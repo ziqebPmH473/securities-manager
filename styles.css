@@ -49,7 +49,7 @@ body {
 }
 .tab.active .badge { background: #fff; color: var(--accent); }
 
-main { padding: 16px; max-width: 1200px; margin: 0 auto; }
+main { padding: 16px; }
 
 .btn {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
@@ -72,9 +72,9 @@ main { padding: 16px; max-width: 1200px; margin: 0 auto; }
 .section-head h2 { margin: 0; font-size: 15px; }
 .section-body { padding: 0; }
 
-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; text-align: right; position: sticky; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+th, td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: 11px; text-align: right; position: sticky; }
 th:first-child, td:first-child { text-align: left; }
 th.l, td.l { text-align: left; }
 tbody tr:hover { background: var(--panel-2); }
@@ -119,6 +119,36 @@ form .row > .field { flex: 1; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--border); padding: 10px 18px; border-radius: 8px; z-index: 200; }
 
 .notice { background: var(--panel-2); border: 1px solid var(--amber); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; color: var(--text); }
+
+.tag.watch { color: var(--amber); border-color: var(--amber); }
+.nowrap { white-space: nowrap; }
+
+/* ソート可能なヘッダ */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+th.sortable.active { color: var(--accent); }
+
+/* フィルタバー */
+.filterbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.filterbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.filterbar select { width: auto; padding: 5px 8px; font-size: 13px; }
+
+/* 評価バッジ（S/A/B/C/D） */
+.grade { display: inline-block; min-width: 20px; padding: 1px 7px; border-radius: 6px; font-weight: 700; font-size: 12px; text-align: center; background: var(--panel-2); border: 1px solid var(--border); }
+.grade-s { color: #fbbf24; border-color: #fbbf24; }
+.grade-a { color: var(--green); border-color: var(--green); }
+.grade-b { color: #60a5fa; border-color: #60a5fa; }
+.grade-c { color: var(--muted); }
+.grade-d { color: var(--red); border-color: var(--red); }
+
+/* フォーム: details / fieldset / textarea / checkbox */
+form textarea { width: 100%; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: 14px; resize: vertical; }
+form .form-group { margin: 12px 0; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+form details.form-group > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+form details.form-group[open] > summary { margin-bottom: 10px; }
+form fieldset.form-group legend { color: var(--muted); font-size: 12px; padding: 0 6px; }
+form label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); margin-bottom: 12px; }
+form label.check input { width: auto; }
 
 @media (max-width: 640px) {
   .app-header h1 { font-size: 16px; }
