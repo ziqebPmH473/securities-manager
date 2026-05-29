@@ -71,7 +71,7 @@ CREATE TABLE securities (
   overall_grade TEXT,                     -- 総合評価 S/A/B/C/D
   rating        TEXT,                     -- 銘柄格付 S/A/B/C/D
   buy_grade     TEXT,                     -- 買い時評価
-  category      TEXT,                     -- 推奨カテゴリ（主力・成長/準主力/投機/宝くじ...）
+  category      TEXT,                     -- 金額カテゴリ（王道・鉄板/主力・成長/準主力/防御・配当/有望な投機/お遊び/対象外）
   star_valuation INTEGER, star_strength INTEGER, star_risk INTEGER, -- ★評価
   priority      INTEGER,                  -- 購入優先順位
   note          TEXT,                     -- 備考
@@ -140,45 +140,37 @@ CREATE TABLE rule_master (
   updated_at      TEXT NOT NULL
 );
 
--- ① 推奨カテゴリ別 金額マスタ（主）
+-- カテゴリ別 金額マスタ（1回あたり推奨エントリー額＝買い増し額）
+-- amount_jpy は日本株の金額（円）。米国株は amount_jpy / 100 をドルとして解決
 CREATE TABLE category_amount_master (
-  category    TEXT PRIMARY KEY,          -- '主力・成長'|'準主力'|'投機'|'宝くじ'...
-  label       TEXT,
-  amount      REAL NOT NULL,             -- 推奨投資額（円）例: 60000
+  category    TEXT PRIMARY KEY,          -- '王道・鉄板'|'主力・成長'|'準主力'|'防御・配当'|'有望な投機'|'お遊び'|'対象外'
+  label       TEXT,                      -- 位置づけ（文明のインフラ 等）
+  amount_jpy  REAL NOT NULL,             -- 日本株の金額（円）例: 80000,60000,50000,40000,25000,15000,0
   sort_order  INTEGER NOT NULL,
   updated_at  TEXT NOT NULL
 );
+-- 解決ルール: JP → amount_jpy(円) / US → amount_jpy / 100 (ドル)
+-- 初期値: 王道80000/主力60000/準主力50000/防御40000/投機25000/お遊び15000/対象外0
 
--- ② 時価総額ティア別 金額マスタ（参考）
--- base_amount は「ベース値」。米株=ドルそのまま / 日本株=×100円 で解決（fx換算ではない）
-CREATE TABLE mktcap_tier_master (
-  id          INTEGER PRIMARY KEY,
-  min_market_cap REAL NOT NULL,          -- このティアの下限（例: 1000000,300000,50000...）
-  base_amount REAL NOT NULL,             -- ベース値（例: 600,500,400,250,150）
-  updated_at  TEXT NOT NULL
-);
--- 解決ルール: US → base_amount(USD) / JP → base_amount × 100 (JPY)
-
--- 金額マスタの版管理（一括変更の履歴。①②共通。「旧」値の保持）
+-- 金額マスタの版管理（一括変更の履歴。「旧」値の保持）
 CREATE TABLE amount_master_history (
   id            INTEGER PRIMARY KEY,
-  master_kind   TEXT NOT NULL,           -- 'category'|'mktcap'
-  master_key    TEXT NOT NULL,           -- category名 or tier識別子
-  amount        REAL NOT NULL,
+  category      TEXT NOT NULL,
+  amount_jpy    REAL NOT NULL,
   effective_from TEXT NOT NULL,
   effective_to   TEXT,                   -- NULL=現行
   reason        TEXT
 );
 
 -- 銘柄ごとの「適用された金額」スナップショット履歴
--- （マスタ変更前の金額を銘柄単位で後から参照できるように保持）
+-- （マスタ変更前 or カテゴリ変更前の金額を銘柄単位で後から参照できるように保持）
 CREATE TABLE security_amount_snapshot (
   id          INTEGER PRIMARY KEY,
   security_id INTEGER NOT NULL REFERENCES securities(id),
-  master_kind TEXT NOT NULL,             -- 'category'|'mktcap'
-  amount      REAL NOT NULL,             -- その時点で銘柄に適用されていた金額
+  category    TEXT NOT NULL,
+  amount_jpy  REAL NOT NULL,             -- その時点で銘柄に適用されていた金額（円基準）
   recorded_at TEXT NOT NULL,
-  trigger     TEXT NOT NULL              -- 'category_change'|'master_change'|'mktcap_change'
+  trigger     TEXT NOT NULL              -- 'category_change'|'master_change'
 );
 
 -- 価格キャッシュ
@@ -210,8 +202,8 @@ CREATE TABLE signals (
   base_value    REAL NOT NULL,           -- 基準高値 or 前回購入価格
   trigger_price REAL NOT NULL,           -- 発火閾値
   current_price REAL NOT NULL,           -- 発火時点の現在値
-  reco_amount_category REAL,             -- 推奨額（カテゴリ別＝主）
-  reco_amount_mktcap   REAL,             -- 参考額（時価総額ティア別）
+  reco_amount   REAL,                    -- 推奨買い増し額（カテゴリ由来。US=ドル/JP=円）
+  reco_currency TEXT,                    -- 'JPY'|'USD'
   status        TEXT NOT NULL DEFAULT 'pending', -- pending|notified|snoozed|done|expired
   fired_at      TEXT NOT NULL,
   notified_at   TEXT,
@@ -269,11 +261,11 @@ for each enabled holding h:
         type = 'addon'
 
     if price <= trigger:
-        reco_cat = category_amount(s.category)        # ① 推奨カテゴリ別（主, 円）
-        # ② 時価総額ティア別（参考）: ベース値を US=$ / JP=×100円 で解決
-        base_amt = mktcap_tier_base(s.market_cap)
-        reco_cap = base_amt if s.market=='US' else base_amt * 100
-        upsert_signal(s, type, base, trigger, price, reco_cat, reco_cap)
+        amt_jpy = category_amount_jpy(s.category)     # カテゴリ→金額（円）
+        # US=ドル(÷100) / JP=円
+        reco = amt_jpy / 100 if s.market=='US' else amt_jpy
+        reco_ccy = 'USD' if s.market=='US' else 'JPY'
+        upsert_signal(s, type, base, trigger, price, reco, reco_ccy)
     else:
         # 価格が戻った場合、rearm=1 なら既存pending/notifiedを解除して再武装
         maybe_rearm(s, rule)
@@ -309,30 +301,35 @@ distance = price / trigger_price - 1                          # 参考値
 
 ## 4. 金額マスタの版管理（重要）
 
-買い増し金額は **2系統マスタ**（①推奨カテゴリ別＝主 / ②時価総額ティア別＝参考）。
-いずれも要件「マスタで一括変更」かつ「変更前の金額を銘柄ごとに保持」を満たす。
-スプレッドシート固定値シートの「購入額／旧」列がまさにこの仕組みに対応。
+買い増し金額は **カテゴリ別金額マスタ1本**（王道80k/主力60k/準主力50k/防御40k/投機25k/
+お遊び15k/対象外0、円。米国株は÷100ドル）。価格非依存の固定値。
+要件「マスタで一括変更」かつ「変更前の金額を銘柄ごとに保持」を満たす（固定値シートの「旧」列に相当）。
 
 ### 4.1 データの持ち方
-1. `category_amount_master` / `mktcap_tier_master` … 各マスタの**現行金額**（既定表示・新規判定で使用）
-2. `amount_master_history` … マスタ金額の**版管理**（master_kind/key, effective_from/to）
+1. `category_amount_master.amount_jpy` … 各カテゴリの**現行金額**（既定表示・新規判定で使用）
+2. `amount_master_history` … マスタ金額の**版管理**（category, effective_from/to）
 3. `security_amount_snapshot` … **銘柄ごと**に、その時点で適用されていた金額のスナップショット
 
-### 4.2 一括変更の処理フロー（例: カテゴリ別金額）
+### 4.2 一括変更の処理フロー
 ```
-PATCH /api/masters/category/{category}  { amount: newAmount }
-  1) amount_master_history: 現行行(kind='category',key=category)の effective_to = now（締め）
-  2) amount_master_history: 新行を effective_from=now, amount=newAmount で追加
+PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
+  1) amount_master_history: 現行行(category)の effective_to = now（締め）
+  2) amount_master_history: 新行を effective_from=now, amount_jpy=newAmount で追加
   3) 当該カテゴリの全 security に対し、変更"前"の金額を
      security_amount_snapshot に trigger='master_change' で記録
-  4) category_amount_master.amount = newAmount に更新
+  4) category_amount_master.amount_jpy = newAmount に更新
 ```
 → 「現在の金額は一括変更」しつつ、各銘柄の **過去に適用されていた金額** を
-  `security_amount_snapshot` から時系列で参照できる。時価総額ティア（②）も同様。
+  `security_amount_snapshot` から時系列で参照できる。
 
-### 4.3 銘柄のカテゴリ/ティア変更時
-- 変更前の（旧カテゴリ/旧ティアの現行）金額を `security_amount_snapshot`
-  （trigger='category_change' 等）に記録してから変更。
+### 4.3 銘柄のカテゴリ変更時
+- 変更前の（旧カテゴリの現行）金額を `security_amount_snapshot`
+  （trigger='category_change'）に記録してから変更。
+
+### 4.4 カテゴリ割当のガイドライン（鉄の掟）
+- アプリは「銘柄に割り当てられたカテゴリ」と金額を保持する（カテゴリ判定は分析側の判断）。
+- 掟: ①価格非依存の固定値 ②80kは安易に付けず迷えば60k ③一国限定/低シェアは最大50k
+  ④キャピタルゲイン見込み薄（横ばい/低ROE）は強制的に40k以下。
 
 ---
 
@@ -349,13 +346,12 @@ PATCH /api/masters/category/{category}  { amount: newAmount }
 | POST | `/securities/{id}/holdings` | 保有（証券会社×口座）の追加/更新 |
 | POST | `/securities/{id}/transactions` | 購入/売却の記録 |
 | GET | `/securities/{id}/amount-history` | 銘柄ごとの適用金額スナップショット履歴 |
-| GET | `/signals?market=` | サイン一覧（残り下落率・推奨額（カテゴリ）/参考額（時価総額））。市場フィルタ |
+| GET | `/signals?market=` | サイン一覧（残り下落率・カテゴリ推奨額）。市場フィルタ |
 | POST | `/signals/{id}/buy` | サインから購入記録（→ done） |
 | POST | `/signals/{id}/snooze` | スヌーズ |
 | GET | `/rules` / POST/PATCH/DELETE | ルールマスタ管理 |
-| GET `/masters/category` / PATCH `/masters/category/{c}` | 推奨カテゴリ別金額マスタ（一括変更は §4.2） |
-| GET `/masters/mktcap` / PATCH `/masters/mktcap/{id}` | 時価総額ティア別金額マスタ |
-| GET | `/masters/{kind}/history` | 金額マスタの変更履歴 |
+| GET `/masters/category` / PATCH `/masters/category/{c}` | カテゴリ別金額マスタ（一括変更は §4.2） |
+| GET | `/masters/category/history` | 金額マスタの変更履歴 |
 | POST | `/import/preview` | CSVアップロード→列マッピング→プレビュー |
 | POST | `/import/commit` | プレビュー確定→取込 |
 | GET | `/reports/portfolio-history` | 資産推移（portfolio_snapshots） |
@@ -421,7 +417,8 @@ PATCH /api/masters/category/{category}  { amount: newAmount }
   ```
   【買い増しサイン】トヨタ(7203) 初回
   現在値 2,450円 ≦ トリガー 2,460円（5年高値4,100円 −40%）
-  推奨買い増し: 60,000円（時価総額ティア参考: 60,000円）
+  カテゴリ: 主力・成長 → 推奨買い増し 60,000円
+  （米国株なら ÷100 で $600 と表示）
   ```
 
 ### 8.2 メール（Resend）
