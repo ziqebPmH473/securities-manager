@@ -150,12 +150,14 @@ CREATE TABLE category_amount_master (
 );
 
 -- ② 時価総額ティア別 金額マスタ（参考）
+-- base_amount は「ベース値」。米株=ドルそのまま / 日本株=×100円 で解決（fx換算ではない）
 CREATE TABLE mktcap_tier_master (
   id          INTEGER PRIMARY KEY,
   min_market_cap REAL NOT NULL,          -- このティアの下限（例: 1000000,300000,50000...）
-  amount      REAL NOT NULL,             -- 購入額（例: 600,500,400,250,150）
+  base_amount REAL NOT NULL,             -- ベース値（例: 600,500,400,250,150）
   updated_at  TEXT NOT NULL
 );
+-- 解決ルール: US → base_amount(USD) / JP → base_amount × 100 (JPY)
 
 -- 金額マスタの版管理（一括変更の履歴。①②共通。「旧」値の保持）
 CREATE TABLE amount_master_history (
@@ -267,8 +269,10 @@ for each enabled holding h:
         type = 'addon'
 
     if price <= trigger:
-        reco_cat = category_amount(s.category)        # ① 推奨カテゴリ別（主）
-        reco_cap = mktcap_tier_amount(s.market_cap)   # ② 時価総額ティア別（参考）
+        reco_cat = category_amount(s.category)        # ① 推奨カテゴリ別（主, 円）
+        # ② 時価総額ティア別（参考）: ベース値を US=$ / JP=×100円 で解決
+        base_amt = mktcap_tier_base(s.market_cap)
+        reco_cap = base_amt if s.market=='US' else base_amt * 100
         upsert_signal(s, type, base, trigger, price, reco_cat, reco_cap)
     else:
         # 価格が戻った場合、rearm=1 なら既存pending/notifiedを解除して再武装
@@ -291,9 +295,13 @@ distance = price / trigger_price - 1                          # 参考値
 - サイン発火 → `status = pending` で作成。通知後 `notified`。
 - 同一トリガーが続く間は再通知しない。
 - ユーザー操作:
-  - **購入を記録** → 対象 transaction を追加 → 平均取得単価・前回購入価格が更新 →
-    既存サインを `done` にし、次回判定で新しい基準で再計算。
+  - **買いを記録** → buy transaction を追加 → **数量加算＋平均取得単価を加重平均で更新**、
+    前回購入価格も更新 → 既存サインを `done` にし、次回判定で新しい基準で再計算。
+  - **売りを記録** → sell transaction を追加 → **数量のみ減算。平均取得単価は不変**、
+    前回購入価格にも影響しない（addonトリガーの基準は直近の buy のまま）。
   - **スヌーズ** → `status = snoozed`, `snooze_until` 設定（例: 当日24時）。
+- 初期保有は transaction を介さず holdings に直接登録可。買い取引が無い銘柄の addon 基準は
+  `securities.base_high_manual` ではなく別途「前回購入価格」手動入力値を用いる。
 - `rearm = 1` の場合、価格が `trigger_price` を上回って戻った後に再度割り込むと、
   既存サインを `expired` にして新規発火（再通知）。`rearm = 0` なら据え置き。
 
@@ -386,16 +394,22 @@ PATCH /api/masters/category/{category}  { amount: newAmount }
 
 | ジョブ | 頻度 | 処理 |
 |--------|------|------|
-| 米株価格更新＋判定 | 米国市場オープン中 毎1分 | Finnhubで保有米株を更新→§3判定→通知 |
-| 日本株価格更新＋判定 | 東証オープン中 毎15分 | Yahooで保有日本株を更新→§3判定→通知 |
+| 米株価格更新＋判定 | 米国市場オープン中 毎1分 | Finnhubで保有米株を更新→§3判定→**サイン記録**（送信はしない） |
+| 日本株価格更新＋判定 | 東証オープン中 毎15分 | Yahooで保有日本株を更新→§3判定→**サイン記録** |
+| **日本株 通知送信** | **7:45 / 11:00 / 17:00 (JST)** | 未通知の日本株サインをまとめてLINE/メール送信 |
+| **米国株 通知送信** | **24:00 / 7:00 (JST)** | 未通知の米国株サインをまとめてLINE/メール送信 |
 | 投信基準価額更新 | 1日1回 | 日本投信の基準価額を取得（or 手入力反映）。判定はしない |
 | ファンダ更新 | 1日1回 | PER/EPS/配当等 fundamentals を更新 |
 | 高値リフレッシュ | 1日1回 | high_5y/52w/all を再計算 |
 | 資産スナップショット | 1日1回（市場クローズ後） | portfolio_snapshots へ記録（市場別内訳も） |
 | 為替更新 | 毎15分 | USDJPY更新 |
 
+> **判定と通知の分離**: 価格更新ジョブはサインを `pending` で記録するだけ。
+> 通知送信ジョブが定時に起動し、`status='pending'`（当該市場）をまとめて配信して `notified` に更新。
+> これにより市場ごとの定時通知（日本株3回/米国株2回）を実現する。
+
 - 取引時間判定はJST/EST（夏時間考慮）で実装。
-- 通知時間帯（quiet hours）外はサイン作成のみ行い、通知は抑止 or 時間内にまとめて送る。
+- 価格更新ジョブはサイン記録のみ。通知は上記の定時送信ジョブが担当（判定と通知を分離）。
 
 ---
 
@@ -407,22 +421,27 @@ PATCH /api/masters/category/{category}  { amount: newAmount }
   ```
   【買い増しサイン】トヨタ(7203) 初回
   現在値 2,450円 ≦ トリガー 2,460円（5年高値4,100円 −40%）
-  推奨買い増し: ランクB = 200,000円
+  推奨買い増し: 60,000円（時価総額ティア参考: 60,000円）
   ```
 
 ### 8.2 メール（Resend）
 - `POST https://api.resend.com/emails`（Bearer: APIキー）
-- 同等内容をHTMLメールで送信。複数サイン時はまとめて1通に集約可。
+- **既存のResendアカウントを利用可**。本アプリ用のAPIキーを別発行し、送信元アドレスを分ける。
+- 同等内容をHTMLメールで送信。複数サインは定時にまとめて1通に集約。
 
-### 8.3 配信制御
-- 同一サインは1回のみ通知（§3.4）。`notified_at` で管理。
-- quiet hours 設定を尊重。失敗時はリトライ（指数バックオフ）。
+### 8.3 配信制御（定時バッチ）
+- **送信は市場ごとの定時のみ**（JST）: 日本株 7:45/11:00/17:00、米国株 24:00/7:00。
+- 各定時に `status='pending'` の当該市場サインを集約配信し `notified` に更新。
+- 同一サインは1回のみ通知（§3.4）。`notified_at` で管理。失敗時はリトライ（指数バックオフ）。
 
 ---
 
 ## 9. CSV取込設計
 
-- 対応: SBI証券 / 楽天証券 / moomoo証券 / 汎用CSV
+> **フェーズ3に後ろ倒し**: 実CSVサンプルが未提供のため、まずは手入力を中核とする。
+> サンプル入手後に証券会社別プロファイルを実装。
+
+- 対応（将来）: SBI / 楽天 / Webull / moomoo / 汎用CSV
 - 文字コード自動判定（Shift_JIS / UTF-8 BOM）
 - フロー: アップロード → プロファイル選択（or 自動判定）→ **列マッピング** → プレビュー → 取込
 - 取込時の突合: `market + ticker` で既存銘柄を判定し「新規追加 / 数量・平均取得単価を更新」を選択
@@ -430,12 +449,18 @@ PATCH /api/masters/category/{category}  { amount: newAmount }
 
 ---
 
-## 10. 認証・セキュリティ（残論点あり）
+## 10. 認証・セキュリティ・データ保持
 
-- 個人利用前提の簡易認証（候補: 単一パスワード + セッションCookie / Cloudflare Access）
-- パスワードはハッシュ化して Secrets 管理。APIは認証必須。
-- 外部APIキー・通知トークンは Secrets。D1には機密を置かない。
+- **データ保持**: 全データは **Cloudflare D1（サーバ側DB）に永続保存**。
+  ログイン方式・端末・ブラウザに依存しない（クリアしても消えない）。
+- **認証 = Googleログイン（OAuth）**: パスワードの代わりに Google アカウントで認証。
+  - 推奨実装: **Cloudflare Access** の Google IdP 連携。許可するメールアドレス（本人）を
+    Access ポリシーで限定し、アプリ全体（Pages/Functions）を保護。
+  - 代替: アプリ内で Google OAuth を実装しセッションCookie発行。
+- 外部APIキー（Finnhub）・通知トークン（LINE）・メール（Resend APIキー）は
+  Cloudflare の **Secrets / 環境変数** に保存。D1には機密を置かない。
 - HTTPS（Cloudflare標準）。
+- **バックアップ**: D1のエクスポート機能を用意（フェーズ3）。
 
 ---
 
