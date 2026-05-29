@@ -53,29 +53,71 @@
 ### 2.2 DDL（案）
 
 ```sql
--- 保有銘柄
-CREATE TABLE holdings (
+-- 銘柄マスタ（市場・分類・ファンダ・戦略メタ。保有有無に関わらず管理＝ウォッチ含む）
+CREATE TABLE securities (
   id            INTEGER PRIMARY KEY,
-  market        TEXT NOT NULL CHECK (market IN ('JP','US')),
-  ticker        TEXT NOT NULL,            -- JP:"7203", US:"AAPL"
+  market        TEXT NOT NULL CHECK (market IN ('JP','US','FUND')), -- 日本株/米国株/投信
+  ticker        TEXT,                     -- JP:"7203", US:"AAPL"。投信はNULL可
+  fund_code     TEXT,                     -- 日本投信のファンドコード/ISIN（market=FUND時）
   name          TEXT NOT NULL,
-  quantity      REAL NOT NULL DEFAULT 0,  -- 保有数量
-  avg_cost      REAL NOT NULL DEFAULT 0,  -- 平均取得単価（原通貨）
   currency      TEXT NOT NULL,            -- 'JPY' | 'USD'
+  asset_class   TEXT NOT NULL DEFAULT 'stock', -- 'stock'|'etf'|'fund'
+  is_etf        INTEGER NOT NULL DEFAULT 0,
+  -- 分類
+  sector        TEXT,
+  industry      TEXT,
+  market_cap    REAL,                     -- 時価総額（時価総額ティア判定に使用）
+  -- 戦略メタ（分析シート相当）
+  overall_grade TEXT,                     -- 総合評価 S/A/B/C/D
+  rating        TEXT,                     -- 銘柄格付 S/A/B/C/D
+  buy_grade     TEXT,                     -- 買い時評価
+  category      TEXT,                     -- 推奨カテゴリ（主力・成長/準主力/投機/宝くじ...）
+  star_valuation INTEGER, star_strength INTEGER, star_risk INTEGER, -- ★評価
+  priority      INTEGER,                  -- 購入優先順位
+  note          TEXT,                     -- 備考
+  watch         INTEGER NOT NULL DEFAULT 0, -- 注意銘柄(ウォッチ)フラグ
+  -- 買い増し設定
   rule_id       INTEGER REFERENCES rule_master(id),
-  rank_code     TEXT REFERENCES rank_master(code),  -- 'S'..'D'
   base_high_mode TEXT DEFAULT NULL,       -- 個別上書き(任意): '5y'|'52w'|'all'|'manual'
-  base_high_manual REAL DEFAULT NULL,     -- manual時の基準高値
-  enabled       INTEGER NOT NULL DEFAULT 1,
+  base_high_manual REAL DEFAULT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1, -- 買い増し判定対象か（投信は通常0）
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
-  UNIQUE(market, ticker)
+  UNIQUE(market, ticker, fund_code)
 );
 
--- 取引履歴（買い/売り）
+-- ファンダメンタル（セクター一覧シート相当。別ソース取得・日次更新）
+CREATE TABLE fundamentals (
+  security_id   INTEGER PRIMARY KEY REFERENCES securities(id),
+  per           REAL,   -- 株価収益率
+  eps           REAL,   -- 1株当たり利益
+  dividend      REAL,   -- 1株配当
+  revenue       REAL,   -- 売上高
+  shares_out    REAL,   -- 発行済株式数
+  current_ratio REAL,
+  fetched_at    TEXT
+);
+
+-- 保有（銘柄×証券会社×口座種別の単位で保有）
+CREATE TABLE holdings (
+  id            INTEGER PRIMARY KEY,
+  security_id   INTEGER NOT NULL REFERENCES securities(id),
+  broker        TEXT NOT NULL,            -- 'SBI'|'楽天'|'Webull'|'moomoo'
+  account_type  TEXT NOT NULL,            -- '特定'|'NISA'|'一般' など
+  quantity      REAL NOT NULL DEFAULT 0,  -- 保有数量（端株=小数対応）
+  avg_cost      REAL NOT NULL DEFAULT 0,  -- 平均取得単価（原通貨）
+  acquired_cost REAL NOT NULL DEFAULT 0,  -- 取得価額（原通貨）
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  UNIQUE(security_id, broker, account_type)
+);
+
+-- 取引履歴（買い/売り）。判定は銘柄(security)単位のため security_id を保持
 CREATE TABLE transactions (
   id          INTEGER PRIMARY KEY,
-  holding_id  INTEGER NOT NULL REFERENCES holdings(id),
+  security_id INTEGER NOT NULL REFERENCES securities(id),
+  broker      TEXT,                       -- 約定した証券会社
+  account_type TEXT,                      -- 特定/NISA
   type        TEXT NOT NULL CHECK (type IN ('buy','sell')),
   price       REAL NOT NULL,              -- 約定単価（原通貨）
   quantity    REAL NOT NULL,
@@ -98,34 +140,43 @@ CREATE TABLE rule_master (
   updated_at      TEXT NOT NULL
 );
 
--- ランク マスタ（現在値）
-CREATE TABLE rank_master (
-  code        TEXT PRIMARY KEY,          -- 'S','A','B','C','D'
+-- ① 推奨カテゴリ別 金額マスタ（主）
+CREATE TABLE category_amount_master (
+  category    TEXT PRIMARY KEY,          -- '主力・成長'|'準主力'|'投機'|'宝くじ'...
   label       TEXT,
-  amount      REAL NOT NULL,             -- 1回の買い増し金額（円）
+  amount      REAL NOT NULL,             -- 推奨投資額（円）例: 60000
   sort_order  INTEGER NOT NULL,
   updated_at  TEXT NOT NULL
 );
 
--- ランク金額の版管理（マスタ一括変更の履歴）
-CREATE TABLE rank_amount_history (
-  id           INTEGER PRIMARY KEY,
-  rank_code    TEXT NOT NULL REFERENCES rank_master(code),
-  amount       REAL NOT NULL,
-  effective_from TEXT NOT NULL,          -- この金額が有効になった日時
-  effective_to   TEXT,                   -- 次の変更で埋まる（NULL=現行）
-  reason       TEXT
+-- ② 時価総額ティア別 金額マスタ（参考）
+CREATE TABLE mktcap_tier_master (
+  id          INTEGER PRIMARY KEY,
+  min_market_cap REAL NOT NULL,          -- このティアの下限（例: 1000000,300000,50000...）
+  amount      REAL NOT NULL,             -- 購入額（例: 600,500,400,250,150）
+  updated_at  TEXT NOT NULL
+);
+
+-- 金額マスタの版管理（一括変更の履歴。①②共通。「旧」値の保持）
+CREATE TABLE amount_master_history (
+  id            INTEGER PRIMARY KEY,
+  master_kind   TEXT NOT NULL,           -- 'category'|'mktcap'
+  master_key    TEXT NOT NULL,           -- category名 or tier識別子
+  amount        REAL NOT NULL,
+  effective_from TEXT NOT NULL,
+  effective_to   TEXT,                   -- NULL=現行
+  reason        TEXT
 );
 
 -- 銘柄ごとの「適用された金額」スナップショット履歴
 -- （マスタ変更前の金額を銘柄単位で後から参照できるように保持）
-CREATE TABLE holding_amount_snapshot (
+CREATE TABLE security_amount_snapshot (
   id          INTEGER PRIMARY KEY,
-  holding_id  INTEGER NOT NULL REFERENCES holdings(id),
-  rank_code   TEXT NOT NULL,
+  security_id INTEGER NOT NULL REFERENCES securities(id),
+  master_kind TEXT NOT NULL,             -- 'category'|'mktcap'
   amount      REAL NOT NULL,             -- その時点で銘柄に適用されていた金額
-  recorded_at TEXT NOT NULL,             -- 記録時点（マスタ変更時/ランク変更時）
-  trigger     TEXT NOT NULL              -- 'rank_change'|'master_change'
+  recorded_at TEXT NOT NULL,
+  trigger     TEXT NOT NULL              -- 'category_change'|'master_change'|'mktcap_change'
 );
 
 -- 価格キャッシュ
@@ -149,15 +200,16 @@ CREATE TABLE fx (
   fetched_at  TEXT NOT NULL
 );
 
--- 買い増しサイン状態
+-- 買い増しサイン状態（銘柄単位）
 CREATE TABLE signals (
   id            INTEGER PRIMARY KEY,
-  holding_id    INTEGER NOT NULL REFERENCES holdings(id),
+  security_id   INTEGER NOT NULL REFERENCES securities(id),
   type          TEXT NOT NULL CHECK (type IN ('initial','addon')),
   base_value    REAL NOT NULL,           -- 基準高値 or 前回購入価格
   trigger_price REAL NOT NULL,           -- 発火閾値
   current_price REAL NOT NULL,           -- 発火時点の現在値
-  reco_amount   REAL,                    -- 推奨買い増し金額（ランク由来）
+  reco_amount_category REAL,             -- 推奨額（カテゴリ別＝主）
+  reco_amount_mktcap   REAL,             -- 参考額（時価総額ティア別）
   status        TEXT NOT NULL DEFAULT 'pending', -- pending|notified|snoozed|done|expired
   fired_at      TEXT NOT NULL,
   notified_at   TEXT,
@@ -215,12 +267,17 @@ for each enabled holding h:
         type = 'addon'
 
     if price <= trigger:
-        reco = current_rank_amount(h.rank_code)   # ランク→金額
-        upsert_signal(h, type, base, trigger, price, reco)
+        reco_cat = category_amount(s.category)        # ① 推奨カテゴリ別（主）
+        reco_cap = mktcap_tier_amount(s.market_cap)   # ② 時価総額ティア別（参考）
+        upsert_signal(s, type, base, trigger, price, reco_cat, reco_cap)
     else:
         # 価格が戻った場合、rearm=1 なら既存pending/notifiedを解除して再武装
-        maybe_rearm(h, rule)
+        maybe_rearm(s, rule)
 ```
+
+> 判定対象は `securities.enabled=1` かつ `market in ('JP','US')` の個別株/ETF のみ。
+> 投信（market='FUND'）は資産表示には含めるが判定対象外（要件どおり）。
+> 「前回購入価格」は銘柄(security)単位で全口座の買い取引を横断して直近のものを採用。
 
 ### 3.3 「あと何%で買い増し」表示用の計算
 一覧・サイン画面で表示する **トリガーまでの残り下落率**：
@@ -242,29 +299,32 @@ distance = price / trigger_price - 1                          # 参考値
 
 ---
 
-## 4. ランク金額マスタの版管理（重要）
+## 4. 金額マスタの版管理（重要）
 
-要件: 「マスタで一括変更」かつ「変更前の金額を銘柄ごとに保持」。
+買い増し金額は **2系統マスタ**（①推奨カテゴリ別＝主 / ②時価総額ティア別＝参考）。
+いずれも要件「マスタで一括変更」かつ「変更前の金額を銘柄ごとに保持」を満たす。
+スプレッドシート固定値シートの「購入額／旧」列がまさにこの仕組みに対応。
 
 ### 4.1 データの持ち方
-1. `rank_master.amount` … 各ランクの**現行金額**（画面の既定表示・新規判定で使用）
-2. `rank_amount_history` … マスタ金額の**版管理**（いつ・いくらに変えたか。effective_from/to）
-3. `holding_amount_snapshot` … **銘柄ごと**に、その時点で適用されていた金額のスナップショット
+1. `category_amount_master` / `mktcap_tier_master` … 各マスタの**現行金額**（既定表示・新規判定で使用）
+2. `amount_master_history` … マスタ金額の**版管理**（master_kind/key, effective_from/to）
+3. `security_amount_snapshot` … **銘柄ごと**に、その時点で適用されていた金額のスナップショット
 
-### 4.2 一括変更の処理フロー
+### 4.2 一括変更の処理フロー（例: カテゴリ別金額）
 ```
-PATCH /api/ranks/{code}  { amount: newAmount }
-  1) rank_amount_history: 現行行の effective_to = now（締め）
-  2) rank_amount_history: 新行を effective_from=now, amount=newAmount で追加
-  3) 当該ランクの全 holding に対し、変更"前"の金額を
-     holding_amount_snapshot に trigger='master_change' で記録
-  4) rank_master.amount = newAmount に更新
+PATCH /api/masters/category/{category}  { amount: newAmount }
+  1) amount_master_history: 現行行(kind='category',key=category)の effective_to = now（締め）
+  2) amount_master_history: 新行を effective_from=now, amount=newAmount で追加
+  3) 当該カテゴリの全 security に対し、変更"前"の金額を
+     security_amount_snapshot に trigger='master_change' で記録
+  4) category_amount_master.amount = newAmount に更新
 ```
-→ これにより「現在の金額は一括変更」しつつ、各銘柄の **過去に適用されていた金額** を
-  `holding_amount_snapshot` から時系列で参照できる。
+→ 「現在の金額は一括変更」しつつ、各銘柄の **過去に適用されていた金額** を
+  `security_amount_snapshot` から時系列で参照できる。時価総額ティア（②）も同様。
 
-### 4.3 銘柄のランク変更時
-- ランク変更前の（旧ランクの現行）金額を `holding_amount_snapshot`（trigger='rank_change'）に記録してから変更。
+### 4.3 銘柄のカテゴリ/ティア変更時
+- 変更前の（旧カテゴリ/旧ティアの現行）金額を `security_amount_snapshot`
+  （trigger='category_change' 等）に記録してから変更。
 
 ---
 
@@ -274,20 +334,20 @@ PATCH /api/ranks/{code}  { amount: newAmount }
 
 | メソッド | パス | 概要 |
 |---------|------|------|
-| GET | `/portfolio/summary` | 総資産・損益・前日比・サイン件数・内訳（ダッシュボード用） |
-| GET | `/holdings` | 保有一覧（現在値・損益・**残り下落率**・サイン状態を含む） |
-| POST | `/holdings` | 銘柄追加（手入力） |
-| GET | `/holdings/{id}` | 詳細（履歴・適用ルール/ランク・チャート用系列） |
-| PATCH | `/holdings/{id}` | 編集（数量・ランク・ルール・基準高値上書き等） |
-| DELETE | `/holdings/{id}` | 削除 |
-| POST | `/holdings/{id}/transactions` | 購入/売却の記録 |
-| GET | `/signals` | サイン一覧（pending/notified、残り下落率・推奨金額） |
+| GET | `/portfolio/summary?market=US\|JP\|FUND\|all` | 総資産・損益・前日比・サイン件数・内訳。**市場フィルタ対応** |
+| GET | `/holdings?market=&broker=&account=&category=` | 保有一覧（現在値・損益・**残り下落率（通知単価まで）**・サイン状態）。市場/証券会社/口座/カテゴリで絞込 |
+| GET/POST | `/securities` | 銘柄マスタ（分類・戦略メタ・ファンダ・ウォッチ）参照/追加 |
+| GET/PATCH/DELETE | `/securities/{id}` | 銘柄詳細・編集（カテゴリ・ルール・基準高値上書き等）・削除 |
+| POST | `/securities/{id}/holdings` | 保有（証券会社×口座）の追加/更新 |
+| POST | `/securities/{id}/transactions` | 購入/売却の記録 |
+| GET | `/securities/{id}/amount-history` | 銘柄ごとの適用金額スナップショット履歴 |
+| GET | `/signals?market=` | サイン一覧（残り下落率・推奨額（カテゴリ）/参考額（時価総額））。市場フィルタ |
 | POST | `/signals/{id}/buy` | サインから購入記録（→ done） |
 | POST | `/signals/{id}/snooze` | スヌーズ |
 | GET | `/rules` / POST/PATCH/DELETE | ルールマスタ管理 |
-| GET | `/ranks` / PATCH `/ranks/{code}` | ランクマスタ（一括変更は §4.2） |
-| GET | `/ranks/{code}/history` | ランク金額の変更履歴 |
-| GET | `/holdings/{id}/amount-history` | 銘柄ごとの適用金額スナップショット履歴 |
+| GET `/masters/category` / PATCH `/masters/category/{c}` | 推奨カテゴリ別金額マスタ（一括変更は §4.2） |
+| GET `/masters/mktcap` / PATCH `/masters/mktcap/{id}` | 時価総額ティア別金額マスタ |
+| GET | `/masters/{kind}/history` | 金額マスタの変更履歴 |
 | POST | `/import/preview` | CSVアップロード→列マッピング→プレビュー |
 | POST | `/import/commit` | プレビュー確定→取込 |
 | GET | `/reports/portfolio-history` | 資産推移（portfolio_snapshots） |
@@ -298,18 +358,26 @@ PATCH /api/ranks/{code}  { amount: newAmount }
 
 ## 6. 株価データソース仕様
 
-### 6.1 米国株（Finnhub・ほぼリアルタイム）
+### 6.1 米国株・米国上場ETF（Finnhub・ほぼリアルタイム）
 - Quote: `GET https://finnhub.io/api/v1/quote?symbol=AAPL&token=KEY`
   - `c`=現在値, `pc`=前日終値, `h/l/o` 当日高安始
+- ETF（QLD/SOXL/EDV/VNM 等）も同じティッカーで取得可
 - 5年/52週高値: candle/metric エンドポイント、または日足を集計して `high_5y/high_52w` を更新
 - レート制限: 無料60回/分。保有米株数に応じバッチ化し、Cronは1分間隔
+- 補足: ファンダ（PER/EPS/配当）は Finnhub の metric 等で取得し `fundamentals` を更新（日次）
 
 ### 6.2 日本株（Yahoo Finance系・15〜20分遅延）
 - Quote: `query1.finance.yahoo.com/v8/finance/chart/7203.T`（現在値・前日終値）
 - 5年高値: `range=5y&interval=1d` の日足から max(high) を算出
 - Cronは15分間隔
 
-### 6.3 為替
+### 6.3 日本の投資信託（非ETF・基準価額／日次）
+- ティッカー無し。`fund_code`（協会コード/ISIN）で識別
+- 基準価額は1日1回更新。取得元候補: 投信協会の公表データ、Yahoo!ファイナンス日本版の
+  ファンドページ等。安定した無料APIが無い場合は **当面手入力**でも可
+- 資産表示・合計には反映するが **買い増し判定の対象外**
+
+### 6.4 為替
 - `USDJPY=X` を Yahoo から取得、`fx` テーブル更新
 
 ---
@@ -320,8 +388,10 @@ PATCH /api/ranks/{code}  { amount: newAmount }
 |--------|------|------|
 | 米株価格更新＋判定 | 米国市場オープン中 毎1分 | Finnhubで保有米株を更新→§3判定→通知 |
 | 日本株価格更新＋判定 | 東証オープン中 毎15分 | Yahooで保有日本株を更新→§3判定→通知 |
+| 投信基準価額更新 | 1日1回 | 日本投信の基準価額を取得（or 手入力反映）。判定はしない |
+| ファンダ更新 | 1日1回 | PER/EPS/配当等 fundamentals を更新 |
 | 高値リフレッシュ | 1日1回 | high_5y/52w/all を再計算 |
-| 資産スナップショット | 1日1回（市場クローズ後） | portfolio_snapshots へ記録 |
+| 資産スナップショット | 1日1回（市場クローズ後） | portfolio_snapshots へ記録（市場別内訳も） |
 | 為替更新 | 毎15分 | USDJPY更新 |
 
 - 取引時間判定はJST/EST（夏時間考慮）で実装。
@@ -372,10 +442,13 @@ PATCH /api/ranks/{code}  { amount: newAmount }
 ## 11. フロント構成（案）
 
 - React + Vite + TypeScript、状態管理は軽量（TanStack Query でAPIキャッシュ）
-- ルーティング: `/`（ダッシュボード）, `/holdings`, `/holdings/:id`, `/signals`,
-  `/rules`, `/ranks`, `/import`, `/reports`, `/settings`
+- ルーティング: `/`（ダッシュボード）, `/holdings`, `/securities/:id`, `/signals`,
+  `/rules`, `/masters`, `/import`, `/reports`, `/settings`
+- **市場分離UI**: ダッシュボードは合算＋市場フィルタ。保有一覧・サインは
+  **市場タブ（米国株 / 日本株 / 投信）** で独立表示。市場ごとに独立スクロール/集計
 - チャート: 軽量ライブラリ（例: Recharts / lightweight-charts）でトリガーライン重畳
-- レスポンシブ: スマホ=カード/縦並び、PC=テーブル。共通コンポーネントで「残り下落率」バッジ表示
+- レスポンシブ: スマホ=カード/縦並び、PC=テーブル。共通コンポーネントで
+  「残り下落率（通知単価まで）」バッジ表示
 
 ---
 
@@ -383,8 +456,10 @@ PATCH /api/ranks/{code}  { amount: newAmount }
 
 - **フェーズ1（MVP）**: D1スキーマ→手入力で保有登録→価格取得（米株/日株/為替）→
   評価額・残り下落率表示→買い増し判定→LINE/メール通知
-- **フェーズ2**: ランク/ルールマスタ管理＋版管理、CSV取込、ダッシュボード/サイン一覧の作り込み
-- **フェーズ3**: 銘柄詳細チャート、資産推移レポート、認証強化、バックアップ/エクスポート
+- **フェーズ2**: 金額マスタ（カテゴリ別/時価総額ティア別）＋版管理、ルールマスタ、
+  証券会社×口座管理、CSV取込、ダッシュボード/サイン一覧の作り込み、市場タブ分離
+- **フェーズ3**: 銘柄詳細チャート、ファンダ/戦略メタ、投信の基準価額取得、
+  資産推移レポート（証券会社×資産クラス集計）、認証強化、バックアップ/エクスポート
 
 ---
 
