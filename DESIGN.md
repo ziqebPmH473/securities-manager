@@ -19,7 +19,7 @@
   │スマホ│─┘                              │             │
   └───┘    ┌──────────────────┐          ▼             │
            │ Cron Trigger      │   ┌──────────────┐    │
-           │ (Scheduled Worker)│──▶│  D1 (SQLite) │    │
+           │ (Scheduled Worker)│──▶│ Sheets + KV  │    │
            │ 価格取得/判定/通知 │   └──────────────┘    │
            └─────┬──────┬──────┘                       │
                  │      │      └────────────────────────┘
@@ -30,27 +30,48 @@
             └────────┘└────────┘ └────────┘ └────────┘
 ```
 
-- **Pages (SPA)**: フロントエンド。レスポンシブ。`/api` を叩く
-- **Pages Functions**: REST API。D1 へCRUD、オンデマンド価格取得のプロキシ
-- **Scheduled Worker (Cron)**: 定期的に価格取得→評価更新→買い増し判定→通知発火
-- **D1**: 永続データ（保有・履歴・ルール・ランク・価格・サイン・設定）
-- **外部API**: Finnhub（米株）/ Yahoo（日株・為替）/ LINE / Resend
+> **構成図の D1 ボックスは「Google スプレッドシート（Sheets API）」に置き換え**、
+> さらに価格キャッシュ用の **Cloudflare KV** を併設する（下記参照）。
 
+- **Pages (SPA)**: フロントエンド。レスポンシブ。`/api` を叩く
+- **Pages Functions**: REST API。**Google Sheets への読み書きを集約（唯一の書き手）**、
+  KV価格キャッシュ参照、オンデマンド価格取得のプロキシ
+- **Scheduled Worker (Cron)**: 価格取得→**KVキャッシュ更新**→買い増し判定→サイン記録→定時通知
+- **保管先 = Google スプレッドシート**: 資産データの原本（銘柄・保有・取引・ルール・金額マスタ・
+  サイン・資産推移・設定）。自分のGoogleドライブに常に残り、ホスト非依存
+- **KV（価格キャッシュ）**: 現在値・前日終値・為替など頻繁更新の一時データ。**Sheetsには書かない**
+- **認証**: Google OAuth（許可アカウントのみ）
+- **外部API**: Finnhub（米株/ETF）/ Yahoo（日株・為替）/ LINE / Resend
+
+> 設計の要点: **頻繁更新（価格）は KV、永続資産データは Sheets** に切り分け、Sheets APIの
+> レート制限を回避。無料・データ所有・ホスト非依存を満たす。Sheets書込はバックエンドに一本化し
+> read-modify-write で扱う（単一ユーザー前提）。
 > Pages と Cron Worker は機能分担。価格取得・判定ロジックは共通モジュール化して両者から呼ぶ。
 
 ---
 
-## 2. データモデル（D1 / SQLite スキーマ）
+## 2. データモデル（Google スプレッドシートのタブ構成）
 
-### 2.1 ER 概要
-- `holdings` 1 ─ N `transactions`
-- `holdings` N ─ 1 `rule_master`（適用ルール）/ `rank_master`（ランク）
-- `holdings` 1 ─ N `signals`
-- `rank_master` 1 ─ N `rank_amount_history`（金額の版管理）
-- `holdings` 1 ─ N `holding_amount_snapshot`（銘柄ごとの適用金額履歴）
-- `prices` / `fx` は ticker 単位の価格キャッシュ
+**保管先は Google スプレッドシート**。1枚のスプレッドシートに、下記の各テーブルを
+**タブ（シート）として 1:1 で対応**させる。各タブの 1 行目をヘッダ（列名）とし、
+`id` は連番、関連は `*_id` 列で参照する（RDB的な使い方）。
 
-### 2.2 DDL（案）
+> 価格・為替（`prices`/`fx`）は **Sheetsに置かず Cloudflare KV に保持**（頻繁更新の一時データ）。
+> 5年高値など日次更新の参照値は `securities` タブに持つ（書込頻度が低く制限に当たらない）。
+
+**タブ一覧**: `securities` / `fundamentals` / `holdings` / `transactions` /
+`category_amount_master` / `amount_master_history` / `security_amount_snapshot` /
+`rule_master` / `signals` / `portfolio_snapshots` / `settings`
+
+### 2.1 関連（リレーション）
+- `securities` 1 ─ N `transactions` / `holdings` / `signals` / `security_amount_snapshot`
+- `securities` N ─ 1 `rule_master`（適用ルール） / `category_amount_master`（カテゴリ）
+- `category_amount_master` 1 ─ N `amount_master_history`（金額の版管理）
+- `holdings` は `securities`×`broker`×`account_type` 単位
+
+### 2.2 各タブの列定義
+下記は **論理スキーマ**（列＝Sheetsのカラム）。型は参考（Sheetsは値ベース）。
+SQLライクに記すが、実体は各タブの列。
 
 ```sql
 -- 銘柄マスタ（市場・分類・ファンダ・戦略メタ。保有有無に関わらず管理＝ウォッチ含む）
@@ -66,7 +87,7 @@ CREATE TABLE securities (
   -- 分類
   sector        TEXT,
   industry      TEXT,
-  market_cap    REAL,                     -- 時価総額（時価総額ティア判定に使用）
+  market_cap    REAL,                     -- 時価総額（参考表示・分類用）
   -- 戦略メタ（分析シート相当）
   overall_grade TEXT,                     -- 総合評価 S/A/B/C/D
   rating        TEXT,                     -- 銘柄格付 S/A/B/C/D
@@ -80,6 +101,11 @@ CREATE TABLE securities (
   rule_id       INTEGER REFERENCES rule_master(id),
   base_high_mode TEXT DEFAULT NULL,       -- 個別上書き(任意): '5y'|'52w'|'all'|'manual'
   base_high_manual REAL DEFAULT NULL,
+  prev_buy_price REAL DEFAULT NULL,       -- 「前回購入価格」手動入力値（買い取引が無い場合のaddon基準）
+  high_5y       REAL,                     -- 5年高値（日次更新, 基準高値の算出用）
+  high_52w      REAL,
+  high_all      REAL,
+  high_updated_at TEXT,
   enabled       INTEGER NOT NULL DEFAULT 1, -- 買い増し判定対象か（投信は通常0）
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
@@ -173,26 +199,11 @@ CREATE TABLE security_amount_snapshot (
   trigger     TEXT NOT NULL              -- 'category_change'|'master_change'
 );
 
--- 価格キャッシュ
-CREATE TABLE prices (
-  market      TEXT NOT NULL,
-  ticker      TEXT NOT NULL,
-  price       REAL,                      -- 現在値（原通貨）
-  prev_close  REAL,                      -- 前日終値
-  high_5y     REAL,                      -- 5年高値（基準高値の算出用）
-  high_52w    REAL,
-  high_all    REAL,
-  fetched_at  TEXT NOT NULL,
-  source      TEXT NOT NULL,             -- 'finnhub'|'yahoo'
-  PRIMARY KEY (market, ticker)
-);
-
--- 為替
-CREATE TABLE fx (
-  pair        TEXT PRIMARY KEY,          -- 'USDJPY'
-  rate        REAL NOT NULL,
-  fetched_at  TEXT NOT NULL
-);
+-- 価格・為替は Sheets タブにしない。Cloudflare KV に保持（§2.3 参照）:
+--   price:{market}:{ticker} = { price, prev_close, fetched_at, source }
+--   fx:USDJPY               = { rate, fetched_at }
+-- ※ 5年/52週/上場来高値（基準高値の算出用）は日次更新のため securities タブの
+--    high_5y / high_52w / high_all 列に保持する。
 
 -- 買い増しサイン状態（銘柄単位）
 CREATE TABLE signals (
@@ -228,8 +239,21 @@ CREATE TABLE settings (
 );
 ```
 
-> 機密情報（Finnhub APIキー、LINEトークン、Resend APIキー、ログインパスワードハッシュ）は
-> D1 ではなく Cloudflare の **環境変数 / Secrets** に保存する。
+> 機密情報（Finnhub APIキー、LINEトークン、Resend APIキー、**Google Sheets アクセス用の
+> サービスアカウント鍵/OAuthトークン**）は Sheets ではなく Cloudflare の **環境変数 / Secrets** に保存する。
+
+### 2.3 価格キャッシュ（KV。Sheets外）
+- `price:{market}:{ticker}` → `{ price, prev_close, fetched_at }`
+- `fx:USDJPY` → `{ rate, fetched_at }`
+- KV は頻繁更新の一時データ専用。喪失しても次回ポーリングで再取得でき、資産データには影響しない。
+
+### 2.4 Google Sheets アクセス方式
+- バックエンド（Pages Functions / Cron Worker）が **サービスアカウント or OAuth** で
+  Sheets API を呼ぶ。**書き込みはバックエンドに一本化**（唯一の書き手）。
+- 読み取りは `spreadsheets.values.batchGet`、書き込みは `batchUpdate` でまとめて実行。
+- 並行制御: 単一ユーザー前提のため read-modify-write で十分。`updated_at` で楽観的整合性を担保。
+- レート目安: Sheets API は 60 req/min/user・300 req/min/project。価格はKVに退避するため、
+  Sheets呼び出しはユーザー操作時と定時のみ＝**制限に到達しない**。
 
 ---
 
@@ -237,15 +261,15 @@ CREATE TABLE settings (
 
 ### 3.1 基準高値の決定（base high）
 銘柄の `base_high_mode`（個別上書き）→ 適用ルールの `base_high_mode` の順で解決：
-- `5y`  → `prices.high_5y`
-- `52w` → `prices.high_52w`
-- `all` → `prices.high_all`
+- `5y`  → `securities.high_5y`
+- `52w` → `securities.high_52w`
+- `all` → `securities.high_all`
 - `manual` → `holdings.base_high_manual`
 
 ### 3.2 判定アルゴリズム（擬似コード）
 ```
 for each enabled holding h:
-    price = prices[h].price
+    price = kv_price(s.market, s.ticker)   # KVキャッシュから現在値
     if price is null: continue
     rule = resolve_rule(h)
     if h.quantity == 0 or no buy transactions:
@@ -382,7 +406,7 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - 資産表示・合計には反映するが **買い増し判定の対象外**
 
 ### 6.4 為替
-- `USDJPY=X` を Yahoo から取得、`fx` テーブル更新
+- `USDJPY=X` を Yahoo から取得、KV `fx:USDJPY` を更新
 
 ---
 
@@ -448,16 +472,20 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 
 ## 10. 認証・セキュリティ・データ保持
 
-- **データ保持**: 全データは **Cloudflare D1（サーバ側DB）に永続保存**。
-  ログイン方式・端末・ブラウザに依存しない（クリアしても消えない）。
+- **データ保持**: 資産データは **自分の Google スプレッドシートに保存**（システム・オブ・レコード）。
+  ホスト・端末・ブラウザに依存せず、いつでもSheetsで直接閲覧でき、Googleドライブに原本が残る。
+  価格・為替は KV キャッシュ（喪失しても再取得可、資産データに影響なし）。
 - **認証 = Googleログイン（OAuth）**: パスワードの代わりに Google アカウントで認証。
   - 推奨実装: **Cloudflare Access** の Google IdP 連携。許可するメールアドレス（本人）を
     Access ポリシーで限定し、アプリ全体（Pages/Functions）を保護。
   - 代替: アプリ内で Google OAuth を実装しセッションCookie発行。
-- 外部APIキー（Finnhub）・通知トークン（LINE）・メール（Resend APIキー）は
-  Cloudflare の **Secrets / 環境変数** に保存。D1には機密を置かない。
+  - 認証で使う Google アカウントと、Sheets を置く Google アカウントは同一にできる。
+- **Sheets アクセス**: バックエンドがサービスアカウント or OAuth で Sheets API を利用。
+  サービスアカウント方式の場合、対象スプレッドシートをそのサービスアカウントに共有する。
+- 外部APIキー（Finnhub）・通知トークン（LINE）・Resend APIキー・**Sheetsアクセス鍵**は
+  Cloudflare の **Secrets / 環境変数** に保存。Sheetsには機密を置かない。
 - HTTPS（Cloudflare標準）。
-- **バックアップ**: D1のエクスポート機能を用意（フェーズ3）。
+- **バックアップ**: 保管先がSheetsのため原本は常にGoogleドライブにあり、コピー作成も容易。
 
 ---
 
@@ -476,9 +504,10 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 
 ## 12. 実装フェーズ（提案）
 
-- **フェーズ1（MVP）**: D1スキーマ→手入力で保有登録→価格取得（米株/日株/為替）→
-  評価額・残り下落率表示→買い増し判定→LINE/メール通知
-- **フェーズ2**: 金額マスタ（カテゴリ別/時価総額ティア別）＋版管理、ルールマスタ、
+- **フェーズ1（MVP）**: Sheetsタブ作成＋Sheets APIアクセス→手入力で保有登録→
+  価格取得（米株/日株/為替, KVキャッシュ）→評価額・残り下落率表示→買い増し判定→定時LINE/メール通知。
+  認証はGoogleログイン
+- **フェーズ2**: カテゴリ別金額マスタ＋版管理、ルールマスタ、
   証券会社×口座管理、CSV取込、ダッシュボード/サイン一覧の作り込み、市場タブ分離
 - **フェーズ3**: 銘柄詳細チャート、ファンダ/戦略メタ、投信の基準価額取得、
   資産推移レポート（証券会社×資産クラス集計）、認証強化、バックアップ/エクスポート
@@ -487,8 +516,9 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 
 ## 13. 残論点（実装着手前に確認）
 
-1. 売却・一部売却の扱い（前回購入価格・平均取得単価への反映方法）
-2. 認証方式（単一パスワード or Cloudflare Access）
-3. SBI/楽天/moomoo の実CSVサンプル
-4. LINE公式アカウント・Resend アカウントの準備
-5. ランク初期金額（S/A/B/C/D）と通知時間帯
+1. LINE公式アカウント（Messaging API チャネル）の準備可否
+2. ログインを許可する Google アカウント（本人のメール）と、Sheets を置く Google アカウント
+3. （将来）SBI/楽天/Webull/moomoo の実CSVサンプル（CSV取込はフェーズ3）
+
+> 解決済み: 売却=数量のみ減算・単価不変 / 認証=Googleログイン / 金額=カテゴリ別マスタ /
+> 通知時刻=日本株7:45,11:00,17:00・米国株24:00,7:00 / 保管先=Google スプレッドシート。
