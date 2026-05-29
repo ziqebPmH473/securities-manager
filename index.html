@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>証券管理ツール</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>証券管理ツール</h1>
+    <div class="header-actions">
+      <span id="fx-indicator" class="fx" title="USD/JPY">USD/JPY: --</span>
+      <button id="btn-refresh" class="btn btn-primary">価格更新</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-view="dashboard">ダッシュボード</button>
+    <button class="tab" data-view="us">米国株</button>
+    <button class="tab" data-view="jp">日本株</button>
+    <button class="tab" data-view="fund">投信</button>
+    <button class="tab" data-view="signals">サイン<span id="signal-badge" class="badge" hidden>0</span></button>
+    <button class="tab" data-view="master">マスタ・設定</button>
+  </nav>
+
+  <main id="app"></main>
+
+  <!-- 汎用モーダル -->
+  <div id="modal-overlay" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h2 id="modal-title">タイトル</h2>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
