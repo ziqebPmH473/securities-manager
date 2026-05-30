@@ -116,6 +116,8 @@ const store = {
     this.data.meta ||= {}; // 銘柄情報マスタ（名前・セクター・ファンダ）priceKeyでキャッシュ
     this.data.amountHistory ||= [];   // 金額マスタ変更履歴（版管理）
     this.data.amountSnapshots ||= []; // 銘柄ごとの適用金額スナップショット
+    this.data.importHistory ||= [];   // 取込履歴
+    this.data.lastPriceUpdate ||= null; // 価格更新日時
     this.data.seq ||= 1;
     if (!this.data.rules.some(r => r.isDefault)) this.data.rules[0].isDefault = true;
     // 後方互換: カテゴリに米国株金額が無ければ日本株の÷100で補完
@@ -128,7 +130,8 @@ const store = {
       securities: [], holdings: [], transactions: [],
       rules: [structuredClone(DEFAULT_RULE)],
       categories: structuredClone(DEFAULT_CATEGORIES),
-      prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [], seq: 1,
+      prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [],
+      importHistory: [], lastPriceUpdate: null, seq: 1,
     };
   },
   nextId() { return this.data.seq++; },
@@ -458,6 +461,7 @@ const api = {
     }
     const fx = quotes['USDJPY=X'];
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
+    store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
     // 銘柄情報（名前・セクター・ファンダ）もマスタ取得（定期取得＝価格更新時に同時更新）
     await this.refreshMeta(secs);
@@ -591,6 +595,8 @@ function render() {
 function updateHeader() {
   const fx = calc.fx();
   document.getElementById('fx-indicator').textContent = `USD/JPY: ${fx ? fx.toFixed(2) : '--'}`;
+  const lu = document.getElementById('last-update');
+  if (lu) lu.textContent = store.data.lastPriceUpdate ? `更新: ${fmtDateTime(store.data.lastPriceUpdate)}` : '更新: 未取得';
 }
 
 function updateSignalBadge() {
@@ -1030,6 +1036,27 @@ function openAmountHistory(secId) {
     <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`);
 }
 
+// 取込履歴セクション
+function importHistorySection() {
+  const hist = store.data.importHistory || [];
+  if (!hist.length) return '';
+  const modeLabel = { append: '追加', replace: '洗い替え', upsert: '追加+上書き' };
+  const rows = hist.slice(0, 20).map(h => `<tr>
+    <td class="l">${fmtDateTime(h.importedAt)}</td>
+    <td class="l">${esc(h.broker)}（${(h.markets || []).map(m => MARKET_LABEL[m] || m).join('・')}）</td>
+    <td class="l">${modeLabel[h.mode] || h.mode}</td>
+    <td>${h.count}</td>
+    <td class="l">${h.baseDate ? esc(h.baseDate) : '—'}</td>
+  </tr>`).join('');
+  return `<details class="form-group" style="margin:0 16px 14px">
+    <summary>取込履歴（${hist.length}件）</summary>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">取込日時</th><th class="l">証券会社（市場）</th><th class="l">モード</th><th>件数</th><th class="l">基準日</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </details>`;
+}
+
 // ---------- マスタ・設定 ----------
 function renderMaster() {
   const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -1074,6 +1101,7 @@ function renderMaster() {
         <button class="btn" onclick="openBrokerImport()">保有を取込（証券会社別）</button>
       </div>
       <p class="muted" style="padding:0 16px 14px">Excelの該当シートをヘッダ行ごとコピーして貼り付け→ティッカーで既存銘柄に紐づけ（未登録は新規作成も可）。</p>
+      ${importHistorySection()}
     </div>
     <div class="section">
       <div class="section-head"><h2>データ管理</h2></div>
@@ -1795,30 +1823,45 @@ function parseGeneric(text) {
 }
 
 const IMPORT_PROFILES = {
-  'sbi-us':  { label: 'SBI 米国株（画面コピーを貼り付け）', input: 'paste', parse: parseSbiUsScreen },
-  'sbi-jp':  { label: 'SBI 日本株（CSVファイル）', input: 'file', parse: parseSbiJpCsv },
-  'moomoo':  { label: 'moomoo（CSVファイル）', input: 'file', parse: parseMoomooCsv },
-  'rakuten': { label: '楽天証券（保有商品一覧CSV）', input: 'file', parse: parseRakutenCsv },
-  'generic': { label: '汎用（貼り付け: ティッカー,市場,数量,取得単価）', input: 'paste', parse: parseGeneric },
+  // scope: 洗い替え（replace）の対象範囲。fixed=固定証券会社（モード固定replace）
+  'sbi-us':  { label: 'SBI 米国株（画面コピーを貼り付け）', input: 'paste', parse: parseSbiUsScreen, fixed: true, scope: { broker: 'SBI', markets: ['US'] } },
+  'sbi-jp':  { label: 'SBI 日本株（CSVファイル）', input: 'file', parse: parseSbiJpCsv, fixed: true, scope: { broker: 'SBI', markets: ['JP'] } },
+  'moomoo':  { label: 'moomoo（CSVファイル）', input: 'file', parse: parseMoomooCsv, fixed: true, scope: { broker: 'moomoo', markets: ['JP', 'US'] } },
+  'rakuten': { label: '楽天証券（保有商品一覧CSV）', input: 'file', parse: parseRakutenCsv, fixed: true, scope: { broker: '楽天', markets: ['JP', 'US'] } },
+  'generic': { label: '汎用（貼り付け: ティッカー,市場,数量,取得単価）', input: 'paste', parse: parseGeneric, fixed: false },
 };
 
-let _importRows = [], _importProfile = 'sbi-us';
+// データ内の基準日（基準日/作成日/出力日/評価日 等のラベル付き日付）を抽出。無ければnull
+function extractBaseDate(text) {
+  const m = String(text || '').match(/(基準日|作成日|出力日|評価日|データ日付|日付)[^\d]{0,8}(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})/);
+  if (!m) return null;
+  return `${m[2]}-${String(m[3]).padStart(2, '0')}-${String(m[4]).padStart(2, '0')}`;
+}
+
+let _importRows = [], _importProfile = 'sbi-us', _importText = '';
 
 function openBrokerImport() {
   const profOpts = Object.entries(IMPORT_PROFILES).map(([k, p]) => `<option value="${k}">${esc(p.label)}</option>`).join('');
-  _importRows = []; _importProfile = 'sbi-us';
+  _importRows = []; _importProfile = 'sbi-us'; _importText = '';
   showModal('保有を取込（証券会社別）', `
     <form id="bimport-form" onsubmit="return false">
       <div class="field"><label>形式（証券会社）</label>
         <select name="profile" onchange="onImportProfileChange(this.value)">${profOpts}</select></div>
       <div class="field" id="bimport-broker-wrap" style="display:none"><label>証券会社（汎用・列に無い場合）</label>
         <select name="broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+      <div class="field" id="bimport-mode-wrap" style="display:none"><label>取込モード（汎用）</label>
+        <select name="mode">
+          <option value="append">追加（既存はそのまま）</option>
+          <option value="replace">証券会社ごとに入れ替え（洗い替え）</option>
+          <option value="upsert">追加＋上書き</option>
+        </select></div>
       <div class="field" id="bimport-file-wrap"><label>CSVファイル（Shift-JIS/UTF-8 自動判定）</label>
         <input type="file" name="file" accept=".csv,text/csv" onchange="onImportFile(this)"></div>
       <div class="field" id="bimport-paste-wrap" style="display:none"><label>貼り付け</label>
         <textarea name="paste" rows="8" oninput="onImportPaste(this.value)" style="font-family:monospace;font-size:12px" placeholder="ここに貼り付け"></textarea></div>
       <label class="check"><input type="checkbox" name="create" checked> 未登録のティッカーは新規作成する</label>
       <div id="bimport-preview" class="muted" style="margin:8px 0"></div>
+      <p class="muted" id="bimport-note" style="margin:0 0 8px"></p>
       <div class="form-actions">
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="button" class="btn btn-primary" onclick="runBrokerImport()">取込を実行</button>
@@ -1827,27 +1870,33 @@ function openBrokerImport() {
   onImportProfileChange('sbi-us');
 }
 function onImportProfileChange(key) {
-  _importProfile = key; _importRows = [];
+  _importProfile = key; _importRows = []; _importText = '';
   const p = IMPORT_PROFILES[key];
   document.getElementById('bimport-file-wrap').style.display = p.input === 'file' ? '' : 'none';
   document.getElementById('bimport-paste-wrap').style.display = p.input === 'paste' ? '' : 'none';
   document.getElementById('bimport-broker-wrap').style.display = key === 'generic' ? '' : 'none';
+  document.getElementById('bimport-mode-wrap').style.display = key === 'generic' ? '' : 'none';
+  const note = document.getElementById('bimport-note');
+  if (note) note.textContent = p.fixed
+    ? `この形式は「洗い替え」です（${p.scope.broker} の ${p.scope.markets.map(m => MARKET_LABEL[m]).join('・')} の保有を全削除してから取り込みます）。`
+    : '汎用は取込モードを選べます。';
   setImportPreview();
 }
 function onImportFile(input) {
   const file = input.files[0]; if (!file) return;
   const r = new FileReader();
   r.onload = () => {
-    let text; const buf = r.result;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
-    catch (_) { text = new TextDecoder('shift_jis').decode(buf); }
-    try { _importRows = IMPORT_PROFILES[_importProfile].parse(text); }
+    const buf = r.result;
+    try { _importText = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+    catch (_) { _importText = new TextDecoder('shift_jis').decode(buf); }
+    try { _importRows = IMPORT_PROFILES[_importProfile].parse(_importText); }
     catch (e) { _importRows = []; }
     setImportPreview();
   };
   r.readAsArrayBuffer(file);
 }
 function onImportPaste(text) {
+  _importText = text;
   try { _importRows = IMPORT_PROFILES[_importProfile].parse(text); }
   catch (e) { _importRows = []; }
   setImportPreview();
@@ -1855,30 +1904,60 @@ function onImportPaste(text) {
 function setImportPreview() {
   const el = document.getElementById('bimport-preview'); if (!el) return;
   if (!_importRows.length) { el.textContent = '（データ未検出）'; return; }
+  const bd = extractBaseDate(_importText);
   const sample = _importRows.slice(0, 4).map(r => `${MARKET_LABEL[r.market]} ${r.ticker} ×${r.quantity} @${r.avgCost}（${r.broker || '—'}/${r.account}）`).join('<br>');
-  el.innerHTML = `<strong>${_importRows.length} 件</strong>を検出:<br>${sample}${_importRows.length > 4 ? '<br>…' : ''}`;
+  el.innerHTML = `<strong>${_importRows.length} 件</strong>を検出${bd ? `（基準日: ${bd}）` : ''}:<br>${sample}${_importRows.length > 4 ? '<br>…' : ''}`;
 }
 function runBrokerImport() {
   if (!_importRows.length) { toast('取込データがありません'); return; }
   const f = document.getElementById('bimport-form');
   const create = f.create.checked;
+  const prof = IMPORT_PROFILES[_importProfile];
   const defBroker = f.broker ? f.broker.value : 'SBI';
-  let updated = 0, created = 0;
+  // モード決定: 固定プロファイルは replace（洗い替え）、汎用は選択
+  const mode = prof.fixed ? 'replace' : (f.mode ? f.mode.value : 'append');
+  // 洗い替えスコープ
+  let scope = prof.fixed ? prof.scope : { broker: defBroker, markets: ['JP', 'US'] };
+
+  // replace: スコープ内の既存保有を削除
+  let removed = 0;
+  if (mode === 'replace') {
+    const keep = [];
+    for (const h of store.data.holdings) {
+      const s = store.data.securities.find(x => x.id === h.securityId);
+      if (s && h.broker === scope.broker && scope.markets.includes(s.market)) { removed++; continue; }
+      keep.push(h);
+    }
+    store.data.holdings = keep;
+  }
+
+  let updated = 0, created = 0, skipped = 0;
   const touched = [];
   for (const row of _importRows) {
     const tk = row.market === 'US' ? row.ticker.trim().toUpperCase() : row.ticker.trim();
     let sec = store.findSecurity(row.market, tk);
     if (!sec) {
-      if (!create) continue;
+      if (!create) { skipped++; continue; }
       sec = store.addSecurity({ market: row.market, ticker: tk, currency: row.market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, ruleId: store.defaultRule().id });
       created++;
     } else updated++;
-    store.setHolding(sec.id, row.broker || defBroker, row.account || '特定', row.quantity, row.avgCost ?? 0);
+    const broker = row.broker || defBroker, account = row.account || '特定';
+    const exists = store.data.holdings.some(h => h.securityId === sec.id && h.broker === broker && h.accountType === account);
+    if (mode === 'append' && exists) { /* 既存はそのまま（上書きしない） */ }
+    else store.setHolding(sec.id, broker, account, row.quantity, row.avgCost ?? 0);
     touched.push(sec);
   }
+  store.save();
+  // 取込履歴
+  const baseDate = extractBaseDate(_importText);
+  store.data.importHistory.unshift({
+    id: store.nextId(), profile: _importProfile, label: prof.label,
+    broker: scope.broker, markets: scope.markets, mode, count: _importRows.length,
+    importedAt: new Date().toISOString(), baseDate: baseDate || null,
+  });
+  store.save();
   closeModal(); render();
-  toast(`取込完了: 更新 ${updated} 件 / 新規 ${created} 件`);
-  // 新規・更新銘柄の名前/セクター等マスタを取得
+  toast(`取込完了: 更新 ${updated} / 新規 ${created}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
   if (touched.length) api.refreshMeta(touched).then(render);
 }
 
