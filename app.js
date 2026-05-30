@@ -2288,15 +2288,22 @@ function splitOverRatio(val, price, r) {
   const ratio = val / price;
   return r >= 1 ? ratio > r + 1e-9 : ratio < r - 1e-9;
 }
-// 既定モード推奨: 保有が分割前に入っていれば「全部」、保有は分割後だが手入力項目があれば「手入力のみ」、何も無ければ「スキップ」
+// 手入力項目が「未調整（分割日より前に入力＝分割前の値のまま）」か。手入力日で判定。
+// 手入力日が無い旧データは判定不能なので安全側で「未調整(true)」扱い。
+function manualUnadjusted(sec, date) {
+  return sec.manualUpdatedAt ? fmtDate(sec.manualUpdatedAt) < date : true;
+}
+// 「手入力のみ」調整が要るか: 手入力項目（前回購入・手動高値）が未調整、または分割前の手動取引がある
+// ※存在するだけでなく、手入力日が分割前（未調整）の時だけ対象（調整後に入力した値は二重調整しない）
 function hasManualToAdjust(sec, date) {
-  if (typeof sec.prevBuyPrice === 'number') return true;
-  if (typeof sec.baseHighManual === 'number') return true;
+  const hasManualField = (typeof sec.prevBuyPrice === 'number') || (typeof sec.baseHighManual === 'number');
+  if (hasManualField && manualUnadjusted(sec, date)) return true;
   return store.data.transactions.some(t => t.securityId === sec.id && t.tradedAt && t.tradedAt < date);
 }
+// 既定モード推奨: 保有(取得単価)が分割前に入っていれば「全部」、保有は分割後でも手入力項目が未調整なら「手入力のみ」、何も無ければ「スキップ」
 function recommendSplitMode(sec, date) {
   const hs = store.data.holdings.filter(h => h.securityId === sec.id);
-  const holdingsPre = hs.some(h => !h.updatedAt || fmtDate(h.updatedAt) < date); // 分割前に入った保有がある
+  const holdingsPre = hs.some(h => h.quantity > 0 && (!h.updatedAt || fmtDate(h.updatedAt) < date)); // 分割前に入った保有がある
   if (holdingsPre) return 'full';
   if (hasManualToAdjust(sec, date)) return 'manual';
   return 'skip';
@@ -2387,6 +2394,12 @@ function openSplitAdjust(items) {
     const w = splitWarnInfo(sec, r);
     const hold = th.qty ? `${num(th.qty)} @${ccy}${num(th.avgCost)}<br><strong>→ ${num(th.qty * r)} @${ccy}${num(th.avgCost / r)}</strong>` : muted;
     const pbp = (typeof sec.prevBuyPrice === 'number') ? `${ccy}${num(sec.prevBuyPrice)}<br><strong>→ ${ccy}${num(sec.prevBuyPrice / r)}</strong>` : muted;
+    // 取込日/手入力日（分割日より前＝未調整の疑いは色付き。一覧と同じルール）
+    const lh = latestHolding(sec.id);
+    const impCls = (lh && lh.updatedAt && fmtDate(lh.updatedAt) < it.date) ? 'after-split' : '';
+    const manCls = (sec.manualUpdatedAt && fmtDate(sec.manualUpdatedAt) < it.date) ? 'after-split' : '';
+    const impCell = lh ? `${fmtDate(lh.updatedAt)} ${lh.source === 'import' ? '取込' : '手入力'}` : muted;
+    const manCell = sec.manualUpdatedAt ? fmtDate(sec.manualUpdatedAt) : muted;
     const rec = recommendSplitMode(sec, it.date); // 推奨処理（専用列に表示。種別の初期値はスキップ固定）
     const o = (v, l) => `<option value="${v}">${l}</option>`;
     const recCell = rec === 'skip' ? `<span class="muted">${MODE_LABEL[rec]}</span>` : `<strong>${MODE_LABEL[rec]}</strong>`;
@@ -2397,20 +2410,22 @@ function openSplitAdjust(items) {
       <td>${price != null ? ccy + num(price) : muted}</td>
       <td class="l">${hold}</td>
       <td class="l">${pbp}</td>
+      <td class="l ${impCls}">${impCell}</td>
+      <td class="l ${manCls}">${manCell}</td>
       <td class="l">${w.warn ? `<span class="neg" title="${esc(w.reason)}">⚠ ${esc(w.reason)}</span>` : '—'}</td>
       <td class="l">${recCell}</td>
       <td class="l"><select class="sa-mode"><option value="skip" selected>スキップ</option>${o('full', '全部')}${o('manual', '手入力のみ')}</select></td>
     </tr>`;
   }).join('');
   showModal('株式分割・併合の一括調整', `
-    <p class="muted">行ごとに「種別」を選んで「調整実行」。初期はスキップ（何もしない）です。⚠＝単価/現在値が分割比率を超過＝既調整や異常の可能性。「全部」=保有も調整／「手入力のみ」=前回購入価格等のみ。<br>「推奨」列は当ツールの推奨処理。チェックして「選択行を→推奨→に一括変更」でまとめて反映できます。</p>
+    <p class="muted">行ごとに「種別」を選んで「調整実行」。初期はスキップ（何もしない）です。⚠＝単価/現在値が分割比率を超過＝既調整や異常の可能性。「全部」=保有も調整／「手入力のみ」=前回購入価格等のみ。取込日/手入力日が分割日より<strong>前</strong>（＝未調整の疑い）は<span class="after-split">この色</span>。<br>「推奨」列は当ツールの推奨処理（手入力日が分割前なら未調整とみなす）。チェックして「選択行を→推奨→に一括変更」でまとめて反映できます。</p>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0">
       <label class="check" style="margin:0"><input type="checkbox" id="sa-all" onchange="saSelectAll(this)"> 全選択</label>
       選択行を <select id="sa-bulk"><option value="reco">推奨</option><option value="full">全部</option><option value="manual">手入力のみ</option><option value="skip">スキップ</option></select>
       <button type="button" class="btn btn-sm" onclick="saApplyBulk()">に一括変更</button>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th class="l">☑</th><th class="l">銘柄</th><th class="l">分割日/比率</th><th>現在値</th><th class="l">保有(現→後)</th><th class="l">前回購入(現→後)</th><th class="l">警告</th><th class="l">推奨</th><th class="l">種別</th></tr></thead>
+      <thead><tr><th class="l">☑</th><th class="l">銘柄</th><th class="l">分割日/比率</th><th>現在値</th><th class="l">保有(現→後)</th><th class="l">前回購入(現→後)</th><th class="l">取込日</th><th class="l">手入力日</th><th class="l">警告</th><th class="l">推奨</th><th class="l">種別</th></tr></thead>
       <tbody id="sa-rows">${rows}</tbody>
     </table></div>
     <div class="form-actions">
