@@ -165,6 +165,19 @@ form label.check input { width: auto; }
 .cp-item label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; flex: 1; }
 .cp-item label input { width: auto; cursor: pointer; }
 
+/* 一括操作バー */
+.bulkbar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.bulkbar .muted { font-size: 12px; }
+
+/* サインの見出し */
+.sig-head { margin: 16px 16px 6px; font-size: 14px; }
+.sig-head.reached { color: var(--red); }
+.sig-head.near { color: var(--amber); }
+.sig-head:first-child { margin-top: 10px; }
+
+/* 行内チェックボックス */
+.row-select, #select-all { width: auto; cursor: pointer; }
+
 @media (max-width: 640px) {
   .app-header h1 { font-size: 16px; }
   main { padding: 12px; }

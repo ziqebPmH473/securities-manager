@@ -35,36 +35,50 @@ const BASE_HIGH_LABEL = { '5y': '5年高値', '52w': '52週高値', 'all': '上�
 const BROKERS = ['SBI', '楽天', 'Webull', 'moomoo'];
 const ACCOUNTS = ['特定', 'NISA', '一般'];
 // ---------- カラム定義 ----------
-// 全カラムのマスタ定義
+// 全カラムのマスタ定義。配列の順＝表示順のベース（ピッカーで個別に並び替え可）
+// markets に含む画面でのみ選択可能。'SIGNAL' はサインタブ。
+const ALLM = ['US','JP','FUND','SIGNAL'];
+const STKM = ['US','JP','SIGNAL'];
 const MASTER_COLS = [
-  { key: 'name',      label: '銘柄名',        left: true,  markets: ['US','JP','FUND'], noSort: false },
-  { key: 'ticker',    label: 'ティッカー',     left: true,  markets: ['US','JP','FUND'], noSort: false },
-  { key: 'price',     label: '現在値',         left: false, markets: ['US','JP','FUND'], noSort: false },
-  { key: 'day',       label: '前日比',         left: false, markets: ['US','JP','FUND'], noSort: true  },
-  { key: 'trigger',   label: '次回購入',       left: false, markets: ['US','JP'],        noSort: true  },
-  { key: 'drop',      label: '残り下落率',     left: false, markets: ['US','JP'],        noSort: false },
-  { key: 'sector',    label: 'セクター',       left: true,  markets: ['US','JP'],        noSort: false },
-  { key: 'industry',  label: '業種',           left: true,  markets: ['US','JP'],        noSort: false },
-  { key: 'marketCap', label: '時価総額(百万)',  left: false, markets: ['US','JP'],        noSort: false },
-  { key: 'value',     label: '評価額',         left: false, markets: ['US','JP','FUND'], noSort: false },
-  { key: 'cost',      label: '取得価額',       left: false, markets: ['US','JP','FUND'], noSort: false },
-  { key: 'pnl',       label: '損益率',         left: false, markets: ['US','JP','FUND'], noSort: false },
-  { key: 'avgCost',   label: '取得単価',       left: false, markets: ['US','JP','FUND'], noSort: false },
-  { key: 'qty',       label: '数量',           left: false, markets: ['US','JP','FUND'], noSort: false },
-  { key: 'buyCount',  label: '購入回数',       left: false, markets: ['US','JP','FUND'], noSort: false },
-  { key: 'buyAmount', label: '1回購入額',      left: false, markets: ['US','JP','FUND'], noSort: false },
-  { key: 'category',  label: 'AI判断',         left: true,  markets: ['US','JP','FUND'], noSort: false },
-  { key: 'rating',    label: '銘柄格付',       left: true,  markets: ['US','JP'],        noSort: false },
-  { key: 'per',       label: 'PER',            left: false, markets: ['US','JP'],        noSort: false },
-  { key: 'dividend',  label: '配当/株',        left: false, markets: ['US','JP'],        noSort: false },
+  { key: 'ticker',      label: 'ティッカー',       left: true,  markets: ALLM, noSort: false },
+  { key: 'name',        label: '銘柄名',           left: true,  markets: ALLM, noSort: false },
+  { key: 'market',      label: '市場',             left: true,  markets: ['SIGNAL'], noSort: false },
+  { key: 'sigType',     label: '種別',             left: true,  markets: ['SIGNAL'], noSort: false },
+  { key: 'price',       label: '現在値',           left: false, markets: ALLM, noSort: false },
+  { key: 'day',         label: '前日比',           left: false, markets: ALLM, noSort: true  },
+  { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: true  },
+  { key: 'base',        label: '基準値',           left: false, markets: ['SIGNAL'], noSort: true },
+  { key: 'drop',        label: '残り下落率',       left: false, markets: STKM, noSort: false },
+  { key: 'high5y',      label: '5年高値',          left: false, markets: STKM, noSort: false },
+  { key: 'high52w',     label: '52週高値',         left: false, markets: STKM, noSort: false },
+  { key: 'dropFrom5y',  label: '5年高値からの下落率', left: false, markets: STKM, noSort: false },
+  { key: 'dropFrom52w', label: '52週高値からの下落率', left: false, markets: STKM, noSort: false },
+  { key: 'prevBuyPrice', label: '前回購入単価',     left: false, markets: STKM, noSort: false },
+  { key: 'dropFromPrev', label: '前回からの下落率', left: false, markets: STKM, noSort: false },
+  { key: 'sector',      label: 'セクター',         left: true,  markets: STKM, noSort: false },
+  { key: 'industry',    label: '業種',             left: true,  markets: STKM, noSort: false },
+  { key: 'marketCap',   label: '時価総額(百万)',    left: false, markets: STKM, noSort: false },
+  { key: 'value',       label: '評価額',           left: false, markets: ALLM, noSort: false },
+  { key: 'cost',        label: '取得価額',         left: false, markets: ALLM, noSort: false },
+  { key: 'pnl',         label: '損益率',           left: false, markets: ALLM, noSort: false },
+  { key: 'avgCost',     label: '取得単価',         left: false, markets: ALLM, noSort: false },
+  { key: 'qty',         label: '数量',             left: false, markets: ALLM, noSort: false },
+  { key: 'buyCount',    label: '購入回数',         left: false, markets: ALLM, noSort: false },
+  { key: 'buyAmount',   label: '買い増し予定額',    left: false, markets: ALLM, noSort: false },
+  { key: 'reco',        label: '推奨購入額',       left: false, markets: ALLM, noSort: false },
+  { key: 'category',    label: 'AI判断',           left: true,  markets: ALLM, noSort: false },
+  { key: 'rating',      label: '銘柄格付',         left: true,  markets: STKM, noSort: false },
+  { key: 'per',         label: 'PER',              left: false, markets: STKM, noSort: false },
+  { key: 'dividend',    label: '配当/株',          left: false, markets: STKM, noSort: false },
 ];
-// デフォルト表示列（市場ごと）。MASTER_COLSのkeyの順＝表示順
+// デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['name','ticker','price','day','trigger','drop','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
-  JP:   ['name','ticker','price','day','trigger','drop','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
-  FUND: ['name','ticker','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
+  US:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
+  JP:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
+  FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
+  SIGNAL: ['ticker','name','market','sigType','price','day','drop','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','rating'],
 };
-const COL_PREFS_KEY = 'sm_colprefs_v1';
+const COL_PREFS_KEY = 'sm_colprefs_v2';
 
 // 分析メタの取込列マッピング（Excel「銘柄分析結果」のヘッダ名 → 内部キー）
 const ANALYSIS_COLMAP = {
@@ -99,6 +113,7 @@ const store = {
     this.data.categories ||= structuredClone(DEFAULT_CATEGORIES);
     this.data.prices ||= {};
     this.data.fx ||= { USDJPY: null };
+    this.data.meta ||= {}; // 銘柄情報マスタ（名前・セクター・ファンダ）priceKeyでキャッシュ
     this.data.seq ||= 1;
     if (!this.data.rules.some(r => r.isDefault)) this.data.rules[0].isDefault = true;
     // 後方互換: カテゴリに米国株金額が無ければ日本株の÷100で補完
@@ -111,7 +126,7 @@ const store = {
       securities: [], holdings: [], transactions: [],
       rules: [structuredClone(DEFAULT_RULE)],
       categories: structuredClone(DEFAULT_CATEGORIES),
-      prices: {}, fx: { USDJPY: null }, seq: 1,
+      prices: {}, fx: { USDJPY: null }, meta: {}, seq: 1,
     };
   },
   nextId() { return this.data.seq++; },
@@ -255,6 +270,21 @@ const calc = {
     return p && typeof p.price === 'number' ? p.price : null;
   },
 
+  // 銘柄情報マスタ（名前・セクター等のキャッシュ）
+  metaOf(sec) { return store.data.meta[priceKey(sec)] || {}; },
+  // 表示名: 手入力名 > マスタ名(日本語優先) > ティッカー
+  displayName(sec) { const meta = this.metaOf(sec); return sec.name || meta.name || sec.ticker; },
+  // フィールド取得: レコード優先・無ければマスタから（セクター/業種/時価総額/PER/配当）
+  field(sec, key) { const v = sec[key]; if (v != null && v !== '') return v; const meta = this.metaOf(sec); return meta[key] ?? null; },
+  // 高値（priceキャッシュ）
+  high5y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high5y ?? null; },
+  high52w(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high52w ?? null; },
+  // 各種「〜からの下落率」（現在値 vs 基準。負=基準より下）
+  dropFrom(sec, base) { const price = this.price(sec); if (price == null || !base) return null; return (price - base) / base * 100; },
+  dropFromPrev(sec) { return this.dropFrom(sec, this.lastBuyPrice(sec)); },
+  dropFrom5y(sec) { return this.dropFrom(sec, this.high5y(sec)); },
+  dropFrom52w(sec) { return this.dropFrom(sec, this.high52w(sec)); },
+
   // 銘柄の合計保有（全口座合算）
   totalHolding(secId) {
     const hs = store.data.holdings.filter(h => h.securityId === secId);
@@ -390,18 +420,47 @@ const api = {
     const fx = quotes['USDJPY=X'];
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
     store.save();
+    // 銘柄情報（名前・セクター・ファンダ）もマスタ取得（定期取得＝価格更新時に同時更新）
+    await this.refreshMeta(secs);
     toast('価格を更新しました');
   },
+
+  // 銘柄情報マスタを一括取得して store.data.meta にキャッシュ
+  async refreshMeta(secs) {
+    secs = secs || store.data.securities.filter(s => s.ticker);
+    if (secs.length === 0) return;
+    const symbols = [...new Set(secs.map(yahooSymbol))];
+    try {
+      const res = await fetch(`/api/info?symbols=${encodeURIComponent(symbols.join(','))}`);
+      if (!res.ok) return;
+      const infos = await res.json();
+      for (const sec of secs) {
+        const d = infos[yahooSymbol(sec)];
+        if (d && !d.error) {
+          const key = priceKey(sec);
+          store.data.meta[key] = { ...(store.data.meta[key] || {}), ...clean(d) };
+        }
+      }
+      store.save();
+    } catch (_) { /* 取得失敗は無視（手入力可） */ }
+  },
 };
+// null/空を除いたオブジェクトを返す（既存マスタ値を上書きしないため）
+function clean(o) {
+  const r = {};
+  for (const k in o) if (o[k] != null && o[k] !== '') r[k] = o[k];
+  return r;
+}
 
 // ---------- ルーター/描画 ----------
 const app = document.getElementById('app');
 let currentView = 'dashboard';
-// 一覧のソート/フィルタ・カラム設定（市場ごと）
+// 一覧のソート/フィルタ・カラム設定（市場ごと）。デフォルトはティッカー順
 const listState = {
-  US:   { sortKey: 'name', sortDir: 1, broker: '', account: '', category: '' },
-  JP:   { sortKey: 'name', sortDir: 1, broker: '', account: '', category: '' },
-  FUND: { sortKey: 'name', sortDir: 1, broker: '', account: '', category: '' },
+  US:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '' },
+  JP:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '' },
+  FUND:   { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '' },
+  SIGNAL: { sortKey: 'drop',   sortDir: 1, broker: '', account: '', category: '' },
 };
 // カラム設定: 市場ごとに [{key, visible}] の配列
 let colPrefs = {};
@@ -411,6 +470,7 @@ function loadColPrefs() {
 function saveColPrefs() { localStorage.setItem(COL_PREFS_KEY, JSON.stringify(colPrefs)); }
 function getColOrder(market) {
   if (!colPrefs[market]) resetColPrefs(market);
+  else reconcileColPrefs(market);
   return colPrefs[market];
 }
 function resetColPrefs(market) {
@@ -420,33 +480,61 @@ function resetColPrefs(market) {
   }));
   saveColPrefs();
 }
+// 保存済み設定に、新規追加カラムを補完し、廃止カラムを除去（アプリ更新対応）
+function reconcileColPrefs(market) {
+  const validKeys = MASTER_COLS.filter(c => c.markets.includes(market)).map(c => c.key);
+  const validSet = new Set(validKeys);
+  const have = new Set(colPrefs[market].map(c => c.key));
+  const visible = new Set(DEFAULT_VISIBLE[market]);
+  let arr = colPrefs[market].filter(c => validSet.has(c.key)); // 廃止カラム除去
+  // 未保持の新カラムを MASTER_COLS の順序で挿入
+  let changed = arr.length !== colPrefs[market].length;
+  for (let i = 0; i < MASTER_COLS.length; i++) {
+    const mc = MASTER_COLS[i];
+    if (!mc.markets.includes(market) || have.has(mc.key)) continue;
+    arr.push({ key: mc.key, visible: visible.has(mc.key) });
+    changed = true;
+  }
+  if (changed) { colPrefs[market] = arr; saveColPrefs(); }
+}
 
 // ---------- カラムレンダラー ----------
 // 各カラムの td を返す関数。引数: (sec, ctx)
-// ctx: { ccy, th, ev, price, priceCell, noPriceMark, valN, pnlPct, dayChg, buyAmt, buyCnt, recoAmt, m, m2 }
+const muted = '<span class="muted">—</span>';
+const pctTd = (v) => `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
 const COL_RENDERERS = {
-  name:      (s,c) => `<td class="l"><strong>${esc(s.name || s.ticker)}</strong>${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
   ticker:    (s,c) => `<td class="l">${esc(s.ticker)}</td>`,
+  name:      (s,c) => `<td class="l"><strong>${esc(calc.displayName(s))}</strong>${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
+  market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
+  sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   price:     (s,c) => `<td>${c.priceCell}</td>`,
-  day:       (s,c) => `<td class="${cls(c.dayChg)}">${c.dayChg != null ? signed(c.dayChg) + '%' : '—'}</td>`,
-  trigger:   (s,c) => `<td>${c.ev ? c.m(c.ev.trigger) : '<span class="muted">—</span>'}</td>`,
-  drop:      (s,c) => !c.ev ? '<td><span class="muted">—</span></td>'
+  day:       (s,c) => pctTd(c.dayChg),
+  trigger:   (s,c) => `<td>${c.ev ? c.m(c.ev.trigger) : muted}</td>`,
+  base:      (s,c) => `<td>${c.ev ? c.m(c.ev.base) : muted}</td>`,
+  drop:      (s,c) => !c.ev ? `<td>${muted}</td>`
                     : c.ev.reached ? '<td class="neg">到達</td>'
                     : `<td class="drop ${c.ev.remainingDropPct <= 5 ? 'near' : 'far'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
-  sector:    (s,c) => `<td class="l">${s.sector ? esc(s.sector) : '<span class="muted">—</span>'}</td>`,
-  industry:  (s,c) => `<td class="l">${s.industry ? esc(s.industry) : '<span class="muted">—</span>'}</td>`,
-  marketCap: (s,c) => `<td>${s.marketCap != null ? Number(s.marketCap).toLocaleString('ja-JP') : '<span class="muted">—</span>'}</td>`,
-  value:     (s,c) => `<td>${c.th.qty ? money(c.valN, c.ccy) + c.noPriceMark : '<span class="muted">—</span>'}</td>`,
-  cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : '<span class="muted">—</span>'}</td>`,
-  pnl:       (s,c) => `<td class="${cls(c.pnlPct)}">${c.pnlPct != null ? signed(c.pnlPct) + '%' : '—'}</td>`,
-  avgCost:   (s,c) => `<td>${c.th.qty ? c.ccy + num(c.th.avgCost) : '<span class="muted">—</span>'}</td>`,
+  high5y:    (s,c) => `<td>${c.high5y != null ? c.ccy + num(c.high5y) : muted}</td>`,
+  high52w:   (s,c) => `<td>${c.high52w != null ? c.ccy + num(c.high52w) : muted}</td>`,
+  dropFrom5y:  (s,c) => pctTd(calc.dropFrom5y(s)),
+  dropFrom52w: (s,c) => pctTd(calc.dropFrom52w(s)),
+  prevBuyPrice: (s,c) => `<td>${c.prevBuy != null ? c.ccy + num(c.prevBuy) : muted}</td>`,
+  dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
+  sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
+  industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
+  marketCap: (s,c) => { const v = calc.field(s,'marketCap'); return `<td>${v != null ? Number(v).toLocaleString('ja-JP') : muted}</td>`; },
+  value:     (s,c) => `<td>${c.th.qty ? money(c.valN, c.ccy) + c.noPriceMark : muted}</td>`,
+  cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : muted}</td>`,
+  pnl:       (s,c) => pctTd(c.pnlPct),
+  avgCost:   (s,c) => `<td>${c.th.qty ? c.ccy + num(c.th.avgCost) : muted}</td>`,
   qty:       (s,c) => `<td>${c.th.qty ? num(c.th.qty) : '<span class="muted">0</span>'}</td>`,
-  buyCount:  (s,c) => `<td>${c.buyCnt ? num(c.buyCnt) : '<span class="muted">—</span>'}</td>`,
+  buyCount:  (s,c) => `<td>${c.buyCnt ? num(c.buyCnt) : muted}</td>`,
   buyAmount: (s,c) => `<td>${c.m(c.buyAmt)}</td>`,
-  category:  (s,c) => `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span> <span class="muted">${c.recoAmt ? money(c.recoAmt, c.ccy) : ''}</span>` : '<span class="muted">—</span>'}</td>`,
+  reco:      (s,c) => `<td>${c.recoAmt ? money(c.recoAmt, c.ccy) : muted}</td>`,
+  category:  (s,c) => `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`,
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
-  per:       (s,c) => `<td>${s.per != null ? num(s.per) : '<span class="muted">—</span>'}</td>`,
-  dividend:  (s,c) => `<td>${s.dividend != null ? c.m(s.dividend) : '<span class="muted">—</span>'}</td>`,
+  per:       (s,c) => { const v = calc.field(s,'per'); return `<td>${v != null ? num(v) : muted}</td>`; },
+  dividend:  (s,c) => { const v = calc.field(s,'dividend'); return `<td>${v != null ? c.m(v) : muted}</td>`; },
 };
 
 function render() {
@@ -547,39 +635,51 @@ function renderDashboard() {
     <div class="section">
       <div class="section-head"><h2>買い増しサイン（到達済み）</h2>
         <button class="btn btn-sm" onclick="go('signals')">一覧へ</button></div>
-      <div class="section-body">${signalsTable(allSignals(), true)}</div>
+      <div class="section-body">${dashSignalsTable()}</div>
     </div>`;
 }
 
 // ---------- 市場別 一覧 ----------
+// ソート用の比較値（一覧・サイン共通）
+function sortValue(sec, key) {
+  const th = calc.totalHolding(sec.id);
+  switch (key) {
+    case 'name': return calc.displayName(sec).toLowerCase();
+    case 'ticker': return (sec.ticker || '').toLowerCase();
+    case 'market': return sec.market;
+    case 'sigType': { const ev = calc.evaluate(sec); return ev ? ev.type : 'z'; }
+    case 'category': return sec.category || '';
+    case 'qty': return th.qty;
+    case 'avgCost': return th.avgCost;
+    case 'cost': return th.acquiredCost;
+    case 'sector': return calc.field(sec, 'sector') || 'zzz';
+    case 'industry': return calc.field(sec, 'industry') || 'zzz';
+    case 'marketCap': return calc.field(sec, 'marketCap') ?? -Infinity;
+    case 'buyCount': return calc.buyCount(sec) || 0;
+    case 'buyAmount': return calc.buyAmount(sec) ?? -Infinity;
+    case 'reco': return store.categoryAmountFor(sec.category, sec.market) || -Infinity;
+    case 'price': return calc.price(sec) ?? -Infinity;
+    case 'high5y': return calc.high5y(sec) ?? -Infinity;
+    case 'high52w': return calc.high52w(sec) ?? -Infinity;
+    case 'prevBuyPrice': return calc.lastBuyPrice(sec) ?? -Infinity;
+    case 'dropFromPrev': return calc.dropFromPrev(sec) ?? Infinity;
+    case 'dropFrom5y': return calc.dropFrom5y(sec) ?? Infinity;
+    case 'dropFrom52w': return calc.dropFrom52w(sec) ?? Infinity;
+    case 'value': return calc.valueOrCostNative(sec) ?? -Infinity;
+    case 'pnl': return calc.pnlPctNative(sec) ?? -Infinity;
+    case 'trigger': { const ev = calc.evaluate(sec); return ev ? ev.trigger : -Infinity; }
+    case 'base': { const ev = calc.evaluate(sec); return ev ? ev.base : -Infinity; }
+    case 'drop': { const ev = calc.evaluate(sec); return ev ? ev.remainingDropPct : Infinity; }
+    case 'rating': return sec.rating || sec.overallGrade || 'zzz';
+    case 'priority': return sec.priority ?? Infinity;
+    default: return '';
+  }
+}
 function sortSecurities(secs, market) {
   const st = listState[market];
   const key = st.sortKey, dir = st.sortDir;
-  const val = (sec) => {
-    const th = calc.totalHolding(sec.id);
-    switch (key) {
-      case 'name': return (sec.name || sec.ticker || '').toLowerCase();
-      case 'ticker': return (sec.ticker || '').toLowerCase();
-      case 'category': return sec.category || '';
-      case 'qty': return th.qty;
-      case 'avgCost': return th.avgCost;
-      case 'cost': return th.acquiredCost;
-      case 'sector': return sec.sector || 'zzz';
-      case 'industry': return sec.industry || 'zzz';
-      case 'marketCap': return sec.marketCap ?? -Infinity;
-      case 'buyCount': return calc.buyCount(sec) || 0;
-      case 'buyAmount': return calc.buyAmount(sec) ?? -Infinity;
-      case 'price': return calc.price(sec) ?? -Infinity;
-      case 'value': return calc.valueOrCostNative(sec) ?? -Infinity;
-      case 'pnl': return calc.pnlPctNative(sec) ?? -Infinity;
-      case 'drop': { const ev = calc.evaluate(sec); return ev ? ev.remainingDropPct : Infinity; }
-      case 'rating': return sec.rating || sec.overallGrade || 'zzz';
-      case 'priority': return sec.priority ?? Infinity;
-      default: return '';
-    }
-  };
   return [...secs].sort((a, b) => {
-    const va = val(a), vb = val(b);
+    const va = sortValue(a, key), vb = sortValue(b, key);
     if (va < vb) return -1 * dir;
     if (va > vb) return 1 * dir;
     return 0;
@@ -603,17 +703,7 @@ function renderMarket(market) {
   const visibleCols = getColOrder(market).filter(c => c.visible)
     .map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
 
-  const headHtml = visibleCols.map(col => {
-    const mc = MASTER_COLS.find(c => c.key === col.key);
-    const leftCls = mc.left ? 'l' : '';
-    // 評価額・取得価額には通貨記号を付ける
-    const label = (['value','cost','buyAmount'].includes(col.key) && ccy !== '¥')
-      ? `${mc.label}(${ccy})` : mc.label;
-    if (mc.noSort) return `<th class="${leftCls}">${label}</th>`;
-    const active = st.sortKey === col.key;
-    const arrow = active ? (st.sortDir === 1 ? ' ▲' : ' ▼') : '';
-    return `<th class="sortable ${leftCls} ${active ? 'active' : ''}" onclick="setSort('${market}','${col.key}')">${label}${arrow}</th>`;
-  }).join('');
+  const headHtml = colHeadHtml(visibleCols, st, market, ccy);
 
   app.innerHTML = `
     <div class="section">
@@ -638,26 +728,71 @@ function renderMarket(market) {
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${market}')" title="列の表示設定">⊞ 列</button>
         <span class="muted" style="margin-left:auto">${secs.length} 件</span>
       </div>
+      <div class="bulkbar">
+        <button class="btn btn-sm btn-danger" onclick="bulkSellAll()">選択を全売却</button>
+        <span class="muted" id="bulk-count">選択 0 件</span>
+      </div>
       <div class="section-body">
         ${secs.length === 0 ? `<div class="empty">該当する銘柄がありません。</div>` : `
         <div class="table-wrap"><table>
-          <thead><tr>${headHtml}<th class="l"></th></tr></thead>
+          <thead><tr><th class="l"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>${headHtml}<th class="l"></th></tr></thead>
           <tbody>
-            ${secs.map(sec => marketRow(sec, market, visibleCols)).join('')}
+            ${secs.map(sec => marketRow(sec, visibleCols, { select: true })).join('')}
           </tbody>
         </table></div>`}
       </div>
     </div>`;
+  bindRowSelect();
 }
 
-function marketRow(sec, market, visibleCols) {
+// ヘッダHTML生成（一覧・サイン共通）
+function colHeadHtml(visibleCols, st, market, ccy) {
+  return visibleCols.map(col => {
+    const mc = MASTER_COLS.find(c => c.key === col.key);
+    const leftCls = mc.left ? 'l' : '';
+    const label = (['value','cost','buyAmount','reco','high5y','high52w','prevBuyPrice'].includes(col.key) && ccy && ccy !== '¥')
+      ? `${mc.label}(${ccy})` : mc.label;
+    if (mc.noSort) return `<th class="${leftCls}">${label}</th>`;
+    const active = st.sortKey === col.key;
+    const arrow = active ? (st.sortDir === 1 ? ' ▲' : ' ▼') : '';
+    return `<th class="sortable ${leftCls} ${active ? 'active' : ''}" onclick="setSort('${market}','${col.key}')">${label}${arrow}</th>`;
+  }).join('');
+}
+
+// チェックボックス選択のバインド（件数表示更新）
+function bindRowSelect() {
+  const boxes = document.querySelectorAll('.row-select');
+  const update = () => {
+    const n = document.querySelectorAll('.row-select:checked').length;
+    const el = document.getElementById('bulk-count');
+    if (el) el.textContent = `選択 ${n} 件`;
+  };
+  boxes.forEach(b => b.addEventListener('change', update));
+  update();
+}
+function toggleSelectAll(master) {
+  document.querySelectorAll('.row-select').forEach(b => { b.checked = master.checked; });
+  bindRowSelect();
+}
+function bulkSellAll() {
+  const ids = [...document.querySelectorAll('.row-select:checked')].map(b => parseInt(b.dataset.id, 10));
+  if (ids.length === 0) { toast('銘柄を選択してください'); return; }
+  const names = ids.map(id => { const s = store.data.securities.find(x => x.id === id); return s ? calc.displayName(s) : ''; }).filter(Boolean);
+  if (!confirm(`選択した ${ids.length} 件を全売却（数量を0に）します。\n\n${names.join('、')}\n\nよろしいですか？`)) return;
+  ids.forEach(id => store.sellAll(id));
+  render();
+  toast(`${ids.length} 件を全売却しました`);
+}
+
+// opts: { select: true で先頭にチェックボックス列, actions: 'list'|'signal' }
+function marketRow(sec, visibleCols, opts = {}) {
+  const market = sec.market; // ccy/ev は銘柄の市場で判定（サインタブの混在に対応）
   const th = calc.totalHolding(sec.id);
   const p = store.data.prices[priceKey(sec)] || {};
   const price = p.price ?? null;
   const ccy = MARKET_CCY[market];
   const ctx = {
-    ccy,
-    th,
+    ccy, th,
     ev: market !== 'FUND' ? calc.evaluate(sec) : null,
     price,
     priceCell: price != null ? ccy + num(price) : priceInputBtn(sec),
@@ -668,18 +803,27 @@ function marketRow(sec, market, visibleCols) {
     buyAmt: calc.buyAmount(sec),
     buyCnt: calc.buyCount(sec),
     recoAmt: store.categoryAmountFor(sec.category, market),
+    high5y: calc.high5y(sec),
+    high52w: calc.high52w(sec),
+    prevBuy: calc.lastBuyPrice(sec),
     m: (v) => v != null ? money(v, ccy) : '<span class="muted">—</span>',
   };
+  const selectTd = opts.select ? `<td class="l"><input type="checkbox" class="row-select" data-id="${sec.id}"></td>` : '';
   const dataCells = visibleCols.map(col => {
     const renderer = COL_RENDERERS[col.key];
     return renderer ? renderer(sec, ctx) : `<td></td>`;
   }).join('');
-  const actionsTd = `<td class="l nowrap">
-    <button class="btn btn-sm" onclick="openTxnForm(${sec.id})">取引</button>
-    <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
-    <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">編集</button>
-  </td>`;
-  return `<tr>${dataCells}${actionsTd}</tr>`;
+  let actionsTd = '';
+  if (opts.actions === 'signal') {
+    actionsTd = `<td class="l nowrap"><button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id},'buy')">購入を記録</button></td>`;
+  } else if (opts.actions !== 'none') {
+    actionsTd = `<td class="l nowrap">
+        <button class="btn btn-sm" onclick="openTxnForm(${sec.id})">取引</button>
+        <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
+        <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">編集</button>
+      </td>`;
+  }
+  return `<tr>${selectTd}${dataCells}${actionsTd}</tr>`;
 }
 
 // 銘柄格付（★評価はツールチップに格納してコンパクトに）
@@ -750,37 +894,59 @@ function cpDragEnd() { _dragSrcIdx = null; document.querySelectorAll('.cp-draggi
 function cpReset() { resetColPrefs(_colPickerMarket); openColPicker(_colPickerMarket); }
 
 // ---------- サイン一覧 ----------
+// 到達（reached）と もうすぐ（残り5%以内）の銘柄を分けて返す
+function signalRows() {
+  const reached = [], near = [];
+  for (const sec of store.data.securities) {
+    const ev = calc.evaluate(sec);
+    if (!ev) continue;
+    if (ev.reached) reached.push(sec);
+    else if (ev.remainingDropPct <= 5) near.push(sec);
+  }
+  return { reached, near };
+}
+
 function renderSignals() {
-  const list = allSignals();
+  const st = listState.SIGNAL;
+  const { reached, near } = signalRows();
+  const visibleCols = getColOrder('SIGNAL').filter(c => c.visible)
+    .map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
   app.innerHTML = `
     <div class="section">
       <div class="section-head"><h2>買い増しサイン（市場横断）</h2>
-        <button class="btn btn-sm" onclick="api.refreshAll().then(render)">価格更新</button></div>
-      <div class="section-body">${signalsTable(list, false)}</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">⊞ 列</button>
+          <button class="btn btn-sm" onclick="api.refreshAll().then(render)">価格更新</button>
+        </div></div>
+      <div class="section-body">
+        <h3 class="sig-head reached">🔴 到達（今が買い時）　${reached.length} 件</h3>
+        ${signalTable(sortSecurities(reached, 'SIGNAL'), visibleCols, st)}
+        <h3 class="sig-head near">🟡 もうすぐ（残り 5% 以内）　${near.length} 件</h3>
+        ${signalTable(sortSecurities(near, 'SIGNAL'), visibleCols, st)}
+      </div>
     </div>`;
 }
 
-function signalsTable(list, compact) {
-  if (list.length === 0) return `<div class="empty">現在、買い増しサインに到達している銘柄はありません。</div>`;
-  list.sort((a, b) => a.ev.remainingDropPct - b.ev.remainingDropPct);
+function signalTable(secs, visibleCols, st) {
+  if (secs.length === 0) return `<div class="empty" style="padding:14px">該当する銘柄はありません。</div>`;
+  const head = colHeadHtml(visibleCols, st, 'SIGNAL', null);
   return `<div class="table-wrap"><table>
-    <thead><tr>
-      <th class="l">銘柄</th><th class="l">市場</th><th class="l">種別</th>
-      <th>現在値</th><th>トリガー</th><th>基準</th><th>推奨買い増し</th>${compact ? '' : '<th></th>'}
-    </tr></thead>
-    <tbody>${list.map(({ sec, ev }) => {
-      const ccy = ev.recoCcy === 'USD' ? '$' : '¥';
-      return `<tr>
-        <td class="l"><strong>${esc(sec.name || sec.ticker)}</strong> <span class="muted">${esc(sec.ticker)}</span></td>
-        <td class="l"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span></td>
-        <td class="l">${ev.type === 'initial' ? '初回購入' : '買い増し'}</td>
-        <td class="neg">${money(ev.price, ccy)}</td>
-        <td>${money(ev.trigger, ccy)}</td>
-        <td>${money(ev.base, ccy)}</td>
-        <td><strong>${money(ev.recoAmount, ccy)}</strong></td>
-        ${compact ? '' : `<td class="l"><button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id}, 'buy')">購入を記録</button></td>`}
-      </tr>`;
-    }).join('')}</tbody>
+    <thead><tr>${head}<th class="l"></th></tr></thead>
+    <tbody>${secs.map(sec => marketRow(sec, visibleCols, { actions: 'signal' })).join('')}</tbody>
+  </table></div>`;
+}
+
+// ダッシュボード用の簡易サイン表（到達のみ・上位）
+function dashSignalsTable() {
+  const { reached } = signalRows();
+  if (reached.length === 0) return `<div class="empty">現在、買い増しサインに到達している銘柄はありません。</div>`;
+  const cols = ['ticker', 'name', 'market', 'price', 'drop', 'trigger', 'buyAmount']
+    .map(k => MASTER_COLS.find(m => m.key === k));
+  const head = cols.map(c => `<th class="${c.left ? 'l' : ''}">${c.label}</th>`).join('');
+  const sorted = sortSecurities(reached, 'SIGNAL');
+  return `<div class="table-wrap"><table>
+    <thead><tr>${head}</tr></thead>
+    <tbody>${sorted.map(sec => marketRow(sec, cols, { actions: 'none' })).join('')}</tbody>
   </table></div>`;
 }
 
@@ -1483,6 +1649,8 @@ window.openPasteImport = openPasteImport;
 window.setSort = setSort;
 window.setFilter = setFilter;
 window.clearFilter = clearFilter;
+window.toggleSelectAll = toggleSelectAll;
+window.bulkSellAll = bulkSellAll;
 window.openColPicker = openColPicker;
 window.cpToggle = cpToggle;
 window.cpDragStart = cpDragStart;
@@ -1500,7 +1668,7 @@ window.render = render;
 // ---------- 起動 ----------
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => go(t.dataset.view));
 document.getElementById('modal-close').onclick = closeModal;
-document.getElementById('modal-overlay').onclick = (e) => { if (e.target.id === 'modal-overlay') closeModal(); };
+// モーダル外クリックでは閉じない（意図しない消失を防止）。× か各フォームのボタンのみで閉じる
 document.getElementById('btn-refresh').onclick = () => api.refreshAll().then(render);
 
 store.load();
