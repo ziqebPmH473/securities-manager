@@ -753,7 +753,11 @@ function openSecurityForm(id, presetMarket) {
       <div class="row">
         <div class="field"><label>市場</label>
           <select name="market">${['US', 'JP', 'FUND'].map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${MARKET_LABEL[x]}</option>`).join('')}</select></div>
-        <div class="field"><label>ティッカー / コード</label><input name="ticker" value="${sec ? esc(sec.ticker) : ''}" placeholder="例: AAPL / 7203" required></div>
+        <div class="field"><label>ティッカー / コード</label>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input name="ticker" value="${sec ? esc(sec.ticker) : ''}" placeholder="例: AAPL / 7203" required style="flex:1" onblur="autoFetchInfo(this)">
+            <span id="info-status" class="muted" style="font-size:11px;white-space:nowrap"></span>
+          </div></div>
       </div>
       <div class="field"><label>銘柄名</label><input name="name" value="${sec ? esc(sec.name || '') : ''}" placeholder="例: Apple"></div>
       <div class="row">
@@ -784,7 +788,7 @@ function openSecurityForm(id, presetMarket) {
         </div>
       </details>
 
-      <details class="form-group" open>
+      <details class="form-group" ${sec ? 'open' : ''}>
         <summary>銘柄分析メタ（カテゴリ・購入額・評価・備考）</summary>
         <div class="row">
           <div class="field"><label>カテゴリ</label>
@@ -863,6 +867,38 @@ function openSecurityForm(id, presetMarket) {
     }
     closeModal(); render();
   };
+}
+
+// ティッカー入力後に /api/info から銘柄情報を自動取得してフォームに反映
+async function autoFetchInfo(tickerEl) {
+  const f = tickerEl.form;
+  const ticker = tickerEl.value.trim();
+  if (!ticker) return;
+  const status = document.getElementById('info-status');
+  if (!status) return;
+  const market = f.market.value;
+  const symbol = market === 'JP' ? `${ticker}.T` : ticker;
+  status.textContent = '取得中…';
+  try {
+    const res = await fetch(`/api/info?symbol=${encodeURIComponent(symbol)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    if (d.error) throw new Error(d.error);
+    // 銘柄名が空なら自動セット（既入力は上書きしない）
+    if (!f.name.value.trim() && d.name) f.name.value = d.name;
+    // セクター・業種・ファンダは常に自動セット（手入力上書き可）
+    if (d.sector)    f.sector.value    = d.sector;
+    if (d.industry)  f.industry.value  = d.industry;
+    if (d.marketCap) f.marketCap.value = d.marketCap;
+    if (d.per)       f.per.value       = d.per;
+    if (d.eps)       f.eps.value       = d.eps;
+    if (d.dividend)  f.dividend.value  = d.dividend;
+    status.textContent = '✓ 取得済み';
+    status.style.color = 'var(--green)';
+  } catch (e) {
+    status.textContent = '取得失敗（手入力可）';
+    status.style.color = 'var(--muted)';
+  }
 }
 
 // カテゴリ選択時に購入額を転記（市場別の登録金額）。手入力で上書き可
@@ -1314,6 +1350,7 @@ function toast(msg) {
 // 公開（onclick用）
 window.go = go;
 window.openSecurityForm = openSecurityForm;
+window.autoFetchInfo = autoFetchInfo;
 window.fillBuyAmount = fillBuyAmount;
 window.maskDate = maskDate;
 window.deleteSecurity = deleteSecurity;
