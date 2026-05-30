@@ -1371,12 +1371,20 @@ function openSecurityForm(id, presetMarket) {
       starValuation: intOrNull(f.starValuation.value), starStrength: intOrNull(f.starStrength.value), starRisk: intOrNull(f.starRisk.value),
       priority: intOrNull(f.priority.value), analysisDate: f.analysisDate.value || null,
       analysisNote: f.analysisNote.value.trim() || null,
-      manualUpdatedAt: store._now(), // 手入力更新日（分割調整の判断材料）
     };
+    // 手入力更新日(manualUpdatedAt)は分割調整の判断材料。分割で調整が要る手入力項目
+    // （前回購入単価・手動基準高値）が実際に変わった時だけ更新する。
+    // 格付け・カテゴリ・メモ等の分割に無関係な編集では更新しない（SEC-34）。
+    const splitRelevantChanged = (old) =>
+      ((old?.prevBuyPrice ?? null) !== (patch.prevBuyPrice ?? null)) ||
+      ((old?.baseHighManual ?? null) !== (patch.baseHighManual ?? null));
     let target;
     if (id) {
+      const before = store.data.securities.find(s => s.id === id);
+      if (splitRelevantChanged(before)) patch.manualUpdatedAt = store._now();
       target = store.updateSecurity(id, patch);
     } else {
+      if (patch.prevBuyPrice != null || patch.baseHighManual != null) patch.manualUpdatedAt = store._now();
       target = store.addSecurity({ ...patch });
       const qty = parseFloat(f.initQty.value), cost = parseFloat(f.initCost.value);
       if (!isNaN(qty) && qty !== 0) store.setHolding(target.id, f.broker.value, f.accountType.value, qty, isNaN(cost) ? 0 : cost);
@@ -1506,9 +1514,13 @@ function openHoldingsForm(secId) {
       const hid = parseInt(tr.dataset.hid, 10);
       const h = store.data.holdings.find(x => x.id === hid);
       if (h) {
-        h.quantity = parseFloat(tr.querySelector('.h-qty').value) || 0;
-        h.avgCost = parseFloat(tr.querySelector('.h-cost').value) || 0;
-        h.source = 'manual'; h.updatedAt = store._now(); // 手入力で更新したことを記録
+        const newQty = parseFloat(tr.querySelector('.h-qty').value) || 0;
+        const newCost = parseFloat(tr.querySelector('.h-cost').value) || 0;
+        // 数量・単価を実際に変更した時だけ「手入力」として記録（未変更の再保存では更新しない）
+        if (newQty !== h.quantity || newCost !== h.avgCost) {
+          h.quantity = newQty; h.avgCost = newCost;
+          h.source = 'manual'; h.updatedAt = store._now();
+        }
       }
     });
     // 新規追加
