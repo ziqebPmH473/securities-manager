@@ -258,6 +258,12 @@ const store = {
     for (const s of this.data.securities) if (s.category === name) s.category = null;
     this.save();
   },
+
+  // 銘柄情報マスタ（meta）への書き込み。key = `${market}:${ticker}`
+  setMeta(key, obj) {
+    this.data.meta[key] = { ...(this.data.meta[key] || {}), ...obj };
+    this.save();
+  },
 };
 
 // ---------- 計算 ----------
@@ -272,10 +278,10 @@ const calc = {
 
   // 銘柄情報マスタ（名前・セクター等のキャッシュ）
   metaOf(sec) { return store.data.meta[priceKey(sec)] || {}; },
-  // 表示名: 手入力名 > マスタ名(日本語優先) > ティッカー
-  displayName(sec) { const meta = this.metaOf(sec); return sec.name || meta.name || sec.ticker; },
-  // フィールド取得: レコード優先・無ければマスタから（セクター/業種/時価総額/PER/配当）
-  field(sec, key) { const v = sec[key]; if (v != null && v !== '') return v; const meta = this.metaOf(sec); return meta[key] ?? null; },
+  // 表示名: マスタ名(日本語優先) > 旧レコード名(後方互換) > ティッカー
+  displayName(sec) { const meta = this.metaOf(sec); return meta.name || sec.name || sec.ticker; },
+  // フィールド取得: マスタ優先・無ければ旧レコード値(後方互換)（セクター/業種/時価総額/PER/配当）
+  field(sec, key) { const meta = this.metaOf(sec); if (meta[key] != null && meta[key] !== '') return meta[key]; const v = sec[key]; return (v != null && v !== '') ? v : null; },
   // 高値（priceキャッシュ）
   high5y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high5y ?? null; },
   high52w(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high52w ?? null; },
@@ -1038,7 +1044,6 @@ function openSecurityForm(id, presetMarket) {
             <span id="info-status" class="muted" style="font-size:11px;white-space:nowrap"></span>
           </div></div>
       </div>
-      <div class="field"><label>銘柄名</label><input name="name" value="${sec ? esc(sec.name || '') : ''}" placeholder="例: Apple"></div>
       <div class="row">
         <div class="field"><label>適用ルール</label><select name="ruleId">${ruleOpts}</select></div>
         <div class="field"><label>判定対象</label>
@@ -1051,21 +1056,11 @@ function openSecurityForm(id, presetMarket) {
           <input name="prevBuyPrice" type="number" step="any" value="${sec && sec.prevBuyPrice != null ? sec.prevBuyPrice : ''}" placeholder="原通貨"></div>
       </div>
 
-      <details class="form-group">
-        <summary>分類・ファンダメンタル（セクター・PER・時価総額 等）</summary>
-        <div class="row">
-          <div class="field"><label>セクター</label><input name="sector" value="${sec ? esc(sec.sector || '') : ''}" placeholder="例: 電子テクノロジー"></div>
-          <div class="field"><label>業種</label><input name="industry" value="${sec ? esc(sec.industry || '') : ''}" placeholder="例: 半導体"></div>
-        </div>
-        <div class="row">
-          <div class="field"><label>時価総額（百万$or円）</label><input name="marketCap" type="number" step="any" value="${sec && sec.marketCap != null ? sec.marketCap : ''}"></div>
-          <div class="field"><label>PER</label><input name="per" type="number" step="any" value="${sec && sec.per != null ? sec.per : ''}"></div>
-        </div>
-        <div class="row">
-          <div class="field"><label>EPS</label><input name="eps" type="number" step="any" value="${sec && sec.eps != null ? sec.eps : ''}"></div>
-          <div class="field"><label>年間配当/株</label><input name="dividend" type="number" step="any" value="${sec && sec.dividend != null ? sec.dividend : ''}"></div>
-        </div>
-      </details>
+      <fieldset class="form-group"><legend>銘柄情報（自動取得・編集不可）</legend>
+        <div id="auto-info" class="auto-info">${autoInfoPanelHtml(m, sec ? sec.ticker : '')}</div>
+        <button type="button" class="btn btn-sm" style="margin-top:8px" onclick="refetchInfo()">今すぐ取得</button>
+        <p class="muted" style="margin:8px 0 0">銘柄名・セクター・業種・時価総額・PER・配当はティッカーをキーに自動取得（マスタ管理）。価格更新時にも定期取得され、手入力はしません。</p>
+      </fieldset>
 
       <details class="form-group" ${sec ? 'open' : ''}>
         <summary>銘柄分析メタ（カテゴリ・購入額・評価・備考）</summary>
@@ -1120,65 +1115,76 @@ function openSecurityForm(id, presetMarket) {
     const market = f.market.value;
     const numOrNull = (v) => v === '' || v == null ? null : parseFloat(v);
     const intOrNull = (v) => v === '' || v == null ? null : parseInt(v, 10);
+    // 銘柄名・セクター・業種・時価総額・PER・EPS・配当はマスタ（meta）で自動管理。レコードには持たせない
     const patch = {
-      market, ticker: f.ticker.value.trim(), name: f.name.value.trim(),
+      market, ticker: f.ticker.value.trim(),
       category: f.category.value || null, ruleId: parseInt(f.ruleId.value, 10),
       enabled: f.enabled.value === '1', watch: f.watch.value === '1',
       currency: market === 'US' ? 'USD' : 'JPY',
       assetClass: market === 'FUND' ? 'fund' : 'stock',
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
-      sector: f.sector.value.trim() || null, industry: f.industry.value.trim() || null,
-      marketCap: numOrNull(f.marketCap.value), per: numOrNull(f.per.value),
-      eps: numOrNull(f.eps.value), dividend: numOrNull(f.dividend.value),
       buyAmount: numOrNull(f.buyAmount.value), buyCount: intOrNull(f.buyCount.value),
       overallGrade: f.overallGrade.value || null, rating: f.rating.value || null, buyGrade: f.buyGrade.value || null,
       starValuation: intOrNull(f.starValuation.value), starStrength: intOrNull(f.starStrength.value), starRisk: intOrNull(f.starRisk.value),
       priority: intOrNull(f.priority.value), analysisDate: f.analysisDate.value || null,
       analysisNote: f.analysisNote.value.trim() || null,
     };
+    let target;
     if (id) {
-      store.updateSecurity(id, patch);
+      target = store.updateSecurity(id, patch);
     } else {
-      const created = store.addSecurity({ ...patch });
-      // 初期保有が入力されていれば作成
+      target = store.addSecurity({ ...patch });
       const qty = parseFloat(f.initQty.value), cost = parseFloat(f.initCost.value);
-      if (!isNaN(qty) && qty !== 0) store.setHolding(created.id, f.broker.value, f.accountType.value, qty, isNaN(cost) ? 0 : cost);
+      if (!isNaN(qty) && qty !== 0) store.setHolding(target.id, f.broker.value, f.accountType.value, qty, isNaN(cost) ? 0 : cost);
     }
     closeModal(); render();
+    // マスタ情報を取得（名前・セクター等）。未取得なら裏で取得して再描画
+    if (target && !store.data.meta[priceKey(target)]?.name) api.refreshMeta([target]).then(render);
   };
 }
 
-// ティッカー入力後に /api/info から銘柄情報を自動取得してフォームに反映
+// フォーム内「銘柄情報（自動取得）」パネルのHTML（マスタ=meta から読み取り専用表示）
+function autoInfoPanelHtml(market, ticker) {
+  const key = `${market}:${(ticker || '').trim()}`;
+  const meta = store.data.meta[key] || {};
+  const ccy = MARKET_CCY[market];
+  const r = (label, val) => `<div class="ai-row"><span class="muted">${label}</span><span>${val}</span></div>`;
+  const sectorInd = [meta.sector, meta.industry].filter(Boolean).join(' / ');
+  return r('銘柄名', esc(meta.name || '—'))
+    + r('セクター / 業種', sectorInd ? esc(sectorInd) : '—')
+    + r('時価総額', meta.marketCap != null ? Number(meta.marketCap).toLocaleString('ja-JP') + ' 百万' : '—')
+    + r('PER', meta.per != null ? num(meta.per) : '—')
+    + r('配当/株', meta.dividend != null ? money(meta.dividend, ccy) : '—');
+}
+
+// ティッカーをキーに /api/info から銘柄情報を取得し、マスタ(meta)に保存。パネルを更新（フォームには手入力させない）
 async function autoFetchInfo(tickerEl) {
   const f = tickerEl.form;
   const ticker = tickerEl.value.trim();
   if (!ticker) return;
   const status = document.getElementById('info-status');
-  if (!status) return;
+  const panel = document.getElementById('auto-info');
   const market = f.market.value;
-  // Yahoo Finance シンボル: JP株→.T付与、投信→.T付与、US株→そのまま
   const symbol = (market === 'JP' || market === 'FUND') ? `${ticker}.T` : ticker;
-  status.textContent = '取得中…';
+  const key = `${market}:${ticker}`;
+  if (status) { status.textContent = '取得中…'; status.style.color = 'var(--muted)'; }
   try {
     const res = await fetch(`/api/info?symbol=${encodeURIComponent(symbol)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const d = await res.json();
     if (d.error) throw new Error(d.error);
-    // 銘柄名が空なら自動セット（既入力は上書きしない）
-    if (!f.name.value.trim() && d.name) f.name.value = d.name;
-    // セクター・業種・ファンダは常に自動セット（手入力上書き可）
-    if (d.sector)    f.sector.value    = d.sector;
-    if (d.industry)  f.industry.value  = d.industry;
-    if (d.marketCap) f.marketCap.value = d.marketCap;
-    if (d.per)       f.per.value       = d.per;
-    if (d.eps)       f.eps.value       = d.eps;
-    if (d.dividend)  f.dividend.value  = d.dividend;
-    status.textContent = '✓ 取得済み';
-    status.style.color = 'var(--green)';
+    store.setMeta(key, clean(d)); // マスタへ保存（null/空は上書きしない）
+    if (panel) panel.innerHTML = autoInfoPanelHtml(market, ticker);
+    if (status) { status.textContent = d.name ? '✓ 取得済み' : '✓ 取得（一部のみ）'; status.style.color = 'var(--green)'; }
   } catch (e) {
-    status.textContent = '取得失敗（手入力可）';
-    status.style.color = 'var(--muted)';
+    if (status) { status.textContent = '取得失敗（再試行可）'; status.style.color = 'var(--muted)'; }
   }
+}
+
+// 「今すぐ取得」ボタン: フォームのティッカーで autoFetchInfo を実行
+function refetchInfo() {
+  const f = document.getElementById('sec-form');
+  if (f && f.ticker) autoFetchInfo(f.ticker);
 }
 
 // カテゴリ選択時に購入額を転記（市場別の登録金額）。手入力で上書き可
@@ -1503,8 +1509,9 @@ function importAnalysis(text, market, create) {
       });
       created++;
     } else updated++;
-    const nf = (v, fb) => (v && v.trim()) ? parseFloat(v) : (fb ?? null);
+    const nf = (v) => (v && v.trim()) ? parseFloat(v) : null;
     const sf = (v, fb) => (v && v.trim()) || fb || null;
+    // 分析の「判断」項目はレコードへ
     const patch = {
       overallGrade: sf(rec.overallGrade, sec.overallGrade),
       rating: sf(rec.rating, sec.rating),
@@ -1516,16 +1523,16 @@ function importAnalysis(text, market, create) {
       analysisDate: normDate(rec.analysisDate) || sec.analysisDate || null,
       recoCategory: sf(rec.recoCategory, sec.recoCategory),
       recoAmount: rec.recoAmount ? parseFloat(rec.recoAmount) : (sec.recoAmount ?? null),
-      sector: sf(rec.sector, sec.sector),
-      industry: sf(rec.industry, sec.industry),
-      marketCap: nf(rec.marketCap, sec.marketCap),
-      per: nf(rec.per, sec.per),
-      eps: nf(rec.eps, sec.eps),
-      dividend: nf(rec.dividend, sec.dividend),
     };
     if (rec.priority) { const p = parseInt(rec.priority, 10); if (!isNaN(p)) patch.priority = p; }
     // カテゴリ未設定なら推奨カテゴリを採用
     if (!sec.category && rec.recoCategory) patch.category = rec.recoCategory;
+    // セクター/業種/時価総額/PER/EPS/配当はマスタ(meta)へ（自動取得項目と同じ置き場所）
+    const metaPatch = clean({
+      sector: sf(rec.sector), industry: sf(rec.industry),
+      marketCap: nf(rec.marketCap), per: nf(rec.per), eps: nf(rec.eps), dividend: nf(rec.dividend),
+    });
+    if (Object.keys(metaPatch).length) store.setMeta(priceKey(sec), metaPatch);
     // 1回購入額が未設定なら推奨投資額を転記（米株は÷100ドル）。手入力済みは保持
     if (sec.buyAmount == null && rec.recoAmount) {
       const a = parseFloat(rec.recoAmount);
@@ -1562,11 +1569,11 @@ function importHoldings(text, market, create) {
       avgCost = (!isNaN(ac) && qty > 0) ? ac / qty : 0;
     }
     store.setHolding(sec.id, (rec.broker || 'SBI').trim(), (rec.accountType || '特定').trim(), qty, avgCost);
-    // セクター・業種が含まれていれば銘柄に反映
-    const secPatch = {};
-    if (rec.sector && rec.sector.trim()) secPatch.sector = rec.sector.trim();
-    if (rec.industry && rec.industry.trim()) secPatch.industry = rec.industry.trim();
-    if (Object.keys(secPatch).length) store.updateSecurity(sec.id, secPatch);
+    // セクター・業種はマスタ(meta)へ反映（自動取得項目と同じ置き場所）
+    const metaPatch = {};
+    if (rec.sector && rec.sector.trim()) metaPatch.sector = rec.sector.trim();
+    if (rec.industry && rec.industry.trim()) metaPatch.industry = rec.industry.trim();
+    if (Object.keys(metaPatch).length) store.setMeta(priceKey(sec), metaPatch);
   }
   return { updated, created, skipped };
 }
@@ -1631,6 +1638,7 @@ function toast(msg) {
 window.go = go;
 window.openSecurityForm = openSecurityForm;
 window.autoFetchInfo = autoFetchInfo;
+window.refetchInfo = refetchInfo;
 window.fillBuyAmount = fillBuyAmount;
 window.maskDate = maskDate;
 window.deleteSecurity = deleteSecurity;

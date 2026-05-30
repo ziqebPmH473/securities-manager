@@ -178,6 +178,11 @@ form label.check input { width: auto; }
 /* 行内チェックボックス */
 .row-select, #select-all { width: auto; cursor: pointer; }
 
+/* 銘柄情報（自動取得）パネル */
+.auto-info { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.auto-info .ai-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
+.auto-info .ai-row + .ai-row { border-top: 1px solid var(--border); }
+
 @media (max-width: 640px) {
   .app-header h1 { font-size: 16px; }
   main { padding: 12px; }
