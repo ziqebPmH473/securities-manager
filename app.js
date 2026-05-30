@@ -1062,7 +1062,7 @@ function openSecurityForm(id, presetMarket) {
         <p class="muted" style="margin:8px 0 0">銘柄名・セクター・業種・時価総額・PER・配当はティッカーをキーに自動取得（マスタ管理）。価格更新時にも定期取得され、手入力はしません。</p>
       </fieldset>
 
-      <details class="form-group" ${sec ? 'open' : ''}>
+      <details class="form-group">
         <summary>銘柄分析メタ（カテゴリ・購入額・評価・備考）</summary>
         <div class="row">
           <div class="field"><label>カテゴリ</label>
