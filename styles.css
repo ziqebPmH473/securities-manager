@@ -75,8 +75,11 @@ main { padding: 16px; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
 th, td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
 /* 見出しは中央揃え・数値は右揃え（デフォルト）・テキストは左揃え */
-th { color: var(--muted); font-weight: 600; font-size: 11px; text-align: center; position: sticky; }
+/* 見出しは固定（スクロールしても列名が見える） */
+th { color: var(--muted); font-weight: 600; font-size: 11px; text-align: center; position: sticky; top: 0; background: var(--panel); z-index: 5; }
 th.l, td.l { text-align: left; }
+/* コード列は狭く */
+th.col-code, td.col-code { max-width: 72px; width: 72px; }
 tbody tr:hover { background: var(--panel-2); }
 .table-wrap { overflow-x: auto; }
 

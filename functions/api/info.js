@@ -58,6 +58,7 @@ async function fetchJpInfo(symbol) {
     per:       summary?.per ?? null,
     eps:       summary?.eps ?? null,
     dividend:  summary?.dividend ?? null,
+    sharesOut: summary?.sharesOut ?? null,
     currency:  chart?.currency || 'JPY',
   };
 }
@@ -97,6 +98,7 @@ async function fetchUsInfo(symbol, finnhubKey) {
     per:       summary?.per ?? fh?.per ?? null,
     eps:       summary?.eps ?? fh?.eps ?? null,
     dividend:  summary?.dividend ?? fh?.dividend ?? null,
+    sharesOut: summary?.sharesOut ?? null,
     currency:  chart?.currency || 'USD',
   };
 }
@@ -194,6 +196,7 @@ async function fetchQuoteSummary(symbol) {
     per: n(sd.trailingPE) ? sd.trailingPE.raw : (n(ks.trailingPE) ? ks.trailingPE.raw : null),
     eps: n(ks.trailingEps) ? ks.trailingEps.raw : null,
     dividend: n(sd.dividendRate) ? sd.dividendRate.raw : null,
+    sharesOut: n(ks.sharesOutstanding) ? ks.sharesOutstanding.raw : null, // 発行済株式数（時価総額=株価×これ で随時算出）
   };
 }
 
