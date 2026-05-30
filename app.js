@@ -2376,6 +2376,7 @@ function openSplitAdjustOne(secId, date) { openSplitAdjust([{ secId, date }]); }
 // 一括調整モーダル（表形式・列分割・初期スキップ・左チェックは種別一括変更用）
 function openSplitAdjust(items) {
   if (!items.length) { toast('調整する銘柄をチェックしてください'); return; }
+  const MODE_LABEL = { full: '全部', manual: '手入力のみ', skip: 'スキップ' };
   const rows = items.map(it => {
     const sec = store.data.securities.find(s => s.id === it.secId); if (!sec) return '';
     const h = (sec.splitHistory || []).find(x => x.date === it.date); if (!h) return '';
@@ -2383,9 +2384,10 @@ function openSplitAdjust(items) {
     const w = splitWarnInfo(sec, r);
     const hold = th.qty ? `${num(th.qty)} @${ccy}${num(th.avgCost)}<br><strong>→ ${num(th.qty * r)} @${ccy}${num(th.avgCost / r)}</strong>` : muted;
     const pbp = (typeof sec.prevBuyPrice === 'number') ? `${ccy}${num(sec.prevBuyPrice)}<br><strong>→ ${ccy}${num(sec.prevBuyPrice / r)}</strong>` : muted;
-    const rec = recommendSplitMode(sec, it.date); // 初期は安全側でスキップ（推奨はツールチップで案内）
-    const o = (v, l) => `<option value="${v}">${l}${rec === v ? '（推奨）' : ''}</option>`;
-    return `<tr data-sec="${sec.id}" data-date="${esc(it.date)}">
+    const rec = recommendSplitMode(sec, it.date); // 推奨処理（専用列に表示。種別の初期値はスキップ固定）
+    const o = (v, l) => `<option value="${v}">${l}</option>`;
+    const recCell = rec === 'skip' ? `<span class="muted">${MODE_LABEL[rec]}</span>` : `<strong>${MODE_LABEL[rec]}</strong>`;
+    return `<tr data-sec="${sec.id}" data-date="${esc(it.date)}" data-rec="${rec}">
       <td class="l"><input type="checkbox" class="sa-chk"></td>
       <td class="l"><strong>${esc(calc.displayName(sec))}</strong><br><span class="muted">${esc(sec.ticker)}</span></td>
       <td class="l">${esc(it.date)}<br><span class="muted">${esc(h.label || ('×' + r))}</span></td>
@@ -2393,18 +2395,19 @@ function openSplitAdjust(items) {
       <td class="l">${hold}</td>
       <td class="l">${pbp}</td>
       <td class="l">${w.warn ? `<span class="neg" title="${esc(w.reason)}">⚠ ${esc(w.reason)}</span>` : '—'}</td>
+      <td class="l">${recCell}</td>
       <td class="l"><select class="sa-mode"><option value="skip" selected>スキップ</option>${o('full', '全部')}${o('manual', '手入力のみ')}</select></td>
     </tr>`;
   }).join('');
   showModal('株式分割・併合の一括調整', `
-    <p class="muted">行ごとに「種別」を選んで「調整実行」。初期はスキップ（何もしない）です。⚠＝単価/現在値が分割比率を超過＝既調整や異常の可能性。「全部」=保有も調整／「手入力のみ」=前回購入価格等のみ。</p>
+    <p class="muted">行ごとに「種別」を選んで「調整実行」。初期はスキップ（何もしない）です。⚠＝単価/現在値が分割比率を超過＝既調整や異常の可能性。「全部」=保有も調整／「手入力のみ」=前回購入価格等のみ。<br>「推奨」列は当ツールの推奨処理。チェックして「選択行を→推奨→に一括変更」でまとめて反映できます。</p>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0">
       <label class="check" style="margin:0"><input type="checkbox" id="sa-all" onchange="saSelectAll(this)"> 全選択</label>
-      選択行を <select id="sa-bulk"><option value="full">全部</option><option value="manual">手入力のみ</option><option value="skip">スキップ</option></select>
+      選択行を <select id="sa-bulk"><option value="reco">推奨</option><option value="full">全部</option><option value="manual">手入力のみ</option><option value="skip">スキップ</option></select>
       <button type="button" class="btn btn-sm" onclick="saApplyBulk()">に一括変更</button>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th class="l">☑</th><th class="l">銘柄</th><th class="l">分割日/比率</th><th>現在値</th><th class="l">保有(現→後)</th><th class="l">前回購入(現→後)</th><th class="l">警告</th><th class="l">種別</th></tr></thead>
+      <thead><tr><th class="l">☑</th><th class="l">銘柄</th><th class="l">分割日/比率</th><th>現在値</th><th class="l">保有(現→後)</th><th class="l">前回購入(現→後)</th><th class="l">警告</th><th class="l">推奨</th><th class="l">種別</th></tr></thead>
       <tbody id="sa-rows">${rows}</tbody>
     </table></div>
     <div class="form-actions">
@@ -2416,7 +2419,9 @@ function saSelectAll(cb) { document.querySelectorAll('#sa-rows .sa-chk').forEach
 function saApplyBulk() {
   const mode = document.getElementById('sa-bulk').value;
   document.querySelectorAll('#sa-rows tr').forEach(tr => {
-    if (tr.querySelector('.sa-chk').checked) tr.querySelector('.sa-mode').value = mode;
+    if (!tr.querySelector('.sa-chk').checked) return;
+    // 「推奨」は行ごとに異なるため、その行の推奨処理(data-rec)を適用
+    tr.querySelector('.sa-mode').value = (mode === 'reco') ? (tr.dataset.rec || 'skip') : mode;
   });
 }
 function runSplitAdjust() {
