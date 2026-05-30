@@ -32,7 +32,7 @@ const DEFAULT_RULE = {
 const MARKET_LABEL = { US: '米国株', JP: '日本株', FUND: '投信' };
 const MARKET_CCY = { US: '$', JP: '¥', FUND: '¥' };
 const BASE_HIGH_LABEL = { '5y': '5年高値', '52w': '52週高値', 'all': '上場来高値', 'manual': '手動指定' };
-const BROKERS = ['SBI', '楽天', 'Webull', 'moomoo'];
+const BROKERS = ['SBI', '楽天', 'Webull', 'moomoo', 'SMBC日興'];
 const ACCOUNTS = ['特定', 'NISA', '一般'];
 // ---------- カラム定義 ----------
 // 全カラムのマスタ定義。配列の順＝表示順のベース（ピッカーで個別に並び替え可）
@@ -118,6 +118,10 @@ const store = {
     this.data.amountSnapshots ||= []; // 銘柄ごとの適用金額スナップショット
     this.data.importHistory ||= [];   // 取込履歴
     this.data.lastPriceUpdate ||= null; // 価格更新日時
+    this.data.importMappings ||= {};  // 取込フィールド設定（列名・位置）のマスタ
+    for (const k in DEFAULT_IMPORT_MAPPINGS) {
+      this.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k], ...(this.data.importMappings[k] || {}) };
+    }
     this.data.seq ||= 1;
     if (!this.data.rules.some(r => r.isDefault)) this.data.rules[0].isDefault = true;
     // 後方互換: カテゴリに米国株金額が無ければ日本株の÷100で補完
@@ -1099,6 +1103,7 @@ function renderMaster() {
       <div class="section-body" style="padding:16px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn" onclick="openPasteImport('analysis')">銘柄分析結果を取込</button>
         <button class="btn" onclick="openBrokerImport()">保有を取込（証券会社別）</button>
+        <button class="btn" onclick="openImportMapping()">取込フィールド設定</button>
       </div>
       <p class="muted" style="padding:0 16px 14px">Excelの該当シートをヘッダ行ごとコピーして貼り付け→ティッカーで既存銘柄に紐づけ（未登録は新規作成も可）。</p>
       ${importHistorySection()}
@@ -1737,70 +1742,108 @@ function normAccount(s) {
   return '特定';
 }
 
-// 各社パーサ: text → [{market, ticker, broker, account, quantity, avgCost}]
-function parseSbiJpCsv(text) {
+// 取込フィールド設定（マスタ化）。CSVはヘッダ名、画面コピーはブロック内の数値の「何番目」(1始まり)
+const DEFAULT_IMPORT_MAPPINGS = {
+  'sbi-us':  { qtyPos: 1, avgCostPos: 2 },                                   // 数量, 取得単価, 現在値, 評価損益
+  'sbi-jp':  { ticker: '銘柄コード', quantity: '保有株数', avgCost: '取得単価' },
+  'moomoo':  { ticker: 'コード', quantity: '数量', avgCost: '平均取得価額', account: '口座区分', currency: '通貨' },
+  'rakuten': { kind: '種別', ticker: '銘柄コード・ティッカー', quantity: '保有数量', avgCost: '平均取得価額', account: '口座' },
+  'smbc':    { qtyPos: 1, avgCostPos: 3 },                                   // 数量, 時価, 平均取得単価, 評価額, 損益
+};
+
+// 各社パーサ: (text, map) → [{market, ticker, broker, account, quantity, avgCost}]
+function parseSbiJpCsv(text, map) {
+  const m = map || DEFAULT_IMPORT_MAPPINGS['sbi-jp'];
   const rows = parseCsvText(text); const out = []; let account = '特定', hi = null;
   for (const r of rows) {
     const joined = r.join('');
     if (/特定預り/.test(joined)) account = '特定';
     else if (/NISA/.test(joined)) account = 'NISA';
-    if (r.includes('銘柄コード')) { hi = r; continue; }
+    if (r.includes(m.ticker)) { hi = r; continue; }
     if (!hi) continue;
-    const code = (r[hi.indexOf('銘柄コード')] || '').trim();
+    const code = (r[hi.indexOf(m.ticker)] || '').trim();
     if (!/^[0-9A-Za-z]{3,5}$/.test(code)) continue;
-    const qty = numClean(r[hi.indexOf('保有株数')]);
-    const ac = numClean(r[hi.indexOf('取得単価')]);
+    const qty = numClean(r[hi.indexOf(m.quantity)]);
+    const ac = numClean(r[hi.indexOf(m.avgCost)]);
     if (qty != null) out.push({ market: 'JP', ticker: code, broker: 'SBI', account, quantity: qty, avgCost: ac ?? 0 });
   }
   return out;
 }
-function parseMoomooCsv(text) {
+function parseMoomooCsv(text, map) {
+  const m = map || DEFAULT_IMPORT_MAPPINGS['moomoo'];
   const rows = parseCsvText(text); if (rows.length < 2) return [];
   const h = rows[0], idx = (n) => h.indexOf(n); const out = [];
   for (let i = 1; i < rows.length; i++) {
-    const r = rows[i]; const code = (r[idx('コード')] || '').trim(); if (!code) continue;
-    const market = (r[idx('通貨')] || '').trim() === 'USD' ? 'US' : 'JP';
-    const qty = numClean(r[idx('数量')]); const ac = numClean(r[idx('平均取得価額')]);
-    if (qty != null) out.push({ market, ticker: code, broker: 'moomoo', account: normAccount(r[idx('口座区分')]), quantity: qty, avgCost: ac ?? 0 });
+    const r = rows[i]; const code = (r[idx(m.ticker)] || '').trim(); if (!code) continue;
+    const market = (r[idx(m.currency)] || '').trim() === 'USD' ? 'US' : 'JP';
+    const qty = numClean(r[idx(m.quantity)]); const ac = numClean(r[idx(m.avgCost)]);
+    if (qty != null) out.push({ market, ticker: code, broker: 'moomoo', account: normAccount(r[idx(m.account)]), quantity: qty, avgCost: ac ?? 0 });
   }
   return out;
 }
-function parseRakutenCsv(text) {
+function parseRakutenCsv(text, map) {
+  const m = map || DEFAULT_IMPORT_MAPPINGS['rakuten'];
   const rows = parseCsvText(text); const out = []; let h = null;
   for (const r of rows) {
-    if (r.includes('銘柄コード・ティッカー')) { h = r; continue; }
+    if (r.includes(m.ticker)) { h = r; continue; }
     if (!h) continue;
     const idx = (n) => h.indexOf(n);
-    const kind = (r[idx('種別')] || '').trim();
-    const code = (r[idx('銘柄コード・ティッカー')] || '').trim(); if (!code) continue;
+    const kind = (r[idx(m.kind)] || '').trim();
+    const code = (r[idx(m.ticker)] || '').trim(); if (!code) continue;
     let market; if (/国内株式/.test(kind)) market = 'JP'; else if (/米国株式/.test(kind)) market = 'US'; else continue; // 投信等skip
-    const qty = numClean(r[idx('保有数量')]); const ac = numClean(r[idx('平均取得価額')]);
-    if (qty != null) out.push({ market, ticker: code, broker: '楽天', account: normAccount(r[idx('口座')]), quantity: qty, avgCost: ac ?? 0 });
+    const qty = numClean(r[idx(m.quantity)]); const ac = numClean(r[idx(m.avgCost)]);
+    if (qty != null) out.push({ market, ticker: code, broker: '楽天', account: normAccount(r[idx(m.account)]), quantity: qty, avgCost: ac ?? 0 });
   }
   return out;
 }
-function parseSbiUsScreen(text) {
+function parseSbiUsScreen(text, map) {
+  const m = map || DEFAULT_IMPORT_MAPPINGS['sbi-us'];
+  const qp = (m.qtyPos || 1) - 1, ap = (m.avgCostPos || 2) - 1;
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const skip = new Set(['現買', '現売', '積立', '(株価：リアルタイム)', '保有数量', '取得単価', '現在値', '外貨建評価損益']);
+  const isTicker = (s) => /^[A-Z][A-Z.]{0,5}\s*[^\x00-\x7F]/.test(s);
   const out = []; let account = '特定', i = 0;
   while (i < lines.length) {
     const ln = lines[i];
     if (/特定預り/.test(ln)) { account = '特定'; i++; continue; }
     if (/NISA預り/.test(ln)) { account = 'NISA'; i++; continue; }
     if (/米国株式|株価：リアルタイム/.test(ln) || skip.has(ln)) { i++; continue; }
-    const m = ln.match(/^([A-Z][A-Z.]{0,5})\s*[^\x00-\x7F]/);
-    if (m) {
-      const ticker = m[1]; const nums = []; let j = i + 1;
-      while (j < lines.length && nums.length < 2) {
-        const x = lines[j];
-        if (/^[A-Z][A-Z.]{0,5}\s*[^\x00-\x7F]/.test(x)) break;
-        if (!skip.has(x)) { const n = numClean(x); if (n != null) nums.push(n); }
+    const tm = ln.match(/^([A-Z][A-Z.]{0,5})\s*[^\x00-\x7F]/);
+    if (tm) {
+      const ticker = tm[1]; const nums = []; let j = i + 1;
+      while (j < lines.length && !isTicker(lines[j])) {
+        if (!skip.has(lines[j])) { const n = numClean(lines[j]); if (n != null) nums.push(n); }
         j++;
       }
-      if (nums.length >= 2) out.push({ market: 'US', ticker, broker: 'SBI', account, quantity: nums[0], avgCost: nums[1] });
+      if (nums.length > qp && nums.length > ap) out.push({ market: 'US', ticker, broker: 'SBI', account, quantity: nums[qp], avgCost: nums[ap] });
       i = j; continue;
     }
     i++;
+  }
+  return out;
+}
+function parseSmbcScreen(text, map) {
+  const m = map || DEFAULT_IMPORT_MAPPINGS['smbc'];
+  const qp = (m.qtyPos || 1) - 1, ap = (m.avgCostPos || 3) - 1;
+  const codeRe = /[（(]([0-9A-Za-z]+)[）)]/;
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const out = []; let i = 0;
+  while (i < lines.length) {
+    const cm = lines[i].match(codeRe);
+    if (!cm) { i++; continue; }
+    const code = cm[1];
+    const nums = []; let account = '特定', j = i + 1;
+    while (j < lines.length && !codeRe.test(lines[j])) {
+      for (const cell of lines[j].split('\t')) {
+        const t = cell.trim();
+        if (/特定|NISA|一般/.test(t)) account = normAccount(t);
+        if (/買付|売却|単元株化/.test(t)) continue;
+        const n = numClean(t); if (n != null) nums.push(n);
+      }
+      j++;
+    }
+    if (nums.length > qp && nums.length > ap) out.push({ market: 'JP', ticker: code, broker: 'SMBC日興', account, quantity: nums[qp], avgCost: nums[ap] });
+    i = j;
   }
   return out;
 }
@@ -1826,6 +1869,7 @@ const IMPORT_PROFILES = {
   // scope: 洗い替え（replace）の対象範囲。fixed=固定証券会社（モード固定replace）
   'sbi-us':  { label: 'SBI 米国株（画面コピーを貼り付け）', input: 'paste', parse: parseSbiUsScreen, fixed: true, scope: { broker: 'SBI', markets: ['US'] } },
   'sbi-jp':  { label: 'SBI 日本株（CSVファイル）', input: 'file', parse: parseSbiJpCsv, fixed: true, scope: { broker: 'SBI', markets: ['JP'] } },
+  'smbc':    { label: 'SMBC日興証券 日本株（画面コピーを貼り付け）', input: 'paste', parse: parseSmbcScreen, fixed: true, scope: { broker: 'SMBC日興', markets: ['JP'] } },
   'moomoo':  { label: 'moomoo（CSVファイル）', input: 'file', parse: parseMoomooCsv, fixed: true, scope: { broker: 'moomoo', markets: ['JP', 'US'] } },
   'rakuten': { label: '楽天証券（保有商品一覧CSV）', input: 'file', parse: parseRakutenCsv, fixed: true, scope: { broker: '楽天', markets: ['JP', 'US'] } },
   'generic': { label: '汎用（貼り付け: ティッカー,市場,数量,取得単価）', input: 'paste', parse: parseGeneric, fixed: false },
@@ -1889,7 +1933,7 @@ function onImportFile(input) {
     const buf = r.result;
     try { _importText = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
     catch (_) { _importText = new TextDecoder('shift_jis').decode(buf); }
-    try { _importRows = IMPORT_PROFILES[_importProfile].parse(_importText); }
+    try { _importRows = IMPORT_PROFILES[_importProfile].parse(_importText, store.data.importMappings[_importProfile]); }
     catch (e) { _importRows = []; }
     setImportPreview();
   };
@@ -1897,7 +1941,7 @@ function onImportFile(input) {
 }
 function onImportPaste(text) {
   _importText = text;
-  try { _importRows = IMPORT_PROFILES[_importProfile].parse(text); }
+  try { _importRows = IMPORT_PROFILES[_importProfile].parse(text, store.data.importMappings[_importProfile]); }
   catch (e) { _importRows = []; }
   setImportPreview();
 }
@@ -1959,6 +2003,48 @@ function runBrokerImport() {
   closeModal(); render();
   toast(`取込完了: 更新 ${updated} / 新規 ${created}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
   if (touched.length) api.refreshMeta(touched).then(render);
+}
+
+// 取込フィールド設定（マッピング）の編集UI。列名/位置が変わってもコード変更なしで調整可
+const MAPPING_FIELDS = {
+  'sbi-jp':  [['ticker', '銘柄コードの列名'], ['quantity', '保有株数の列名'], ['avgCost', '取得単価の列名']],
+  'moomoo':  [['ticker', 'コード列名'], ['quantity', '数量列名'], ['avgCost', '平均取得価額列名'], ['account', '口座区分列名'], ['currency', '通貨列名']],
+  'rakuten': [['kind', '種別列名'], ['ticker', '銘柄コード列名'], ['quantity', '保有数量列名'], ['avgCost', '平均取得価額列名'], ['account', '口座列名']],
+  'sbi-us':  [['qtyPos', '数量は数値の何番目か'], ['avgCostPos', '取得単価は数値の何番目か']],
+  'smbc':    [['qtyPos', '数量は数値の何番目か'], ['avgCostPos', '平均取得単価は数値の何番目か']],
+};
+function openImportMapping() {
+  const blocks = Object.entries(MAPPING_FIELDS).map(([key, fields]) => {
+    const label = IMPORT_PROFILES[key].label;
+    const cur = store.data.importMappings[key] || {};
+    const inputs = fields.map(([f, lbl]) => {
+      const isPos = f.endsWith('Pos');
+      return `<div class="field"><label>${esc(lbl)}</label>
+        <input data-prof="${key}" data-field="${f}" ${isPos ? 'type="number" min="1" step="1"' : 'type="text"'} value="${esc(cur[f] != null ? cur[f] : '')}"></div>`;
+    }).join('');
+    return `<details class="form-group"><summary>${esc(label)}</summary>${inputs}</details>`;
+  }).join('');
+  showModal('取込フィールド設定（マッピング）', `
+    <p class="muted">各証券会社の取込で、どの列名／何番目の数値を使うかを設定します（列が変わってもここで調整できます）。</p>
+    <div id="mapping-body">${blocks}</div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-sm" onclick="resetImportMapping()">既定に戻す</button>
+      <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+      <button type="button" class="btn btn-primary" onclick="saveImportMapping()">保存</button>
+    </div>`);
+}
+function saveImportMapping() {
+  document.querySelectorAll('#mapping-body input').forEach(inp => {
+    const prof = inp.dataset.prof, field = inp.dataset.field;
+    store.data.importMappings[prof] ||= {};
+    if (inp.type === 'number') store.data.importMappings[prof][field] = parseInt(inp.value, 10) || DEFAULT_IMPORT_MAPPINGS[prof][field];
+    else store.data.importMappings[prof][field] = inp.value.trim() || DEFAULT_IMPORT_MAPPINGS[prof][field];
+  });
+  store.save(); closeModal(); toast('取込フィールド設定を保存しました');
+}
+function resetImportMapping() {
+  for (const k in DEFAULT_IMPORT_MAPPINGS) store.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k] };
+  store.save(); openImportMapping(); toast('既定に戻しました');
 }
 
 // ---------- データ管理 ----------
@@ -2039,6 +2125,9 @@ window.deleteRule = deleteRule;
 window.setDefaultRule = setDefaultRule;
 window.openPasteImport = openPasteImport;
 window.openBrokerImport = openBrokerImport;
+window.openImportMapping = openImportMapping;
+window.saveImportMapping = saveImportMapping;
+window.resetImportMapping = resetImportMapping;
 window.onImportProfileChange = onImportProfileChange;
 window.onImportFile = onImportFile;
 window.onImportPaste = onImportPaste;
