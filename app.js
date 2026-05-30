@@ -418,8 +418,9 @@ const calc = {
       if (base == null) return null;
       trigger = base * (1 - rule.addonDropPct / 100);
     }
-    // 米国株は次回購入を1ドル単位（10ドル未満は0.1ドル単位）、端数切捨て
+    // 次回購入の丸め（端数切捨て）: 米株=1ドル単位（10ドル未満は0.1ドル）、日本株=円未満切捨て
     if (sec.market === 'US') trigger = trigger >= 10 ? Math.floor(trigger) : Math.floor(trigger * 10) / 10;
+    else trigger = Math.floor(trigger);
     const remainingDropPct = (price - trigger) / price * 100; // >0: あとこれだけ下落で到達
     const recoCcy = sec.market === 'US' ? 'USD' : 'JPY';
     const recoAmount = this.buyAmount(sec);
@@ -635,6 +636,8 @@ function reconcileColPrefs(market) {
 // ---------- カラムレンダラー ----------
 // 各カラムの td を返す関数。引数: (sec, ctx)
 const muted = '<span class="muted">—</span>';
+// みなし（取得単価を前回購入単価とみなす）の省スペース表示
+const MINASHI = ' <span class="muted" title="みなし（前回購入単価が未登録のため取得単価を使用）" style="cursor:help">≒</span>';
 const pctTd = (v) => `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code">${esc(s.ticker)}</td>`,
@@ -643,8 +646,8 @@ const COL_RENDERERS = {
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   price:     (s,c) => `<td>${c.priceCell}</td>`,
   day:       (s,c) => pctTd(c.dayChg),
-  trigger:   (s,c) => `<td>${c.ev ? c.m(c.ev.trigger) + (c.ev.baseSource === 'みなし' ? ' <span class="muted" title="前回購入単価が未登録のため取得単価をみなしで使用">(みなし)</span>' : '') : muted}</td>`,
-  base:      (s,c) => `<td>${c.ev ? c.m(c.ev.base) + (c.ev.baseSource === 'みなし' ? ' <span class="muted">(みなし)</span>' : '') : muted}</td>`,
+  trigger:   (s,c) => `<td>${c.ev ? c.m(c.ev.trigger) + (c.ev.baseSource === 'みなし' ? MINASHI : '') : muted}</td>`,
+  base:      (s,c) => `<td>${c.ev ? c.m(c.ev.base) + (c.ev.baseSource === 'みなし' ? MINASHI : '') : muted}</td>`,
   drop:      (s,c) => !c.ev ? `<td>${muted}</td>`
                     : c.ev.reached ? '<td class="neg">到達</td>'
                     : `<td class="drop ${c.ev.remainingDropPct <= 5 ? 'near' : 'far'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
@@ -652,7 +655,7 @@ const COL_RENDERERS = {
   high52w:   (s,c) => `<td>${c.high52w != null ? c.ccy + num(c.high52w) : muted}</td>`,
   dropFrom5y:  (s,c) => pctTd(calc.dropFrom5y(s)),
   dropFrom52w: (s,c) => pctTd(calc.dropFrom52w(s)),
-  prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? c.ccy + num(lb.price) + (lb.source === 'みなし' ? ' <span class="muted">(みなし)</span>' : '') : muted}</td>`; },
+  prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? c.ccy + num(lb.price) + (lb.source === 'みなし' ? MINASHI : '') : muted}</td>`; },
   dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
@@ -2289,9 +2292,11 @@ function renderSplitsTab() {
     <div class="section">
       <div class="section-head"><h2>分割・併合の履歴（全銘柄）</h2></div>
       <div class="section-body">${allHist.length === 0 ? '<div class="empty">履歴はありません。「価格更新」または「銘柄情報を更新」で検知します。</div>' : `
+        <p class="muted" style="padding:8px 16px 0">分割日に承認できず「記録のみ」になったものは、「調整」ボタンで後から比率を反映できます。</p>
         <div class="table-wrap"><table>
-          <thead><tr><th class="l">分割日</th><th class="l">銘柄</th><th class="l">比率</th><th class="l">状態</th></tr></thead>
-          <tbody>${allHist.map(h => `<tr><td class="l">${esc(h.date)}</td><td class="l">${esc(calc.displayName(h.sec))} <span class="muted">${esc(h.sec.ticker)}</span></td><td class="l">${esc(h.label || ('×' + h.ratio))}</td><td class="l">${splitStatusLabel(h.status)}</td></tr>`).join('')}</tbody>
+          <thead><tr><th class="l">分割日</th><th class="l">銘柄</th><th class="l">比率</th><th class="l">状態</th><th class="l"></th></tr></thead>
+          <tbody>${allHist.map(h => `<tr><td class="l">${esc(h.date)}</td><td class="l">${esc(calc.displayName(h.sec))} <span class="muted">${esc(h.sec.ticker)}</span></td><td class="l">${esc(h.label || ('×' + h.ratio))}</td><td class="l">${splitStatusLabel(h.status)}</td>
+            <td class="l">${(h.status === 'recorded' || h.status === 'skipped') ? `<button class="btn btn-sm" onclick="applyHistSplit(${h.sec.id},'${esc(h.date)}')">調整</button>` : ''}</td></tr>`).join('')}</tbody>
         </table></div>`}
       </div>
     </div>`;
@@ -2312,6 +2317,17 @@ function approveAllSplits() {
   for (const p of pendingSplits()) store.applySplit(p.secId, p.date, p.ratio);
   render();
   toast('承認待ちの分割をすべて承認・調整しました');
+}
+// 履歴一覧から手動で調整（記録のみ/スキップの取りこぼし反映）
+function applyHistSplit(secId, date) {
+  const sec = store.data.securities.find(s => s.id === secId);
+  const h = sec && (sec.splitHistory || []).find(x => x.date === date); if (!h) return;
+  const r = h.ratio, ccy = MARKET_CCY[sec.market];
+  const th = calc.totalHolding(secId);
+  const msg = `${calc.displayName(sec)}（${sec.ticker}）の分割 ${h.label || ('×' + r)} を反映します。\n`
+    + `保有数量 ${num(th.qty)} → ${num(th.qty * r)} 株、取得単価 ${ccy}${num(th.avgCost)} → ${ccy}${num(th.avgCost / r)}\n`
+    + `（前回購入価格・手動基準高値・分割日前の取引も調整）\nよろしいですか？`;
+  if (confirm(msg)) { store.applySplit(secId, date, r); render(); toast('分割を反映しました'); }
 }
 
 // ---------- データ管理 ----------
@@ -2418,6 +2434,7 @@ window.refreshAllMeta = refreshAllMeta;
 window.approveSplit = approveSplit;
 window.skipSplit = skipSplit;
 window.approveAllSplits = approveAllSplits;
+window.applyHistSplit = applyHistSplit;
 window.importData = importData;
 window.resetData = resetData;
 window.api = api;
