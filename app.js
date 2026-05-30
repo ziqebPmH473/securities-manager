@@ -35,7 +35,7 @@ const BASE_HIGH_LABEL = { '5y': '5年高値', '52w': '52週高値', 'all': '上�
 const BROKERS = ['SBI', '楽天', 'Webull', 'moomoo'];
 const ACCOUNTS = ['特定', 'NISA', '一般'];
 // 一覧で左寄せにする列（見出しと本文の寄せを一致させる）
-const LEFT_COLS = new Set(['name', 'category', 'rating']);
+const LEFT_COLS = new Set(['name', 'sector', 'industry', 'category', 'rating']);
 
 // 分析メタの取込列マッピング（Excel「銘柄分析結果」のヘッダ名 → 内部キー）
 const ANALYSIS_COLMAP = {
@@ -482,6 +482,9 @@ function sortSecurities(secs, market) {
       case 'qty': return th.qty;
       case 'avgCost': return th.avgCost;
       case 'cost': return th.acquiredCost;
+      case 'sector': return sec.sector || 'zzz';
+      case 'industry': return sec.industry || 'zzz';
+      case 'marketCap': return sec.marketCap ?? -Infinity;
       case 'buyCount': return calc.buyCount(sec) || 0;
       case 'buyAmount': return calc.buyAmount(sec) ?? -Infinity;
       case 'price': return calc.price(sec) ?? -Infinity;
@@ -516,8 +519,10 @@ function renderMarket(market) {
 
   const ccy = MARKET_CCY[market];
   // カラム順は移行元スプレッドシート（銘柄リスト）の流れに準拠。評価額(円)は一覧では非表示（内部計算は保持）
+  // Excel 銘柄リスト列順: 銘柄→現在値→前日比→次回購入→残り下落率→セクター→業種→時価総額→評価額→取得価額→損益率→取得単価→数量→購入回数→1回購入額→AI判断→銘柄格付
   const cols = isStock
     ? [['name', '銘柄'], ['price', '現在値'], ['day', '前日比', true], ['trigger', '次回購入', true], ['drop', '残り下落率'],
+       ['sector', 'セクター'], ['industry', '業種'], ['marketCap', '時価総額(百万)'],
        ['value', `評価額(${ccy})`], ['cost', `取得価額(${ccy})`], ['pnl', '損益率'],
        ['avgCost', '取得単価'], ['qty', '数量'], ['buyCount', '購入回数'], ['buyAmount', `1回購入額(${ccy})`],
        ['category', 'AI判断'], ['rating', '銘柄格付']]
@@ -582,12 +587,13 @@ function marketRow(sec, isStock) {
   const recoAmt = store.categoryAmountFor(sec.category, sec.market); // AI判断カテゴリの推奨金額
 
   const m = (v) => v != null ? money(v, ccy) : '<span class="muted">—</span>';
-  // 銘柄名セル: セクター・業種をサブ行に表示（設定済みなら）
-  const sectorSub = [sec.sector, sec.industry].filter(Boolean).join(' / ');
-  const nameCell = `<td class="l"><strong>${esc(sec.name || sec.ticker)}</strong> <span class="muted">${esc(sec.ticker)}</span>${sec.watch ? ' <span class="tag watch">注意</span>' : ''}${sectorSub ? `<br><span class="muted" style="font-size:11px">${esc(sectorSub)}</span>` : ''}</td>`;
+  const nameCell = `<td class="l"><strong>${esc(sec.name || sec.ticker)}</strong> <span class="muted">${esc(sec.ticker)}</span>${sec.watch ? ' <span class="tag watch">注意</span>' : ''}</td>`;
   const priceTd = `<td>${priceCell}</td>`;
   const dayTd = `<td class="${cls(dayChg)}">${dayChg != null ? signed(dayChg) + '%' : '—'}</td>`;
   const triggerTd = `<td>${ev ? m(ev.trigger) : '<span class="muted">—</span>'}</td>`;
+  const sectorTd = `<td class="l">${sec.sector ? esc(sec.sector) : '<span class="muted">—</span>'}</td>`;
+  const industryTd = `<td class="l">${sec.industry ? esc(sec.industry) : '<span class="muted">—</span>'}</td>`;
+  const marketCapTd = `<td>${sec.marketCap != null ? Number(sec.marketCap).toLocaleString('ja-JP') : '<span class="muted">—</span>'}</td>`;
   // 残り下落率: 到達は強調、それ以外は%のみ（語は見出しに任せる）
   const remainTd = !ev ? '<td class="muted">—</td>'
     : ev.reached ? '<td class="neg">到達</td>'
@@ -610,7 +616,7 @@ function marketRow(sec, isStock) {
 
   // 並び: 銘柄→現在値→前日比→あと%→トリガー→評価額→取得価額→損益率→取得単価→数量→購入回数→1回購入額→AI判断→銘柄格付
   if (isStock) {
-    return `<tr>${nameCell}${priceTd}${dayTd}${triggerTd}${remainTd}${valueTd}${costTd}${pnlTd}${avgCostTd}${qtyTd}${buyCountTd}${buyAmtTd}${aiTd}${gradeTd}${actionsTd}</tr>`;
+    return `<tr>${nameCell}${priceTd}${dayTd}${triggerTd}${remainTd}${sectorTd}${industryTd}${marketCapTd}${valueTd}${costTd}${pnlTd}${avgCostTd}${qtyTd}${buyCountTd}${buyAmtTd}${aiTd}${gradeTd}${actionsTd}</tr>`;
   }
   return `<tr>${nameCell}${priceTd}${valueTd}${costTd}${pnlTd}${avgCostTd}${qtyTd}${buyCountTd}${buyAmtTd}${aiTd}${actionsTd}</tr>`;
 }
