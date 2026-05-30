@@ -51,7 +51,7 @@ async function fetchJpInfo(symbol) {
     fetchQuoteSummary(symbol).catch(() => null),
   ]);
   return {
-    name:      jpName || chart?.name || null,
+    name:      cleanName(jpName) || cleanName(chart?.name) || null,
     sector:    summary?.sector || null,
     industry:  summary?.industry || null,
     marketCap: summary?.marketCap ?? null,
@@ -62,9 +62,26 @@ async function fetchJpInfo(symbol) {
   };
 }
 
+// 銘柄名から法人格表記のみを省略（株式会社/(株)/㈱ / Inc. / Corporation / Co., Ltd. 等）
+// Group/Holdings/Class などは社名の一部のことが多いので残す
+function cleanName(name) {
+  if (!name) return null;
+  const orig = String(name).trim();
+  let s = orig;
+  // 日本語: 「株式会社」「(株)」「（株）」「㈱」を除去
+  s = s.replace(/(株式会社|\(株\)|（株）|㈱)/g, '');
+  // 英語の法人格サフィックスを末尾から最大2回除去（"Co., Ltd." 等の連結対応）
+  const EN = /[,，]?\s*(Incorporated|Inc|Corporation|Corp|Company|Co|Limited|Ltd|P\.?L\.?C|LLC|N\.?V|S\.?A|A\.?G)\.?$/i;
+  s = s.replace(EN, '').replace(EN, '');
+  s = s.replace(/[\s,，・]+$/, '').trim();
+  return s || orig;
+}
+
 // ---------- 米国株 ----------
 async function fetchUsInfo(symbol, finnhubKey) {
-  const [chart, summary] = await Promise.all([
+  // 日本語名は Yahoo!ファイナンス日本版から（例: AAPL→アップル）、無ければ英語名(chart)
+  const [jpName, chart, summary] = await Promise.all([
+    fetchYahooJpName(symbol).catch(() => null),
     fetchChartMeta(symbol).catch(() => null),
     fetchQuoteSummary(symbol).catch(() => null),
   ]);
@@ -73,7 +90,7 @@ async function fetchUsInfo(symbol, finnhubKey) {
     fh = await fetchFinnhubMetric(symbol, finnhubKey).catch(() => null);
   }
   return {
-    name:      chart?.name || null,
+    name:      cleanName(jpName) || cleanName(chart?.name) || null,
     sector:    summary?.sector || null,
     industry:  summary?.industry || null,
     marketCap: summary?.marketCap ?? fh?.marketCap ?? null,
