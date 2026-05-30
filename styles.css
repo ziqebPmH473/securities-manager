@@ -150,6 +150,21 @@ form fieldset.form-group legend { color: var(--muted); font-size: 12px; padding:
 form label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); margin-bottom: 12px; }
 form label.check input { width: auto; }
 
+/* カラムピッカー */
+.col-picker-btn { border-style: dashed; }
+.cp-wrapper { max-height: 60vh; overflow-y: auto; }
+.cp-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 6px; border-radius: 6px; cursor: default;
+  border: 1px solid transparent; margin-bottom: 2px;
+}
+.cp-item:hover { background: var(--panel-2); }
+.cp-item.cp-dragging { opacity: 0.4; }
+.cp-item[draggable=true]:hover { border-color: var(--border); }
+.cp-handle { cursor: grab; color: var(--muted); font-size: 16px; line-height: 1; user-select: none; }
+.cp-item label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; flex: 1; }
+.cp-item label input { width: auto; cursor: pointer; }
+
 @media (max-width: 640px) {
   .app-header h1 { font-size: 16px; }
   main { padding: 12px; }

@@ -34,8 +34,37 @@ const MARKET_CCY = { US: '$', JP: '¥', FUND: '¥' };
 const BASE_HIGH_LABEL = { '5y': '5年高値', '52w': '52週高値', 'all': '上場来高値', 'manual': '手動指定' };
 const BROKERS = ['SBI', '楽天', 'Webull', 'moomoo'];
 const ACCOUNTS = ['特定', 'NISA', '一般'];
-// 一覧で左寄せにする列（見出しと本文の寄せを一致させる）
-const LEFT_COLS = new Set(['name', 'sector', 'industry', 'category', 'rating']);
+// ---------- カラム定義 ----------
+// 全カラムのマスタ定義
+const MASTER_COLS = [
+  { key: 'name',      label: '銘柄名',        left: true,  markets: ['US','JP','FUND'], noSort: false },
+  { key: 'ticker',    label: 'ティッカー',     left: true,  markets: ['US','JP','FUND'], noSort: false },
+  { key: 'price',     label: '現在値',         left: false, markets: ['US','JP','FUND'], noSort: false },
+  { key: 'day',       label: '前日比',         left: false, markets: ['US','JP','FUND'], noSort: true  },
+  { key: 'trigger',   label: '次回購入',       left: false, markets: ['US','JP'],        noSort: true  },
+  { key: 'drop',      label: '残り下落率',     left: false, markets: ['US','JP'],        noSort: false },
+  { key: 'sector',    label: 'セクター',       left: true,  markets: ['US','JP'],        noSort: false },
+  { key: 'industry',  label: '業種',           left: true,  markets: ['US','JP'],        noSort: false },
+  { key: 'marketCap', label: '時価総額(百万)',  left: false, markets: ['US','JP'],        noSort: false },
+  { key: 'value',     label: '評価額',         left: false, markets: ['US','JP','FUND'], noSort: false },
+  { key: 'cost',      label: '取得価額',       left: false, markets: ['US','JP','FUND'], noSort: false },
+  { key: 'pnl',       label: '損益率',         left: false, markets: ['US','JP','FUND'], noSort: false },
+  { key: 'avgCost',   label: '取得単価',       left: false, markets: ['US','JP','FUND'], noSort: false },
+  { key: 'qty',       label: '数量',           left: false, markets: ['US','JP','FUND'], noSort: false },
+  { key: 'buyCount',  label: '購入回数',       left: false, markets: ['US','JP','FUND'], noSort: false },
+  { key: 'buyAmount', label: '1回購入額',      left: false, markets: ['US','JP','FUND'], noSort: false },
+  { key: 'category',  label: 'AI判断',         left: true,  markets: ['US','JP','FUND'], noSort: false },
+  { key: 'rating',    label: '銘柄格付',       left: true,  markets: ['US','JP'],        noSort: false },
+  { key: 'per',       label: 'PER',            left: false, markets: ['US','JP'],        noSort: false },
+  { key: 'dividend',  label: '配当/株',        left: false, markets: ['US','JP'],        noSort: false },
+];
+// デフォルト表示列（市場ごと）。MASTER_COLSのkeyの順＝表示順
+const DEFAULT_VISIBLE = {
+  US:   ['name','ticker','price','day','trigger','drop','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
+  JP:   ['name','ticker','price','day','trigger','drop','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
+  FUND: ['name','ticker','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
+};
+const COL_PREFS_KEY = 'sm_colprefs_v1';
 
 // 分析メタの取込列マッピング（Excel「銘柄分析結果」のヘッダ名 → 内部キー）
 const ANALYSIS_COLMAP = {
@@ -360,11 +389,56 @@ const api = {
 // ---------- ルーター/描画 ----------
 const app = document.getElementById('app');
 let currentView = 'dashboard';
-// 一覧のソート/フィルタ状態（市場ごと）
+// 一覧のソート/フィルタ・カラム設定（市場ごと）
 const listState = {
-  US: { sortKey: 'name', sortDir: 1, broker: '', account: '', category: '' },
-  JP: { sortKey: 'name', sortDir: 1, broker: '', account: '', category: '' },
+  US:   { sortKey: 'name', sortDir: 1, broker: '', account: '', category: '' },
+  JP:   { sortKey: 'name', sortDir: 1, broker: '', account: '', category: '' },
   FUND: { sortKey: 'name', sortDir: 1, broker: '', account: '', category: '' },
+};
+// カラム設定: 市場ごとに [{key, visible}] の配列
+let colPrefs = {};
+function loadColPrefs() {
+  try { colPrefs = JSON.parse(localStorage.getItem(COL_PREFS_KEY)) || {}; } catch(_) { colPrefs = {}; }
+}
+function saveColPrefs() { localStorage.setItem(COL_PREFS_KEY, JSON.stringify(colPrefs)); }
+function getColOrder(market) {
+  if (!colPrefs[market]) resetColPrefs(market);
+  return colPrefs[market];
+}
+function resetColPrefs(market) {
+  const visible = new Set(DEFAULT_VISIBLE[market]);
+  colPrefs[market] = MASTER_COLS.filter(c => c.markets.includes(market)).map(c => ({
+    key: c.key, visible: visible.has(c.key),
+  }));
+  saveColPrefs();
+}
+
+// ---------- カラムレンダラー ----------
+// 各カラムの td を返す関数。引数: (sec, ctx)
+// ctx: { ccy, th, ev, price, priceCell, noPriceMark, valN, pnlPct, dayChg, buyAmt, buyCnt, recoAmt, m, m2 }
+const COL_RENDERERS = {
+  name:      (s,c) => `<td class="l"><strong>${esc(s.name || s.ticker)}</strong>${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
+  ticker:    (s,c) => `<td class="l">${esc(s.ticker)}</td>`,
+  price:     (s,c) => `<td>${c.priceCell}</td>`,
+  day:       (s,c) => `<td class="${cls(c.dayChg)}">${c.dayChg != null ? signed(c.dayChg) + '%' : '—'}</td>`,
+  trigger:   (s,c) => `<td>${c.ev ? c.m(c.ev.trigger) : '<span class="muted">—</span>'}</td>`,
+  drop:      (s,c) => !c.ev ? '<td><span class="muted">—</span></td>'
+                    : c.ev.reached ? '<td class="neg">到達</td>'
+                    : `<td class="drop ${c.ev.remainingDropPct <= 5 ? 'near' : 'far'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
+  sector:    (s,c) => `<td class="l">${s.sector ? esc(s.sector) : '<span class="muted">—</span>'}</td>`,
+  industry:  (s,c) => `<td class="l">${s.industry ? esc(s.industry) : '<span class="muted">—</span>'}</td>`,
+  marketCap: (s,c) => `<td>${s.marketCap != null ? Number(s.marketCap).toLocaleString('ja-JP') : '<span class="muted">—</span>'}</td>`,
+  value:     (s,c) => `<td>${c.th.qty ? money(c.valN, c.ccy) + c.noPriceMark : '<span class="muted">—</span>'}</td>`,
+  cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : '<span class="muted">—</span>'}</td>`,
+  pnl:       (s,c) => `<td class="${cls(c.pnlPct)}">${c.pnlPct != null ? signed(c.pnlPct) + '%' : '—'}</td>`,
+  avgCost:   (s,c) => `<td>${c.th.qty ? c.ccy + num(c.th.avgCost) : '<span class="muted">—</span>'}</td>`,
+  qty:       (s,c) => `<td>${c.th.qty ? num(c.th.qty) : '<span class="muted">0</span>'}</td>`,
+  buyCount:  (s,c) => `<td>${c.buyCnt ? num(c.buyCnt) : '<span class="muted">—</span>'}</td>`,
+  buyAmount: (s,c) => `<td>${c.m(c.buyAmt)}</td>`,
+  category:  (s,c) => `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span> <span class="muted">${c.recoAmt ? money(c.recoAmt, c.ccy) : ''}</span>` : '<span class="muted">—</span>'}</td>`,
+  rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
+  per:       (s,c) => `<td>${s.per != null ? num(s.per) : '<span class="muted">—</span>'}</td>`,
+  dividend:  (s,c) => `<td>${s.dividend != null ? c.m(s.dividend) : '<span class="muted">—</span>'}</td>`,
 };
 
 function render() {
@@ -508,9 +582,8 @@ function renderMarket(market) {
   const st = listState[market];
   const isStock = market !== 'FUND';
   let secs = store.data.securities.filter(s => s.market === market);
-  // フィルタ（証券会社/口座は保有を持つ銘柄で判定）
-  if (st.broker) secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.broker === st.broker && h.quantity > 0));
-  if (st.account) secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.accountType === st.account && h.quantity > 0));
+  if (st.broker)   secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.broker === st.broker && h.quantity > 0));
+  if (st.account)  secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.accountType === st.account && h.quantity > 0));
   if (st.category) secs = secs.filter(s => s.category === st.category);
   secs = sortSecurities(secs, market);
 
@@ -518,23 +591,20 @@ function renderMarket(market) {
     .map(c => `<option value="${esc(c.category)}" ${st.category === c.category ? 'selected' : ''}>${esc(c.category)}</option>`).join('');
 
   const ccy = MARKET_CCY[market];
-  // カラム順は移行元スプレッドシート（銘柄リスト）の流れに準拠。評価額(円)は一覧では非表示（内部計算は保持）
-  // Excel 銘柄リスト列順: 銘柄→現在値→前日比→次回購入→残り下落率→セクター→業種→時価総額→評価額→取得価額→損益率→取得単価→数量→購入回数→1回購入額→AI判断→銘柄格付
-  const cols = isStock
-    ? [['name', '銘柄'], ['price', '現在値'], ['day', '前日比', true], ['trigger', '次回購入', true], ['drop', '残り下落率'],
-       ['sector', 'セクター'], ['industry', '業種'], ['marketCap', '時価総額(百万)'],
-       ['value', `評価額(${ccy})`], ['cost', `取得価額(${ccy})`], ['pnl', '損益率'],
-       ['avgCost', '取得単価'], ['qty', '数量'], ['buyCount', '購入回数'], ['buyAmount', `1回購入額(${ccy})`],
-       ['category', 'AI判断'], ['rating', '銘柄格付']]
-    : [['name', '銘柄'], ['price', '現在値'], ['value', '評価額'], ['cost', '取得価額'], ['pnl', '損益率'],
-       ['avgCost', '取得単価'], ['qty', '数量'], ['buyCount', '購入回数'], ['buyAmount', '1回購入額'], ['category', 'AI判断']];
+  // 表示するカラム（ユーザー設定済みの順・表示フラグ反映）
+  const visibleCols = getColOrder(market).filter(c => c.visible)
+    .map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
 
-  const headHtml = cols.map(([key, label, noSort]) => {
-    const leftCls = LEFT_COLS.has(key) ? 'l' : '';
-    if (noSort) return `<th class="${leftCls}">${label}</th>`;
-    const active = st.sortKey === key;
+  const headHtml = visibleCols.map(col => {
+    const mc = MASTER_COLS.find(c => c.key === col.key);
+    const leftCls = mc.left ? 'l' : '';
+    // 評価額・取得価額には通貨記号を付ける
+    const label = (['value','cost','buyAmount'].includes(col.key) && ccy !== '¥')
+      ? `${mc.label}(${ccy})` : mc.label;
+    if (mc.noSort) return `<th class="${leftCls}">${label}</th>`;
+    const active = st.sortKey === col.key;
     const arrow = active ? (st.sortDir === 1 ? ' ▲' : ' ▼') : '';
-    return `<th class="sortable ${leftCls} ${active ? 'active' : ''}" onclick="setSort('${market}','${key}')">${label}${arrow}</th>`;
+    return `<th class="sortable ${leftCls} ${active ? 'active' : ''}" onclick="setSort('${market}','${col.key}')">${label}${arrow}</th>`;
   }).join('');
 
   app.innerHTML = `
@@ -557,6 +627,7 @@ function renderMarket(market) {
             <option value="">すべて</option>${catOpts}
           </select></label>
         ${(st.broker || st.account || st.category) ? `<button class="btn btn-sm" onclick="clearFilter('${market}')">絞込解除</button>` : ''}
+        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${market}')" title="列の表示設定">⊞ 列</button>
         <span class="muted" style="margin-left:auto">${secs.length} 件</span>
       </div>
       <div class="section-body">
@@ -564,61 +635,43 @@ function renderMarket(market) {
         <div class="table-wrap"><table>
           <thead><tr>${headHtml}<th class="l"></th></tr></thead>
           <tbody>
-            ${secs.map(sec => marketRow(sec, isStock)).join('')}
+            ${secs.map(sec => marketRow(sec, market, visibleCols)).join('')}
           </tbody>
         </table></div>`}
       </div>
     </div>`;
 }
 
-function marketRow(sec, isStock) {
+function marketRow(sec, market, visibleCols) {
   const th = calc.totalHolding(sec.id);
   const p = store.data.prices[priceKey(sec)] || {};
   const price = p.price ?? null;
-  const dayChg = (price != null && p.prevClose) ? (price - p.prevClose) / p.prevClose * 100 : null;
-  const valN = calc.valueOrCostNative(sec);
-  const pnlPct = calc.pnlPctNative(sec);
-  const ev = isStock ? calc.evaluate(sec) : null;
-  const ccy = MARKET_CCY[sec.market];
-  const priceCell = price != null ? ccy + num(price) : priceInputBtn(sec);
-  const noPriceMark = (price == null && th.qty > 0) ? ' <span class="muted" title="価格未取得・取得原価で表示">*</span>' : '';
-  const buyAmt = calc.buyAmount(sec);
-  const buyCnt = calc.buyCount(sec);
-  const recoAmt = store.categoryAmountFor(sec.category, sec.market); // AI判断カテゴリの推奨金額
-
-  const m = (v) => v != null ? money(v, ccy) : '<span class="muted">—</span>';
-  const nameCell = `<td class="l"><strong>${esc(sec.name || sec.ticker)}</strong> <span class="muted">${esc(sec.ticker)}</span>${sec.watch ? ' <span class="tag watch">注意</span>' : ''}</td>`;
-  const priceTd = `<td>${priceCell}</td>`;
-  const dayTd = `<td class="${cls(dayChg)}">${dayChg != null ? signed(dayChg) + '%' : '—'}</td>`;
-  const triggerTd = `<td>${ev ? m(ev.trigger) : '<span class="muted">—</span>'}</td>`;
-  const sectorTd = `<td class="l">${sec.sector ? esc(sec.sector) : '<span class="muted">—</span>'}</td>`;
-  const industryTd = `<td class="l">${sec.industry ? esc(sec.industry) : '<span class="muted">—</span>'}</td>`;
-  const marketCapTd = `<td>${sec.marketCap != null ? Number(sec.marketCap).toLocaleString('ja-JP') : '<span class="muted">—</span>'}</td>`;
-  // 残り下落率: 到達は強調、それ以外は%のみ（語は見出しに任せる）
-  const remainTd = !ev ? '<td class="muted">—</td>'
-    : ev.reached ? '<td class="neg">到達</td>'
-    : `<td class="drop ${ev.remainingDropPct <= 5 ? 'near' : 'far'}">${ev.remainingDropPct.toFixed(1)}%</td>`;
-  const valueTd = `<td>${th.qty ? money(valN, ccy) + noPriceMark : '<span class="muted">—</span>'}</td>`;
-  const costTd = `<td>${th.qty ? m(th.acquiredCost) : '<span class="muted">—</span>'}</td>`;
-  const pnlTd = `<td class="${cls(pnlPct)}">${pnlPct != null ? signed(pnlPct) + '%' : '—'}</td>`;
-  const avgCostTd = `<td>${th.qty ? ccy + num(th.avgCost) : '<span class="muted">—</span>'}</td>`;
-  const qtyTd = `<td>${th.qty ? num(th.qty) : '<span class="muted">0</span>'}</td>`;
-  const buyCountTd = `<td>${buyCnt ? num(buyCnt) : '<span class="muted">—</span>'}</td>`;
-  const buyAmtTd = `<td>${m(buyAmt)}</td>`;
-  // AI判断 = カテゴリ + そのカテゴリの推奨金額
-  const aiTd = `<td class="l">${sec.category ? `<span class="tag">${esc(sec.category)}</span> <span class="muted">${recoAmt ? money(recoAmt, ccy) : ''}</span>` : '<span class="muted">—</span>'}</td>`;
-  const gradeTd = `<td class="l">${gradeBadge(sec)}</td>`;
+  const ccy = MARKET_CCY[market];
+  const ctx = {
+    ccy,
+    th,
+    ev: market !== 'FUND' ? calc.evaluate(sec) : null,
+    price,
+    priceCell: price != null ? ccy + num(price) : priceInputBtn(sec),
+    noPriceMark: (price == null && th.qty > 0) ? ' <span class="muted" title="価格未取得・取得原価で表示">*</span>' : '',
+    valN: calc.valueOrCostNative(sec),
+    pnlPct: calc.pnlPctNative(sec),
+    dayChg: (price != null && p.prevClose) ? (price - p.prevClose) / p.prevClose * 100 : null,
+    buyAmt: calc.buyAmount(sec),
+    buyCnt: calc.buyCount(sec),
+    recoAmt: store.categoryAmountFor(sec.category, market),
+    m: (v) => v != null ? money(v, ccy) : '<span class="muted">—</span>',
+  };
+  const dataCells = visibleCols.map(col => {
+    const renderer = COL_RENDERERS[col.key];
+    return renderer ? renderer(sec, ctx) : `<td></td>`;
+  }).join('');
   const actionsTd = `<td class="l nowrap">
-      <button class="btn btn-sm" onclick="openTxnForm(${sec.id})">取引</button>
-      <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
-      <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">編集</button>
-    </td>`;
-
-  // 並び: 銘柄→現在値→前日比→あと%→トリガー→評価額→取得価額→損益率→取得単価→数量→購入回数→1回購入額→AI判断→銘柄格付
-  if (isStock) {
-    return `<tr>${nameCell}${priceTd}${dayTd}${triggerTd}${remainTd}${sectorTd}${industryTd}${marketCapTd}${valueTd}${costTd}${pnlTd}${avgCostTd}${qtyTd}${buyCountTd}${buyAmtTd}${aiTd}${gradeTd}${actionsTd}</tr>`;
-  }
-  return `<tr>${nameCell}${priceTd}${valueTd}${costTd}${pnlTd}${avgCostTd}${qtyTd}${buyCountTd}${buyAmtTd}${aiTd}${actionsTd}</tr>`;
+    <button class="btn btn-sm" onclick="openTxnForm(${sec.id})">取引</button>
+    <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
+    <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">編集</button>
+  </td>`;
+  return `<tr>${dataCells}${actionsTd}</tr>`;
 }
 
 // 銘柄格付（★評価はツールチップに格納してコンパクトに）
@@ -641,6 +694,52 @@ function setSort(market, key) {
 }
 function setFilter(market, field, value) { listState[market][field] = value; render(); }
 function clearFilter(market) { Object.assign(listState[market], { broker: '', account: '', category: '' }); render(); }
+
+// ---------- カラムピッカー ----------
+let _colPickerMarket = null;
+let _dragSrcIdx = null;
+
+function openColPicker(market) {
+  _colPickerMarket = market;
+  const order = getColOrder(market);
+  const itemsHtml = order.map((c, i) => {
+    const mc = MASTER_COLS.find(m => m.key === c.key);
+    if (!mc) return '';
+    return `<div class="cp-item" draggable="true" data-idx="${i}"
+        ondragstart="cpDragStart(event,${i})" ondragover="cpDragOver(event,${i})" ondrop="cpDrop(event,${i})" ondragend="cpDragEnd()">
+      <span class="cp-handle">⠿</span>
+      <label><input type="checkbox" onchange="cpToggle('${c.key}',this.checked)" ${c.visible ? 'checked' : ''}> ${esc(mc.label)}</label>
+    </div>`;
+  }).join('');
+  showModal('列の表示・並び替え', `
+    <div class="cp-wrapper">
+      <p class="muted" style="margin:0 0 10px">チェックで表示/非表示。ハンドル(⠿)をドラッグで並び替え。</p>
+      <div id="cp-list">${itemsHtml}</div>
+    </div>
+    <div class="form-actions" style="margin-top:12px">
+      <button type="button" class="btn btn-sm" onclick="cpReset()">デフォルトに戻す</button>
+      <button type="button" class="btn btn-primary" onclick="closeModal();render()">適用</button>
+    </div>`);
+}
+function cpToggle(key, checked) {
+  const order = getColOrder(_colPickerMarket);
+  const c = order.find(x => x.key === key);
+  if (c) { c.visible = checked; saveColPrefs(); }
+}
+function cpDragStart(e, idx) { _dragSrcIdx = idx; e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('cp-dragging'); }
+function cpDragOver(e, idx) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+function cpDrop(e, idx) {
+  e.preventDefault();
+  if (_dragSrcIdx === null || _dragSrcIdx === idx) return;
+  const order = getColOrder(_colPickerMarket);
+  const [moved] = order.splice(_dragSrcIdx, 1);
+  order.splice(idx, 0, moved);
+  saveColPrefs();
+  // DOM内で並び替え反映（モーダル再描画）
+  openColPicker(_colPickerMarket);
+}
+function cpDragEnd() { _dragSrcIdx = null; document.querySelectorAll('.cp-dragging').forEach(el => el.classList.remove('cp-dragging')); }
+function cpReset() { resetColPrefs(_colPickerMarket); openColPicker(_colPickerMarket); }
 
 // ---------- サイン一覧 ----------
 function renderSignals() {
@@ -1375,6 +1474,13 @@ window.openPasteImport = openPasteImport;
 window.setSort = setSort;
 window.setFilter = setFilter;
 window.clearFilter = clearFilter;
+window.openColPicker = openColPicker;
+window.cpToggle = cpToggle;
+window.cpDragStart = cpDragStart;
+window.cpDragOver = cpDragOver;
+window.cpDrop = cpDrop;
+window.cpDragEnd = cpDragEnd;
+window.cpReset = cpReset;
 window.closeModal = closeModal;
 window.exportData = exportData;
 window.importData = importData;
@@ -1389,4 +1495,5 @@ document.getElementById('modal-overlay').onclick = (e) => { if (e.target.id === 
 document.getElementById('btn-refresh').onclick = () => api.refreshAll().then(render);
 
 store.load();
+loadColPrefs();
 render();
