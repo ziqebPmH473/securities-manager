@@ -44,11 +44,14 @@ const ANALYSIS_COLMAP = {
   '推奨投資額': 'recoAmount', '推奨カテゴリ': 'recoCategory',
   'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
   '備考': 'analysisNote', '評価時点_購入優先順位': 'priority', '購入優先順位': 'priority',
+  'セクター': 'sector', '業種': 'industry', '時価総額(百万)': 'marketCap',
+  'PER': 'per', 'EPS': 'eps', '年間配当/株': 'dividend',
 };
 // 保有取込列マッピング（Excel「10_保有株」）
 const HOLDING_COLMAP = {
   'ティッカー': 'ticker', '証券会社': 'broker', '口座種別': 'accountType',
   '取得単価': 'avgCost', '数量': 'quantity', '取得価額': 'acquiredCost',
+  'セクター': 'sector', '業種': 'industry',
 };
 
 // ---------- ストア ----------
@@ -514,7 +517,7 @@ function renderMarket(market) {
   const ccy = MARKET_CCY[market];
   // カラム順は移行元スプレッドシート（銘柄リスト）の流れに準拠。評価額(円)は一覧では非表示（内部計算は保持）
   const cols = isStock
-    ? [['name', '銘柄'], ['price', '現在値'], ['day', '前日比', true], ['drop', 'あと%'], ['trigger', 'トリガー', true],
+    ? [['name', '銘柄'], ['price', '現在値'], ['day', '前日比', true], ['trigger', '次回購入', true], ['drop', '残り下落率'],
        ['value', `評価額(${ccy})`], ['cost', `取得価額(${ccy})`], ['pnl', '損益率'],
        ['avgCost', '取得単価'], ['qty', '数量'], ['buyCount', '購入回数'], ['buyAmount', `1回購入額(${ccy})`],
        ['category', 'AI判断'], ['rating', '銘柄格付']]
@@ -579,14 +582,16 @@ function marketRow(sec, isStock) {
   const recoAmt = store.categoryAmountFor(sec.category, sec.market); // AI判断カテゴリの推奨金額
 
   const m = (v) => v != null ? money(v, ccy) : '<span class="muted">—</span>';
-  const nameCell = `<td class="l"><strong>${esc(sec.name || sec.ticker)}</strong> <span class="muted">${esc(sec.ticker)}</span>${sec.watch ? ' <span class="tag watch">注意</span>' : ''}</td>`;
+  // 銘柄名セル: セクター・業種をサブ行に表示（設定済みなら）
+  const sectorSub = [sec.sector, sec.industry].filter(Boolean).join(' / ');
+  const nameCell = `<td class="l"><strong>${esc(sec.name || sec.ticker)}</strong> <span class="muted">${esc(sec.ticker)}</span>${sec.watch ? ' <span class="tag watch">注意</span>' : ''}${sectorSub ? `<br><span class="muted" style="font-size:11px">${esc(sectorSub)}</span>` : ''}</td>`;
   const priceTd = `<td>${priceCell}</td>`;
   const dayTd = `<td class="${cls(dayChg)}">${dayChg != null ? signed(dayChg) + '%' : '—'}</td>`;
-  // 「あと%」: 到達は強調、それ以外は残り下落率のみ（語は見出しに任せる）
+  const triggerTd = `<td>${ev ? m(ev.trigger) : '<span class="muted">—</span>'}</td>`;
+  // 残り下落率: 到達は強調、それ以外は%のみ（語は見出しに任せる）
   const remainTd = !ev ? '<td class="muted">—</td>'
     : ev.reached ? '<td class="neg">到達</td>'
     : `<td class="drop ${ev.remainingDropPct <= 5 ? 'near' : 'far'}">${ev.remainingDropPct.toFixed(1)}%</td>`;
-  const triggerTd = `<td>${ev ? m(ev.trigger) : '<span class="muted">—</span>'}</td>`;
   const valueTd = `<td>${th.qty ? money(valN, ccy) + noPriceMark : '<span class="muted">—</span>'}</td>`;
   const costTd = `<td>${th.qty ? m(th.acquiredCost) : '<span class="muted">—</span>'}</td>`;
   const pnlTd = `<td class="${cls(pnlPct)}">${pnlPct != null ? signed(pnlPct) + '%' : '—'}</td>`;
@@ -605,7 +610,7 @@ function marketRow(sec, isStock) {
 
   // 並び: 銘柄→現在値→前日比→あと%→トリガー→評価額→取得価額→損益率→取得単価→数量→購入回数→1回購入額→AI判断→銘柄格付
   if (isStock) {
-    return `<tr>${nameCell}${priceTd}${dayTd}${remainTd}${triggerTd}${valueTd}${costTd}${pnlTd}${avgCostTd}${qtyTd}${buyCountTd}${buyAmtTd}${aiTd}${gradeTd}${actionsTd}</tr>`;
+    return `<tr>${nameCell}${priceTd}${dayTd}${triggerTd}${remainTd}${valueTd}${costTd}${pnlTd}${avgCostTd}${qtyTd}${buyCountTd}${buyAmtTd}${aiTd}${gradeTd}${actionsTd}</tr>`;
   }
   return `<tr>${nameCell}${priceTd}${valueTd}${costTd}${pnlTd}${avgCostTd}${qtyTd}${buyCountTd}${buyAmtTd}${aiTd}${actionsTd}</tr>`;
 }
@@ -763,6 +768,22 @@ function openSecurityForm(id, presetMarket) {
           <input name="prevBuyPrice" type="number" step="any" value="${sec && sec.prevBuyPrice != null ? sec.prevBuyPrice : ''}" placeholder="原通貨"></div>
       </div>
 
+      <details class="form-group">
+        <summary>分類・ファンダメンタル（セクター・PER・時価総額 等）</summary>
+        <div class="row">
+          <div class="field"><label>セクター</label><input name="sector" value="${sec ? esc(sec.sector || '') : ''}" placeholder="例: 電子テクノロジー"></div>
+          <div class="field"><label>業種</label><input name="industry" value="${sec ? esc(sec.industry || '') : ''}" placeholder="例: 半導体"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>時価総額（百万$or円）</label><input name="marketCap" type="number" step="any" value="${sec && sec.marketCap != null ? sec.marketCap : ''}"></div>
+          <div class="field"><label>PER</label><input name="per" type="number" step="any" value="${sec && sec.per != null ? sec.per : ''}"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>EPS</label><input name="eps" type="number" step="any" value="${sec && sec.eps != null ? sec.eps : ''}"></div>
+          <div class="field"><label>年間配当/株</label><input name="dividend" type="number" step="any" value="${sec && sec.dividend != null ? sec.dividend : ''}"></div>
+        </div>
+      </details>
+
       <details class="form-group" open>
         <summary>銘柄分析メタ（カテゴリ・購入額・評価・備考）</summary>
         <div class="row">
@@ -823,6 +844,9 @@ function openSecurityForm(id, presetMarket) {
       currency: market === 'US' ? 'USD' : 'JPY',
       assetClass: market === 'FUND' ? 'fund' : 'stock',
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
+      sector: f.sector.value.trim() || null, industry: f.industry.value.trim() || null,
+      marketCap: numOrNull(f.marketCap.value), per: numOrNull(f.per.value),
+      eps: numOrNull(f.eps.value), dividend: numOrNull(f.dividend.value),
       buyAmount: numOrNull(f.buyAmount.value), buyCount: intOrNull(f.buyCount.value),
       overallGrade: f.overallGrade.value || null, rating: f.rating.value || null, buyGrade: f.buyGrade.value || null,
       starValuation: intOrNull(f.starValuation.value), starStrength: intOrNull(f.starStrength.value), starRisk: intOrNull(f.starRisk.value),
@@ -1163,17 +1187,25 @@ function importAnalysis(text, market, create) {
       });
       created++;
     } else updated++;
+    const nf = (v, fb) => (v && v.trim()) ? parseFloat(v) : (fb ?? null);
+    const sf = (v, fb) => (v && v.trim()) || fb || null;
     const patch = {
-      overallGrade: rec.overallGrade || sec.overallGrade || null,
-      rating: rec.rating || sec.rating || null,
-      buyGrade: rec.buyGrade || sec.buyGrade || null,
+      overallGrade: sf(rec.overallGrade, sec.overallGrade),
+      rating: sf(rec.rating, sec.rating),
+      buyGrade: sf(rec.buyGrade, sec.buyGrade),
       starValuation: parseStars(rec.starValuation) ?? sec.starValuation ?? null,
       starStrength: parseStars(rec.starStrength) ?? sec.starStrength ?? null,
       starRisk: parseStars(rec.starRisk) ?? sec.starRisk ?? null,
-      analysisNote: rec.analysisNote || sec.analysisNote || null,
+      analysisNote: sf(rec.analysisNote, sec.analysisNote),
       analysisDate: normDate(rec.analysisDate) || sec.analysisDate || null,
-      recoCategory: rec.recoCategory || sec.recoCategory || null,
+      recoCategory: sf(rec.recoCategory, sec.recoCategory),
       recoAmount: rec.recoAmount ? parseFloat(rec.recoAmount) : (sec.recoAmount ?? null),
+      sector: sf(rec.sector, sec.sector),
+      industry: sf(rec.industry, sec.industry),
+      marketCap: nf(rec.marketCap, sec.marketCap),
+      per: nf(rec.per, sec.per),
+      eps: nf(rec.eps, sec.eps),
+      dividend: nf(rec.dividend, sec.dividend),
     };
     if (rec.priority) { const p = parseInt(rec.priority, 10); if (!isNaN(p)) patch.priority = p; }
     // カテゴリ未設定なら推奨カテゴリを採用
@@ -1214,6 +1246,11 @@ function importHoldings(text, market, create) {
       avgCost = (!isNaN(ac) && qty > 0) ? ac / qty : 0;
     }
     store.setHolding(sec.id, (rec.broker || 'SBI').trim(), (rec.accountType || '特定').trim(), qty, avgCost);
+    // セクター・業種が含まれていれば銘柄に反映
+    const secPatch = {};
+    if (rec.sector && rec.sector.trim()) secPatch.sector = rec.sector.trim();
+    if (rec.industry && rec.industry.trim()) secPatch.industry = rec.industry.trim();
+    if (Object.keys(secPatch).length) store.updateSecurity(sec.id, secPatch);
   }
   return { updated, created, skipped };
 }
