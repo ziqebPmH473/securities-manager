@@ -2314,8 +2314,8 @@ function latestHolding(secId) {
     .sort((a, b) => ((a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1))[0];
 }
 // 分割タブ: ①承認待ち（要対応）②履歴（過去の見直し用）
-function splitTable(list, idPrefix) {
-  return `<div class="table-wrap"><table>
+function splitTable(list, scope) {
+  return `<div class="table-wrap"><table${scope ? ` id="sptbl-${scope}"` : ''}>
     <thead><tr><th class="l"><input type="checkbox" onchange="splitHistAll(this)"></th>
       <th class="l">分割日</th><th class="l">銘柄</th><th class="l">比率</th><th>取得単価</th><th>現在値</th>
       <th class="l">取込日</th><th class="l">手入力日</th><th class="l">警告</th><th class="l">状態</th><th class="l"></th></tr></thead>
@@ -2330,16 +2330,17 @@ function renderSplitsTab() {
   app.innerHTML = `
     <div class="section">
       <div class="section-head"><h2>株式分割・併合の承認待ち（${pending.length} 件）</h2>
-        ${pending.length ? '<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked()">選択を調整</button>' : ''}</div>
+        ${pending.length ? `<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked('sptbl-pending')">選択を調整</button>` : ''}</div>
       <div class="section-body">${pending.length === 0 ? '<div class="empty">承認待ちの分割はありません。</div>' : `
         <p class="muted" style="padding:10px 16px 0">警告(⚠)・取込日(分割日より<strong>前</strong>＝未調整の疑いは<span class="after-split">この色</span>)を確認し、調整するものにチェック→「選択を調整」。行の「調整」で個別も可。</p>
-        ${splitTable(pending)}`}
+        ${splitTable(pending, 'pending')}`}
       </div>
     </div>
     <div class="section">
-      <div class="section-head"><h2>分割・併合の履歴（全銘柄）</h2></div>
+      <div class="section-head"><h2>分割・併合の履歴（全銘柄）</h2>
+        ${allHist.some(h => h.status !== 'applied') ? `<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked('sptbl-hist')">選択を調整</button>` : ''}</div>
       <div class="section-body">${allHist.length === 0 ? '<div class="empty">履歴はありません。「価格更新」または「銘柄情報を更新」で検知します。</div>'
-        : splitTable(allHist)}
+        : splitTable(allHist, 'hist')}
       </div>
     </div>`;
 }
@@ -2366,9 +2367,11 @@ function splitHistRow(h) {
     <td class="l">${done ? '' : `<button class="btn btn-sm" onclick="openSplitAdjustOne(${sec.id},'${esc(h.date)}')">調整</button>`}</td>
   </tr>`;
 }
-function splitHistAll(cb) { document.querySelectorAll('.split-hist-chk').forEach(c => { c.checked = cb.checked; }); }
-function openSplitAdjustChecked() {
-  const items = [...document.querySelectorAll('.split-hist-chk:checked')].map(c => ({ secId: parseInt(c.dataset.sec, 10), date: c.dataset.date }));
+// 全選択は同じテーブル内のチェックボックスのみ対象（承認待ち/履歴を取り違えない）
+function splitHistAll(cb) { cb.closest('table').querySelectorAll('.split-hist-chk').forEach(c => { c.checked = cb.checked; }); }
+function openSplitAdjustChecked(scope) {
+  const root = (scope && document.getElementById(scope)) || document;
+  const items = [...root.querySelectorAll('.split-hist-chk:checked')].map(c => ({ secId: parseInt(c.dataset.sec, 10), date: c.dataset.date }));
   openSplitAdjust(items);
 }
 function openSplitAdjustOne(secId, date) { openSplitAdjust([{ secId, date }]); }
