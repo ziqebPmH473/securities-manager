@@ -467,8 +467,9 @@ const api = {
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
     store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
-    // 銘柄情報（名前・セクター・ファンダ）もマスタ取得（定期取得＝価格更新時に同時更新）
-    await this.refreshMeta(secs);
+    // 銘柄情報は名前未取得の銘柄だけ取得（名前はほぼ不変＝毎回取らない。APIリクエスト削減＋名称ブレ防止）
+    const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
+    if (need.length) await this.refreshMeta(need);
     toast('価格を更新しました');
   },
 
@@ -485,13 +486,18 @@ const api = {
         const d = infos[yahooSymbol(sec)];
         if (d && !d.error) {
           const key = priceKey(sec);
-          store.data.meta[key] = { ...(store.data.meta[key] || {}), ...clean(d) };
+          const ex = store.data.meta[key] || {};
+          const inc = clean(d);
+          // 日本語名は英語フォールバックで上書きしない（取得のたびに名称がブレないように）
+          if (inc.name && ex.name && hasJa(ex.name) && !hasJa(inc.name)) delete inc.name;
+          store.data.meta[key] = { ...ex, ...inc };
         }
       }
       store.save();
     } catch (_) { /* 取得失敗は無視（手入力可） */ }
   },
 };
+function hasJa(s) { return /[^\x00-\x7F]/.test(String(s || '')); }
 // null/空を除いたオブジェクトを返す（既存マスタ値を上書きしないため）
 function clean(o) {
   const r = {};
@@ -1104,6 +1110,7 @@ function renderMaster() {
         <button class="btn" onclick="openPasteImport('analysis')">銘柄分析結果を取込</button>
         <button class="btn" onclick="openBrokerImport()">保有を取込（証券会社別）</button>
         <button class="btn" onclick="openImportMapping()">取込フィールド設定</button>
+        <button class="btn" onclick="refreshAllMeta()">銘柄情報を更新（名前・セクター・PER等）</button>
       </div>
       <p class="muted" style="padding:0 16px 14px">Excelの該当シートをヘッダ行ごとコピーして貼り付け→ティッカーで既存銘柄に紐づけ（未登録は新規作成も可）。</p>
       ${importHistorySection()}
@@ -1113,6 +1120,7 @@ function renderMaster() {
       <div class="section-body" style="padding:16px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn" onclick="exportData()">エクスポート(JSON)</button>
         <button class="btn" onclick="importData()">インポート(JSON)</button>
+        <button class="btn" onclick="exportGeneric()">汎用出力(CSV)</button>
         <button class="btn btn-danger" onclick="resetData()">全データ削除</button>
       </div>
       <p class="muted" style="padding:0 16px 14px">現在の保存先: このブラウザ(localStorage)。将来 Google スプレッドシートへ移行予定。</p>
@@ -1847,20 +1855,52 @@ function parseSmbcScreen(text, map) {
   }
   return out;
 }
+// 汎用入出力の列（日本語ラベル↔内部キー）。分析結果（評価/格付/★/備考/優先順位/評価日）は対象外
+const GENERIC_MAP = {
+  'ティッカー': 'ticker', 'コード': 'ticker', '市場': 'market', '証券会社': 'broker', '口座': 'account', '口座種別': 'account',
+  '数量': 'quantity', '取得単価': 'avgCost', '平均取得単価': 'avgCost',
+  '前回購入価格': 'prevBuyPrice', '基準高値モード': 'baseHighMode', '手動基準高値': 'baseHighManual',
+  'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category',
+  '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
+};
+const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '基準高値モード', '手動基準高値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ'];
+function normBaseHighMode(s) {
+  s = String(s || '').trim();
+  if (!s) return null;
+  if (/5y|5年/.test(s)) return '5y';
+  if (/52w|52週/.test(s)) return '52w';
+  if (/all|上場来/.test(s)) return 'all';
+  if (/manual|手動/.test(s)) return 'manual';
+  return null;
+}
 function parseGeneric(text) {
   const raw = text.includes('\t') ? text.split(/\r?\n/).map(l => l.split('\t')) : parseCsvText(text);
   const rows = raw.filter(r => r.some(c => String(c).trim() !== ''));
   if (!rows.length) return [];
-  const GMAP = { 'ティッカー': 'ticker', 'コード': 'ticker', '市場': 'market', '数量': 'quantity', '取得単価': 'avgCost', '平均取得単価': 'avgCost', '証券会社': 'broker', '口座': 'account', '口座種別': 'account' };
-  let header = rows[0].map(h => GMAP[String(h).trim()] || null), start = 1;
-  if (!header.some(Boolean)) { header = ['ticker', 'market', 'quantity', 'avgCost']; start = 0; }
+  let header = rows[0].map(h => GENERIC_MAP[String(h).trim()] || null), start = 1;
+  const hasHeader = header.some(Boolean);
+  if (!hasHeader) { header = ['ticker', 'market', 'quantity', 'avgCost']; start = 0; }
   const out = [];
   for (let i = start; i < rows.length; i++) {
     const rec = {}; rows[i].forEach((c, j) => { if (header[j]) rec[header[j]] = String(c).trim(); });
     const ticker = (rec.ticker || '').trim(); if (!ticker) continue;
     let market = (rec.market || '').toUpperCase(); if (market !== 'US' && market !== 'JP') market = /^\d/.test(ticker) ? 'JP' : 'US';
-    const qty = numClean(rec.quantity); if (qty == null) continue;
-    out.push({ market, ticker, broker: rec.broker || null, account: normAccount(rec.account), quantity: qty, avgCost: numClean(rec.avgCost) ?? 0 });
+    const qty = numClean(rec.quantity);
+    const row = { market, ticker, broker: rec.broker || null, account: normAccount(rec.account), quantity: qty, avgCost: numClean(rec.avgCost) ?? 0 };
+    // 銘柄属性（ヘッダにある列のみ）。分析結果は含めない
+    const sec = {};
+    if ('prevBuyPrice' in rec) sec.prevBuyPrice = numClean(rec.prevBuyPrice);
+    if ('baseHighMode' in rec) sec.baseHighMode = normBaseHighMode(rec.baseHighMode);
+    if ('baseHighManual' in rec) sec.baseHighManual = numClean(rec.baseHighManual);
+    if ('ruleName' in rec) sec.ruleName = rec.ruleName || '';
+    if ('category' in rec) sec.category = rec.category || null;
+    if ('buyAmount' in rec) sec.buyAmount = numClean(rec.buyAmount);
+    if ('buyCount' in rec) { const n = parseInt(rec.buyCount, 10); sec.buyCount = isNaN(n) ? null : n; }
+    if ('enabled' in rec) sec.enabled = /有効|^1$|true|yes/i.test(rec.enabled);
+    if ('watch' in rec) sec.watch = /注意|^1$|true|yes/i.test(rec.watch);
+    if (Object.keys(sec).length) row._sec = sec;
+    if (qty == null && !row._sec) continue; // 数量も属性も無い行はスキップ
+    out.push(row);
   }
   return out;
 }
@@ -1985,10 +2025,19 @@ function runBrokerImport() {
       sec = store.addSecurity({ market: row.market, ticker: tk, currency: row.market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, ruleId: store.defaultRule().id });
       created++;
     } else updated++;
-    const broker = row.broker || defBroker, account = row.account || '特定';
-    const exists = store.data.holdings.some(h => h.securityId === sec.id && h.broker === broker && h.accountType === account);
-    if (mode === 'append' && exists) { /* 既存はそのまま（上書きしない） */ }
-    else store.setHolding(sec.id, broker, account, row.quantity, row.avgCost ?? 0);
+    // 汎用: 銘柄属性（前回購入価格・基準高値・ルール・カテゴリ 等）を反映（分析結果は対象外）
+    if (row._sec) {
+      const p = { ...row._sec };
+      if ('ruleName' in p) { const r = store.data.rules.find(x => x.name === p.ruleName); if (r) p.ruleId = r.id; delete p.ruleName; }
+      store.updateSecurity(sec.id, p);
+    }
+    // 数量がある行のみ保有を作成/更新
+    if (row.quantity != null) {
+      const broker = row.broker || defBroker, account = row.account || '特定';
+      const exists = store.data.holdings.some(h => h.securityId === sec.id && h.broker === broker && h.accountType === account);
+      if (mode === 'append' && exists) { /* 既存はそのまま（上書きしない） */ }
+      else store.setHolding(sec.id, broker, account, row.quantity, row.avgCost ?? 0);
+    }
     touched.push(sec);
   }
   store.save();
@@ -2045,6 +2094,40 @@ function saveImportMapping() {
 function resetImportMapping() {
   for (const k in DEFAULT_IMPORT_MAPPINGS) store.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k] };
   store.save(); openImportMapping(); toast('既定に戻しました');
+}
+
+// 汎用出力: 全銘柄・保有を汎用取込フォーマットのCSVで出力（分析結果は除く）
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function exportGeneric() {
+  const lines = [GENERIC_HEADER.join(',')];
+  for (const s of store.data.securities) {
+    const ruleName = (store.rule(s.ruleId) || {}).name || '';
+    const base = [s.ticker, s.market, '', '', '', '',
+      s.prevBuyPrice ?? '', s.baseHighMode || '', s.baseHighManual ?? '', ruleName, s.category || '',
+      s.buyAmount ?? '', s.buyCount ?? '', s.enabled === false ? '無効' : '有効', s.watch ? '注意' : '通常'];
+    const hs = store.data.holdings.filter(h => h.securityId === s.id);
+    if (hs.length) {
+      for (const h of hs) { const r = base.slice(); r[2] = h.broker; r[3] = h.accountType; r[4] = h.quantity; r[5] = h.avgCost; lines.push(r.map(csvCell).join(',')); }
+    } else {
+      lines.push(base.map(csvCell).join(','));
+    }
+  }
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `securities-generic-${today()}.csv`;
+  a.click();
+}
+
+// 銘柄情報マスタ（名前・セクター・ファンダ）を全銘柄ぶん再取得（任意タイミング）
+function refreshAllMeta() {
+  const secs = store.data.securities.filter(s => s.ticker);
+  if (!secs.length) { toast('銘柄がありません'); return; }
+  toast('銘柄情報を取得中…');
+  api.refreshMeta(secs).then(() => { render(); toast('銘柄情報を更新しました'); });
 }
 
 // ---------- データ管理 ----------
@@ -2146,6 +2229,8 @@ window.cpDragEnd = cpDragEnd;
 window.cpReset = cpReset;
 window.closeModal = closeModal;
 window.exportData = exportData;
+window.exportGeneric = exportGeneric;
+window.refreshAllMeta = refreshAllMeta;
 window.importData = importData;
 window.resetData = resetData;
 window.api = api;
