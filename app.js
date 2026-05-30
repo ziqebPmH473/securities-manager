@@ -2269,23 +2269,30 @@ function adjustableSplits() {
   out.sort((a, b) => (a.date < b.date ? 1 : -1));
   return out;
 }
-// 妥当性警告: 単価/現在値 が比率rを超える（または逆）= 観測倍率が分割比率を超える
+// 妥当性警告: 分割(r>1)は「単価が現在値の r 倍超」＝未分割の疑い。併合(r<1)は逆（単価が現在値の r 倍未満）
 function splitOverRatio(val, price, r) {
   if (!val || !price || !r) return false;
-  return Math.max(val / price, price / val) > Math.max(r, 1 / r) + 1e-9;
+  const ratio = val / price;
+  return r >= 1 ? ratio > r + 1e-9 : ratio < r - 1e-9;
 }
-// 既定モード推奨: 保有が全て分割日以降に更新済み→手入力のみ、それ以外→全部
+// 既定モード推奨: 保有が分割前に入っていれば「全部」、保有は分割後だが手入力項目があれば「手入力のみ」、何も無ければ「スキップ」
+function hasManualToAdjust(sec, date) {
+  if (typeof sec.prevBuyPrice === 'number') return true;
+  if (typeof sec.baseHighManual === 'number') return true;
+  return store.data.transactions.some(t => t.securityId === sec.id && t.tradedAt && t.tradedAt < date);
+}
 function recommendSplitMode(sec, date) {
   const hs = store.data.holdings.filter(h => h.securityId === sec.id);
-  if (!hs.length) return 'full';
-  const allAfter = hs.every(h => h.updatedAt && fmtDate(h.updatedAt) >= date);
-  return allAfter ? 'manual' : 'full';
+  const holdingsPre = hs.some(h => !h.updatedAt || fmtDate(h.updatedAt) < date); // 分割前に入った保有がある
+  if (holdingsPre) return 'full';
+  if (hasManualToAdjust(sec, date)) return 'manual';
+  return 'skip';
 }
-// 妥当性警告の理由（取得単価/現在値・前回購入/現在値 が比率rを超過）
+// 妥当性警告の理由（取得単価／前回購入単価 が現在値の r 倍を超過）
 function splitWarnInfo(sec, r) {
   const price = calc.price(sec), th = calc.totalHolding(sec.id), reasons = [];
-  if (splitOverRatio(th.avgCost, price, r)) reasons.push(`取得単価/現在値=${(th.avgCost / price).toFixed(1)}>${r}`);
-  if (splitOverRatio(sec.prevBuyPrice, price, r)) reasons.push(`前回購入/現在値=${(sec.prevBuyPrice / price).toFixed(1)}>${r}`);
+  if (splitOverRatio(th.avgCost, price, r)) reasons.push(`取得単価が現在値の${(th.avgCost / price).toFixed(1)}倍（分割${r}倍超・未分割の疑い）`);
+  if (splitOverRatio(sec.prevBuyPrice, price, r)) reasons.push(`前回購入が現在値の${(sec.prevBuyPrice / price).toFixed(1)}倍（分割${r}倍超）`);
   return { warn: reasons.length > 0, reason: reasons.join(' / ') };
 }
 // 当該銘柄の代表的な保有（最新更新）
@@ -2293,24 +2300,33 @@ function latestHolding(secId) {
   return store.data.holdings.filter(h => h.securityId === secId)
     .sort((a, b) => ((a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1))[0];
 }
-// 履歴タブ: 表で確認→チェック→「選択を調整」 or 行ごと「調整」
+// 分割タブ: ①承認待ち（要対応）②履歴（過去の見直し用）
+function splitTable(list, idPrefix) {
+  return `<div class="table-wrap"><table>
+    <thead><tr><th class="l"><input type="checkbox" onchange="splitHistAll(this)"></th>
+      <th class="l">分割日</th><th class="l">銘柄</th><th class="l">比率</th><th>取得単価</th><th>現在値</th>
+      <th class="l">取込日</th><th class="l">手入力日</th><th class="l">警告</th><th class="l">状態</th><th class="l"></th></tr></thead>
+    <tbody>${list.map(splitHistRow).join('')}</tbody>
+  </table></div>`;
+}
 function renderSplitsTab() {
   const allHist = [];
   for (const s of store.data.securities) for (const h of (s.splitHistory || [])) allHist.push({ sec: s, ...h });
   allHist.sort((a, b) => (a.date < b.date ? 1 : -1));
-  const adjustable = allHist.filter(h => h.status !== 'applied');
+  const pending = allHist.filter(h => h.status === 'pending');
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>株式分割・併合（要確認 ${adjustable.length} 件）</h2>
-        ${adjustable.length ? '<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked()">選択を調整</button>' : ''}</div>
-      <div class="section-body">${allHist.length === 0 ? '<div class="empty">履歴はありません。「価格更新」または「銘柄情報を更新」で検知します。</div>' : `
-        <p class="muted" style="padding:10px 16px 0">警告(⚠)の銘柄を確認し、調整が必要なものにチェック→「選択を調整」。または行の「調整」で個別に。</p>
-        <div class="table-wrap"><table>
-          <thead><tr><th class="l"><input type="checkbox" id="split-all" onchange="splitHistAll(this)"></th>
-            <th class="l">分割日</th><th class="l">銘柄</th><th class="l">比率</th><th>取得単価</th><th>現在値</th>
-            <th class="l">取込日</th><th class="l">手入力日</th><th class="l">警告</th><th class="l">状態</th><th class="l"></th></tr></thead>
-          <tbody>${allHist.map(splitHistRow).join('')}</tbody>
-        </table></div>`}
+      <div class="section-head"><h2>株式分割・併合の承認待ち（${pending.length} 件）</h2>
+        ${pending.length ? '<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked()">選択を調整</button>' : ''}</div>
+      <div class="section-body">${pending.length === 0 ? '<div class="empty">承認待ちの分割はありません。</div>' : `
+        <p class="muted" style="padding:10px 16px 0">警告(⚠)・取込日(分割日より後は<span class="after-split">この色</span>)を確認し、調整するものにチェック→「選択を調整」。行の「調整」で個別も可。</p>
+        ${splitTable(pending)}`}
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>分割・併合の履歴（全銘柄）</h2></div>
+      <div class="section-body">${allHist.length === 0 ? '<div class="empty">履歴はありません。「価格更新」または「銘柄情報を更新」で検知します。</div>'
+        : splitTable(allHist)}
       </div>
     </div>`;
 }
@@ -2320,6 +2336,9 @@ function splitHistRow(h) {
   const lh = latestHolding(sec.id);
   const w = splitWarnInfo(sec, r);
   const done = h.status === 'applied';
+  // 取込日/手入力日が分割日より後なら黄色（既に分割後＝二重調整に注意の材料）
+  const impCls = (lh && lh.updatedAt && fmtDate(lh.updatedAt) > h.date) ? 'after-split' : '';
+  const manCls = (sec.manualUpdatedAt && fmtDate(sec.manualUpdatedAt) > h.date) ? 'after-split' : '';
   return `<tr>
     <td class="l">${done ? '' : `<input type="checkbox" class="split-hist-chk" data-sec="${sec.id}" data-date="${esc(h.date)}">`}</td>
     <td class="l">${esc(h.date)}</td>
@@ -2327,8 +2346,8 @@ function splitHistRow(h) {
     <td class="l">${esc(h.label || ('×' + r))}</td>
     <td>${th.qty ? ccy + num(th.avgCost) : muted}</td>
     <td>${price != null ? ccy + num(price) : muted}</td>
-    <td class="l">${lh ? `${lh.source === 'import' ? '取込' : '手入力'} ${fmtDate(lh.updatedAt)}` : muted}</td>
-    <td class="l">${sec.manualUpdatedAt ? fmtDate(sec.manualUpdatedAt) : muted}</td>
+    <td class="l ${impCls}">${lh ? `${fmtDate(lh.updatedAt)} ${lh.source === 'import' ? '取込' : '手入力'}` : muted}</td>
+    <td class="l ${manCls}">${sec.manualUpdatedAt ? fmtDate(sec.manualUpdatedAt) : muted}</td>
     <td class="l">${w.warn ? `<span class="neg" title="${esc(w.reason)}">⚠ ${esc(w.reason)}</span>` : '—'}</td>
     <td class="l">${splitStatusLabel(h.status)}</td>
     <td class="l">${done ? '' : `<button class="btn btn-sm" onclick="openSplitAdjustOne(${sec.id},'${esc(h.date)}')">調整</button>`}</td>
