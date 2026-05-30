@@ -636,8 +636,8 @@ function reconcileColPrefs(market) {
 // ---------- カラムレンダラー ----------
 // 各カラムの td を返す関数。引数: (sec, ctx)
 const muted = '<span class="muted">—</span>';
-// みなし（取得単価を前回購入単価とみなす）の省スペース表示
-const MINASHI = ' <span class="muted" title="みなし（前回購入単価が未登録のため取得単価を使用）" style="cursor:help">≒</span>';
+// みなし（取得単価を前回購入単価とみなす）の省スペース表示。数値の「前」に付けて桁ズレを防ぐ
+const MINASHI = '<span class="muted" title="みなし（前回購入単価が未登録のため取得単価を使用）" style="cursor:help">≒</span>';
 const pctTd = (v) => `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code">${esc(s.ticker)}</td>`,
@@ -646,8 +646,8 @@ const COL_RENDERERS = {
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   price:     (s,c) => `<td>${c.priceCell}</td>`,
   day:       (s,c) => pctTd(c.dayChg),
-  trigger:   (s,c) => `<td>${c.ev ? c.m(c.ev.trigger) + (c.ev.baseSource === 'みなし' ? MINASHI : '') : muted}</td>`,
-  base:      (s,c) => `<td>${c.ev ? c.m(c.ev.base) + (c.ev.baseSource === 'みなし' ? MINASHI : '') : muted}</td>`,
+  trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.trigger) : muted}</td>`,
+  base:      (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.base) : muted}</td>`,
   drop:      (s,c) => !c.ev ? `<td>${muted}</td>`
                     : c.ev.reached ? '<td class="neg">到達</td>'
                     : `<td class="drop ${c.ev.remainingDropPct <= 5 ? 'near' : 'far'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
@@ -655,7 +655,7 @@ const COL_RENDERERS = {
   high52w:   (s,c) => `<td>${c.high52w != null ? c.ccy + num(c.high52w) : muted}</td>`,
   dropFrom5y:  (s,c) => pctTd(calc.dropFrom5y(s)),
   dropFrom52w: (s,c) => pctTd(calc.dropFrom52w(s)),
-  prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? c.ccy + num(lb.price) + (lb.source === 'みなし' ? MINASHI : '') : muted}</td>`; },
+  prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + c.ccy + num(lb.price) : muted}</td>`; },
   dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
