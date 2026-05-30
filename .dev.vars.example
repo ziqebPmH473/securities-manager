@@ -1,0 +1,10 @@
+# Cloudflare Pages Functions のローカル開発用環境変数
+# このファイルを .dev.vars にコピーして値を設定すると
+# `npx wrangler pages dev .` 実行時に読み込まれます
+#
+# .dev.vars は .gitignore に含まれているため、APIキーが誤ってコミットされません。
+
+# Finnhub APIキー（米国株のほぼリアルタイム価格取得）
+# 取得方法: https://finnhub.io/ で無料アカウント作成 → API Keys
+# 未設定の場合は Yahoo Finance（15〜20分遅延）にフォールバックします
+FINNHUB_API_KEY=your_finnhub_api_key_here

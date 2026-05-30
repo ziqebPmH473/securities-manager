@@ -28,8 +28,11 @@
 
 ## 動かし方
 
-### A. Cloudflare Pages として動かす（推奨・価格自動取得が有効）
-価格取得 `/api/price`（Yahoo中継）を使うには Pages Functions を動かす必要があります。
+> **重要**: 価格の自動取得（日本株・米国株・投信・為替）は `/api/price` を経由します。
+> このエンドポイントは Cloudflare Pages Function なので、**wrangler で起動するか Cloudflare にデプロイしないと動きません**。
+> 静的サーバー（`python -m http.server` 等）では価格取得できません（手入力のみ可）。
+
+### A. ローカルで動かす（推奨・価格自動取得が有効）
 
 ```bash
 npx wrangler pages dev .
@@ -37,19 +40,29 @@ npx wrangler pages dev .
 
 表示された `http://localhost:8788` をブラウザで開きます。
 
-### B. 静的に開くだけ（価格は手入力）
-`index.html` を直接ブラウザで開く、または簡易サーバで配信:
+#### Finnhub（米国株ほぼリアルタイム）をローカルで使う場合
+
+`.dev.vars.example` を `.dev.vars` にコピーして Finnhub API キーを設定します：
 
 ```bash
-npx serve .
+cp .dev.vars.example .dev.vars
+# .dev.vars を編集して FINNHUB_API_KEY を設定
+npx wrangler pages dev .
 ```
 
-この場合 `/api/price` は使えないため、各銘柄の「価格入力」から現在値・5年高値を手入力すると
-買い増し判定まで確認できます。
+> `.dev.vars` は `.gitignore` に含まれているためコミットされません。
+> 未設定の場合は Yahoo Finance（15〜20分遅延）にフォールバックします。
+
+### B. 静的に開くだけ（価格は手入力）
+
+`index.html` を直接ブラウザで開く。価格は各銘柄の「価格入力」から手入力できます。
 
 ### デプロイ（Cloudflare Pages）
-このリポジトリを Cloudflare Pages に接続すれば、`/functions` が自動でAPIになります。
-（ビルド不要・出力ディレクトリはルート）
+
+このリポジトリを Cloudflare Pages に接続すれば `/functions` が自動でAPIになります（ビルド不要・出力ディレクトリはルート）。
+
+Finnhub を本番で使う場合は Cloudflare Pages の **Settings > Environment variables** に
+`FINNHUB_API_KEY` を設定してください。
 
 ## 使い方の流れ
 1. 「米国株」または「日本株」タブ →「＋ 銘柄を追加」でティッカー（例: `AAPL` / `7203`）とカテゴリを登録

@@ -352,7 +352,15 @@ const calc = {
 };
 
 function priceKey(sec) { return `${sec.market}:${sec.ticker}`; }
-function yahooSymbol(sec) { return sec.market === 'JP' ? `${sec.ticker}.T` : sec.ticker; }
+// Yahoo Finance シンボル変換:
+//   JP株  → 7203.T
+//   投信  → 0131103C.T（ファンドコード.T形式）
+//   US株  → AAPL（そのまま）
+function yahooSymbol(sec) {
+  if (sec.market === 'JP') return `${sec.ticker}.T`;
+  if (sec.market === 'FUND') return `${sec.ticker}.T`;
+  return sec.ticker;
+}
 
 // ---------- 価格取得 ----------
 const api = {

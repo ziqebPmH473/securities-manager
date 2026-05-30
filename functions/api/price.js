@@ -29,9 +29,13 @@ export async function onRequestGet(context) {
 // シンボルの種別を判定
 function symbolType(sym) {
   if (sym === 'USDJPY=X') return 'fx';
-  if (sym.endsWith('.T') && /^\d{8}/.test(sym)) return 'fund'; // 投信: 8桁数字.T
-  if (sym.endsWith('.T')) return 'jp';                          // 日本株: xxxx.T
-  return 'us';                                                  // 米国株
+  // 投信: 8桁英数字.T（例: 0131103C.T）
+  if (sym.endsWith('.T') && /^[0-9A-Z]{8}\.T$/.test(sym)) return 'fund';
+  // 日本株: 4桁数字.T（例: 7203.T）
+  if (sym.endsWith('.T') && /^\d{4}\.T$/.test(sym)) return 'jp';
+  // 日本株（その他 .T 付き）
+  if (sym.endsWith('.T')) return 'jp';
+  return 'us';
 }
 
 async function fetchOne(symbol, finnhubKey) {

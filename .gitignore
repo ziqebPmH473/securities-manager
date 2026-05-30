@@ -1,0 +1,11 @@
+# 環境変数・シークレット（絶対にコミットしない）
+.dev.vars
+
+# Wrangler
+.wrangler/
+
+# Claude Code
+.claude/
+
+# Node
+node_modules/
