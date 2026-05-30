@@ -1237,9 +1237,11 @@ function renderMaster() {
 }
 
 // ---------- モーダル/フォーム ----------
-function showModal(title, bodyHtml) {
+function showModal(title, bodyHtml, opts = {}) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = bodyHtml;
+  const m = document.querySelector('#modal-overlay .modal');
+  if (m) m.classList.toggle('wide', !!opts.wide);
   document.getElementById('modal-overlay').hidden = false;
 }
 function closeModal() { document.getElementById('modal-overlay').hidden = true; }
@@ -2279,85 +2281,123 @@ function recommendSplitMode(sec, date) {
   const allAfter = hs.every(h => h.updatedAt && fmtDate(h.updatedAt) >= date);
   return allAfter ? 'manual' : 'full';
 }
+// 妥当性警告の理由（取得単価/現在値・前回購入/現在値 が比率rを超過）
+function splitWarnInfo(sec, r) {
+  const price = calc.price(sec), th = calc.totalHolding(sec.id), reasons = [];
+  if (splitOverRatio(th.avgCost, price, r)) reasons.push(`取得単価/現在値=${(th.avgCost / price).toFixed(1)}>${r}`);
+  if (splitOverRatio(sec.prevBuyPrice, price, r)) reasons.push(`前回購入/現在値=${(sec.prevBuyPrice / price).toFixed(1)}>${r}`);
+  return { warn: reasons.length > 0, reason: reasons.join(' / ') };
+}
+// 当該銘柄の代表的な保有（最新更新）
+function latestHolding(secId) {
+  return store.data.holdings.filter(h => h.securityId === secId)
+    .sort((a, b) => ((a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1))[0];
+}
+// 履歴タブ: 表で確認→チェック→「選択を調整」 or 行ごと「調整」
 function renderSplitsTab() {
-  const items = adjustableSplits();
   const allHist = [];
   for (const s of store.data.securities) for (const h of (s.splitHistory || [])) allHist.push({ sec: s, ...h });
   allHist.sort((a, b) => (a.date < b.date ? 1 : -1));
+  const adjustable = allHist.filter(h => h.status !== 'applied');
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>株式分割・併合（調整対象 ${items.length} 件）</h2>
-        ${items.length ? '<button class="btn btn-primary btn-sm" onclick="openSplitAdjust()">分割を調整</button>' : ''}</div>
-      <div class="section-body">
-        ${items.length === 0 ? '<div class="empty">調整対象の分割はありません。「価格更新」または「銘柄情報を更新」で検知します。</div>'
-          : '<p class="muted" style="padding:10px 16px">「分割を調整」から、銘柄ごとに 全部／手入力のみ を選んで一括調整できます（取込日・手入力日・警告を表で確認）。</p>'}
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-head"><h2>分割・併合の履歴（全銘柄）</h2></div>
-      <div class="section-body">${allHist.length === 0 ? '<div class="empty">履歴はありません。</div>' : `
+      <div class="section-head"><h2>株式分割・併合（要確認 ${adjustable.length} 件）</h2>
+        ${adjustable.length ? '<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked()">選択を調整</button>' : ''}</div>
+      <div class="section-body">${allHist.length === 0 ? '<div class="empty">履歴はありません。「価格更新」または「銘柄情報を更新」で検知します。</div>' : `
+        <p class="muted" style="padding:10px 16px 0">警告(⚠)の銘柄を確認し、調整が必要なものにチェック→「選択を調整」。または行の「調整」で個別に。</p>
         <div class="table-wrap"><table>
-          <thead><tr><th class="l">分割日</th><th class="l">銘柄</th><th class="l">比率</th><th class="l">状態</th></tr></thead>
-          <tbody>${allHist.map(h => `<tr><td class="l">${esc(h.date)}</td><td class="l">${esc(calc.displayName(h.sec))} <span class="muted">${esc(h.sec.ticker)}</span></td><td class="l">${esc(h.label || ('×' + h.ratio))}</td><td class="l">${splitStatusLabel(h.status)}</td></tr>`).join('')}</tbody>
+          <thead><tr><th class="l"><input type="checkbox" id="split-all" onchange="splitHistAll(this)"></th>
+            <th class="l">分割日</th><th class="l">銘柄</th><th class="l">比率</th><th>取得単価</th><th>現在値</th>
+            <th class="l">取込日</th><th class="l">手入力日</th><th class="l">警告</th><th class="l">状態</th><th class="l"></th></tr></thead>
+          <tbody>${allHist.map(splitHistRow).join('')}</tbody>
         </table></div>`}
       </div>
     </div>`;
 }
-// 調整モーダル（表形式・複数選択・全部/手入力/スキップ）
-function openSplitAdjust() {
-  const items = adjustableSplits();
-  if (!items.length) { toast('調整対象がありません'); return; }
-  const rows = items.map((it, i) => {
-    const sec = it.sec, r = it.ratio, ccy = MARKET_CCY[sec.market];
-    const price = calc.price(sec);
-    const hs = store.data.holdings.filter(h => h.securityId === sec.id);
-    const holdHtml = hs.length ? hs.map(h => {
-      const warn = splitOverRatio(h.avgCost, price, r) ? ' <span class="neg" title="取得単価/現在値が分割比率を超過">⚠</span>' : '';
-      return `${esc(h.broker)}/${esc(h.accountType)}: ${num(h.quantity)}@${ccy}${num(h.avgCost)}→<strong>${num(h.quantity * r)}@${ccy}${num(h.avgCost / r)}</strong>${warn}<br><span class="muted">${h.source === 'import' ? '取込' : '手入力'} ${fmtDate(h.updatedAt)}</span>`;
-    }).join('<hr style="border:0;border-top:1px dotted var(--border);margin:3px 0">') : '<span class="muted">保有なし</span>';
-    const pbpWarn = splitOverRatio(sec.prevBuyPrice, price, r) ? ' <span class="neg" title="前回購入単価/現在値が分割比率を超過">⚠</span>' : '';
-    const pbpHtml = (typeof sec.prevBuyPrice === 'number')
-      ? `${ccy}${num(sec.prevBuyPrice)}→<strong>${ccy}${num(sec.prevBuyPrice / r)}</strong>${pbpWarn}<br><span class="muted">手入力 ${fmtDate(sec.manualUpdatedAt)}</span>`
-      : '<span class="muted">—</span>';
-    const rec = recommendSplitMode(sec, it.date);
-    const opt = (v, l) => `<option value="${v}" ${rec === v ? 'selected' : ''}>${l}</option>`;
+function splitHistRow(h) {
+  const sec = h.sec, r = h.ratio, ccy = MARKET_CCY[sec.market];
+  const th = calc.totalHolding(sec.id), price = calc.price(sec);
+  const lh = latestHolding(sec.id);
+  const w = splitWarnInfo(sec, r);
+  const done = h.status === 'applied';
+  return `<tr>
+    <td class="l">${done ? '' : `<input type="checkbox" class="split-hist-chk" data-sec="${sec.id}" data-date="${esc(h.date)}">`}</td>
+    <td class="l">${esc(h.date)}</td>
+    <td class="l">${esc(calc.displayName(sec))} <span class="muted">${esc(sec.ticker)}</span></td>
+    <td class="l">${esc(h.label || ('×' + r))}</td>
+    <td>${th.qty ? ccy + num(th.avgCost) : muted}</td>
+    <td>${price != null ? ccy + num(price) : muted}</td>
+    <td class="l">${lh ? `${lh.source === 'import' ? '取込' : '手入力'} ${fmtDate(lh.updatedAt)}` : muted}</td>
+    <td class="l">${sec.manualUpdatedAt ? fmtDate(sec.manualUpdatedAt) : muted}</td>
+    <td class="l">${w.warn ? `<span class="neg" title="${esc(w.reason)}">⚠ ${esc(w.reason)}</span>` : '—'}</td>
+    <td class="l">${splitStatusLabel(h.status)}</td>
+    <td class="l">${done ? '' : `<button class="btn btn-sm" onclick="openSplitAdjustOne(${sec.id},'${esc(h.date)}')">調整</button>`}</td>
+  </tr>`;
+}
+function splitHistAll(cb) { document.querySelectorAll('.split-hist-chk').forEach(c => { c.checked = cb.checked; }); }
+function openSplitAdjustChecked() {
+  const items = [...document.querySelectorAll('.split-hist-chk:checked')].map(c => ({ secId: parseInt(c.dataset.sec, 10), date: c.dataset.date }));
+  openSplitAdjust(items);
+}
+function openSplitAdjustOne(secId, date) { openSplitAdjust([{ secId, date }]); }
+
+// 一括調整モーダル（表形式・列分割・初期スキップ・左チェックは種別一括変更用）
+function openSplitAdjust(items) {
+  if (!items.length) { toast('調整する銘柄をチェックしてください'); return; }
+  const rows = items.map(it => {
+    const sec = store.data.securities.find(s => s.id === it.secId); if (!sec) return '';
+    const h = (sec.splitHistory || []).find(x => x.date === it.date); if (!h) return '';
+    const r = h.ratio, ccy = MARKET_CCY[sec.market], price = calc.price(sec), th = calc.totalHolding(sec.id);
+    const w = splitWarnInfo(sec, r);
+    const hold = th.qty ? `${num(th.qty)} @${ccy}${num(th.avgCost)}<br><strong>→ ${num(th.qty * r)} @${ccy}${num(th.avgCost / r)}</strong>` : muted;
+    const pbp = (typeof sec.prevBuyPrice === 'number') ? `${ccy}${num(sec.prevBuyPrice)}<br><strong>→ ${ccy}${num(sec.prevBuyPrice / r)}</strong>` : muted;
+    const rec = recommendSplitMode(sec, it.date); // 初期は安全側でスキップ（推奨はツールチップで案内）
+    const o = (v, l) => `<option value="${v}">${l}${rec === v ? '（推奨）' : ''}</option>`;
     return `<tr data-sec="${sec.id}" data-date="${esc(it.date)}">
-      <td class="l"><input type="checkbox" class="split-chk" ${it.status === 'pending' ? 'checked' : ''}></td>
+      <td class="l"><input type="checkbox" class="sa-chk"></td>
       <td class="l"><strong>${esc(calc.displayName(sec))}</strong><br><span class="muted">${esc(sec.ticker)}</span></td>
-      <td class="l">${esc(it.date)}<br><span class="muted">${esc(it.label || ('×' + r))}</span></td>
-      <td class="l" style="font-size:12px">${holdHtml}</td>
-      <td class="l" style="font-size:12px">${pbpHtml}</td>
-      <td class="l"><select class="split-mode">${opt('full', '全部')}${opt('manual', '手入力のみ')}<option value="skip">スキップ</option></select></td>
+      <td class="l">${esc(it.date)}<br><span class="muted">${esc(h.label || ('×' + r))}</span></td>
+      <td>${price != null ? ccy + num(price) : muted}</td>
+      <td class="l">${hold}</td>
+      <td class="l">${pbp}</td>
+      <td class="l">${w.warn ? `<span class="neg" title="${esc(w.reason)}">⚠ ${esc(w.reason)}</span>` : '—'}</td>
+      <td class="l"><select class="sa-mode"><option value="skip" selected>スキップ</option>${o('full', '全部')}${o('manual', '手入力のみ')}</select></td>
     </tr>`;
   }).join('');
-  showModal('株式分割・併合の調整', `
-    <p class="muted">チェックした銘柄を「種別」に従って一括調整します（未チェックは何もしません）。⚠ は 単価/現在値 が分割比率を超過＝既調整や異常の可能性。</p>
-    <div style="margin:6px 0"><button type="button" class="btn btn-sm" onclick="splitSelectAll(true)">全選択</button>
-      <button type="button" class="btn btn-sm" onclick="splitSelectAll(false)">全解除</button></div>
-    <div class="table-wrap" style="max-height:50vh;overflow:auto"><table>
-      <thead><tr><th class="l">☑</th><th class="l">銘柄</th><th class="l">分割日/比率</th><th class="l">保有(現→後)・取込日</th><th class="l">前回購入(現→後)・手入力日</th><th class="l">種別</th></tr></thead>
-      <tbody id="split-adjust-rows">${rows}</tbody>
+  showModal('株式分割・併合の一括調整', `
+    <p class="muted">行ごとに「種別」を選んで「調整実行」。初期はスキップ（何もしない）です。⚠＝単価/現在値が分割比率を超過＝既調整や異常の可能性。「全部」=保有も調整／「手入力のみ」=前回購入価格等のみ。</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0">
+      <label class="check" style="margin:0"><input type="checkbox" id="sa-all" onchange="saSelectAll(this)"> 全選択</label>
+      選択行を <select id="sa-bulk"><option value="full">全部</option><option value="manual">手入力のみ</option><option value="skip">スキップ</option></select>
+      <button type="button" class="btn btn-sm" onclick="saApplyBulk()">に一括変更</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">☑</th><th class="l">銘柄</th><th class="l">分割日/比率</th><th>現在値</th><th class="l">保有(現→後)</th><th class="l">前回購入(現→後)</th><th class="l">警告</th><th class="l">種別</th></tr></thead>
+      <tbody id="sa-rows">${rows}</tbody>
     </table></div>
     <div class="form-actions">
       <button type="button" class="btn" onclick="closeModal()">閉じる</button>
-      <button type="button" class="btn btn-primary" onclick="runSplitAdjust()">選択を一括調整</button>
-    </div>`);
+      <button type="button" class="btn btn-primary" onclick="runSplitAdjust()">調整実行</button>
+    </div>`, { wide: true });
 }
-function splitSelectAll(v) { document.querySelectorAll('#split-adjust-rows .split-chk').forEach(c => { c.checked = v; }); }
+function saSelectAll(cb) { document.querySelectorAll('#sa-rows .sa-chk').forEach(c => { c.checked = cb.checked; }); }
+function saApplyBulk() {
+  const mode = document.getElementById('sa-bulk').value;
+  document.querySelectorAll('#sa-rows tr').forEach(tr => {
+    if (tr.querySelector('.sa-chk').checked) tr.querySelector('.sa-mode').value = mode;
+  });
+}
 function runSplitAdjust() {
-  let done = 0;
-  document.querySelectorAll('#split-adjust-rows tr').forEach(tr => {
-    if (!tr.querySelector('.split-chk').checked) return;
-    const secId = parseInt(tr.dataset.sec, 10), date = tr.dataset.date;
-    const mode = tr.querySelector('.split-mode').value;
+  let adj = 0, skip = 0;
+  document.querySelectorAll('#sa-rows tr').forEach(tr => {
+    const secId = parseInt(tr.dataset.sec, 10), date = tr.dataset.date, mode = tr.querySelector('.sa-mode').value;
     const sec = store.data.securities.find(s => s.id === secId);
     const h = sec && (sec.splitHistory || []).find(x => x.date === date); if (!h) return;
-    if (mode === 'skip') { h.status = 'skipped'; store.save(); }
-    else store.applySplit(secId, date, h.ratio, mode);
-    done++;
+    if (mode === 'skip') { if (h.status === 'pending') { h.status = 'skipped'; store.save(); skip++; } }
+    else { store.applySplit(secId, date, h.ratio, mode); adj++; }
   });
   closeModal(); render();
-  toast(`${done} 件を処理しました`);
+  toast(`調整 ${adj} 件${skip ? ` / スキップ ${skip} 件` : ''}`);
 }
 
 // ---------- データ管理 ----------
@@ -2461,8 +2501,11 @@ window.closeModal = closeModal;
 window.exportData = exportData;
 window.exportGeneric = exportGeneric;
 window.refreshAllMeta = refreshAllMeta;
-window.openSplitAdjust = openSplitAdjust;
-window.splitSelectAll = splitSelectAll;
+window.splitHistAll = splitHistAll;
+window.openSplitAdjustChecked = openSplitAdjustChecked;
+window.openSplitAdjustOne = openSplitAdjustOne;
+window.saSelectAll = saSelectAll;
+window.saApplyBulk = saApplyBulk;
 window.runSplitAdjust = runSplitAdjust;
 window.importData = importData;
 window.resetData = resetData;
