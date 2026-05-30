@@ -544,9 +544,8 @@ const api = {
     store.data.lastInfoDate = today(); store.save();
     await this.refreshAll();              // 価格＋高値（52週/5年）＋名前未取得分
     await this.refreshMeta();             // 全銘柄の名前/セクター/業種/ファンダを日次更新（日本語名は維持）
-    const pending = await this.checkSplits();
+    await this.checkSplits();             // 分割検知（承認待ちは「分割」タブのバッジで通知）
     render();
-    if (pending.length) openSplitApproval(pending);
   },
 
   // 株式分割・併合を検知。過去（今日より前）の新規分割は履歴に記録のみ、当日以降は承認待ちで返す
@@ -684,11 +683,13 @@ const COL_RENDERERS = {
 function render() {
   updateHeader();
   updateSignalBadge();
+  updateSplitBadge();
   switch (currentView) {
     case 'dashboard': renderDashboard(); break;
     case 'us': renderMarket('US'); break;
     case 'jp': renderMarket('JP'); break;
     case 'signals': renderSignals(); break;
+    case 'splits': renderSplitsTab(); break;
     case 'master': renderMaster(); break;
   }
 }
@@ -704,6 +705,12 @@ function updateSignalBadge() {
   const n = allSignals().length;
   const b = document.getElementById('signal-badge');
   b.textContent = n; b.hidden = n === 0;
+}
+
+function updateSplitBadge() {
+  const n = pendingSplits().length;
+  const b = document.getElementById('split-badge');
+  if (b) { b.textContent = n; b.hidden = n === 0; }
 }
 
 function allSignals() {
@@ -2226,67 +2233,85 @@ function refreshAllMeta() {
   const secs = store.data.securities.filter(s => s.ticker);
   if (!secs.length) { toast('銘柄がありません'); return; }
   toast('銘柄情報を取得中…');
-  api.refreshMeta(secs).then(() => { render(); toast('銘柄情報を更新しました'); });
+  api.refreshMeta(secs).then(() => api.checkSplits()).then(() => { render(); toast('銘柄情報を更新しました'); });
 }
 
-// ---------- 株式分割・併合の承認 ----------
-let _pendingSplits = [];
+// ---------- 株式分割・併合タブ ----------
 // 当該証券会社の最新取込日時（みなし二重調整の判断材料）
 function lastImportFor(broker) {
   const h = (store.data.importHistory || []).find(x => x.broker === broker);
   return h ? fmtDateTime(h.importedAt) : null;
 }
-function openSplitApproval(pending) {
-  _pendingSplits = pending.slice();
-  renderSplitApproval();
+// 承認待ち（status=pending）の分割を全銘柄から収集
+function pendingSplits() {
+  const out = [];
+  for (const s of store.data.securities) for (const h of (s.splitHistory || [])) {
+    if (h.status === 'pending') out.push({ secId: s.id, date: h.date, ratio: h.ratio, label: h.label });
+  }
+  return out;
 }
-function renderSplitApproval() {
-  if (!_pendingSplits.length) { closeModal(); render(); return; }
-  const rows = _pendingSplits.map((p, i) => {
-    const sec = store.data.securities.find(s => s.id === p.secId); if (!sec) return '';
-    const r = p.ratio, ccy = MARKET_CCY[sec.market];
-    const hs = store.data.holdings.filter(h => h.securityId === sec.id);
-    const hp = hs.length ? hs.map(h => {
-      const imp = lastImportFor(h.broker);
-      return `${esc(h.broker)}/${esc(h.accountType)}: ${num(h.quantity)}株 @${ccy}${num(h.avgCost)} → <strong>${num(h.quantity * r)}株 @${ccy}${num(h.avgCost / r)}</strong>　<span class="muted">取込: ${imp || '手動'}</span>`;
-    }).join('<br>') : '<span class="muted">保有なし</span>';
-    const pbp = (typeof sec.prevBuyPrice === 'number') ? `<br>前回購入価格: ${ccy}${num(sec.prevBuyPrice)} → <strong>${ccy}${num(sec.prevBuyPrice / r)}</strong>` : '';
-    return `<div class="split-item" style="padding:8px 0;border-bottom:1px solid var(--border)">
-      <div><strong>${esc(calc.displayName(sec))}</strong> <span class="muted">${esc(sec.ticker)}</span>　分割日 <strong>${p.date}</strong>　比率 ${esc(p.label)}（×${r}）</div>
-      <div style="font-size:12px;margin-top:4px">${hp}${pbp}</div>
-      <div style="display:flex;gap:8px;margin-top:6px">
-        <button class="btn btn-sm btn-primary" onclick="approveSplit(${i})">承認して調整</button>
-        <button class="btn btn-sm" onclick="skipSplit(${i})">スキップ（調整しない）</button>
+function splitStatusLabel(st) {
+  return st === 'applied' ? '調整済' : st === 'recorded' ? '記録のみ' : st === 'skipped' ? 'スキップ' : '承認待ち';
+}
+function splitItemHtml(p) {
+  const sec = store.data.securities.find(s => s.id === p.secId); if (!sec) return '';
+  const r = p.ratio, ccy = MARKET_CCY[sec.market];
+  const hs = store.data.holdings.filter(h => h.securityId === sec.id);
+  const hp = hs.length ? hs.map(h => {
+    const imp = lastImportFor(h.broker);
+    return `${esc(h.broker)}/${esc(h.accountType)}: ${num(h.quantity)}株 @${ccy}${num(h.avgCost)} → <strong>${num(h.quantity * r)}株 @${ccy}${num(h.avgCost / r)}</strong>　<span class="muted">取込: ${imp || '手動'}</span>`;
+  }).join('<br>') : '<span class="muted">保有なし</span>';
+  const pbp = (typeof sec.prevBuyPrice === 'number') ? `<br>前回購入価格: ${ccy}${num(sec.prevBuyPrice)} → <strong>${ccy}${num(sec.prevBuyPrice / r)}</strong>` : '';
+  return `<div class="split-item" style="padding:10px 0;border-bottom:1px solid var(--border)">
+    <div><strong>${esc(calc.displayName(sec))}</strong> <span class="muted">${esc(sec.ticker)}</span>　分割日 <strong>${esc(p.date)}</strong>　比率 ${esc(p.label)}（×${r}）</div>
+    <div style="font-size:12px;margin-top:4px">${hp}${pbp}</div>
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn btn-sm btn-primary" onclick="approveSplit(${sec.id},'${esc(p.date)}')">承認して調整</button>
+      <button class="btn btn-sm" onclick="skipSplit(${sec.id},'${esc(p.date)}')">スキップ（調整しない）</button>
+    </div>
+  </div>`;
+}
+function renderSplitsTab() {
+  const pend = pendingSplits();
+  const allHist = [];
+  for (const s of store.data.securities) for (const h of (s.splitHistory || [])) allHist.push({ sec: s, ...h });
+  allHist.sort((a, b) => (a.date < b.date ? 1 : -1));
+  app.innerHTML = `
+    <div class="section">
+      <div class="section-head"><h2>株式分割・併合の承認（${pend.length}件）</h2></div>
+      <div class="section-body">
+        ${pend.length === 0 ? '<div class="empty">承認待ちの分割はありません。</div>' : `
+          <p class="muted" style="padding:8px 16px 0">承認すると 保有数量・取得単価・前回購入価格・手動基準高値・分割日前の取引 を比率で調整します。取込で既に分割後の値の場合はスキップ（取込日時を参考に判断）。</p>
+          <div style="padding:4px 16px">${pend.map(splitItemHtml).join('')}</div>
+          <div class="form-actions" style="padding:0 16px 14px"><button class="btn btn-primary" onclick="approveAllSplits()">全て承認</button></div>`}
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>分割・併合の履歴（全銘柄）</h2></div>
+      <div class="section-body">${allHist.length === 0 ? '<div class="empty">履歴はありません。「価格更新」または「銘柄情報を更新」で検知します。</div>' : `
+        <div class="table-wrap"><table>
+          <thead><tr><th class="l">分割日</th><th class="l">銘柄</th><th class="l">比率</th><th class="l">状態</th></tr></thead>
+          <tbody>${allHist.map(h => `<tr><td class="l">${esc(h.date)}</td><td class="l">${esc(calc.displayName(h.sec))} <span class="muted">${esc(h.sec.ticker)}</span></td><td class="l">${esc(h.label || ('×' + h.ratio))}</td><td class="l">${splitStatusLabel(h.status)}</td></tr>`).join('')}</tbody>
+        </table></div>`}
       </div>
     </div>`;
-  }).join('');
-  showModal(`株式分割・併合の検出（${_pendingSplits.length}件）`, `
-    <p class="muted">分割日以降に検出されました。承認すると 保有数量・取得単価・前回購入価格・手動基準高値・分割日前の取引 を比率で調整します。取込で既に分割後の値になっている場合はスキップしてください（取込日時を参考に判断）。</p>
-    ${rows}
-    <div class="form-actions">
-      <button type="button" class="btn" onclick="closeModal()">後で</button>
-      <button type="button" class="btn btn-primary" onclick="approveAllSplits()">全て承認</button>
-    </div>`);
 }
-function approveSplit(i) {
-  const p = _pendingSplits[i]; if (!p) return;
-  store.applySplit(p.secId, p.date, p.ratio);
-  _pendingSplits.splice(i, 1);
-  renderSplitApproval();
+function approveSplit(secId, date) {
+  const sec = store.data.securities.find(s => s.id === secId);
+  const h = sec && (sec.splitHistory || []).find(x => x.date === date);
+  if (h) store.applySplit(secId, date, h.ratio);
+  render();
 }
-function skipSplit(i) {
-  const p = _pendingSplits[i]; if (!p) return;
-  const sec = store.data.securities.find(s => s.id === p.secId);
-  const h = sec && (sec.splitHistory || []).find(x => x.date === p.date);
+function skipSplit(secId, date) {
+  const sec = store.data.securities.find(s => s.id === secId);
+  const h = sec && (sec.splitHistory || []).find(x => x.date === date);
   if (h) { h.status = 'skipped'; store.save(); }
-  _pendingSplits.splice(i, 1);
-  renderSplitApproval();
+  render();
 }
 function approveAllSplits() {
-  for (const p of _pendingSplits) store.applySplit(p.secId, p.date, p.ratio);
-  _pendingSplits = [];
-  closeModal(); render();
-  toast('検出された分割をすべて承認・調整しました');
+  for (const p of pendingSplits()) store.applySplit(p.secId, p.date, p.ratio);
+  render();
+  toast('承認待ちの分割をすべて承認・調整しました');
 }
 
 // ---------- データ管理 ----------
@@ -2390,7 +2415,6 @@ window.closeModal = closeModal;
 window.exportData = exportData;
 window.exportGeneric = exportGeneric;
 window.refreshAllMeta = refreshAllMeta;
-window.openSplitApproval = openSplitApproval;
 window.approveSplit = approveSplit;
 window.skipSplit = skipSplit;
 window.approveAllSplits = approveAllSplits;
