@@ -257,6 +257,29 @@ CREATE TABLE settings (
 
 ---
 
+## 2.5 株式分割・併合の反映（2026-05-30 追加）
+
+**比率** `r = 分割後株数 / 分割前株数`（1:5分割→r=5、5:1併合→r=0.2）。取得元は `/api/splits`（Yahoo chart の `events.splits`、`r = numerator/denominator`）。実施前（予告）の分割は無料では安定取得できないため**実施日以降のみ**検知する。
+
+**検知と承認**（日次・起動時 `dailyStartup`）:
+- 各銘柄の `splitHistory:[{date, ratio, label, status}]` に無い分割を `/api/splits` から検出
+- **過去（today より前）** の新規分割 → `status:'recorded'`（記録のみ・調整しない＝既に反映済みとみなす）
+- **当日以降** → `status:'pending'` で承認待ち。承認モーダルで個別/一括承認（取込日時と分割日を表示し、二重調整を目視回避）
+- 承認 → `applySplit` 実行 → `status:'applied'`。スキップ → `status:'skipped'`
+
+**`applySplit(secId, date, r)` が調整する対象**（1株あたりの価格・株数のみ）:
+- 保有: `quantity ×= r` / `avgCost /= r`（取得価額は不変）
+- 手動の `prevBuyPrice /= r`、`baseHighManual /= r`
+- 分割日より前の取引: `price /= r` / `quantity ×= r`
+- 価格キャッシュ（現在値・高値）を削除→再取得で分割後の正値に
+
+**調整しないもの**（自動取得で自己補正・または金額/算出値で不変）:
+- 現在値・前日終値・52週/5年高値・EPS・発行済株式数・1株配当（Yahoo が分割反映済み）
+- PER・時価総額・配当利回り（株価×株数/EPSで常に算出）
+- 1回購入額（金額）・取得価額（数量×単価で不変）
+
+---
+
 ## 3. 買い増し判定ロジック
 
 ### 3.1 基準高値の決定（base high）
