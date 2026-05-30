@@ -583,7 +583,6 @@ function render() {
     case 'dashboard': renderDashboard(); break;
     case 'us': renderMarket('US'); break;
     case 'jp': renderMarket('JP'); break;
-    case 'fund': renderMarket('FUND'); break;
     case 'signals': renderSignals(); break;
     case 'master': renderMaster(); break;
   }
@@ -611,7 +610,7 @@ function allSignals() {
 
 // ---------- ダッシュボード ----------
 function renderDashboard() {
-  const markets = ['US', 'JP', 'FUND'];
+  const markets = ['US', 'JP'];
   const per = {};
   for (const m of markets) per[m] = { valN: 0, costN: 0, cnt: 0, held: 0, noPrice: 0 };
 
@@ -1113,7 +1112,7 @@ function openSecurityForm(id, presetMarket) {
     <form id="sec-form">
       <div class="row">
         <div class="field"><label>市場</label>
-          <select name="market">${['US', 'JP', 'FUND'].map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${MARKET_LABEL[x]}</option>`).join('')}</select></div>
+          <select name="market">${['US', 'JP'].map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${MARKET_LABEL[x]}</option>`).join('')}</select></div>
         <div class="field"><label>ティッカー / コード</label>
           <div style="display:flex;gap:6px;align-items:center">
             <input name="ticker" value="${sec ? esc(sec.ticker) : ''}" placeholder="例: AAPL / 7203" required style="flex:1" onblur="autoFetchInfo(this)">
@@ -1538,7 +1537,7 @@ function openPasteImport(kind) {
     <form id="import-form">
       <p class="muted">Excelの該当シートを<strong>ヘッダ行ごと</strong>選択してコピーし、下に貼り付けてください（タブ/カンマ区切り対応）。</p>
       <div class="field"><label>対象市場（ティッカーで既存銘柄に紐づけ／新規作成時に使用）</label>
-        <select name="market">${['US', 'JP', 'FUND'].map(x => `<option value="${x}">${MARKET_LABEL[x]}</option>`).join('')}</select></div>
+        <select name="market">${['US', 'JP'].map(x => `<option value="${x}">${MARKET_LABEL[x]}</option>`).join('')}</select></div>
       <label class="check"><input type="checkbox" name="create" checked> 未登録のティッカーは新規銘柄として作成する</label>
       <div class="field"><label>貼り付け（想定列: ${esc(sample)}）</label>
         <textarea name="data" rows="10" placeholder="ここに貼り付け" style="font-family:monospace;font-size:12px"></textarea></div>
