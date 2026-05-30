@@ -990,7 +990,8 @@ async function autoFetchInfo(tickerEl) {
   const status = document.getElementById('info-status');
   if (!status) return;
   const market = f.market.value;
-  const symbol = market === 'JP' ? `${ticker}.T` : ticker;
+  // Yahoo Finance シンボル: JP株→.T付与、投信→.T付与、US株→そのまま
+  const symbol = (market === 'JP' || market === 'FUND') ? `${ticker}.T` : ticker;
   status.textContent = '取得中…';
   try {
     const res = await fetch(`/api/info?symbol=${encodeURIComponent(symbol)}`);
