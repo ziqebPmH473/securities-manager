@@ -1071,7 +1071,7 @@ function renderMaster() {
       <div class="section-head"><h2>一括取込（Excel/CSV 貼り付け）</h2></div>
       <div class="section-body" style="padding:16px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn" onclick="openPasteImport('analysis')">銘柄分析結果を取込</button>
-        <button class="btn" onclick="openPasteImport('holdings')">保有株を取込</button>
+        <button class="btn" onclick="openBrokerImport()">保有を取込（証券会社別）</button>
       </div>
       <p class="muted" style="padding:0 16px 14px">Excelの該当シートをヘッダ行ごとコピーして貼り付け→ティッカーで既存銘柄に紐づけ（未登録は新規作成も可）。</p>
     </div>
@@ -1679,6 +1679,209 @@ function normDate(v) {
   return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
 }
 
+// ---------- 証券会社別 保有取込 ----------
+// CSV1行をフィールド配列に（引用符・セル内カンマ対応）
+function parseCsvText(text) {
+  const rows = []; let row = [], cell = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false; }
+      else cell += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ',') { row.push(cell); cell = ''; }
+    else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (ch === '\r') { /* skip */ }
+    else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+function numClean(v) {
+  if (v == null) return null;
+  const n = parseFloat(String(v).replace(/[,\s¥円$＄"']/g, ''));
+  return isNaN(n) ? null : n;
+}
+function normAccount(s) {
+  s = String(s || '');
+  if (/NISA|ﾆｰｻ|ニーサ|つみたて/i.test(s)) return 'NISA';
+  if (/一般/.test(s)) return '一般';
+  return '特定';
+}
+
+// 各社パーサ: text → [{market, ticker, broker, account, quantity, avgCost}]
+function parseSbiJpCsv(text) {
+  const rows = parseCsvText(text); const out = []; let account = '特定', hi = null;
+  for (const r of rows) {
+    const joined = r.join('');
+    if (/特定預り/.test(joined)) account = '特定';
+    else if (/NISA/.test(joined)) account = 'NISA';
+    if (r.includes('銘柄コード')) { hi = r; continue; }
+    if (!hi) continue;
+    const code = (r[hi.indexOf('銘柄コード')] || '').trim();
+    if (!/^[0-9A-Za-z]{3,5}$/.test(code)) continue;
+    const qty = numClean(r[hi.indexOf('保有株数')]);
+    const ac = numClean(r[hi.indexOf('取得単価')]);
+    if (qty != null) out.push({ market: 'JP', ticker: code, broker: 'SBI', account, quantity: qty, avgCost: ac ?? 0 });
+  }
+  return out;
+}
+function parseMoomooCsv(text) {
+  const rows = parseCsvText(text); if (rows.length < 2) return [];
+  const h = rows[0], idx = (n) => h.indexOf(n); const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i]; const code = (r[idx('コード')] || '').trim(); if (!code) continue;
+    const market = (r[idx('通貨')] || '').trim() === 'USD' ? 'US' : 'JP';
+    const qty = numClean(r[idx('数量')]); const ac = numClean(r[idx('平均取得価額')]);
+    if (qty != null) out.push({ market, ticker: code, broker: 'moomoo', account: normAccount(r[idx('口座区分')]), quantity: qty, avgCost: ac ?? 0 });
+  }
+  return out;
+}
+function parseRakutenCsv(text) {
+  const rows = parseCsvText(text); const out = []; let h = null;
+  for (const r of rows) {
+    if (r.includes('銘柄コード・ティッカー')) { h = r; continue; }
+    if (!h) continue;
+    const idx = (n) => h.indexOf(n);
+    const kind = (r[idx('種別')] || '').trim();
+    const code = (r[idx('銘柄コード・ティッカー')] || '').trim(); if (!code) continue;
+    let market; if (/国内株式/.test(kind)) market = 'JP'; else if (/米国株式/.test(kind)) market = 'US'; else continue; // 投信等skip
+    const qty = numClean(r[idx('保有数量')]); const ac = numClean(r[idx('平均取得価額')]);
+    if (qty != null) out.push({ market, ticker: code, broker: '楽天', account: normAccount(r[idx('口座')]), quantity: qty, avgCost: ac ?? 0 });
+  }
+  return out;
+}
+function parseSbiUsScreen(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const skip = new Set(['現買', '現売', '積立', '(株価：リアルタイム)', '保有数量', '取得単価', '現在値', '外貨建評価損益']);
+  const out = []; let account = '特定', i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    if (/特定預り/.test(ln)) { account = '特定'; i++; continue; }
+    if (/NISA預り/.test(ln)) { account = 'NISA'; i++; continue; }
+    if (/米国株式|株価：リアルタイム/.test(ln) || skip.has(ln)) { i++; continue; }
+    const m = ln.match(/^([A-Z][A-Z.]{0,5})\s*[^\x00-\x7F]/);
+    if (m) {
+      const ticker = m[1]; const nums = []; let j = i + 1;
+      while (j < lines.length && nums.length < 2) {
+        const x = lines[j];
+        if (/^[A-Z][A-Z.]{0,5}\s*[^\x00-\x7F]/.test(x)) break;
+        if (!skip.has(x)) { const n = numClean(x); if (n != null) nums.push(n); }
+        j++;
+      }
+      if (nums.length >= 2) out.push({ market: 'US', ticker, broker: 'SBI', account, quantity: nums[0], avgCost: nums[1] });
+      i = j; continue;
+    }
+    i++;
+  }
+  return out;
+}
+function parseGeneric(text) {
+  const raw = text.includes('\t') ? text.split(/\r?\n/).map(l => l.split('\t')) : parseCsvText(text);
+  const rows = raw.filter(r => r.some(c => String(c).trim() !== ''));
+  if (!rows.length) return [];
+  const GMAP = { 'ティッカー': 'ticker', 'コード': 'ticker', '市場': 'market', '数量': 'quantity', '取得単価': 'avgCost', '平均取得単価': 'avgCost', '証券会社': 'broker', '口座': 'account', '口座種別': 'account' };
+  let header = rows[0].map(h => GMAP[String(h).trim()] || null), start = 1;
+  if (!header.some(Boolean)) { header = ['ticker', 'market', 'quantity', 'avgCost']; start = 0; }
+  const out = [];
+  for (let i = start; i < rows.length; i++) {
+    const rec = {}; rows[i].forEach((c, j) => { if (header[j]) rec[header[j]] = String(c).trim(); });
+    const ticker = (rec.ticker || '').trim(); if (!ticker) continue;
+    let market = (rec.market || '').toUpperCase(); if (market !== 'US' && market !== 'JP') market = /^\d/.test(ticker) ? 'JP' : 'US';
+    const qty = numClean(rec.quantity); if (qty == null) continue;
+    out.push({ market, ticker, broker: rec.broker || null, account: normAccount(rec.account), quantity: qty, avgCost: numClean(rec.avgCost) ?? 0 });
+  }
+  return out;
+}
+
+const IMPORT_PROFILES = {
+  'sbi-us':  { label: 'SBI 米国株（画面コピーを貼り付け）', input: 'paste', parse: parseSbiUsScreen },
+  'sbi-jp':  { label: 'SBI 日本株（CSVファイル）', input: 'file', parse: parseSbiJpCsv },
+  'moomoo':  { label: 'moomoo（CSVファイル）', input: 'file', parse: parseMoomooCsv },
+  'rakuten': { label: '楽天証券（保有商品一覧CSV）', input: 'file', parse: parseRakutenCsv },
+  'generic': { label: '汎用（貼り付け: ティッカー,市場,数量,取得単価）', input: 'paste', parse: parseGeneric },
+};
+
+let _importRows = [], _importProfile = 'sbi-us';
+
+function openBrokerImport() {
+  const profOpts = Object.entries(IMPORT_PROFILES).map(([k, p]) => `<option value="${k}">${esc(p.label)}</option>`).join('');
+  _importRows = []; _importProfile = 'sbi-us';
+  showModal('保有を取込（証券会社別）', `
+    <form id="bimport-form" onsubmit="return false">
+      <div class="field"><label>形式（証券会社）</label>
+        <select name="profile" onchange="onImportProfileChange(this.value)">${profOpts}</select></div>
+      <div class="field" id="bimport-broker-wrap" style="display:none"><label>証券会社（汎用・列に無い場合）</label>
+        <select name="broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+      <div class="field" id="bimport-file-wrap"><label>CSVファイル（Shift-JIS/UTF-8 自動判定）</label>
+        <input type="file" name="file" accept=".csv,text/csv" onchange="onImportFile(this)"></div>
+      <div class="field" id="bimport-paste-wrap" style="display:none"><label>貼り付け</label>
+        <textarea name="paste" rows="8" oninput="onImportPaste(this.value)" style="font-family:monospace;font-size:12px" placeholder="ここに貼り付け"></textarea></div>
+      <label class="check"><input type="checkbox" name="create" checked> 未登録のティッカーは新規作成する</label>
+      <div id="bimport-preview" class="muted" style="margin:8px 0"></div>
+      <div class="form-actions">
+        <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+        <button type="button" class="btn btn-primary" onclick="runBrokerImport()">取込を実行</button>
+      </div>
+    </form>`);
+  onImportProfileChange('sbi-us');
+}
+function onImportProfileChange(key) {
+  _importProfile = key; _importRows = [];
+  const p = IMPORT_PROFILES[key];
+  document.getElementById('bimport-file-wrap').style.display = p.input === 'file' ? '' : 'none';
+  document.getElementById('bimport-paste-wrap').style.display = p.input === 'paste' ? '' : 'none';
+  document.getElementById('bimport-broker-wrap').style.display = key === 'generic' ? '' : 'none';
+  setImportPreview();
+}
+function onImportFile(input) {
+  const file = input.files[0]; if (!file) return;
+  const r = new FileReader();
+  r.onload = () => {
+    let text; const buf = r.result;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+    catch (_) { text = new TextDecoder('shift_jis').decode(buf); }
+    try { _importRows = IMPORT_PROFILES[_importProfile].parse(text); }
+    catch (e) { _importRows = []; }
+    setImportPreview();
+  };
+  r.readAsArrayBuffer(file);
+}
+function onImportPaste(text) {
+  try { _importRows = IMPORT_PROFILES[_importProfile].parse(text); }
+  catch (e) { _importRows = []; }
+  setImportPreview();
+}
+function setImportPreview() {
+  const el = document.getElementById('bimport-preview'); if (!el) return;
+  if (!_importRows.length) { el.textContent = '（データ未検出）'; return; }
+  const sample = _importRows.slice(0, 4).map(r => `${MARKET_LABEL[r.market]} ${r.ticker} ×${r.quantity} @${r.avgCost}（${r.broker || '—'}/${r.account}）`).join('<br>');
+  el.innerHTML = `<strong>${_importRows.length} 件</strong>を検出:<br>${sample}${_importRows.length > 4 ? '<br>…' : ''}`;
+}
+function runBrokerImport() {
+  if (!_importRows.length) { toast('取込データがありません'); return; }
+  const f = document.getElementById('bimport-form');
+  const create = f.create.checked;
+  const defBroker = f.broker ? f.broker.value : 'SBI';
+  let updated = 0, created = 0;
+  const touched = [];
+  for (const row of _importRows) {
+    const tk = row.market === 'US' ? row.ticker.trim().toUpperCase() : row.ticker.trim();
+    let sec = store.findSecurity(row.market, tk);
+    if (!sec) {
+      if (!create) continue;
+      sec = store.addSecurity({ market: row.market, ticker: tk, currency: row.market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, ruleId: store.defaultRule().id });
+      created++;
+    } else updated++;
+    store.setHolding(sec.id, row.broker || defBroker, row.account || '特定', row.quantity, row.avgCost ?? 0);
+    touched.push(sec);
+  }
+  closeModal(); render();
+  toast(`取込完了: 更新 ${updated} 件 / 新規 ${created} 件`);
+  // 新規・更新銘柄の名前/セクター等マスタを取得
+  if (touched.length) api.refreshMeta(touched).then(render);
+}
+
 // ---------- データ管理 ----------
 function exportData() {
   const blob = new Blob([JSON.stringify(store.data, null, 2)], { type: 'application/json' });
@@ -1756,6 +1959,11 @@ window.openRuleEdit = openRuleEdit;
 window.deleteRule = deleteRule;
 window.setDefaultRule = setDefaultRule;
 window.openPasteImport = openPasteImport;
+window.openBrokerImport = openBrokerImport;
+window.onImportProfileChange = onImportProfileChange;
+window.onImportFile = onImportFile;
+window.onImportPaste = onImportPaste;
+window.runBrokerImport = runBrokerImport;
 window.setSort = setSort;
 window.setFilter = setFilter;
 window.clearFilter = clearFilter;
