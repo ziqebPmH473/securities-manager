@@ -67,8 +67,7 @@ main { padding: 16px; }
 .card .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 4px; }
 .card .sub { font-size: 12px; margin-top: 2px; }
 
-/* overflow:hidden だと中の sticky な見出しが固定されない（クリップ＝スクロール文脈）ため visible に */
-.section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; overflow: visible; }
+.section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; overflow: hidden; }
 .section-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .section-head h2 { margin: 0; font-size: 15px; }
 .section-body { padding: 0; }
@@ -79,16 +78,13 @@ th, td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--bor
 /* 見出しは中央揃え・数値は右揃え（デフォルト）・テキストは左揃え */
 /* 見出しは固定（スクロールしても列名が見える） */
 th { color: var(--muted); font-weight: 600; font-size: 11px; text-align: center; position: sticky; top: 0; background: var(--panel); z-index: 5; }
-/* メイン一覧の見出しは、固定ヘッダー＋タブ（合計約106px）の直下に貼り付ける。
-   ページ自体をスクロールさせるため、.section / .section内table-wrap の overflow は visible にする（下記） */
-.section thead th { top: 106px; }
 th.l, td.l { text-align: left; }
 /* コード列は狭く */
 th.col-code, td.col-code { max-width: 72px; width: 72px; }
 tbody tr:hover { background: var(--panel-2); }
-.table-wrap { overflow-x: auto; }
-/* メイン一覧はページスクロール基準で見出し固定するため横スクロール枠を外す（横はページごとスクロール） */
-.section .table-wrap { overflow: visible; }
+/* 横スクロールは枠内で完結。max-height は描画後に JS(fitListTables) が画面に合わせて設定し、
+   その枠の中で thead(sticky top:0) を固定する（横スクロールを保ったまま見出し固定） */
+.table-wrap { overflow: auto; }
 
 .pos { color: var(--green); }
 .neg { color: var(--red); }

@@ -699,7 +699,23 @@ function render() {
     case 'splits': renderSplitsTab(); break;
     case 'master': renderMaster(); break;
   }
+  fitListTables();
 }
+
+// 一覧テーブルの枠(.table-wrap)の高さを画面に合わせて制限し、枠内スクロール＋見出し固定を成立させる。
+// （横スクロールを枠内に保ったまま thead を固定するため。ページ全体は極力スクロールさせない）
+function fitListTables() {
+  document.querySelectorAll('main .section .table-wrap').forEach(wrap => {
+    wrap.style.maxHeight = '';                               // 一旦解除して自然な高さを測る
+    const top = wrap.getBoundingClientRect().top;            // ビューポート上端からの位置
+    // 画面下端まで（最低200px）。枠下の余白（section margin16 + main padding16 + border ≒ 36px）を引いて
+    // ページ自体がスクロールしないようにする
+    const avail = Math.max(200, window.innerHeight - top - 36);
+    if (wrap.scrollHeight > avail) wrap.style.maxHeight = avail + 'px'; // はみ出す時だけ枠内スクロール化
+  });
+}
+let _fitTimer = null;
+window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(fitListTables, 120); });
 
 function updateHeader() {
   const fx = calc.fx();
