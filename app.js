@@ -114,6 +114,8 @@ const store = {
     this.data.prices ||= {};
     this.data.fx ||= { USDJPY: null };
     this.data.meta ||= {}; // 銘柄情報マスタ（名前・セクター・ファンダ）priceKeyでキャッシュ
+    this.data.amountHistory ||= [];   // 金額マスタ変更履歴（版管理）
+    this.data.amountSnapshots ||= []; // 銘柄ごとの適用金額スナップショット
     this.data.seq ||= 1;
     if (!this.data.rules.some(r => r.isDefault)) this.data.rules[0].isDefault = true;
     // 後方互換: カテゴリに米国株金額が無ければ日本株の÷100で補完
@@ -126,16 +128,27 @@ const store = {
       securities: [], holdings: [], transactions: [],
       rules: [structuredClone(DEFAULT_RULE)],
       categories: structuredClone(DEFAULT_CATEGORIES),
-      prices: {}, fx: { USDJPY: null }, meta: {}, seq: 1,
+      prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [], seq: 1,
     };
   },
   nextId() { return this.data.seq++; },
+  _now() { return new Date().toISOString(); },
 
   // securities
   addSecurity(s) { s.id = this.nextId(); this.data.securities.push(s); this.save(); return s; },
   updateSecurity(id, patch) {
     const s = this.data.securities.find(x => x.id === id);
-    if (s) { Object.assign(s, patch); this.save(); }
+    if (s) {
+      // カテゴリ変更時は、変更前カテゴリの適用金額をスナップショットに残す
+      if (patch.category !== undefined && patch.category !== s.category && s.category) {
+        const c = this.data.categories.find(x => x.category === s.category);
+        if (c) this.data.amountSnapshots.push({
+          id: this.nextId(), securityId: id, category: s.category,
+          amountJpy: c.amountJpy, amountUsd: c.amountUsd, recordedAt: this._now(), trigger: 'category_change',
+        });
+      }
+      Object.assign(s, patch); this.save();
+    }
     return s;
   },
   removeSecurity(id) {
@@ -246,6 +259,26 @@ const store = {
     const c = this.data.categories.find(x => x.category === oldName);
     if (!c) return;
     const newName = patch.category;
+    // 金額変更を検知したら版管理（履歴＋銘柄スナップショット）
+    const jpyChanged = patch.amountJpy != null && patch.amountJpy !== c.amountJpy;
+    const usdChanged = patch.amountUsd != null && patch.amountUsd !== c.amountUsd;
+    if (jpyChanged || usdChanged) {
+      const now = this._now();
+      // 変更前金額を、当該カテゴリの全銘柄にスナップショット
+      for (const s of this.data.securities.filter(x => x.category === oldName)) {
+        this.data.amountSnapshots.push({
+          id: this.nextId(), securityId: s.id, category: oldName,
+          amountJpy: c.amountJpy, amountUsd: c.amountUsd, recordedAt: now, trigger: 'master_change',
+        });
+      }
+      // 変更履歴（旧→新）
+      this.data.amountHistory.push({
+        id: this.nextId(), category: newName || oldName,
+        prevJpy: c.amountJpy, prevUsd: c.amountUsd,
+        newJpy: patch.amountJpy ?? c.amountJpy, newUsd: patch.amountUsd ?? c.amountUsd,
+        changedAt: now,
+      });
+    }
     Object.assign(c, patch);
     // カテゴリ名を変えたら、参照している銘柄も追従
     if (newName && newName !== oldName) {
@@ -956,6 +989,48 @@ function dashSignalsTable() {
   </table></div>`;
 }
 
+// 金額マスタの変更履歴セクション（版管理の可視化）
+function amountHistorySection() {
+  const hist = [...(store.data.amountHistory || [])].sort((a, b) => (a.changedAt < b.changedAt ? 1 : -1));
+  if (hist.length === 0) return '';
+  const rows = hist.slice(0, 30).map(h => `<tr>
+    <td class="l">${fmtDateTime(h.changedAt)}</td>
+    <td class="l">${esc(h.category)}</td>
+    <td>${yen(h.prevJpy)} → <strong>${yen(h.newJpy)}</strong></td>
+    <td>$${num(h.prevUsd)} → <strong>$${num(h.newUsd)}</strong></td>
+  </tr>`).join('');
+  return `<details class="form-group" style="margin:0 16px 14px">
+    <summary>金額変更履歴（${hist.length}件）</summary>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">変更日時</th><th class="l">カテゴリ</th><th>日本株(円)</th><th>米国株($)</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </details>`;
+}
+
+// 銘柄ごとの適用金額スナップショット履歴（モーダル）
+function openAmountHistory(secId) {
+  const sec = store.data.securities.find(s => s.id === secId);
+  const snaps = (store.data.amountSnapshots || []).filter(x => x.securityId === secId)
+    .sort((a, b) => (a.recordedAt < b.recordedAt ? 1 : -1));
+  const trigLabel = { master_change: 'マスタ金額変更', category_change: 'カテゴリ変更' };
+  const cur = store.data.categories.find(c => c.category === sec.category);
+  const curRow = `<tr><td class="l">現在</td><td class="l">${sec.category ? esc(sec.category) : '—'}</td>
+    <td>${cur ? yen(cur.amountJpy) : '—'}</td><td>${cur ? '$' + num(cur.amountUsd) : '—'}</td></tr>`;
+  const rows = snaps.map(s => `<tr>
+    <td class="l">${fmtDateTime(s.recordedAt)}<br><span class="muted">${trigLabel[s.trigger] || s.trigger}</span></td>
+    <td class="l">${esc(s.category)}</td><td>${yen(s.amountJpy)}</td><td>$${num(s.amountUsd)}</td>
+  </tr>`).join('');
+  showModal(`適用金額履歴 — ${esc(calc.displayName(sec))}`, `
+    <p class="muted">この銘柄に適用されていた1回購入額（カテゴリ金額）の履歴です。最新が上。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">時点</th><th class="l">カテゴリ</th><th>日本株(円)</th><th>米国株($)</th></tr></thead>
+      <tbody>${curRow}${rows || ''}</tbody>
+    </table></div>
+    ${snaps.length === 0 ? '<div class="empty">変更履歴はまだありません。</div>' : ''}
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`);
+}
+
 // ---------- マスタ・設定 ----------
 function renderMaster() {
   const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -974,6 +1049,7 @@ function renderMaster() {
         </tr>`).join('')}</tbody>
       </table></div>
       <p class="muted" style="padding:0 16px 14px">金額は価格に左右されない固定値（ビジネスモデル・財務で決定）。日本株(円)・米国株($)を個別に登録できます。</p>
+      ${amountHistorySection()}
       </div>
     </div>
     <div class="section">
@@ -1055,6 +1131,15 @@ function openSecurityForm(id, presetMarket) {
         <div class="field"><label>前回購入価格（買い取引が無い場合の基準・任意）</label>
           <input name="prevBuyPrice" type="number" step="any" value="${sec && sec.prevBuyPrice != null ? sec.prevBuyPrice : ''}" placeholder="原通貨"></div>
       </div>
+      <div class="row">
+        <div class="field"><label>基準高値（個別上書き・任意）</label>
+          <select name="baseHighMode" onchange="toggleBaseHighManual(this)">
+            <option value="" ${!sec || !sec.baseHighMode ? 'selected' : ''}>ルールに従う（${BASE_HIGH_LABEL[store.rule(sec ? sec.ruleId : null).baseHighMode] || '5年高値'}）</option>
+            ${Object.entries(BASE_HIGH_LABEL).map(([v, lbl]) => `<option value="${v}" ${sec && sec.baseHighMode === v ? 'selected' : ''}>${lbl}</option>`).join('')}
+          </select></div>
+        <div class="field"><label>手動の基準高値（基準高値=手動指定の時のみ）</label>
+          <input name="baseHighManual" type="number" step="any" value="${sec && sec.baseHighManual != null ? sec.baseHighManual : ''}" placeholder="原通貨" ${sec && sec.baseHighMode === 'manual' ? '' : 'disabled'}></div>
+      </div>
 
       <fieldset class="form-group"><legend>銘柄情報（自動取得・編集不可）</legend>
         <div id="auto-info" class="auto-info">${autoInfoPanelHtml(m, sec ? sec.ticker : '')}</div>
@@ -1104,7 +1189,8 @@ function openSecurityForm(id, presetMarket) {
       </fieldset>`}
 
       <div class="form-actions">
-        ${id ? `<button type="button" class="btn btn-danger" onclick="deleteSecurity(${id})">削除</button>` : ''}
+        ${id ? `<button type="button" class="btn btn-danger" onclick="deleteSecurity(${id})">削除</button>
+        <button type="button" class="btn" onclick="openAmountHistory(${id})">適用金額履歴</button>` : ''}
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
@@ -1123,6 +1209,8 @@ function openSecurityForm(id, presetMarket) {
       currency: market === 'US' ? 'USD' : 'JPY',
       assetClass: market === 'FUND' ? 'fund' : 'stock',
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
+      baseHighMode: f.baseHighMode.value || null,
+      baseHighManual: f.baseHighMode.value === 'manual' ? numOrNull(f.baseHighManual.value) : null,
       buyAmount: numOrNull(f.buyAmount.value), buyCount: intOrNull(f.buyCount.value),
       overallGrade: f.overallGrade.value || null, rating: f.rating.value || null, buyGrade: f.buyGrade.value || null,
       starValuation: intOrNull(f.starValuation.value), starStrength: intOrNull(f.starStrength.value), starRisk: intOrNull(f.starRisk.value),
@@ -1185,6 +1273,12 @@ async function autoFetchInfo(tickerEl) {
 function refetchInfo() {
   const f = document.getElementById('sec-form');
   if (f && f.ticker) autoFetchInfo(f.ticker);
+}
+
+// 基準高値モード=手動指定 のときだけ手動値入力を有効化
+function toggleBaseHighManual(sel) {
+  const el = sel.form.baseHighManual;
+  if (el) { el.disabled = sel.value !== 'manual'; if (el.disabled) el.value = ''; }
 }
 
 // カテゴリ選択時に購入額を転記（市場別の登録金額）。手入力で上書き可
@@ -1627,6 +1721,13 @@ function money(n, ccy) { return n == null ? '—' : ccy + Number(n).toLocaleStri
 function signed(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
 function cls(n) { return n == null ? '' : (n > 0 ? 'pos' : (n < 0 ? 'neg' : '')); }
 function today() { return new Date().toISOString().slice(0, 10); }
+function fmtDateTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(String(iso));
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 let toastTimer;
 function toast(msg) {
   const t = document.getElementById('toast');
@@ -1639,6 +1740,7 @@ window.go = go;
 window.openSecurityForm = openSecurityForm;
 window.autoFetchInfo = autoFetchInfo;
 window.refetchInfo = refetchInfo;
+window.toggleBaseHighManual = toggleBaseHighManual;
 window.fillBuyAmount = fillBuyAmount;
 window.maskDate = maskDate;
 window.deleteSecurity = deleteSecurity;
@@ -1648,6 +1750,7 @@ window.sellAll = sellAll;
 window.openTxnForm = openTxnForm;
 window.openPriceInput = openPriceInput;
 window.openCategoryEdit = openCategoryEdit;
+window.openAmountHistory = openAmountHistory;
 window.syncUsdAmount = syncUsdAmount;
 window.deleteCategory = deleteCategory;
 window.openRuleEdit = openRuleEdit;
