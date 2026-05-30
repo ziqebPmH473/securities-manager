@@ -1508,6 +1508,7 @@ function openHoldingsForm(secId) {
       if (h) {
         h.quantity = parseFloat(tr.querySelector('.h-qty').value) || 0;
         h.avgCost = parseFloat(tr.querySelector('.h-cost').value) || 0;
+        h.source = 'manual'; h.updatedAt = store._now(); // 手入力で更新したことを記録
       }
     });
     // 新規追加
@@ -2319,7 +2320,7 @@ function renderSplitsTab() {
       <div class="section-head"><h2>株式分割・併合の承認待ち（${pending.length} 件）</h2>
         ${pending.length ? '<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked()">選択を調整</button>' : ''}</div>
       <div class="section-body">${pending.length === 0 ? '<div class="empty">承認待ちの分割はありません。</div>' : `
-        <p class="muted" style="padding:10px 16px 0">警告(⚠)・取込日(分割日より後は<span class="after-split">この色</span>)を確認し、調整するものにチェック→「選択を調整」。行の「調整」で個別も可。</p>
+        <p class="muted" style="padding:10px 16px 0">警告(⚠)・取込日(分割日より<strong>前</strong>＝未調整の疑いは<span class="after-split">この色</span>)を確認し、調整するものにチェック→「選択を調整」。行の「調整」で個別も可。</p>
         ${splitTable(pending)}`}
       </div>
     </div>
@@ -2336,9 +2337,9 @@ function splitHistRow(h) {
   const lh = latestHolding(sec.id);
   const w = splitWarnInfo(sec, r);
   const done = h.status === 'applied';
-  // 取込日/手入力日が分割日より後なら黄色（既に分割後＝二重調整に注意の材料）
-  const impCls = (lh && lh.updatedAt && fmtDate(lh.updatedAt) > h.date) ? 'after-split' : '';
-  const manCls = (sec.manualUpdatedAt && fmtDate(sec.manualUpdatedAt) > h.date) ? 'after-split' : '';
+  // 取込日/手入力日が分割日より「前」なら黄色（＝分割前に入れたデータ＝未調整の疑い・要確認）
+  const impCls = (lh && lh.updatedAt && fmtDate(lh.updatedAt) < h.date) ? 'after-split' : '';
+  const manCls = (sec.manualUpdatedAt && fmtDate(sec.manualUpdatedAt) < h.date) ? 'after-split' : '';
   return `<tr>
     <td class="l">${done ? '' : `<input type="checkbox" class="split-hist-chk" data-sec="${sec.id}" data-date="${esc(h.date)}">`}</td>
     <td class="l">${esc(h.date)}</td>
