@@ -1746,15 +1746,17 @@ function openSecurityDetail(secId) {
   const rule = store.rule(sec.ruleId);
   const lb = calc.lastBuyInfo(sec);
   const kv = (l, v) => `<div class="ai-row"><span class="muted">${l}</span><span>${v}</span></div>`;
+  // 適用ルールの内容（初回/買い増しの下落率・基準高値）。判定対象外でも表示。
+  const bhMode = (sec.baseHighMode || (rule && rule.baseHighMode) || '5y');
+  const ruleInfo = rule ? kv('適用ルール', `${esc(rule.name)}<br><span class="muted">初回 −${rule.initialDropPct}% ／ 買い増し −${rule.addonDropPct}% ／ 基準高値 ${esc(BASE_HIGH_LABEL[bhMode] || bhMode)}</span>`) : '';
   // 判定
-  const judge = ev ? [
-    kv('適用ルール', esc(rule ? rule.name : '—')),
+  const judge = ruleInfo + (ev ? [
     kv('種別', ev.type === 'initial' ? '初回購入' : '買い増し'),
     kv('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
     kv('次回購入(トリガー)', (ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.trigger)),
     kv('現在値', m(price)),
     kv('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%</span>` + (ev.reached ? '（到達）' : '') : '—'),
-  ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>';
+  ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>');
   // 保有（口座別）
   const hs = store.data.holdings.filter(h => h.securityId === sec.id);
   const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}</span></div>`).join('') : '<div class="muted">保有なし</div>';
@@ -1779,10 +1781,11 @@ function openSecurityDetail(secId) {
     kv('時価総額(百万) / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? num(Math.round(calc.marketCap(sec))) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
   ].join('');
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
-  showModal(`${esc(calc.displayName(sec))}　<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span> <span class="muted" style="font-size:12px">${esc(sec.ticker)}</span>`, `
-    <fieldset class="form-group"><legend>価格チャート（2年・終値）</legend>
-      <div id="detail-chart" class="muted" style="min-height:120px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
-      <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice==='number'||lb.price!=null?' / 橙破線=前回購入':''}</p>
+  showModal(`${calc.displayName(sec)}（${sec.ticker}）`, `
+    <div style="margin:-4px 0 10px"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span></div>
+    <fieldset class="form-group"><legend>価格チャート（5年・週足終値）</legend>
+      <div id="detail-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
+      <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice==='number'||lb.price!=null?' / 橙破線=前回購入':''} / ◆高値・安値 / 灰=補助目盛</p>
     </fieldset>
     ${sectionBox('判定', judge)}
     ${sectionBox('保有', holdRows + (holdSummary || ''))}
@@ -1800,7 +1803,7 @@ function openSecurityDetail(secId) {
 async function loadDetailChart(sec, ev, price, lb) {
   const el = document.getElementById('detail-chart'); if (!el) return;
   try {
-    const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(sec))}&range=2y&interval=1wk`);
+    const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(sec))}&range=5y&interval=1wk`);
     const d = await res.json();
     if (d.error || !d.points || !d.points.length) { el.textContent = '価格履歴を取得できませんでした（ローカルは wrangler 起動時のみ取得可）。'; return; }
     const overlays = [];
@@ -1811,24 +1814,39 @@ async function loadDetailChart(sec, ev, price, lb) {
     el.innerHTML = detailSvgChart(d.points, overlays);
   } catch (e) { el.textContent = '価格履歴の取得に失敗しました: ' + (e && e.message || e); }
 }
-// バニラSVGの折れ線チャート（外部ライブラリ不要）
+// バニラSVGの折れ線チャート（外部ライブラリ不要）。Y補助目盛・X年ラベル・高値/安値マーカー付き。
 function detailSvgChart(points, overlays) {
-  const W = 720, H = 240, pad = { l: 8, r: 70, t: 10, b: 8 };
-  const ys = points.map(p => p[1]);
+  const W = 760, H = 300, pad = { l: 56, r: 86, t: 14, b: 26 };
+  const ys = points.map(p => p[1]); const xs = points.map(p => p[0]);
   let ymin = Math.min(...ys), ymax = Math.max(...ys);
   overlays.forEach(o => { if (o.y != null) { ymin = Math.min(ymin, o.y); ymax = Math.max(ymax, o.y); } });
   if (ymin === ymax) { ymin -= 1; ymax += 1; }
-  const xs = points.map(p => p[0]); const xmin = xs[0], xmax = xs[xs.length - 1];
+  const sp = ymax - ymin; ymin -= sp * 0.06; ymax += sp * 0.06; // 上下に少し余白
+  const xmin = xs[0], xmax = xs[xs.length - 1];
   const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
   const py = v => pad.t + (1 - (v - ymin) / (ymax - ymin)) * (H - pad.t - pad.b);
-  const d = points.map((p, i) => (i ? 'L' : 'M') + px(p[0]).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ');
-  const lines = overlays.filter(o => o.y != null).map(o => {
-    const y = py(o.y).toFixed(1);
-    return `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="${o.color}" stroke-width="1" stroke-dasharray="4 3"/>` +
-      `<text x="${W - pad.r + 4}" y="${(+y + 3).toFixed(1)}" fill="${o.color}" font-size="10">${esc(o.label)} ${num(o.y)}</text>`;
-  }).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" style="display:block;background:var(--bg);border:1px solid var(--border);border-radius:8px">
-    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${lines}
+  // Y補助線＋目盛（5分割）
+  let grid = '';
+  const yt = 5;
+  for (let i = 0; i <= yt; i++) {
+    const v = ymin + (ymax - ymin) * i / yt; const y = py(v).toFixed(1);
+    grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="var(--border)" stroke-width="1"/>`;
+    grid += `<text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${num(Math.round(v))}</text>`;
+  }
+  // X年の区切り＋ラベル
+  let xlab = '', lastYear = null;
+  points.forEach(p => { const yr = new Date(p[0] * 1000).getFullYear(); if (yr !== lastYear) { lastYear = yr; const x = px(p[0]).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${H - pad.b}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4"/><text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="10" text-anchor="middle">${yr}</text>`; } });
+  // 高値・安値マーカー
+  let hi = -Infinity, lo = Infinity, hiI = 0, loI = 0;
+  ys.forEach((v, i) => { if (v > hi) { hi = v; hiI = i; } if (v < lo) { lo = v; loI = i; } });
+  const mark = (i, v, label, color, up) => { const x = px(xs[i]).toFixed(1), y = py(v); return `<circle cx="${x}" cy="${y.toFixed(1)}" r="3.5" fill="${color}"/><text x="${x}" y="${(y + (up ? -6 : 14)).toFixed(1)}" fill="${color}" font-size="10" text-anchor="middle">${label} ${num(v)}</text>`; };
+  const hl = mark(hiI, hi, '高値', '#c026d3', true) + mark(loI, lo, '安値', '#0d9488', false);
+  // データ線
+  const dpath = points.map((p, i) => (i ? 'L' : 'M') + px(p[0]).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ');
+  // overlays（右ラベル）
+  const ov = overlays.filter(o => o.y != null).map(o => { const y = py(o.y).toFixed(1); return `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="${o.color}" stroke-width="1" stroke-dasharray="4 3"/><text x="${W - pad.r + 4}" y="${(+y + 3).toFixed(1)}" fill="${o.color}" font-size="10">${esc(o.label)} ${num(o.y)}</text>`; }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">
+    ${grid}${xlab}<path d="${dpath}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${ov}${hl}
   </svg>`;
 }
 
