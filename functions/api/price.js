@@ -83,7 +83,9 @@ async function fetchFinnhub(symbol, token) {
 // ---------- Yahoo Finance ----------
 async function fetchYahoo(symbol, type) {
   const range = type === 'fund' ? '1y' : '5y';
-  const interval = type === 'fund' ? '1d' : '1wk';
+  // 日足で取得する。週足だと chartPreviousClose が「前週終値」になり前日比が壊れるため。
+  // 前日終値は日足の終値配列の最後から2番目を使う（下記 fetchYahooChart）。
+  const interval = '1d';
   const q = await fetchYahooChart(symbol, range, interval);
   return {
     price:    q.price,
@@ -112,6 +114,13 @@ async function fetchYahooChart(symbol, range, interval) {
   const quotes = r.indicators && r.indicators.quote && r.indicators.quote[0];
   const highs = (quotes && quotes.high) || [];
 
+  // 前日終値＝日足終値配列（null除外）の最後から2番目。
+  // 場中は最後が当日partial／引け後は最後が当日確定で、いずれも len-2 が前営業日終値になる。
+  const closes = ((quotes && quotes.close) || []).filter(c => typeof c === 'number');
+  const prevClose = closes.length >= 2
+    ? closes[closes.length - 2]
+    : num(meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose);
+
   // 52週高値（直近52週の最大値）
   const now = Date.now() / 1000;
   const ts = r.timestamp || [];
@@ -125,7 +134,7 @@ async function fetchYahooChart(symbol, range, interval) {
 
   return {
     price:    num(meta.regularMarketPrice),
-    prevClose: num(meta.chartPreviousClose ?? meta.previousClose),
+    prevClose: num(prevClose),
     high5y:   high5y || num(meta.fiftyTwoWeekHigh),
     high52w:  high52w || num(meta.fiftyTwoWeekHigh),
     currency: meta.currency || null,
