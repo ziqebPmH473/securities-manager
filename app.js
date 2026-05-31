@@ -68,6 +68,7 @@ const MASTER_COLS = [
   { key: 'buyAmount',   label: '買い増し予定額',    left: false, markets: ALLM, noSort: false },
   { key: 'reco',        label: '推奨購入額',       left: false, markets: ALLM, noSort: false },
   { key: 'category',    label: 'AI判断',           left: true,  markets: ALLM, noSort: false },
+  { key: 'ruleName',    label: '買い増しルール',    left: true,  markets: ALLM, noSort: false },
   { key: 'rating',      label: '銘柄格付',         left: true,  markets: STKM, noSort: false },
   { key: 'per',         label: 'PER',              left: false, markets: STKM, noSort: false },
   { key: 'dividend',    label: '配当/株',          left: false, markets: STKM, noSort: false },
@@ -84,10 +85,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
-  JP:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
+  US:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','rating'],
+  JP:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','rating'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -725,6 +726,7 @@ const COL_RENDERERS = {
   buyAmount: (s,c) => `<td>${c.m(c.buyAmt)}</td>`,
   reco:      (s,c) => `<td>${c.recoAmt ? fmtAmt(c.recoAmt, c.market) : muted}</td>`,
   category:  (s,c) => `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`,
+  ruleName:  (s,c) => { const r = store.rule(s.ruleId); return `<td class="l">${r ? esc(r.name) : muted}</td>`; },
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
   per:       (s,c) => { const v = calc.per(s); return `<td>${v != null ? num(v) : muted}</td>`; },
   dividend:  (s,c) => { const v = calc.field(s,'dividend'); return `<td>${v != null ? c.m(v) : muted}</td>`; },
@@ -877,6 +879,7 @@ function sortValue(sec, key) {
     case 'broker': return (calc.lastBroker(sec) || '').toLowerCase();
     case 'sigType': { const ev = calc.evaluate(sec); return ev ? ev.type : 'z'; }
     case 'category': return sec.category || '';
+    case 'ruleName': { const r = store.rule(sec.ruleId); return r ? (r.name || '').toLowerCase() : ''; }
     case 'qty': return th.qty;
     case 'avgCost': return th.avgCost;
     case 'cost': return th.acquiredCost;
