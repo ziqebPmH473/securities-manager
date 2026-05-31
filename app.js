@@ -69,6 +69,7 @@ const MASTER_COLS = [
   { key: 'reco',        label: '推奨購入額',       left: false, markets: ALLM, noSort: false },
   { key: 'category',    label: 'AI判断',           left: true,  markets: ALLM, noSort: false },
   { key: 'ruleName',    label: '買い増しルール',    left: true,  markets: ALLM, noSort: false },
+  { key: 'fixedBuyPrice', label: '買増固定値',       left: false, markets: STKM, noSort: false },
   { key: 'rating',      label: '銘柄格付',         left: true,  markets: STKM, noSort: false },
   { key: 'per',         label: 'PER',              left: false, markets: STKM, noSort: false },
   { key: 'dividend',    label: '配当/株',          left: false, markets: STKM, noSort: false },
@@ -85,10 +86,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','rating'],
-  JP:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','rating'],
+  US:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -330,6 +331,7 @@ const store = {
     // 手入力項目・手動取引は両モードで調整
     if (typeof sec.prevBuyPrice === 'number') sec.prevBuyPrice /= r;
     if (typeof sec.baseHighManual === 'number') sec.baseHighManual /= r;
+    if (typeof sec.fixedBuyPrice === 'number') sec.fixedBuyPrice /= r;
     for (const t of this.data.transactions.filter(t => t.securityId === secId && t.tradedAt && t.tradedAt < date)) { t.price /= r; t.quantity *= r; }
     delete this.data.prices[priceKey(sec)]; // 価格・高値キャッシュをクリア（再取得で分割後の正値に）
     const hrec = (sec.splitHistory || []).find(x => x.date === date);
@@ -430,22 +432,27 @@ const calc = {
     const th = this.totalHolding(sec.id);
     const lb = this.lastBuyInfo(sec);
 
-    let type, base, trigger, baseSource;
-    if (th.qty <= 0 && lb.price == null) {
-      type = 'initial';
+    const fixed = (typeof sec.fixedBuyPrice === 'number' && sec.fixedBuyPrice > 0) ? sec.fixedBuyPrice : null;
+    let type = (th.qty <= 0 && lb.price == null) ? 'initial' : 'addon';
+    let base, trigger, baseSource;
+    if (fixed != null) {
+      // 買増固定値: ルール計算でなく手入力の固定トリガーを使う（丸めなし）
+      trigger = fixed; base = fixed; baseSource = '固定';
+    } else if (type === 'initial') {
       base = this.baseHigh(sec); baseSource = 'high';
       if (base == null) return null;
       trigger = base * (1 - rule.initialDropPct / 100);
     } else {
-      type = 'addon';
       base = lb.price != null ? lb.price : this.baseHigh(sec);
       baseSource = lb.price != null ? lb.source : 'high';
       if (base == null) return null;
       trigger = base * (1 - rule.addonDropPct / 100);
     }
-    // 次回購入の丸め（端数切捨て）: 米株=1ドル単位（10ドル未満は0.1ドル）、日本株=円未満切捨て
-    if (sec.market === 'US') trigger = trigger >= 10 ? Math.floor(trigger) : Math.floor(trigger * 10) / 10;
-    else trigger = Math.floor(trigger);
+    // 次回購入の丸め（固定値以外・端数切捨て）: 米株=1ドル単位（10ドル未満は0.1ドル）、日本株=円未満切捨て
+    if (fixed == null) {
+      if (sec.market === 'US') trigger = trigger >= 10 ? Math.floor(trigger) : Math.floor(trigger * 10) / 10;
+      else trigger = Math.floor(trigger);
+    }
     const remainingDropPct = (price - trigger) / price * 100; // >0: あとこれだけ下落で到達
     const recoCcy = sec.market === 'US' ? 'USD' : 'JPY';
     const recoAmount = this.buyAmount(sec);
@@ -663,6 +670,8 @@ function reconcileColPrefs(market) {
 const muted = '<span class="muted">—</span>';
 // みなし（取得単価を前回購入単価とみなす）の省スペース表示。数値の「前」に付けて桁ズレを防ぐ
 const MINASHI = '<span class="muted" title="みなし（前回購入単価が未登録のため取得単価を使用）" style="cursor:help">≒</span>';
+// 買増固定値（手入力のトリガー）マーカー。数値の前に付ける。
+const FIXED_MARK = '<span class="muted" title="買増固定値（ルール計算でなく手入力のトリガー）" style="cursor:help">固</span>';
 const pctTd = (v) => `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
 // 条件付き強調（参照元スプレッドシート 米国株管理.xlsx の段階を踏襲）。値は%。
 // ダークUI向けに「半透明の色オーバーレイ＋太字」で強調する。文字色は +緑/-赤 のまま維持する。
@@ -706,7 +715,7 @@ const COL_RENDERERS = {
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   price:     (s,c) => `<td>${c.priceCell}</td>`,
   day:       (s,c) => pctTdBg(c.dayChg, 'day'),
-  trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.trigger) : muted}</td>`,
+  trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
   base:      (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.base) : muted}</td>`,
   // 残り下落率: 到達後はマイナス値（超過幅）も表示（SEC-38）。到達=赤(reached)、残り5%以内=near。
   drop:      (s,c) => !c.ev ? `<td>${muted}</td>`
@@ -730,6 +739,7 @@ const COL_RENDERERS = {
   reco:      (s,c) => `<td>${c.recoAmt ? fmtAmt(c.recoAmt, c.market) : muted}</td>`,
   category:  (s,c) => `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`,
   ruleName:  (s,c) => { const r = store.rule(s.ruleId); return `<td class="l">${r ? esc(r.name) : muted}</td>`; },
+  fixedBuyPrice: (s,c) => `<td>${typeof s.fixedBuyPrice === 'number' ? fmtAmt(s.fixedBuyPrice, c.market) : muted}</td>`,
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
   per:       (s,c) => { const v = calc.per(s); return `<td>${v != null ? num(v) : muted}</td>`; },
   dividend:  (s,c) => { const v = calc.field(s,'dividend'); return `<td>${v != null ? c.m(v) : muted}</td>`; },
@@ -884,6 +894,7 @@ function sortValue(sec, key) {
     case 'sigType': { const ev = calc.evaluate(sec); return ev ? ev.type : 'z'; }
     case 'category': return sec.category || '';
     case 'ruleName': { const r = store.rule(sec.ruleId); return r ? (r.name || '').toLowerCase() : ''; }
+    case 'fixedBuyPrice': return sec.fixedBuyPrice ?? -Infinity;
     case 'qty': return th.qty;
     case 'avgCost': return th.avgCost;
     case 'cost': return th.acquiredCost;
@@ -1437,6 +1448,10 @@ function openSecurityForm(id, presetMarket) {
         <div class="field"><label>手動の基準高値（基準高値=手動指定の時のみ）</label>
           <input name="baseHighManual" type="number" step="any" value="${sec && sec.baseHighManual != null ? sec.baseHighManual : ''}" placeholder="原通貨" ${sec && sec.baseHighMode === 'manual' ? '' : 'disabled'}></div>
       </div>
+      <div class="row">
+        <div class="field"><label>買増固定値（次回購入をこの価格に固定・任意）</label>
+          <input name="fixedBuyPrice" type="number" step="any" value="${sec && sec.fixedBuyPrice != null ? sec.fixedBuyPrice : ''}" placeholder="原通貨。入力するとルール計算より優先"></div>
+      </div>
 
       <fieldset class="form-group"><legend>表示の手動上書き（任意・自動取得では上書きされません）</legend>
         <div class="field"><label>銘柄名（上書き）</label>
@@ -1522,6 +1537,7 @@ function openSecurityForm(id, presetMarket) {
       currency: market === 'US' ? 'USD' : 'JPY',
       assetClass: market === 'FUND' ? 'fund' : 'stock',
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
+      fixedBuyPrice: numOrNull(f.fixedBuyPrice.value),
       baseHighMode: f.baseHighMode.value || null,
       baseHighManual: f.baseHighMode.value === 'manual' ? numOrNull(f.baseHighManual.value) : null,
       buyAmount: numOrNull(f.buyAmount.value), buyCount: intOrNull(f.buyCount.value),
@@ -1539,7 +1555,8 @@ function openSecurityForm(id, presetMarket) {
     // 格付け・カテゴリ・メモ等の分割に無関係な編集では更新しない（SEC-34）。
     const splitRelevantChanged = (old) =>
       ((old?.prevBuyPrice ?? null) !== (patch.prevBuyPrice ?? null)) ||
-      ((old?.baseHighManual ?? null) !== (patch.baseHighManual ?? null));
+      ((old?.baseHighManual ?? null) !== (patch.baseHighManual ?? null)) ||
+      ((old?.fixedBuyPrice ?? null) !== (patch.fixedBuyPrice ?? null));
     let target;
     if (id) {
       const before = store.data.securities.find(s => s.id === id);
@@ -2151,10 +2168,11 @@ const GENERIC_MAP = {
   'ティッカー': 'ticker', 'コード': 'ticker', '市場': 'market', '証券会社': 'broker', '口座': 'account', '口座種別': 'account',
   '数量': 'quantity', '取得単価': 'avgCost', '平均取得単価': 'avgCost',
   '前回購入価格': 'prevBuyPrice', '基準高値モード': 'baseHighMode', '手動基準高値': 'baseHighManual',
+  '買増固定値': 'fixedBuyPrice', '次回購入固定値': 'fixedBuyPrice',
   'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category',
   '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
 };
-const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '基準高値モード', '手動基準高値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ'];
+const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -2181,6 +2199,7 @@ function parseGeneric(text) {
     // 銘柄属性（ヘッダにある列のみ）。分析結果は含めない
     const sec = {};
     if ('prevBuyPrice' in rec) sec.prevBuyPrice = numClean(rec.prevBuyPrice);
+    if ('fixedBuyPrice' in rec) sec.fixedBuyPrice = numClean(rec.fixedBuyPrice);
     if ('baseHighMode' in rec) sec.baseHighMode = normBaseHighMode(rec.baseHighMode);
     if ('baseHighManual' in rec) sec.baseHighManual = numClean(rec.baseHighManual);
     if ('ruleName' in rec) sec.ruleName = rec.ruleName || '';
@@ -2397,7 +2416,7 @@ function exportGeneric() {
   for (const s of store.data.securities) {
     const ruleName = (store.rule(s.ruleId) || {}).name || '';
     const base = [s.ticker, s.market, '', '', '', '',
-      s.prevBuyPrice ?? '', s.baseHighMode || '', s.baseHighManual ?? '', ruleName, s.category || '',
+      s.prevBuyPrice ?? '', s.baseHighMode || '', s.baseHighManual ?? '', s.fixedBuyPrice ?? '', ruleName, s.category || '',
       s.buyAmount ?? '', s.buyCount ?? '', s.enabled === false ? '無効' : '有効', s.watch ? '注意' : '通常'];
     const hs = store.data.holdings.filter(h => h.securityId === s.id);
     if (hs.length) {
@@ -2458,7 +2477,7 @@ function manualUnadjusted(sec, date) {
 // 「手入力のみ」調整が要るか: 手入力項目（前回購入・手動高値）が未調整、または分割前の手動取引がある
 // ※存在するだけでなく、手入力日が分割前（未調整）の時だけ対象（調整後に入力した値は二重調整しない）
 function hasManualToAdjust(sec, date) {
-  const hasManualField = (typeof sec.prevBuyPrice === 'number') || (typeof sec.baseHighManual === 'number');
+  const hasManualField = (typeof sec.prevBuyPrice === 'number') || (typeof sec.baseHighManual === 'number') || (typeof sec.fixedBuyPrice === 'number');
   if (hasManualField && manualUnadjusted(sec, date)) return true;
   return store.data.transactions.some(t => t.securityId === sec.id && t.tradedAt && t.tradedAt < date);
 }
