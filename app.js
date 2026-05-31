@@ -350,10 +350,13 @@ const calc = {
 
   // 銘柄情報マスタ（名前・セクター等のキャッシュ）
   metaOf(sec) { return store.data.meta[priceKey(sec)] || {}; },
-  // 表示名: マスタ名(日本語優先) > 旧レコード名(後方互換) > ティッカー
-  displayName(sec) { const meta = this.metaOf(sec); return meta.name || sec.name || sec.ticker; },
-  // フィールド取得: マスタ優先・無ければ旧レコード値(後方互換)（セクター/業種/時価総額/PER/配当）
-  field(sec, key) { const meta = this.metaOf(sec); if (meta[key] != null && meta[key] !== '') return meta[key]; const v = sec[key]; return (v != null && v !== '') ? v : null; },
+  // 表示名: 手動上書き(nameOverride) > マスタ名(日本語優先) > 旧レコード名(後方互換) > ティッカー
+  displayName(sec) { if (sec.nameOverride) return sec.nameOverride; const meta = this.metaOf(sec); return meta.name || sec.name || sec.ticker; },
+  // フィールド取得: 手動上書き(<key>Override) > マスタ優先 > 旧レコード値(後方互換)（セクター/業種/時価総額/PER/配当）
+  field(sec, key) {
+    const ov = sec[key + 'Override']; if (ov != null && ov !== '') return ov; // 手動上書き（自動取得で潰れない）
+    const meta = this.metaOf(sec); if (meta[key] != null && meta[key] !== '') return meta[key]; const v = sec[key]; return (v != null && v !== '') ? v : null;
+  },
   // 高値（priceキャッシュ）
   high5y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high5y ?? null; },
   high52w(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high52w ?? null; },
@@ -751,6 +754,7 @@ function render() {
     case 'jp': renderMarket('JP'); break;
     case 'signals': renderSignals(); break;
     case 'splits': renderSplitsTab(); break;
+    case 'secmaster': renderSecMaster(); break;
     case 'master': renderMaster(); break;
   }
   fitListTables();
@@ -1272,6 +1276,49 @@ function importHistorySection() {
   </details>`;
 }
 
+// ---------- 銘柄マスタ（SEC-27） ----------
+// 全銘柄の固有データ（名前・セクター・業種・格付け・分析メタ・ルール）を一覧表示。編集は銘柄編集フォームへ。
+function renderSecMaster() {
+  const secs = [...store.data.securities].sort((a, b) => (a.market + a.ticker).localeCompare(b.market + b.ticker));
+  const cell = (v, l) => `<td class="${l ? 'l ' : ''}">${v != null && v !== '' ? esc(String(v)) : muted}</td>`;
+  const rows = secs.map(s => {
+    const rule = store.rule(s.ruleId);
+    const ov = (k) => s[k + 'Override'] ? ' <span class="tag" title="手動上書き中">手</span>' : '';
+    return `<tr>
+      <td class="l col-code">${esc(s.ticker)}</td>
+      <td class="l"><strong>${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
+      <td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>
+      <td class="l">${calc.field(s, 'sector') ? esc(calc.field(s, 'sector')) + ov('sector') : muted}</td>
+      <td class="l">${calc.field(s, 'industry') ? esc(calc.field(s, 'industry')) + ov('industry') : muted}</td>
+      <td class="l">${gradeBadge(s)}</td>
+      ${cell(s.overallGrade, true)}
+      ${cell(s.buyGrade, true)}
+      ${cell(s.recoCategory, true)}
+      <td>${s.priority != null ? num(s.priority) : muted}</td>
+      <td class="l">${rule ? esc(rule.name) : muted}</td>
+      <td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>
+      <td class="l nowrap"><button class="btn btn-sm" onclick="openSecurityForm(${s.id})">編集</button></td>
+    </tr>`;
+  }).join('');
+  app.innerHTML = `
+    <div class="section">
+      <div class="section-head"><h2>銘柄マスタ（${secs.length} 件）</h2>
+        <button class="btn btn-sm btn-primary" onclick="openSecurityForm()">＋ 銘柄を追加</button></div>
+      <div class="section-body">
+        <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます（自動取得では上書きされません）。「手」=手動上書き中。</p>
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th class="l col-code">コード</th><th class="l">銘柄名</th><th class="l">市場</th>
+            <th class="l">セクター</th><th class="l">業種</th><th class="l">格付</th>
+            <th class="l">総合評価</th><th class="l">買い時評価</th><th class="l">AI推奨カテゴリ</th>
+            <th>優先順位</th><th class="l">買い増しルール</th><th class="l">AI判断</th><th class="l"></th>
+          </tr></thead>
+          <tbody>${rows || `<tr><td colspan="13" class="empty">銘柄がありません。</td></tr>`}</tbody>
+        </table></div>
+      </div>
+    </div>`;
+}
+
 // ---------- マスタ・設定 ----------
 function renderMaster() {
   const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -1388,7 +1435,19 @@ function openSecurityForm(id, presetMarket) {
           <input name="baseHighManual" type="number" step="any" value="${sec && sec.baseHighManual != null ? sec.baseHighManual : ''}" placeholder="原通貨" ${sec && sec.baseHighMode === 'manual' ? '' : 'disabled'}></div>
       </div>
 
-      <fieldset class="form-group"><legend>銘柄情報（自動取得・編集不可）</legend>
+      <fieldset class="form-group"><legend>表示の手動上書き（任意・自動取得では上書きされません）</legend>
+        <div class="field"><label>銘柄名（上書き）</label>
+          <input name="nameOverride" value="${sec && sec.nameOverride ? esc(sec.nameOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).name || sec.ticker) : '空欄で自動取得名を使用'}"></div>
+        <div class="row">
+          <div class="field"><label>セクター（上書き）</label>
+            <input name="sectorOverride" value="${sec && sec.sectorOverride ? esc(sec.sectorOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).sector || '空欄で自動取得') : '空欄で自動取得'}"></div>
+          <div class="field"><label>業種（上書き）</label>
+            <input name="industryOverride" value="${sec && sec.industryOverride ? esc(sec.industryOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).industry || '空欄で自動取得') : '空欄で自動取得'}"></div>
+        </div>
+        <p class="muted" style="margin:6px 0 0">空欄にすると自動取得値に戻ります。</p>
+      </fieldset>
+
+      <fieldset class="form-group"><legend>銘柄情報（自動取得）</legend>
         <div id="auto-info" class="auto-info">${autoInfoPanelHtml(m, sec ? sec.ticker : '')}</div>
         <button type="button" class="btn btn-sm" style="margin-top:8px" onclick="refetchInfo()">今すぐ取得</button>
         <p class="muted" style="margin:8px 0 0">銘柄名・セクター・業種・時価総額・PER・配当はティッカーをキーに自動取得（マスタ管理）。価格更新時にも定期取得され、手入力はしません。</p>
@@ -1467,6 +1526,10 @@ function openSecurityForm(id, presetMarket) {
       starValuation: intOrNull(f.starValuation.value), starStrength: intOrNull(f.starStrength.value), starRisk: intOrNull(f.starRisk.value),
       priority: intOrNull(f.priority.value), analysisDate: f.analysisDate.value || null,
       analysisNote: f.analysisNote.value.trim() || null,
+      // 名前・セクター・業種の手動上書き（空＝自動取得を使用。自動取得では潰れない）
+      nameOverride: f.nameOverride && f.nameOverride.value.trim() || null,
+      sectorOverride: f.sectorOverride && f.sectorOverride.value.trim() || null,
+      industryOverride: f.industryOverride && f.industryOverride.value.trim() || null,
     };
     // 手入力更新日(manualUpdatedAt)は分割調整の判断材料。分割で調整が要る手入力項目
     // （前回購入単価・手動基準高値）が実際に変わった時だけ更新する。
