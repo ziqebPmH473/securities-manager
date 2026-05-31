@@ -669,21 +669,22 @@ const CF_RULES = {
     { t: v => v >= 10, bg: 'rgba(34,197,94,.45)' }, { t: v => v >= 5, bg: 'rgba(34,197,94,.20)' },
     { t: v => v <= -10, bg: 'rgba(239,68,68,.45)' }, { t: v => v <= -5, bg: 'rgba(239,68,68,.20)' },
   ],
-  // 5年高値からの下落率: 深いほど濃く（薄→黄→橙→赤）。-20/-40/-52/-62。
+  // 5年高値からの下落率: 深いほど濃く、-20/-40/-60/-80 で4段階に色分け（薄スレート→黄→橙→赤）。
   dropFrom5y: [
-    { t: v => v <= -62, bg: 'rgba(239,68,68,.48)' }, { t: v => v <= -52, bg: 'rgba(249,115,22,.42)' },
-    { t: v => v <= -40, bg: 'rgba(234,179,8,.36)' }, { t: v => v <= -20, bg: 'rgba(148,163,184,.20)' },
+    { t: v => v <= -80, bg: 'rgba(239,68,68,.52)' }, { t: v => v <= -60, bg: 'rgba(249,115,22,.46)' },
+    { t: v => v <= -40, bg: 'rgba(234,179,8,.38)' }, { t: v => v <= -20, bg: 'rgba(148,163,184,.22)' },
   ],
   // 前回からの下落率: すみぽん指定で「下落が深いほど濃い」（5年高値からの下落率と同段階・同色）。
   dropFromPrev: [
-    { t: v => v <= -62, bg: 'rgba(239,68,68,.48)' }, { t: v => v <= -52, bg: 'rgba(249,115,22,.42)' },
-    { t: v => v <= -40, bg: 'rgba(234,179,8,.36)' }, { t: v => v <= -20, bg: 'rgba(148,163,184,.20)' },
+    { t: v => v <= -80, bg: 'rgba(239,68,68,.52)' }, { t: v => v <= -60, bg: 'rgba(249,115,22,.46)' },
+    { t: v => v <= -40, bg: 'rgba(234,179,8,.38)' }, { t: v => v <= -20, bg: 'rgba(148,163,184,.22)' },
   ],
 };
 function condStyle(key, v) {
   if (v == null) return '';
   const rules = CF_RULES[key]; if (!rules) return '';
-  for (const r of rules) { if (r.t(v)) return ` style="background:${r.bg};font-weight:700"`; }
+  // 太字は桁位置がずれるため付けない（背景色のみで強調）
+  for (const r of rules) { if (r.t(v)) return ` style="background:${r.bg}"`; }
   return '';
 }
 // 強調付き％セル。文字色(+緑/-赤=cls)は常に維持し、しきい値超過時のみ半透明オーバーレイ＋太字。
@@ -1159,11 +1160,12 @@ function renderSignals() {
   const seg = (m, label) => `<button class="btn btn-sm${signalMarketFilter === m ? ' btn-primary' : ''}" onclick="setSignalMarket('${m}')">${label}</button>`;
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>買い増しサイン</h2>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <div class="section-head">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <h2>買い増しサイン</h2>
           <div class="seg-toggle">${seg('all', '全市場')}${seg('JP', '日本株')}${seg('US', '米国株')}</div>
-          <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">⊞ 列</button>
         </div>
+        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">⊞ 列</button>
       </div>
       <div class="section-body">
         <div class="table-wrap"><table>
