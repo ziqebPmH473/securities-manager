@@ -1072,9 +1072,12 @@ function marketRow(sec, visibleCols, opts = {}) {
   }).join('');
   let actionsTd = '';
   if (opts.actions === 'signal') {
-    actionsTd = `<td class="l nowrap"><button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id},'buy')">購入を記録</button></td>`;
+    actionsTd = `<td class="l nowrap">
+        <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">詳細</button>
+        <button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id},'buy')">購入を記録</button></td>`;
   } else if (opts.actions !== 'none') {
     actionsTd = `<td class="l nowrap">
+        <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">詳細</button>
         <button class="btn btn-sm" onclick="openTxnForm(${sec.id})">取引</button>
         <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
         <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">編集</button>
@@ -1312,7 +1315,7 @@ function renderSecMaster() {
       <td>${s.priority != null ? num(s.priority) : muted}</td>
       <td class="l">${rule ? esc(rule.name) : muted}</td>
       <td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>
-      <td class="l nowrap"><button class="btn btn-sm" onclick="openSecurityForm(${s.id})">編集</button></td>
+      <td class="l nowrap"><button class="btn btn-sm" onclick="openSecurityDetail(${s.id})">詳細</button> <button class="btn btn-sm" onclick="openSecurityForm(${s.id})">編集</button></td>
     </tr>`;
   }).join('');
   app.innerHTML = `
@@ -1718,6 +1721,104 @@ function sellAll(secId) {
   if (confirm('この銘柄の全口座の数量を0にします（全売却）。平均取得単価は保持します。よろしいですか？')) {
     store.sellAll(secId); closeModal(); render();
   }
+}
+
+// ---------- 銘柄詳細（SEC-15） ----------
+// 価格チャート（トリガーライン重畳）＋判定・保有・購入履歴・分析メタ・ファンダを1画面に。
+function openSecurityDetail(secId) {
+  const sec = store.data.securities.find(s => s.id === secId); if (!sec) return;
+  const ccy = MARKET_CCY[sec.market];
+  const m = v => v == null ? '<span class="muted">—</span>' : ccy + num(v);
+  const ev = calc.evaluate(sec);
+  const th = calc.totalHolding(sec.id);
+  const price = calc.price(sec);
+  const rule = store.rule(sec.ruleId);
+  const lb = calc.lastBuyInfo(sec);
+  const kv = (l, v) => `<div class="ai-row"><span class="muted">${l}</span><span>${v}</span></div>`;
+  // 判定
+  const judge = ev ? [
+    kv('適用ルール', esc(rule ? rule.name : '—')),
+    kv('種別', ev.type === 'initial' ? '初回購入' : '買い増し'),
+    kv('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
+    kv('次回購入(トリガー)', (ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.trigger)),
+    kv('現在値', m(price)),
+    kv('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%</span>` + (ev.reached ? '（到達）' : '') : '—'),
+  ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>';
+  // 保有（口座別）
+  const hs = store.data.holdings.filter(h => h.securityId === sec.id);
+  const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}</span></div>`).join('') : '<div class="muted">保有なし</div>';
+  const holdSummary = th.qty ? kv('合計 / 評価額 / 損益率',
+    `${fmtQty(th.qty, sec.market)}　/　${m(calc.valueOrCostNative(sec))}　/　<span class="${cls(calc.pnlPctNative(sec))}">${calc.pnlPctNative(sec) != null ? signed(calc.pnlPctNative(sec)) + '%' : '—'}</span>`) : '';
+  // 購入・取引履歴
+  const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
+  const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
+  // 分析メタ
+  const meta = [
+    kv('銘柄格付 / 総合 / 買い時', `${esc(sec.rating || '—')} / ${esc(sec.overallGrade || '—')} / ${esc(sec.buyGrade || '—')}`),
+    kv('★(ﾊﾞﾘｭ/強/ﾘｽｸ)', [sec.starValuation, sec.starStrength, sec.starRisk].some(x => x != null) ? [sec.starValuation, sec.starStrength, sec.starRisk].map(x => x ?? '—').join('/') : '—'),
+    kv('AI判断 / 推奨カテゴリ', `${esc(sec.category || '—')} / ${esc(sec.recoCategory || '—')}`),
+    kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
+    sec.analysisNote ? kv('分析メモ', esc(sec.analysisNote)) : '',
+  ].join('');
+  // ファンダ
+  const fund = [
+    kv('セクター / 業種', `${esc(calc.field(sec, 'sector') || '—')} / ${esc(calc.field(sec, 'industry') || '—')}`),
+    kv('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
+    kv('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
+    kv('時価総額(百万) / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? num(Math.round(calc.marketCap(sec))) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
+  ].join('');
+  const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
+  showModal(`${esc(calc.displayName(sec))}　<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span> <span class="muted" style="font-size:12px">${esc(sec.ticker)}</span>`, `
+    <fieldset class="form-group"><legend>価格チャート（2年・終値）</legend>
+      <div id="detail-chart" class="muted" style="min-height:120px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
+      <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice==='number'||lb.price!=null?' / 橙破線=前回購入':''}</p>
+    </fieldset>
+    ${sectionBox('判定', judge)}
+    ${sectionBox('保有', holdRows + (holdSummary || ''))}
+    ${sectionBox('購入・取引履歴', txnRows)}
+    ${sectionBox('分析メタ', meta)}
+    ${sectionBox('ファンダ', fund)}
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="openTxnForm(${sec.id})">取引を記録</button>
+      <button type="button" class="btn" onclick="openSecurityForm(${sec.id})">編集</button>
+      <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
+    </div>`, { wide: true });
+  loadDetailChart(sec, ev, price, lb);
+}
+// 終値時系列を取得してSVGチャートを描画（トリガー/現在値/前回購入の水平線つき）
+async function loadDetailChart(sec, ev, price, lb) {
+  const el = document.getElementById('detail-chart'); if (!el) return;
+  try {
+    const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(sec))}&range=2y&interval=1wk`);
+    const d = await res.json();
+    if (d.error || !d.points || !d.points.length) { el.textContent = '価格履歴を取得できませんでした（ローカルは wrangler 起動時のみ取得可）。'; return; }
+    const overlays = [];
+    if (ev && ev.trigger != null) overlays.push({ y: ev.trigger, color: 'var(--red)', label: '次回購入' });
+    if (price != null) overlays.push({ y: price, color: 'var(--green)', label: '現在値' });
+    if (lb && lb.price != null) overlays.push({ y: lb.price, color: 'var(--amber)', label: '前回購入' });
+    el.classList.remove('muted');
+    el.innerHTML = detailSvgChart(d.points, overlays);
+  } catch (e) { el.textContent = '価格履歴の取得に失敗しました: ' + (e && e.message || e); }
+}
+// バニラSVGの折れ線チャート（外部ライブラリ不要）
+function detailSvgChart(points, overlays) {
+  const W = 720, H = 240, pad = { l: 8, r: 70, t: 10, b: 8 };
+  const ys = points.map(p => p[1]);
+  let ymin = Math.min(...ys), ymax = Math.max(...ys);
+  overlays.forEach(o => { if (o.y != null) { ymin = Math.min(ymin, o.y); ymax = Math.max(ymax, o.y); } });
+  if (ymin === ymax) { ymin -= 1; ymax += 1; }
+  const xs = points.map(p => p[0]); const xmin = xs[0], xmax = xs[xs.length - 1];
+  const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
+  const py = v => pad.t + (1 - (v - ymin) / (ymax - ymin)) * (H - pad.t - pad.b);
+  const d = points.map((p, i) => (i ? 'L' : 'M') + px(p[0]).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ');
+  const lines = overlays.filter(o => o.y != null).map(o => {
+    const y = py(o.y).toFixed(1);
+    return `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="${o.color}" stroke-width="1" stroke-dasharray="4 3"/>` +
+      `<text x="${W - pad.r + 4}" y="${(+y + 3).toFixed(1)}" fill="${o.color}" font-size="10">${esc(o.label)} ${num(o.y)}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" style="display:block;background:var(--bg);border:1px solid var(--border);border-radius:8px">
+    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${lines}
+  </svg>`;
 }
 
 function openTxnForm(secId, presetType) {
