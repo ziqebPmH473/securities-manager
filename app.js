@@ -1814,24 +1814,33 @@ async function loadDetailChart(sec, ev, price, lb) {
     el.innerHTML = detailSvgChart(d.points, overlays);
   } catch (e) { el.textContent = '価格履歴の取得に失敗しました: ' + (e && e.message || e); }
 }
+// 「切りのいい」目盛刻み幅を返す（1/2/5×10^n）。range=値域, target=目安の本数。
+function niceStep(range, target) {
+  const raw = range / target;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag; // 1〜10
+  const f = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return f * mag;
+}
 // バニラSVGの折れ線チャート（外部ライブラリ不要）。Y補助目盛・X年ラベル・高値/安値マーカー付き。
 function detailSvgChart(points, overlays) {
   const W = 760, H = 300, pad = { l: 56, r: 86, t: 14, b: 26 };
   const ys = points.map(p => p[1]); const xs = points.map(p => p[0]);
-  let ymin = Math.min(...ys), ymax = Math.max(...ys);
-  overlays.forEach(o => { if (o.y != null) { ymin = Math.min(ymin, o.y); ymax = Math.max(ymax, o.y); } });
-  if (ymin === ymax) { ymin -= 1; ymax += 1; }
-  const sp = ymax - ymin; ymin -= sp * 0.06; ymax += sp * 0.06; // 上下に少し余白
+  let dmin = Math.min(...ys), dmax = Math.max(...ys);
+  overlays.forEach(o => { if (o.y != null) { dmin = Math.min(dmin, o.y); dmax = Math.max(dmax, o.y); } });
+  if (dmin === dmax) { dmin -= 1; dmax += 1; }
+  // 切りのいい刻み幅（…/10/20/50/100/200/500/1000/…）を範囲から自動決定し、Y軸の上下端もその倍数に丸める
+  const step = niceStep((dmax - dmin) || 1, 5);
+  const ymin = Math.floor(dmin / step) * step, ymax = Math.ceil(dmax / step) * step;
   const xmin = xs[0], xmax = xs[xs.length - 1];
   const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
   const py = v => pad.t + (1 - (v - ymin) / (ymax - ymin)) * (H - pad.t - pad.b);
-  // Y補助線＋目盛（5分割）
+  // Y補助線＋目盛（刻み幅 step の倍数）
   let grid = '';
-  const yt = 5;
-  for (let i = 0; i <= yt; i++) {
-    const v = ymin + (ymax - ymin) * i / yt; const y = py(v).toFixed(1);
+  for (let v = ymin; v <= ymax + step * 1e-6; v += step) {
+    const y = py(v).toFixed(1);
     grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="var(--border)" stroke-width="1"/>`;
-    grid += `<text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${num(Math.round(v))}</text>`;
+    grid += `<text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${num(v)}</text>`;
   }
   // X年の区切り＋ラベル
   let xlab = '', lastYear = null;
