@@ -50,6 +50,7 @@ const MASTER_COLS = [
   { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: true  },
   { key: 'base',        label: '基準値',           left: false, markets: ['SIGNAL'], noSort: true },
   { key: 'drop',        label: '残り下落率',       left: false, markets: STKM, noSort: false },
+  { key: 'dropPrev',    label: '残り下落率(前日)', left: false, markets: STKM, noSort: false },
   { key: 'high5y',      label: '5年高値',          left: false, markets: STKM, noSort: false },
   { key: 'high52w',     label: '52週高値',         left: false, markets: STKM, noSort: false },
   { key: 'dropFrom5y',  label: '5年高値からの下落率', left: false, markets: STKM, noSort: false },
@@ -86,10 +87,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','trigger','drop','dropPrev','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','trigger','drop','dropPrev','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -366,6 +367,14 @@ const calc = {
   // 各種「〜からの下落率」（現在値 vs 基準。負=基準より下）
   dropFrom(sec, base) { const price = this.price(sec); if (price == null || !base) return null; return (price - base) / base * 100; },
   dropFromPrev(sec) { return this.dropFrom(sec, this.lastBuyPrice(sec)); },
+  // 前日終値時点での「次回購入(トリガー)まで残り下落率」。(前日終値 − トリガー)/前日終値。
+  // 既存の残り下落率(現在値ベース)と同じ符号（正=あとこれだけ下落で到達 / 負=超過）。
+  remainingDropPrev(sec) {
+    const ev = this.evaluate(sec); if (!ev || ev.trigger == null) return null;
+    const pc = (store.data.prices[priceKey(sec)] || {}).prevClose;
+    if (pc == null || !pc) return null;
+    return (pc - ev.trigger) / pc * 100;
+  },
   dropFrom5y(sec) { return this.dropFrom(sec, this.high5y(sec)); },
   dropFrom52w(sec) { return this.dropFrom(sec, this.high52w(sec)); },
 
@@ -721,6 +730,7 @@ const COL_RENDERERS = {
   // 残り下落率: 到達後はマイナス値（超過幅）も表示（SEC-38）。到達=赤(reached)、残り5%以内=near。
   drop:      (s,c) => !c.ev ? `<td>${muted}</td>`
                     : `<td class="drop ${c.ev.reached ? 'reached' : (c.ev.remainingDropPct <= 5 ? 'near' : 'far')}" title="${c.ev.reached ? 'トリガー超過（到達）' : 'あとこれだけ下落で到達'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
+  dropPrev:  (s,c) => { const v = calc.remainingDropPrev(s); return v == null ? `<td>${muted}</td>` : `<td class="drop ${v <= 0 ? 'reached' : (v <= 5 ? 'near' : 'far')}" title="前日終値時点で次回購入(トリガー)まで">${v.toFixed(1)}%</td>`; },
   high5y:    (s,c) => `<td>${c.high5y != null ? fmtAmt(c.high5y, c.market) : muted}</td>`,
   high52w:   (s,c) => `<td>${c.high52w != null ? fmtAmt(c.high52w, c.market) : muted}</td>`,
   dropFrom5y:  (s,c) => pctTdBg(calc.dropFrom5y(s), 'dropFrom5y'),
@@ -924,6 +934,7 @@ function sortValue(sec, key) {
     case 'trigger': { const ev = calc.evaluate(sec); return ev ? ev.trigger : -Infinity; }
     case 'base': { const ev = calc.evaluate(sec); return ev ? ev.base : -Infinity; }
     case 'drop': { const ev = calc.evaluate(sec); return ev ? ev.remainingDropPct : Infinity; }
+    case 'dropPrev': return calc.remainingDropPrev(sec) ?? Infinity;
     case 'rating': return sec.rating || sec.overallGrade || 'zzz';
     case 'priority': return sec.priority ?? Infinity;
     default: return '';
