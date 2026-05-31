@@ -643,13 +643,43 @@ const muted = '<span class="muted">—</span>';
 // みなし（取得単価を前回購入単価とみなす）の省スペース表示。数値の「前」に付けて桁ズレを防ぐ
 const MINASHI = '<span class="muted" title="みなし（前回購入単価が未登録のため取得単価を使用）" style="cursor:help">≒</span>';
 const pctTd = (v) => `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
+// 条件付き書式の背景色（参照元スプレッドシート 米国株管理.xlsx の条件付き書式に準拠）。値は%。
+// 各配列は上から順に評価し最初に一致した色を使う（しきい値の厳しい順）。bg は薄色なので文字は暗色にする。
+const CF_RULES = {
+  // 前日比（変動率 E列）: 上昇=青系 / 下落=赤系、±5%/±10%で2段階。±5%以内は無色。
+  day: [
+    { t: v => v >= 10, bg: '#6fa8dc' }, { t: v => v >= 5, bg: '#cfe2f3' },
+    { t: v => v <= -10, bg: '#ea9999' }, { t: v => v <= -5, bg: '#f4cccc' },
+  ],
+  // 5年高値からの下落率（下落率 G列）: 深いほど濃い。-20/-40/-52/-62。
+  dropFrom5y: [
+    { t: v => v <= -62, bg: '#ff0000' }, { t: v => v <= -52, bg: '#ff9900' },
+    { t: v => v <= -40, bg: '#ffff00' }, { t: v => v <= -20, bg: '#d0e0e3' },
+  ],
+  // 前回からの下落率: 元シートに対応書式が無いため暫定で前日比と同配色（要確認）。
+  dropFromPrev: [
+    { t: v => v >= 10, bg: '#6fa8dc' }, { t: v => v >= 5, bg: '#cfe2f3' },
+    { t: v => v <= -10, bg: '#ea9999' }, { t: v => v <= -5, bg: '#f4cccc' },
+  ],
+};
+function condStyle(key, v) {
+  if (v == null) return '';
+  const rules = CF_RULES[key]; if (!rules) return '';
+  for (const r of rules) { if (r.t(v)) return ` style="background:${r.bg};color:#111"`; }
+  return '';
+}
+// 背景色付き％セル（条件付き書式）。色が付く時は可読性のため文字色を暗色にし、pos/neg文字色は外す。
+const pctTdBg = (v, key) => {
+  const st = condStyle(key, v);
+  return `<td class="${st ? '' : cls(v)}"${st}>${v != null ? signed(v) + '%' : '—'}</td>`;
+};
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code">${esc(s.ticker)}</td>`,
   name:      (s,c) => `<td class="l"><strong>${esc(calc.displayName(s))}</strong>${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   price:     (s,c) => `<td>${c.priceCell}</td>`,
-  day:       (s,c) => pctTd(c.dayChg),
+  day:       (s,c) => pctTdBg(c.dayChg, 'day'),
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.trigger) : muted}</td>`,
   base:      (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.base) : muted}</td>`,
   // 残り下落率: 到達後はマイナス値（超過幅）も表示（SEC-38）。到達=赤(reached)、残り5%以内=near。
@@ -657,10 +687,10 @@ const COL_RENDERERS = {
                     : `<td class="drop ${c.ev.reached ? 'reached' : (c.ev.remainingDropPct <= 5 ? 'near' : 'far')}" title="${c.ev.reached ? 'トリガー超過（到達）' : 'あとこれだけ下落で到達'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
   high5y:    (s,c) => `<td>${c.high5y != null ? fmtAmt(c.high5y, c.market) : muted}</td>`,
   high52w:   (s,c) => `<td>${c.high52w != null ? fmtAmt(c.high52w, c.market) : muted}</td>`,
-  dropFrom5y:  (s,c) => pctTd(calc.dropFrom5y(s)),
+  dropFrom5y:  (s,c) => pctTdBg(calc.dropFrom5y(s), 'dropFrom5y'),
   dropFrom52w: (s,c) => pctTd(calc.dropFrom52w(s)),
   prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
-  dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
+  dropFromPrev: (s,c) => pctTdBg(calc.dropFromPrev(s), 'dropFromPrev'),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   marketCap: (s,c) => { const v = calc.marketCap(s); return `<td>${v != null ? Number(Math.round(v)).toLocaleString('ja-JP') : muted}</td>`; },
