@@ -932,6 +932,9 @@ function renderMarket(market) {
   const st = listState[market];
   const isStock = market !== 'FUND';
   let secs = store.data.securities.filter(s => s.market === market);
+  // 一覧に出すのは「保有あり(数量>0) または 注意銘柄」のみ。
+  // 保有なし＆非注意（例: 分析後に全売却した銘柄）は一覧から外し、銘柄マスタタブで管理する。
+  secs = secs.filter(s => s.watch || store.data.holdings.some(h => h.securityId === s.id && h.quantity > 0));
   if (st.broker)   secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.broker === st.broker && h.quantity > 0));
   if (st.account)  secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.accountType === st.account && h.quantity > 0));
   if (st.category) secs = secs.filter(s => s.category === st.category);
