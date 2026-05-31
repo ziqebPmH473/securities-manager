@@ -652,26 +652,26 @@ const COL_RENDERERS = {
   day:       (s,c) => pctTd(c.dayChg),
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.trigger) : muted}</td>`,
   base:      (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.base) : muted}</td>`,
+  // 残り下落率: 到達後はマイナス値（超過幅）も表示（SEC-38）。到達=赤(reached)、残り5%以内=near。
   drop:      (s,c) => !c.ev ? `<td>${muted}</td>`
-                    : c.ev.reached ? '<td class="neg">到達</td>'
-                    : `<td class="drop ${c.ev.remainingDropPct <= 5 ? 'near' : 'far'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
-  high5y:    (s,c) => `<td>${c.high5y != null ? c.ccy + num(c.high5y) : muted}</td>`,
-  high52w:   (s,c) => `<td>${c.high52w != null ? c.ccy + num(c.high52w) : muted}</td>`,
+                    : `<td class="drop ${c.ev.reached ? 'reached' : (c.ev.remainingDropPct <= 5 ? 'near' : 'far')}" title="${c.ev.reached ? 'トリガー超過（到達）' : 'あとこれだけ下落で到達'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
+  high5y:    (s,c) => `<td>${c.high5y != null ? fmtAmt(c.high5y, c.market) : muted}</td>`,
+  high52w:   (s,c) => `<td>${c.high52w != null ? fmtAmt(c.high52w, c.market) : muted}</td>`,
   dropFrom5y:  (s,c) => pctTd(calc.dropFrom5y(s)),
   dropFrom52w: (s,c) => pctTd(calc.dropFrom52w(s)),
-  prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + c.ccy + num(lb.price) : muted}</td>`; },
+  prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
   dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   marketCap: (s,c) => { const v = calc.marketCap(s); return `<td>${v != null ? Number(Math.round(v)).toLocaleString('ja-JP') : muted}</td>`; },
-  value:     (s,c) => `<td>${c.th.qty ? money(c.valN, c.ccy) + c.noPriceMark : muted}</td>`,
+  value:     (s,c) => `<td>${c.th.qty ? fmtAmt(c.valN, c.market) + c.noPriceMark : muted}</td>`,
   cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : muted}</td>`,
   pnl:       (s,c) => pctTd(c.pnlPct),
-  avgCost:   (s,c) => `<td>${c.th.qty ? c.ccy + num(c.th.avgCost) : muted}</td>`,
-  qty:       (s,c) => `<td>${c.th.qty ? num(c.th.qty) : '<span class="muted">0</span>'}</td>`,
+  avgCost:   (s,c) => `<td>${c.th.qty ? fmtAmt(c.th.avgCost, c.market) : muted}</td>`,
+  qty:       (s,c) => `<td>${c.th.qty ? fmtQty(c.th.qty, c.market) : '<span class="muted">0</span>'}</td>`,
   buyCount:  (s,c) => `<td>${c.buyCnt ? num(c.buyCnt) : muted}</td>`,
   buyAmount: (s,c) => `<td>${c.m(c.buyAmt)}</td>`,
-  reco:      (s,c) => `<td>${c.recoAmt ? money(c.recoAmt, c.ccy) : muted}</td>`,
+  reco:      (s,c) => `<td>${c.recoAmt ? fmtAmt(c.recoAmt, c.market) : muted}</td>`,
   category:  (s,c) => `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`,
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
   per:       (s,c) => { const v = calc.per(s); return `<td>${v != null ? num(v) : muted}</td>`; },
@@ -974,10 +974,10 @@ function marketRow(sec, visibleCols, opts = {}) {
   const price = p.price ?? null;
   const ccy = MARKET_CCY[market];
   const ctx = {
-    ccy, th,
+    ccy, market, th,
     ev: market !== 'FUND' ? calc.evaluate(sec) : null,
     price,
-    priceCell: price != null ? ccy + num(price) : priceInputBtn(sec),
+    priceCell: price != null ? fmtAmt(price, market) : priceInputBtn(sec),
     noPriceMark: (price == null && th.qty > 0) ? ' <span class="muted" title="価格未取得・取得原価で表示">*</span>' : '',
     valN: calc.valueOrCostNative(sec),
     pnlPct: calc.pnlPctNative(sec),
@@ -988,7 +988,7 @@ function marketRow(sec, visibleCols, opts = {}) {
     high5y: calc.high5y(sec),
     high52w: calc.high52w(sec),
     prevBuy: calc.lastBuyPrice(sec),
-    m: (v) => v != null ? money(v, ccy) : '<span class="muted">—</span>',
+    m: (v) => v != null ? fmtAmt(v, market) : '<span class="muted">—</span>',
   };
   const selectTd = opts.select ? `<td class="l"><input type="checkbox" class="row-select" data-id="${sec.id}"></td>` : '';
   const dataCells = visibleCols.map(col => {
@@ -2509,6 +2509,20 @@ function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;'
 function num(n) { return n == null ? '—' : Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 2 }); }
 function yen(n) { return n == null ? '—' : '¥' + Math.round(n).toLocaleString('ja-JP'); }
 function money(n, ccy) { return n == null ? '—' : ccy + Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 2 }); }
+// 一覧表示用フォーマッタ（通貨記号なし=SEC-44 / 表示桁=SEC-45）。内部値は変えず表示だけ丸める。
+// 株価・金額: 米国株=小数2桁固定 / 日本株=整数。
+function fmtAmt(n, market) {
+  if (n == null) return null;
+  const d = market === 'US' ? 2 : 0;
+  return Number(n).toLocaleString('ja-JP', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+// 数量: 米国株=小数5桁固定 / 日本株=整数（ただしSMBC日興の端株など非整数は最大5桁表示）。
+function fmtQty(n, market) {
+  if (n == null) return null;
+  if (market === 'US') return Number(n).toLocaleString('ja-JP', { minimumFractionDigits: 5, maximumFractionDigits: 5 });
+  return Number.isInteger(n) ? Number(n).toLocaleString('ja-JP')
+    : Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 5 });
+}
 function signed(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
 function cls(n) { return n == null ? '' : (n > 0 ? 'pos' : (n < 0 ? 'neg' : '')); }
 function today() { return new Date().toISOString().slice(0, 10); }
