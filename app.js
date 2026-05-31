@@ -718,8 +718,8 @@ const pctTdBg = (v, key) => {
   return `<td class="${cls(v)}"${st}>${v != null ? signed(v) + '%' : '—'}</td>`;
 };
 const COL_RENDERERS = {
-  ticker:    (s,c) => `<td class="l col-code">${esc(s.ticker)}</td>`,
-  name:      (s,c) => `<td class="l"><strong>${esc(calc.displayName(s))}</strong>${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
+  ticker:    (s,c) => `<td class="l col-code"><span class="lnk" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
+  name:      (s,c) => `<td class="l"><strong class="lnk" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
@@ -1083,12 +1083,9 @@ function marketRow(sec, visibleCols, opts = {}) {
   }).join('');
   let actionsTd = '';
   if (opts.actions === 'signal') {
-    actionsTd = `<td class="l nowrap">
-        <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">詳細</button>
-        <button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id},'buy')">購入を記録</button></td>`;
+    actionsTd = `<td class="l nowrap"><button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id},'buy')">購入を記録</button></td>`;
   } else if (opts.actions !== 'none') {
     actionsTd = `<td class="l nowrap">
-        <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">詳細</button>
         <button class="btn btn-sm" onclick="openTxnForm(${sec.id})">取引</button>
         <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
         <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">編集</button>
@@ -1314,8 +1311,8 @@ function renderSecMaster() {
     const rule = store.rule(s.ruleId);
     const ov = (k) => s[k + 'Override'] ? ' <span class="tag" title="手動上書き中">手</span>' : '';
     return `<tr>
-      <td class="l col-code">${esc(s.ticker)}</td>
-      <td class="l"><strong>${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
+      <td class="l col-code"><span class="lnk" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>
+      <td class="l"><strong class="lnk" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
       <td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>
       <td class="l">${calc.field(s, 'sector') ? esc(calc.field(s, 'sector')) + ov('sector') : muted}</td>
       <td class="l">${calc.field(s, 'industry') ? esc(calc.field(s, 'industry')) + ov('industry') : muted}</td>
@@ -1326,7 +1323,7 @@ function renderSecMaster() {
       <td>${s.priority != null ? num(s.priority) : muted}</td>
       <td class="l">${rule ? esc(rule.name) : muted}</td>
       <td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>
-      <td class="l nowrap"><button class="btn btn-sm" onclick="openSecurityDetail(${s.id})">詳細</button> <button class="btn btn-sm" onclick="openSecurityForm(${s.id})">編集</button></td>
+      <td class="l nowrap"><button class="btn btn-sm" onclick="openSecurityForm(${s.id})">編集</button></td>
     </tr>`;
   }).join('');
   app.innerHTML = `
