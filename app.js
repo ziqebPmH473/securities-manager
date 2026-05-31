@@ -43,6 +43,7 @@ const MASTER_COLS = [
   { key: 'ticker',      label: 'コード',           left: true,  markets: ALLM, noSort: false, narrow: true },
   { key: 'name',        label: '銘柄名',           left: true,  markets: ALLM, noSort: false },
   { key: 'market',      label: '市場',             left: true,  markets: ['SIGNAL'], noSort: false },
+  { key: 'broker',      label: '証券会社',         left: true,  markets: ALLM, noSort: false },
   { key: 'sigType',     label: '種別',             left: true,  markets: ['SIGNAL'], noSort: false },
   { key: 'price',       label: '現在値',           left: false, markets: ALLM, noSort: false },
   { key: 'day',         label: '前日比',           left: false, markets: ALLM, noSort: true  },
@@ -86,7 +87,7 @@ const DEFAULT_VISIBLE = {
   US:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
   JP:   ['ticker','name','price','day','trigger','drop','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','sigType','price','day','drop','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','rating'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -383,6 +384,22 @@ const calc = {
   },
   lastBuyPrice(sec) { return this.lastBuyInfo(sec).price; },
 
+  // 最後に購入した証券会社（買い取引の最新→無ければ保有の最新更新→無ければnull）
+  lastBroker(sec) {
+    const buys = store.data.transactions
+      .filter(t => t.securityId === sec.id && t.type === 'buy' && t.broker)
+      .sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
+    if (buys.length) return buys[0].broker;
+    const hs = store.data.holdings.filter(h => h.securityId === sec.id && h.broker);
+    if (!hs.length) return null;
+    hs.sort((a, b) => {
+      const aq = h => (h.quantity > 0 ? 1 : 0);
+      if (aq(a) !== aq(b)) return aq(b) - aq(a);            // 保有あり優先
+      return (a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1; // 更新が新しい順
+    });
+    return hs[0].broker || null;
+  },
+
   // PER = 株価/EPS（随時算出）。EPS無ければ取得済みPER
   per(sec) { const eps = this.field(sec, 'eps'); const p = this.price(sec); if (eps && eps > 0 && p != null) return p / eps; return this.field(sec, 'per'); },
   // 時価総額(百万) = 株価×発行済株式数/1e6（随時算出）。無ければ取得済み時価総額
@@ -678,6 +695,7 @@ const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code">${esc(s.ticker)}</td>`,
   name:      (s,c) => `<td class="l"><strong>${esc(calc.displayName(s))}</strong>${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
+  broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   price:     (s,c) => `<td>${c.priceCell}</td>`,
   day:       (s,c) => pctTdBg(c.dayChg, 'day'),
@@ -853,6 +871,7 @@ function sortValue(sec, key) {
     case 'name': return calc.displayName(sec).toLowerCase();
     case 'ticker': return (sec.ticker || '').toLowerCase();
     case 'market': return sec.market;
+    case 'broker': return (calc.lastBroker(sec) || '').toLowerCase();
     case 'sigType': { const ev = calc.evaluate(sec); return ev ? ev.type : 'z'; }
     case 'category': return sec.category || '';
     case 'qty': return th.qty;
@@ -1119,20 +1138,43 @@ function signalRows() {
   return { reached, near };
 }
 
+let signalMarketFilter = 'all'; // 'all' | 'JP' | 'US'
+function setSignalMarket(m) { signalMarketFilter = m; renderSignals(); }
 function renderSignals() {
   const st = listState.SIGNAL;
-  const { reached, near } = signalRows();
+  let { reached, near } = signalRows();
+  if (signalMarketFilter !== 'all') {
+    reached = reached.filter(s => s.market === signalMarketFilter);
+    near = near.filter(s => s.market === signalMarketFilter);
+  }
   const visibleCols = getColOrder('SIGNAL').filter(c => c.visible)
     .map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
+  const colCount = visibleCols.length + 1; // +1 = アクション列
+  const head = colHeadHtml(visibleCols, st, 'SIGNAL', null);
+  // 到達／もうすぐ を1つの表にまとめ、グループ見出し行で区切る（列幅を揃えるため）
+  const groupRow = (label, cls2, n) => `<tr class="sig-group ${cls2}"><td colspan="${colCount}">${label}　${n} 件</td></tr>`;
+  const bodyRows = (secs) => secs.length
+    ? secs.map(sec => marketRow(sec, visibleCols, { actions: 'signal' })).join('')
+    : `<tr><td class="muted" colspan="${colCount}" style="padding:12px 16px">該当する銘柄はありません。</td></tr>`;
+  const seg = (m, label) => `<button class="btn btn-sm${signalMarketFilter === m ? ' btn-primary' : ''}" onclick="setSignalMarket('${m}')">${label}</button>`;
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>買い増しサイン（市場横断）</h2>
-        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">⊞ 列</button></div>
+      <div class="section-head"><h2>買い増しサイン</h2>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <div class="seg-toggle">${seg('all', '全市場')}${seg('JP', '日本株')}${seg('US', '米国株')}</div>
+          <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">⊞ 列</button>
+        </div>
+      </div>
       <div class="section-body">
-        <h3 class="sig-head reached">🔴 到達（今が買い時）　${reached.length} 件</h3>
-        ${signalTable(sortSecurities(reached, 'SIGNAL'), visibleCols, st)}
-        <h3 class="sig-head near">🟡 もうすぐ（残り 5% 以内）　${near.length} 件</h3>
-        ${signalTable(sortSecurities(near, 'SIGNAL'), visibleCols, st)}
+        <div class="table-wrap"><table>
+          <thead><tr>${head}<th class="l"></th></tr></thead>
+          <tbody>
+            ${groupRow('🔴 到達（今が買い時）', 'reached', reached.length)}
+            ${bodyRows(sortSecurities(reached, 'SIGNAL'))}
+            ${groupRow('🟡 もうすぐ（残り 5% 以内）', 'near', near.length)}
+            ${bodyRows(sortSecurities(near, 'SIGNAL'))}
+          </tbody>
+        </table></div>
       </div>
     </div>`;
 }

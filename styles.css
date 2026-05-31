@@ -184,6 +184,13 @@ form label.check input { width: auto; }
 .sig-head.near { color: var(--amber); }
 .sig-head:first-child { margin-top: 10px; }
 
+/* サイン: 到達/もうすぐ を1表にまとめた時のグループ見出し行 */
+.sig-group td { background: var(--panel-2); font-weight: 700; text-align: left; padding: 8px 16px; font-size: 13px; }
+.sig-group.reached td { color: var(--red); }
+.sig-group.near td { color: var(--amber); }
+/* 市場フィルタのトグル */
+.seg-toggle { display: inline-flex; gap: 4px; }
+
 /* 行内チェックボックス */
 .row-select, #select-all { width: auto; cursor: pointer; }
 
