@@ -643,35 +643,36 @@ const muted = '<span class="muted">—</span>';
 // みなし（取得単価を前回購入単価とみなす）の省スペース表示。数値の「前」に付けて桁ズレを防ぐ
 const MINASHI = '<span class="muted" title="みなし（前回購入単価が未登録のため取得単価を使用）" style="cursor:help">≒</span>';
 const pctTd = (v) => `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
-// 条件付き書式の背景色（参照元スプレッドシート 米国株管理.xlsx の条件付き書式に準拠）。値は%。
-// 各配列は上から順に評価し最初に一致した色を使う（しきい値の厳しい順）。bg は薄色なので文字は暗色にする。
+// 条件付き強調（参照元スプレッドシート 米国株管理.xlsx の段階を踏襲）。値は%。
+// ダークUI向けに「半透明の色オーバーレイ＋太字」で強調する。文字色は +緑/-赤 のまま維持する。
+// 各配列は上から順に評価し最初に一致した色を使う（しきい値の厳しい順）。
 const CF_RULES = {
-  // 前日比（変動率 E列）: 上昇=青系 / 下落=赤系、±5%/±10%で2段階。±5%以内は無色。
+  // 前日比: 上昇=青系 / 下落=赤系、±5%/±10%で2段階（±5%以内は無強調）。
   day: [
-    { t: v => v >= 10, bg: '#6fa8dc' }, { t: v => v >= 5, bg: '#cfe2f3' },
-    { t: v => v <= -10, bg: '#ea9999' }, { t: v => v <= -5, bg: '#f4cccc' },
+    { t: v => v >= 10, bg: 'rgba(59,130,246,.45)' }, { t: v => v >= 5, bg: 'rgba(59,130,246,.20)' },
+    { t: v => v <= -10, bg: 'rgba(239,68,68,.45)' }, { t: v => v <= -5, bg: 'rgba(239,68,68,.20)' },
   ],
-  // 5年高値からの下落率（下落率 G列）: 深いほど濃い。-20/-40/-52/-62。
+  // 5年高値からの下落率: 深いほど濃く（薄→黄→橙→赤）。-20/-40/-52/-62。
   dropFrom5y: [
-    { t: v => v <= -62, bg: '#ff0000' }, { t: v => v <= -52, bg: '#ff9900' },
-    { t: v => v <= -40, bg: '#ffff00' }, { t: v => v <= -20, bg: '#d0e0e3' },
+    { t: v => v <= -62, bg: 'rgba(239,68,68,.48)' }, { t: v => v <= -52, bg: 'rgba(249,115,22,.42)' },
+    { t: v => v <= -40, bg: 'rgba(234,179,8,.36)' }, { t: v => v <= -20, bg: 'rgba(148,163,184,.20)' },
   ],
-  // 前回からの下落率: すみぽん指定で「下落が深いほど濃い」配色（5年高値からの下落率と同じ）。
+  // 前回からの下落率: すみぽん指定で「下落が深いほど濃い」（5年高値からの下落率と同段階・同色）。
   dropFromPrev: [
-    { t: v => v <= -62, bg: '#ff0000' }, { t: v => v <= -52, bg: '#ff9900' },
-    { t: v => v <= -40, bg: '#ffff00' }, { t: v => v <= -20, bg: '#d0e0e3' },
+    { t: v => v <= -62, bg: 'rgba(239,68,68,.48)' }, { t: v => v <= -52, bg: 'rgba(249,115,22,.42)' },
+    { t: v => v <= -40, bg: 'rgba(234,179,8,.36)' }, { t: v => v <= -20, bg: 'rgba(148,163,184,.20)' },
   ],
 };
 function condStyle(key, v) {
   if (v == null) return '';
   const rules = CF_RULES[key]; if (!rules) return '';
-  for (const r of rules) { if (r.t(v)) return ` style="background:${r.bg};color:#111"`; }
+  for (const r of rules) { if (r.t(v)) return ` style="background:${r.bg};font-weight:700"`; }
   return '';
 }
-// 背景色付き％セル（条件付き書式）。色が付く時は可読性のため文字色を暗色にし、pos/neg文字色は外す。
+// 強調付き％セル。文字色(+緑/-赤=cls)は常に維持し、しきい値超過時のみ半透明オーバーレイ＋太字。
 const pctTdBg = (v, key) => {
   const st = condStyle(key, v);
-  return `<td class="${st ? '' : cls(v)}"${st}>${v != null ? signed(v) + '%' : '—'}</td>`;
+  return `<td class="${cls(v)}"${st}>${v != null ? signed(v) + '%' : '—'}</td>`;
 };
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code">${esc(s.ticker)}</td>`,
