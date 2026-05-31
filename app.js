@@ -333,7 +333,8 @@ const store = {
     if (typeof sec.baseHighManual === 'number') sec.baseHighManual /= r;
     if (typeof sec.fixedBuyPrice === 'number') sec.fixedBuyPrice /= r;
     for (const t of this.data.transactions.filter(t => t.securityId === secId && t.tradedAt && t.tradedAt < date)) { t.price /= r; t.quantity *= r; }
-    delete this.data.prices[priceKey(sec)]; // 価格・高値キャッシュをクリア（再取得で分割後の正値に）
+    // 自動取得の価格キャッシュ（現在値・前日終値・5年/52週高値）は触らない。
+    // Yahoo はEx-date以降は分割調整済みの値を返すため、削除せず手入力項目だけ調整する（次の価格更新で最新化）。
     const hrec = (sec.splitHistory || []).find(x => x.date === date);
     if (hrec) { hrec.status = 'applied'; hrec.appliedAt = this._now(); hrec.mode = mode; }
     this.save();
