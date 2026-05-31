@@ -1,15 +1,17 @@
 :root {
-  --bg: #0f1419;
-  --panel: #1a2029;
-  --panel-2: #222b38;
-  --border: #2d3949;
-  --text: #e6edf3;
-  --muted: #8b98a9;
-  --accent: #3b82f6;
-  --accent-d: #2563eb;
-  --green: #22c55e;
-  --red: #ef4444;
-  --amber: #f59e0b;
+  /* ライト（白ベース）テーマ。完全な白ではなくオフホワイト地＋白パネル。 */
+  --bg: #f4f6f9;
+  --panel: #ffffff;
+  --panel-2: #eef1f5;
+  --border: #d6dce4;
+  --text: #1f2733;
+  --muted: #687385;
+  --accent: #2563eb;
+  --accent-d: #1d4ed8;
+  /* 緑/赤/橙は白地でも読めるよう少し濃いめ */
+  --green: #15a34a;
+  --red: #dc2626;
+  --amber: #c2740a;
   --radius: 10px;
 }
 
@@ -90,9 +92,9 @@ tbody tr:hover { background: var(--panel-2); }
 .neg { color: var(--red); }
 .muted { color: var(--muted); }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
-.tag.us { color: #60a5fa; }
-.tag.jp { color: #f87171; }
-.tag.fund { color: #a78bfa; }
+.tag.us { color: #2563eb; }
+.tag.jp { color: #dc2626; }
+.tag.fund { color: #7c3aed; }
 
 /* 残り下落率バッジ */
 .drop { font-weight: 600; }
@@ -144,9 +146,9 @@ th.sortable.active { color: var(--accent); }
 
 /* 評価バッジ（S/A/B/C/D） */
 .grade { display: inline-block; min-width: 20px; padding: 1px 7px; border-radius: 6px; font-weight: 700; font-size: 12px; text-align: center; background: var(--panel-2); border: 1px solid var(--border); }
-.grade-s { color: #fbbf24; border-color: #fbbf24; }
+.grade-s { color: #b45309; border-color: #d9a441; }
 .grade-a { color: var(--green); border-color: var(--green); }
-.grade-b { color: #60a5fa; border-color: #60a5fa; }
+.grade-b { color: #2563eb; border-color: #2563eb; }
 .grade-c { color: var(--muted); }
 .grade-d { color: var(--red); border-color: var(--red); }
 
