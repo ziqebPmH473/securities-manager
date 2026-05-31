@@ -2575,6 +2575,7 @@ function openSplitAdjust(items) {
     const w = splitWarnInfo(sec, r);
     const hold = th.qty ? `${num(th.qty)} @${ccy}${num(th.avgCost)}<br><strong>→ ${num(th.qty * r)} @${ccy}${num(th.avgCost / r)}</strong>` : muted;
     const pbp = (typeof sec.prevBuyPrice === 'number') ? `${ccy}${num(sec.prevBuyPrice)}<br><strong>→ ${ccy}${num(sec.prevBuyPrice / r)}</strong>` : muted;
+    const fbp = (typeof sec.fixedBuyPrice === 'number') ? `${ccy}${num(sec.fixedBuyPrice)}<br><strong>→ ${ccy}${num(sec.fixedBuyPrice / r)}</strong>` : muted;
     // 取込日/手入力日（分割日より前＝未調整の疑いは色付き。一覧と同じルール）
     const lh = latestHolding(sec.id);
     const impCls = (lh && lh.updatedAt && fmtDate(lh.updatedAt) < it.date) ? 'after-split' : '';
@@ -2591,6 +2592,7 @@ function openSplitAdjust(items) {
       <td>${price != null ? ccy + num(price) : muted}</td>
       <td class="l">${hold}</td>
       <td class="l">${pbp}</td>
+      <td class="l">${fbp}</td>
       <td class="l ${impCls}">${impCell}</td>
       <td class="l ${manCls}">${manCell}</td>
       <td class="l">${w.warn ? `<span class="neg" title="${esc(w.reason)}">⚠ ${esc(w.reason)}</span>` : '—'}</td>
@@ -2606,7 +2608,7 @@ function openSplitAdjust(items) {
       <button type="button" class="btn btn-sm" onclick="saApplyBulk()">に一括変更</button>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th class="l">☑</th><th class="l">銘柄</th><th class="l">分割日/比率</th><th>現在値</th><th class="l">保有(現→後)</th><th class="l">前回購入(現→後)</th><th class="l">取込日</th><th class="l">手入力日</th><th class="l">警告</th><th class="l">推奨</th><th class="l">種別</th></tr></thead>
+      <thead><tr><th class="l">☑</th><th class="l">銘柄</th><th class="l">分割日/比率</th><th>現在値</th><th class="l">保有(現→後)</th><th class="l">前回購入(現→後)</th><th class="l">買増固定値(現→後)</th><th class="l">取込日</th><th class="l">手入力日</th><th class="l">警告</th><th class="l">推奨</th><th class="l">種別</th></tr></thead>
       <tbody id="sa-rows">${rows}</tbody>
     </table></div>
     <div class="form-actions">
@@ -2678,8 +2680,9 @@ function money(n, ccy) { return n == null ? '—' : ccy + Number(n).toLocaleStri
 // 株価・金額: 米国株=小数2桁固定 / 日本株=整数。
 function fmtAmt(n, market) {
   if (n == null) return null;
-  const d = market === 'US' ? 2 : 0;
-  return Number(n).toLocaleString('ja-JP', { minimumFractionDigits: d, maximumFractionDigits: d });
+  if (market === 'US') return Number(n).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // 日本株: 基本は整数表示。ただし小数を持つ値（買増固定値・端数のある単価等）は四捨五入で消さず最大2桁まで表示。
+  return Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 2 });
 }
 // 数量: 米国株=小数5桁固定 / 日本株=整数（ただしSMBC日興の端株など非整数は最大5桁表示）。
 function fmtQty(n, market) {
