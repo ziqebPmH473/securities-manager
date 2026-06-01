@@ -1662,27 +1662,48 @@ function renderMaster() {
       </div>
     </div>
     <div class="section">
-      <div class="section-head"><h2>一括取込（Excel/CSV 貼り付け）</h2></div>
-      <div class="section-body" style="padding:16px;display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn" onclick="openPasteImport('analysis')">銘柄分析結果を取込</button>
-        <button class="btn" onclick="openBrokerImport()">保有を取込（証券会社別）</button>
-        <button class="btn" onclick="openImportMapping()">取込フィールド設定</button>
-        <button class="btn" onclick="refreshAllMeta()">銘柄情報を更新（名前・セクター・PER等）</button>
+      <div class="section-head"><h2>データ取込（インポート）</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="grp-label">① 保有を取り込む（証券会社のデータ）</div>
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="openBrokerImport()">保有を取込（証券会社別）</button>
+          <button class="btn" onclick="openImportMapping()">取込フィールド設定</button>
+        </div>
+        <p class="muted grp-note">各社の画面コピー/CSVを貼り付け→ティッカーで銘柄に紐づけ（未登録は新規作成可）。「取込フィールド設定」は列名・位置が変わった時だけ調整します。</p>
+        <div class="grp-label">取込状況（最終取込日時）</div>
+        ${importStatusHtml()}
+        ${importHistorySection()}
+        <div class="grp-label" style="margin-top:18px">② 銘柄情報・分析を取り込む</div>
+        <div class="btn-row">
+          <button class="btn" onclick="refreshAllMeta()">銘柄情報を更新（名前・セクター・PER等）</button>
+          <button class="btn" onclick="openPasteImport('analysis')">銘柄分析結果を取込</button>
+        </div>
+        <p class="muted grp-note">「銘柄情報を更新」＝名前・セクター・ファンダを自動取得。「銘柄分析結果を取込」＝分析Excelを貼り付け。</p>
       </div>
-      <p class="muted" style="padding:0 16px 14px">Excelの該当シートをヘッダ行ごとコピーして貼り付け→ティッカーで既存銘柄に紐づけ（未登録は新規作成も可）。</p>
-      <div style="padding:0 16px 14px"><div class="muted" style="margin:0 0 6px">取込状況（最終取込日時）</div>${importStatusHtml()}</div>
-      ${importHistorySection()}
     </div>
     <div class="section">
-      <div class="section-head"><h2>データ管理</h2></div>
-      <div class="section-body" style="padding:16px;display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn" onclick="go('transfer')">資産貼付・転記（別タブ）</button>
-        <button class="btn" onclick="exportData()">エクスポート(JSON)</button>
-        <button class="btn" onclick="importData()">インポート(JSON)</button>
-        <button class="btn" onclick="exportGeneric()">汎用出力(CSV)</button>
-        <button class="btn btn-danger" onclick="resetData()">全データ削除</button>
+      <div class="section-head"><h2>バックアップ・出力</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="grp-label">全データのバックアップ（JSONファイル）</div>
+        <div class="btn-row">
+          <button class="btn" onclick="exportData()">バックアップ書出し（JSON）</button>
+          <button class="btn" onclick="importData()">バックアップ読込（JSON）</button>
+        </div>
+        <p class="muted grp-note">このブラウザ(localStorage)の全データをファイルに保存／復元します。保存先は現在このブラウザのみ（将来 Google スプレッドシートへ移行予定）。</p>
+        <div class="grp-label" style="margin-top:18px">その他の出力</div>
+        <div class="btn-row">
+          <button class="btn" onclick="go('transfer')">資産貼付・転記（転記用タブへ）</button>
+          <button class="btn" onclick="exportGeneric()">汎用出力（CSV）</button>
+        </div>
+        <p class="muted grp-note">資産管理エクセルへの貼付・現金転記は専用の「転記用」タブで行います。汎用CSVは全銘柄・保有の書き出し（再取込用）。</p>
       </div>
-      <p class="muted" style="padding:0 16px 14px">現在の保存先: このブラウザ(localStorage)。将来 Google スプレッドシートへ移行予定。</p>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>データ削除</h2></div>
+      <div class="section-body" style="padding:16px">
+        <button class="btn btn-danger" onclick="resetData()">全データ削除</button>
+        <p class="muted grp-note">全データを初期化します（誤削除対策として、削除前にJSONバックアップを自動ダウンロード）。</p>
+      </div>
     </div>
     ${googleSyncSection()}`;
 }

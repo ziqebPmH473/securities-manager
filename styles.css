@@ -143,6 +143,11 @@ form .row > .field { flex: 1; }
 .tag.watch { color: var(--amber); border-color: var(--amber); }
 .nowrap { white-space: nowrap; }
 
+/* マスタ・設定のグループ化UI */
+.grp-label { font-weight: 600; font-size: 13px; color: var(--text); margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 6px; }
+.grp-note { margin: 0 0 14px; font-size: 12px; }
+
 /* ソート可能なヘッダ */
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
