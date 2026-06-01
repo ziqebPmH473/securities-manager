@@ -2040,19 +2040,21 @@ function openHoldingsForm(secId) {
   const sec = store.data.securities.find(s => s.id === secId);
   const ccy = MARKET_CCY[sec.market];
   const hs = store.data.holdings.filter(h => h.securityId === secId);
+  const us = sec.market === 'US';
   const rowsHtml = hs.map(h => `
     <tr data-hid="${h.id}">
       <td class="l">${esc(h.broker)}</td><td class="l">${esc(h.accountType)}</td>
       <td><input type="number" step="any" class="h-qty" value="${h.quantity}"></td>
       <td><input type="number" step="any" class="h-cost" value="${h.avgCost}"></td>
+      ${us ? `<td><input type="number" step="any" class="h-acq" value="${h.acqJpy ?? ''}" placeholder="取得円"></td>` : ''}
       <td class="l"><button type="button" class="btn btn-sm btn-danger" onclick="removeHolding(${h.id},${secId})">削除</button></td>
     </tr>`).join('');
 
   showModal(`保有を直接編集 — ${esc(sec.name || sec.ticker)}`, `
     <form id="holdings-form">
-      <p class="muted">取引履歴を介さず、数量・平均取得単価を直接修正できます（単価 ${ccy}）。</p>
+      <p class="muted">取引履歴を介さず、数量・平均取得単価を直接修正できます（単価 ${ccy}）。${us ? '「取得円(円)」は米国株の取得円（転記・取得円列に使用）。空欄＝未設定。' : ''}</p>
       <div class="table-wrap"><table>
-        <thead><tr><th class="l">証券会社</th><th class="l">口座</th><th>数量</th><th>平均取得単価(${ccy})</th><th></th></tr></thead>
+        <thead><tr><th class="l">証券会社</th><th class="l">口座</th><th>数量</th><th>平均取得単価(${ccy})</th>${us ? '<th>取得円(円)</th>' : ''}<th></th></tr></thead>
         <tbody id="holdings-rows">${rowsHtml || ''}</tbody>
       </table></div>
       ${hs.length === 0 ? '<div class="empty">保有がありません。下のフォームから追加してください。</div>' : ''}
@@ -2066,6 +2068,7 @@ function openHoldingsForm(secId) {
           <div class="field"><label>数量</label><input name="newQty" type="number" step="any" placeholder="0"></div>
           <div class="field"><label>平均取得単価(${ccy})</label><input name="newCost" type="number" step="any" placeholder="0"></div>
         </div>
+        ${us ? `<div class="row"><div class="field"><label>取得円(円)（任意・取得円用）</label><input name="newAcq" type="number" step="any" placeholder="空欄可"></div></div>` : ''}
       </fieldset>
 
       <div class="form-actions">
@@ -2089,12 +2092,19 @@ function openHoldingsForm(secId) {
           h.quantity = newQty; h.avgCost = newCost;
           h.source = 'manual'; h.updatedAt = store._now();
         }
+        // 取得円(円)の直接編集（米国株）。空欄なら未設定に戻す
+        const acqEl = tr.querySelector('.h-acq');
+        if (acqEl) { const v = acqEl.value.trim(); h.acqJpy = v === '' ? undefined : (parseFloat(v) || 0); }
       }
     });
     // 新規追加
     if (f.newQty.value || f.newCost.value) {
       store.setHolding(secId, f.broker.value, f.accountType.value,
         parseFloat(f.newQty.value) || 0, parseFloat(f.newCost.value) || 0);
+      if (f.newAcq && f.newAcq.value.trim() !== '') {
+        const nh = store.data.holdings.find(x => x.securityId === secId && x.broker === f.broker.value && x.accountType === f.accountType.value);
+        if (nh) nh.acqJpy = parseFloat(f.newAcq.value) || 0;
+      }
     }
     store.save(); closeModal(); render();
   };
@@ -2586,6 +2596,7 @@ const DEFAULT_IMPORT_MAPPINGS = {
   'sbi-jp':  { ticker: '銘柄コード', quantity: '保有株数', avgCost: '取得単価' },
   'moomoo':  { ticker: 'コード', quantity: '数量', avgCost: '平均取得価額', account: '口座区分', currency: '通貨' },
   'rakuten': { kind: '種別', ticker: '銘柄コード・ティッカー', quantity: '保有数量', avgCost: '平均取得価額', account: '口座' },
+  'monex-jp': { ticker: '銘柄コード', quantity: '保有数', avgCost: '平均取得単価', account: '口座区分' },
   'smbc':    { qtyPos: 1, avgCostPos: 3 },                                   // 数量, 時価, 平均取得単価, 評価額, 損益
 };
 
@@ -2616,6 +2627,18 @@ function parseMoomooCsv(text, map) {
     const market = (r[idx(m.currency)] || '').trim() === 'USD' ? 'US' : 'JP';
     const qty = numClean(r[idx(m.quantity)]); const ac = numClean(r[idx(m.avgCost)]);
     if (qty != null) out.push({ market, ticker: code, broker: 'moomoo', account: normAccount(r[idx(m.account)]), quantity: qty, avgCost: ac ?? 0 });
+  }
+  return out;
+}
+// マネックス 日本株（端株含む）CSV: 銘柄コード/平均取得単価/保有数/口座区分
+function parseMonexJpCsv(text, map) {
+  const m = map || DEFAULT_IMPORT_MAPPINGS['monex-jp'];
+  const rows = parseCsvText(text); if (rows.length < 2) return [];
+  const h = rows[0], idx = (n) => h.indexOf(n); const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i]; const code = (r[idx(m.ticker)] || '').trim(); if (!code) continue;
+    const qty = numClean(r[idx(m.quantity)]); const ac = numClean(r[idx(m.avgCost)]);
+    if (qty != null) out.push({ market: 'JP', ticker: code, broker: 'マネックス', account: normAccount(r[idx(m.account)]), quantity: qty, avgCost: ac ?? 0 });
   }
   return out;
 }
@@ -2757,6 +2780,7 @@ const IMPORT_PROFILES = {
   'smbc':    { label: 'SMBC日興証券 日本株（画面コピーを貼り付け）', input: 'paste', parse: parseSmbcScreen, fixed: true, scope: { broker: 'SMBC日興', markets: ['JP'] } },
   'moomoo':  { label: 'moomoo（CSVファイル）', input: 'file', parse: parseMoomooCsv, fixed: true, scope: { broker: 'moomoo', markets: ['JP', 'US'] } },
   'rakuten': { label: '楽天証券（保有商品一覧CSV）', input: 'file', parse: parseRakutenCsv, fixed: true, scope: { broker: '楽天', markets: ['JP', 'US'] } },
+  'monex-jp': { label: 'マネックス 日本株（CSVファイル）', input: 'file', parse: parseMonexJpCsv, fixed: true, scope: { broker: 'マネックス', markets: ['JP'] } },
   // 汎用取込は「汎用データ（取込⇄出力）」セクションの専用UI(openGenericImport)へ分離（証券会社取込とは別枠）
 };
 
@@ -2915,6 +2939,7 @@ const MAPPING_FIELDS = {
   'sbi-jp':  [['ticker', '銘柄コードの列名'], ['quantity', '保有株数の列名'], ['avgCost', '取得単価の列名']],
   'moomoo':  [['ticker', 'コード列名'], ['quantity', '数量列名'], ['avgCost', '平均取得価額列名'], ['account', '口座区分列名'], ['currency', '通貨列名']],
   'rakuten': [['kind', '種別列名'], ['ticker', '銘柄コード列名'], ['quantity', '保有数量列名'], ['avgCost', '平均取得価額列名'], ['account', '口座列名']],
+  'monex-jp': [['ticker', '銘柄コード列名'], ['quantity', '保有数列名'], ['avgCost', '平均取得単価列名'], ['account', '口座区分列名']],
   'sbi-us':  [['qtyPos', '数量は数値の何番目か'], ['avgCostPos', '取得単価は数値の何番目か'], ['evalJpyPos', '円換算評価額は数値の何番目か'], ['pnlJpyPos', '円換算評価損益は数値の何番目か']],
   'smbc':    [['qtyPos', '数量は数値の何番目か'], ['avgCostPos', '平均取得単価は数値の何番目か']],
 };
@@ -3697,7 +3722,8 @@ function detectFundHeader(cells) {
     const t = String(c).trim();
     if (idx.name == null && /ファンド名|銘柄名称|^銘柄名$|^銘柄$|^ファンド$/.test(t)) idx.name = i;
     if (idx.acq == null && /取得金額|取得額/.test(t)) idx.acq = i;
-    if (idx.eval == null && /(時価)?評価額(\[円\])?$/.test(t)) idx.eval = i;
+    if (idx.eval == null && /(時価|概算)?評価額(\[円\])?$/.test(t)) idx.eval = i;     // 概算評価額 等も
+    if (idx.pnl == null && /評価損益$/.test(t)) idx.pnl = i;                          // 取得金額が無い時 評価額−損益 で算出
     if (idx.account == null && /口座|預り区分|口座区分/.test(t)) idx.account = i;
   });
   return (idx.name != null && idx.eval != null) ? idx : null;
@@ -3722,7 +3748,9 @@ function parseFundRows(text) {
     const name = (cells[col.name] || '').trim();
     const ev = numClean(cells[col.eval]);
     if (!name || ev == null) continue;
-    const acq = col.acq != null ? numClean(cells[col.acq]) : null;
+    // 取得金額: 列があればそれ、無ければ 評価額−評価損益（マネックス投信CSV等）
+    const acq = col.acq != null ? numClean(cells[col.acq])
+      : (col.pnl != null ? ev - (numClean(cells[col.pnl]) || 0) : null);
     const account = (col.account != null && cells[col.account]) ? normAccount(cells[col.account]) : acct;
     out.push({ name, evalJpy: ev, acqJpy: acq, account });
   }
