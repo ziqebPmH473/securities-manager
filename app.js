@@ -1596,13 +1596,23 @@ function bulkSetDetailType() {
   toast(`${ids.length}件の詳細種別を「${val || '自動判定'}」に変更しました`);
 }
 let secMasterSort = { key: 'ticker', dir: 1 };
+let secMasterFilter = 'all'; // all | noprice | noholding | holding
 function setSecMasterSort(key) {
   if (secMasterSort.key === key) secMasterSort.dir *= -1; else { secMasterSort.key = key; secMasterSort.dir = 1; }
   renderSecMaster();
 }
+function setSecMasterFilter(v) { secMasterFilter = v; renderSecMaster(); }
 function renderSecMaster() {
   const sk = secMasterSort.key, dir = secMasterSort.dir;
-  const secs = [...store.data.securities].sort((a, b) => { const va = sortValue(a, sk), vb = sortValue(b, sk); if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0; });
+  const smHasPrice = (s) => { const p = store.data.prices[priceKey(s)]; return !!(p && p.price != null); };
+  const smHasHolding = (s) => store.data.holdings.some(h => h.securityId === s.id && h.quantity > 0);
+  const allSecs = [...store.data.securities].sort((a, b) => { const va = sortValue(a, sk), vb = sortValue(b, sk); if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0; });
+  const secs = allSecs.filter(s => {
+    if (secMasterFilter === 'noprice') return !smHasPrice(s);
+    if (secMasterFilter === 'noholding') return !smHasHolding(s);
+    if (secMasterFilter === 'holding') return smHasHolding(s);
+    return true;
+  });
   const cell = (v, l) => `<td class="${l ? 'l ' : ''}">${v != null && v !== '' ? esc(String(v)) : muted}</td>`;
   // ソート可能なヘッダ（sortValue が各キーに対応）
   const SM_COLS = [
@@ -1639,10 +1649,15 @@ function renderSecMaster() {
   }).join('');
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>銘柄マスタ（${secs.length} 件）</h2>
+      <div class="section-head"><h2>銘柄マスタ（${allSecs.length} 件）</h2>
         <button class="btn btn-sm btn-primary" onclick="openSecurityForm()">＋ 銘柄を追加</button></div>
       <div class="section-body">
-        <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます。「手」=手動上書き中。詳細種別の「auto」=自動判定（未設定）。</p>
+        <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます。「手」=手動上書き中。詳細種別の「auto」=自動判定（未設定）。<strong>「価格未取得」は実在しないティッカー/コードの可能性</strong>（価格更新後に抽出→全選択→一括削除で整理できます）。</p>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
+          <span class="muted">抽出:</span>
+          ${['all', '全て', 'noprice', '価格未取得', 'noholding', '保有なし', 'holding', '保有あり'].reduce((acc, _, i, arr) => { if (i % 2) acc.push(`<button class="btn btn-sm${secMasterFilter === arr[i - 1] ? ' btn-primary' : ''}" onclick="setSecMasterFilter('${arr[i - 1]}')">${arr[i]}</button>`); return acc; }, []).join('')}
+          <span class="muted">${secs.length}/${allSecs.length}件</span>
+        </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
           <span class="muted">選択した銘柄の詳細種別を</span>
           <select id="sm-bulk-detail">${['個別株', 'ETF', '（自動判定に戻す）'].map(o => `<option>${o}</option>`).join('')}</select>
@@ -3981,6 +3996,7 @@ window.runAcqJpyImport = runAcqJpyImport;
 window.mfTransferGenerate = mfTransferGenerate;
 window.fundGenerate = fundGenerate;
 window.smSelectAll = smSelectAll;
+window.setSecMasterFilter = setSecMasterFilter;
 window.bulkSetDetailType = bulkSetDetailType;
 window.bulkDeleteSecurities = bulkDeleteSecurities;
 window.openGenericImport = openGenericImport;
