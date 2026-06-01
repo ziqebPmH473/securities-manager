@@ -1,8 +1,28 @@
 # 証券管理ツール 詳細設計書
 
-最終更新: 2026-05-29
-ステータス: ドラフト（詳細設計フェーズ）
-関連: [REQUIREMENTS.md](./REQUIREMENTS.md)
+最終更新: 2026-06-01
+ステータス: §0 が現状実装、§1〜13 は**目標アーキテクチャ**（Sheets/Cron/通知/React は未実装＝次フェーズ）
+関連: [REQUIREMENTS.md](./REQUIREMENTS.md) / [HANDOFF.md](./HANDOFF.md)
+
+> **注意**: 本書の §1〜13 は当初の目標設計（React/Vite・Cloudflare・Google Sheets・Cron・通知）。
+> 実際の実装はこれと一部異なります。**現状の実装は §0 を参照**してください。
+
+---
+
+## 0. 現状実装サマリ（2026-06-01）
+
+- **技術**: バニラ HTML/CSS/JS（**ビルド無し**。React/Vite ではない）＋ Cloudflare Pages Functions。
+- **保存**: ブラウザ **localStorage**（キー `sm_data_v1`、列設定は `sm_colprefs_v2`）。Sheets/KV は未実装。
+- **デプロイ**: GitHub のブランチ `claude/securities-portfolio-tool-WGIsF`（既定＝本番）への push で **CF Pages 自動デプロイ**。
+- **API（Pages Functions）**: `/api/price`（Yahoo価格・**日足で前日比正常化**）、`/api/info`（日本語名・セクター/業種・EPS/発行済株式数）、`/api/splits`（分割）、`/api/history`（終値時系列・チャート用）。Finnhub は `FINNHUB_API_KEY` 設定時のみ米株に使用。
+- **データモデル（store）**: `securities / holdings / transactions / rules / categories / prices / fx / meta / indices / amountHistory / amountSnapshots / importHistory / importMappings`。
+  - `securities` は分析メタ＋ `nameOverride/sectorOverride/industryOverride`（手動上書き、自動取得で潰れない）、`fixedBuyPrice`（買増固定値）、`prevBuyPrice`、`baseHighMode/baseHighManual`、`watch`（注意＝未保有でも一覧に残す）、`enabled`（判定対象）、`splitHistory[]`、`manualUpdatedAt`。
+  - `meta`（`market:ticker`キー）= 名前/セクター/業種/PER/EPS/配当/時価総額/sharesOut の自動取得キャッシュ。
+  - `prices`（`market:ticker`キー）= price/prevClose/high5y/high52w。`indices` = 参考指数 price/prevClose。
+- **市場**: 日本株(JP)/米国株(US)のみ。**投信(FUND)は除外**（2026-05-30判断。後方互換で定義は残るがUI選択不可）。
+- **一覧の表示条件**: 「保有あり(数量>0) または 注意銘柄」のみ。売却済み・非注意は銘柄マスタタブで管理。
+- **タブ**: ダッシュボード/米国株/日本株/サイン/分割/レポート/銘柄マスタ/マスタ・設定。
+- **未実装（§1〜13の目標のうち）**: Googleログイン、Sheets保存、Cron、KV、定時通知(LINE/Resend)、資産推移グラフ、サイン履歴の永続化。→ 次フェーズ（HANDOFF §4）。
 
 ---
 
@@ -267,16 +287,18 @@ CREATE TABLE settings (
 - **当日以降** → `status:'pending'` で承認待ち。承認モーダルで個別/一括承認（取込日時と分割日を表示し、二重調整を目視回避）
 - 承認 → `applySplit` 実行 → `status:'applied'`。スキップ → `status:'skipped'`
 
-**`applySplit(secId, date, r)` が調整する対象**（1株あたりの価格・株数のみ）:
-- 保有: `quantity ×= r` / `avgCost /= r`（取得価額は不変）
-- 手動の `prevBuyPrice /= r`、`baseHighManual /= r`
+**`applySplit(secId, date, r)` が調整する対象**（手入力項目・保有・取引のみ。mode='full'は保有も）:
+- 保有(mode='full'): `quantity ×= r` / `avgCost /= r`（取得価額は不変）
+- 手動の `prevBuyPrice /= r`、`baseHighManual /= r`、**`fixedBuyPrice /= r`（買増固定値）**
 - 分割日より前の取引: `price /= r` / `quantity ×= r`
-- 価格キャッシュ（現在値・高値）を削除→再取得で分割後の正値に
 
 **調整しないもの**（自動取得で自己補正・または金額/算出値で不変）:
-- 現在値・前日終値・52週/5年高値・EPS・発行済株式数・1株配当（Yahoo が分割反映済み）
-- PER・時価総額・配当利回り（株価×株数/EPSで常に算出）
+- **価格キャッシュ（現在値・前日終値・52週/5年高値）は削除も調整もしない**（SEC-48）。
+  YahooはEx-date以降は分割調整済みの値を返すため。※当初は delete していたが「自動取得データが消える」ため廃止。
+- EPS・発行済株式数・1株配当（Yahoo が分割反映済み）／ PER・時価総額・配当利回り（常に算出）
 - 1回購入額（金額）・取得価額（数量×単価で不変）
+
+**推奨処理（recommendSplitMode）**: 保有が分割前なら「全部」、保有は分割後でも手入力項目(前回購入・手動高値・買増固定値)が**手入力日 < 分割日**なら「手入力のみ」、何も無ければ「スキップ」。一括調整モーダルに推奨列＋現→後プレビュー（取得単価/前回購入/買増固定値）。
 
 ---
 
