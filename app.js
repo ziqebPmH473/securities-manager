@@ -63,6 +63,7 @@ const MASTER_COLS = [
   { key: 'marketCap',   label: '時価総額(百万)',    left: false, markets: STKM, noSort: false },
   { key: 'value',       label: '評価額',           left: false, markets: ALLM, noSort: false },
   { key: 'cost',        label: '取得価額',         left: false, markets: ALLM, noSort: false },
+  { key: 'acqJpy',      label: '取得円(円)',       left: false, markets: STKM, noSort: false },
   { key: 'pnl',         label: '損益率',           left: false, markets: ALLM, noSort: false },
   { key: 'avgCost',     label: '取得単価',         left: false, markets: ALLM, noSort: false },
   { key: 'qty',         label: '数量',             left: false, markets: ALLM, noSort: false },
@@ -866,6 +867,13 @@ const COL_RENDERERS = {
   marketCap: (s,c) => { const v = calc.marketCap(s); return `<td>${v != null ? Number(Math.round(v)).toLocaleString('ja-JP') : muted}</td>`; },
   value:     (s,c) => `<td>${c.th.qty ? fmtAmt(c.valN, c.market) + c.noPriceMark : muted}</td>`,
   cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : muted}</td>`,
+  // 取得円(円): 米株=保有のacqJpy(取得円)合計（取込/手入力したもの）、日本株=取得単価×数量
+  acqJpy:    (s,c) => {
+    let v = null;
+    if (s.market === 'US') { const hs = store.data.holdings.filter(h => h.securityId === s.id); if (hs.some(h => h.acqJpy != null)) v = Math.round(hs.reduce((a, h) => a + (h.acqJpy || 0), 0)); }
+    else v = c.th.qty ? Math.round(c.th.avgCost * c.th.qty) : null;
+    return `<td>${v != null ? num(v) : muted}</td>`;
+  },
   pnl:       (s,c) => pctTd(c.pnlPct),
   avgCost:   (s,c) => `<td>${c.th.qty ? fmtAmt(c.th.avgCost, c.market) : muted}</td>`,
   qty:       (s,c) => `<td>${c.th.qty ? fmtQty(c.th.qty, c.market) : '<span class="muted">0</span>'}</td>`,
@@ -1053,6 +1061,10 @@ function sortValue(sec, key) {
     case 'qty': return th.qty;
     case 'avgCost': return th.avgCost;
     case 'cost': return th.acquiredCost;
+    case 'acqJpy': {
+      if (sec.market === 'US') { const hs = store.data.holdings.filter(h => h.securityId === sec.id); return hs.some(h => h.acqJpy != null) ? hs.reduce((a, h) => a + (h.acqJpy || 0), 0) : -Infinity; }
+      return th.qty ? th.avgCost * th.qty : -Infinity;
+    }
     case 'sector': return calc.field(sec, 'sector') || 'zzz';
     case 'industry': return calc.field(sec, 'industry') || 'zzz';
     case 'marketCap': return calc.marketCap(sec) ?? -Infinity;
@@ -3546,7 +3558,7 @@ function excelExportControlsHtml() {
     <div class="field"><label>取込単位（取込のまとまり）</label><div>${boxes}</div></div>
     <div class="row" style="align-items:center;gap:18px">
       <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="xe-manual"> 手入力の保有も含める</label>
-      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="xe-header" checked> ヘッダ行を含める</label>
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="xe-header"> ヘッダ行を含める</label>
     </div>
     <div class="form-actions" style="justify-content:flex-start">
       <button type="button" class="btn btn-primary" onclick="excelExportGenerate()">生成</button>
@@ -3653,7 +3665,7 @@ function mfTransferControlsHtml() {
       <textarea id="mf-text" rows="8" style="width:100%;font-family:monospace;font-size:12px"
         placeholder="種類・名称␉残高␉保有金融機関␉変更␉削除&#10;残高別普通預金残高␉2,035,314円␉三井住友銀行"></textarea></div>
     <div class="row" style="align-items:center;gap:18px">
-      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="mf-header" checked> ヘッダ行を含める</label>
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="mf-header"> ヘッダ行を含める</label>
     </div>
     <div class="form-actions" style="justify-content:flex-start">
       <button type="button" class="btn btn-primary" onclick="mfTransferGenerate()">変換</button>
@@ -3724,7 +3736,7 @@ function fundTransferControlsHtml() {
         <select id="fund-broker"><option value="">―</option>${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
       <div class="field" style="width:auto"><label style="font-size:11px">口座（明細に無い時の既定）</label>
         <select id="fund-account">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
-      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="fund-header" checked> ヘッダ行を含める</label>
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="fund-header"> ヘッダ行を含める</label>
     </div>
     <textarea id="fund-text" rows="7" style="width:100%;font-family:monospace;font-size:12px" placeholder="保有証券一覧（投信部分）をヘッダごと貼り付け"></textarea>
     <div class="btn-row"><button type="button" class="btn btn-primary" onclick="fundGenerate()">変換</button></div>
