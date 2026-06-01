@@ -144,6 +144,8 @@ form .row > .field { flex: 1; }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
 th.sortable.active { color: var(--accent); }
+/* ソート矢印は常に同じ幅を占有（ソートで列幅が変わらないように） */
+.sort-arrow { display: inline-block; width: 0.9em; text-align: center; font-size: 10px; }
 
 /* フィルタバー */
 .filterbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--border); }

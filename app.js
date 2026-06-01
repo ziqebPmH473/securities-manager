@@ -1157,7 +1157,8 @@ function colHeadHtml(visibleCols, st, market, ccy) {
       ? `${mc.label}(${ccy})` : mc.label;
     if (mc.noSort) return `<th class="${cls2}">${label}</th>`;
     const active = st.sortKey === col.key;
-    const arrow = active ? (st.sortDir === 1 ? ' ▲' : ' ▼') : '';
+    // 矢印スペースを常時予約（ソートで列幅が変わらないように）
+    const arrow = `<span class="sort-arrow">${active ? (st.sortDir === 1 ? '▲' : '▼') : ''}</span>`;
     return `<th class="sortable ${cls2} ${active ? 'active' : ''}" onclick="setSort('${market}','${col.key}')">${label}${arrow}</th>`;
   }).join('');
 }
@@ -1516,7 +1517,7 @@ function renderSecMaster() {
     { k: 'overallGrade', l: '総合評価', c: 'l' }, { k: 'buyGrade', l: '買い時評価', c: 'l' }, { k: 'recoCategory', l: 'AI推奨カテゴリ', c: 'l' },
     { k: 'priority', l: '優先順位', c: '' }, { k: 'ruleName', l: '買い増しルール', c: 'l' }, { k: 'category', l: 'AI判断', c: 'l' },
   ];
-  const smHead = SM_COLS.map(col => { const active = sk === col.k; const arrow = active ? (dir > 0 ? ' ▲' : ' ▼') : ''; return `<th class="${col.c} sortable${active ? ' active' : ''}" onclick="setSecMasterSort('${col.k}')">${col.l}${arrow}</th>`; }).join('') + '<th class="l"></th>';
+  const smHead = SM_COLS.map(col => { const active = sk === col.k; const arrow = `<span class="sort-arrow">${active ? (dir > 0 ? '▲' : '▼') : ''}</span>`; return `<th class="${col.c} sortable${active ? ' active' : ''}" onclick="setSecMasterSort('${col.k}')">${col.l}${arrow}</th>`; }).join('') + '<th class="l"></th>';
   const rows = secs.map(s => {
     const rule = store.rule(s.ruleId);
     const ov = (k) => s[k + 'Override'] ? ' <span class="tag" title="手動上書き中">手</span>' : '';
