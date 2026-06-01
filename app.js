@@ -775,6 +775,7 @@ function render() {
     case 'jp': renderMarket('JP'); break;
     case 'signals': renderSignals(); break;
     case 'splits': renderSplitsTab(); break;
+    case 'report': renderReport(); break;
     case 'secmaster': renderSecMaster(); break;
     case 'master': renderMaster(); break;
   }
@@ -1300,6 +1301,76 @@ function importHistorySection() {
       <tbody>${rows}</tbody>
     </table></div>
   </details>`;
+}
+
+// ---------- レポート（SEC-17） ----------
+let reportPeriod = 'all'; // 'all' | 'ytd'
+function setReportPeriod(p) { reportPeriod = p; renderReport(); }
+function renderReport() {
+  const byMarket = {}, byBroker = {}, matrix = {};
+  let fxMissing = false;
+  const ensure = (o, k) => (o[k] || (o[k] = { valJpy: 0, costJpy: 0, secs: new Set() }));
+  for (const h of store.data.holdings) {
+    if (!(h.quantity > 0)) continue;
+    const sec = store.data.securities.find(s => s.id === h.securityId); if (!sec) continue;
+    const m = sec.market, price = calc.price(sec);
+    const valN = price != null ? h.quantity * price : h.quantity * h.avgCost;
+    const costN = h.quantity * h.avgCost;
+    const valJ = calc.toJpy(m, valN), costJ = calc.toJpy(m, costN);
+    if (valJ == null || costJ == null) { fxMissing = true; continue; } // 米株で為替未取得
+    const b = h.broker || '(不明)';
+    const mm = ensure(byMarket, m); mm.valJpy += valJ; mm.costJpy += costJ; mm.secs.add(sec.id);
+    const bb = ensure(byBroker, b); bb.valJpy += valJ; bb.costJpy += costJ; bb.secs.add(sec.id);
+    (matrix[b] || (matrix[b] = {}))[m] = (matrix[b][m] || 0) + valJ;
+  }
+  let totalVal = 0, totalCost = 0;
+  Object.values(byMarket).forEach(d => { totalVal += d.valJpy; totalCost += d.costJpy; });
+  const pnl = totalVal - totalCost, pnlPct = totalCost > 0 ? pnl / totalCost * 100 : 0;
+  const pnlCls = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
+
+  const mkRows = ['US', 'JP'].filter(m => byMarket[m]).map(m => { const d = byMarket[m], p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : 0; return `<tr><td class="l"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span></td><td>${yen(d.valJpy)}</td><td>${yen(d.costJpy)}</td><td class="${cls(p)}">${yen(p)}</td><td class="${cls(pp)}">${signed(pp)}%</td><td>${d.secs.size}</td></tr>`; }).join('');
+  const brokers = Object.keys(byBroker).sort((a, b) => byBroker[b].valJpy - byBroker[a].valJpy);
+  const bkRows = brokers.map(b => { const d = byBroker[b], p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : 0; return `<tr><td class="l">${esc(b)}</td><td>${yen(d.valJpy)}</td><td>${yen(d.costJpy)}</td><td class="${cls(p)}">${yen(p)}</td><td class="${cls(pp)}">${signed(pp)}%</td><td>${d.secs.size}</td></tr>`; }).join('');
+  const mxRows = brokers.map(b => { const us = (matrix[b] || {}).US || 0, jp = (matrix[b] || {}).JP || 0; return `<tr><td class="l">${esc(b)}</td><td>${us ? yen(us) : muted}</td><td>${jp ? yen(jp) : muted}</td><td><strong>${yen(us + jp)}</strong></td></tr>`; }).join('');
+
+  // 取引サマリー（期間: 全期間 / 今年）
+  const yStart = `${new Date().getFullYear()}-01-01`;
+  let buyTot = 0, sellTot = 0, buyN = 0, sellN = 0;
+  for (const t of store.data.transactions) {
+    if (reportPeriod === 'ytd' && !(t.tradedAt && t.tradedAt >= yStart)) continue;
+    const sec = store.data.securities.find(s => s.id === t.securityId); if (!sec) continue;
+    const amt = calc.toJpy(sec.market, (t.price || 0) * (t.quantity || 0)); if (amt == null) continue;
+    if (t.type === 'buy') { buyTot += amt; buyN++; } else if (t.type === 'sell') { sellTot += amt; sellN++; }
+  }
+  const net = buyTot - sellTot;
+  const seg = (p, l) => `<button class="btn btn-sm${reportPeriod === p ? ' btn-primary' : ''}" onclick="setReportPeriod('${p}')">${l}</button>`;
+
+  app.innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="label">総資産（円換算）</div><div class="value">${yen(totalVal)}</div></div>
+      <div class="card"><div class="label">取得原価（円換算）</div><div class="value">${yen(totalCost)}</div></div>
+      <div class="card"><div class="label">評価損益</div><div class="value ${pnlCls}">${yen(pnl)}</div><div class="sub ${cls(pnlPct)}">${signed(pnlPct)}%</div></div>
+    </div>
+    ${fxMissing ? '<div class="notice">USD/JPY 為替が未取得のため、円換算に米国株を含めていません。「価格更新」で取得できます。</div>' : ''}
+    <div class="section"><div class="section-head"><h2>市場別の集計（円換算）</h2></div>
+      <div class="table-wrap"><table><thead><tr><th class="l">市場</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
+      <tbody>${mkRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div></div>
+    <div class="section"><div class="section-head"><h2>証券会社別の集計（円換算）</h2></div>
+      <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
+      <tbody>${bkRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div></div>
+    <div class="section"><div class="section-head"><h2>証券会社 × 市場（評価額・円換算）</h2></div>
+      <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>米国株</th><th>日本株</th><th>合計</th></tr></thead>
+      <tbody>${mxRows || `<tr><td colspan="4" class="empty">—</td></tr>`}</tbody></table></div></div>
+    <div class="section"><div class="section-head"><h2>取引サマリー（${reportPeriod === 'ytd' ? '今年' : '全期間'}・円換算）</h2>
+        <div class="seg-toggle">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
+      <div class="table-wrap"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
+        <tbody>
+          <tr><td class="l">買い</td><td>${buyN}</td><td>${yen(buyTot)}</td></tr>
+          <tr><td class="l">売り</td><td>${sellN}</td><td>${yen(sellTot)}</td></tr>
+          <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
+        </tbody></table></div>
+      <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p></div>
+    <div class="notice">資産推移（時系列グラフ）とサイン到達の履歴は、日々のスナップショット保存が前提のため、Googleスプレッドシート保存への移行後に対応予定です。</div>`;
 }
 
 // ---------- 銘柄マスタ（SEC-27） ----------
