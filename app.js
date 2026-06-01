@@ -910,6 +910,7 @@ function render() {
     case 'splits': renderSplitsTab(); break;
     case 'report': renderReport(); break;
     case 'secmaster': renderSecMaster(); break;
+    case 'import': renderImport(); break;
     case 'transfer': renderTransfer(); break;
     case 'master': renderMaster(); break;
   }
@@ -1752,7 +1753,39 @@ function renderMaster() {
       </div>
     </div>
     <div class="section">
-      <div class="section-head"><h2>データ取込（インポート）</h2></div>
+      <div class="section-head"><h2>バックアップ・出力</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="grp-label">全データのバックアップ（JSONファイル）</div>
+        <div class="btn-row">
+          <button class="btn" onclick="exportData()">バックアップ書出し（JSON）</button>
+          <button class="btn" onclick="importData()">バックアップ読込（JSON）</button>
+        </div>
+        <p class="muted grp-note">このブラウザ(localStorage)の全データをファイルに保存／復元します。保存先は現在このブラウザのみ（将来 Google スプレッドシートへ移行予定）。</p>
+        <div class="grp-label" style="margin-top:18px">資産貼付・転記</div>
+        <div class="btn-row">
+          <button class="btn" onclick="go('transfer')">資産貼付・転記（転記用タブへ）</button>
+        </div>
+        <p class="muted grp-note">資産管理エクセルへの貼付・現金転記は専用の「転記用」タブで行います。</p>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>データ削除</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="btn-row">
+          <button class="btn btn-danger" onclick="resetTxnData()">保有・取引データだけ削除（マスタ・銘柄は残す）</button>
+          <button class="btn btn-danger" onclick="resetData()">全データ削除</button>
+        </div>
+        <p class="muted grp-note">「保有・取引だけ削除」＝カテゴリ金額/ルール/銘柄マスタ（銘柄の定義・属性）を残し、保有・取引・取込履歴・価格キャッシュなど下部データのみ削除。「全データ削除」＝マスタ含め初期化。いずれも削除前にJSONバックアップを自動ダウンロード。</p>
+      </div>
+    </div>
+    ${googleSyncSection()}`;
+}
+
+// ---------- 取込タブ（銘柄・保有データの取込を集約） ----------
+function renderImport() {
+  app.innerHTML = `
+    <div class="section">
+      <div class="section-head"><h2>保有・銘柄データの取込</h2></div>
       <div class="section-body" style="padding:16px">
         <div class="grp-label">① 保有を取り込む（証券会社のデータ）</div>
         <div class="btn-row">
@@ -1772,22 +1805,6 @@ function renderMaster() {
       </div>
     </div>
     <div class="section">
-      <div class="section-head"><h2>バックアップ・出力</h2></div>
-      <div class="section-body" style="padding:16px">
-        <div class="grp-label">全データのバックアップ（JSONファイル）</div>
-        <div class="btn-row">
-          <button class="btn" onclick="exportData()">バックアップ書出し（JSON）</button>
-          <button class="btn" onclick="importData()">バックアップ読込（JSON）</button>
-        </div>
-        <p class="muted grp-note">このブラウザ(localStorage)の全データをファイルに保存／復元します。保存先は現在このブラウザのみ（将来 Google スプレッドシートへ移行予定）。</p>
-        <div class="grp-label" style="margin-top:18px">資産貼付・転記</div>
-        <div class="btn-row">
-          <button class="btn" onclick="go('transfer')">資産貼付・転記（転記用タブへ）</button>
-        </div>
-        <p class="muted grp-note">資産管理エクセルへの貼付・現金転記は専用の「転記用」タブで行います。</p>
-      </div>
-    </div>
-    <div class="section">
       <div class="section-head"><h2>汎用データ（取込 ⇄ 出力）</h2></div>
       <div class="section-body" style="padding:16px">
         <div class="btn-row">
@@ -1796,18 +1813,7 @@ function renderMaster() {
         </div>
         <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます。</p>
       </div>
-    </div>
-    <div class="section">
-      <div class="section-head"><h2>データ削除</h2></div>
-      <div class="section-body" style="padding:16px">
-        <div class="btn-row">
-          <button class="btn btn-danger" onclick="resetTxnData()">保有・取引データだけ削除（マスタ・銘柄は残す）</button>
-          <button class="btn btn-danger" onclick="resetData()">全データ削除</button>
-        </div>
-        <p class="muted grp-note">「保有・取引だけ削除」＝カテゴリ金額/ルール/銘柄マスタ（銘柄の定義・属性）を残し、保有・取引・取込履歴・価格キャッシュなど下部データのみ削除。「全データ削除」＝マスタ含め初期化。いずれも削除前にJSONバックアップを自動ダウンロード。</p>
-      </div>
-    </div>
-    ${googleSyncSection()}`;
+    </div>`;
 }
 
 // Google連携（実験的・任意）。クライアントID未設定なら休眠＝現行アプリに影響しない。
