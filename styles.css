@@ -101,6 +101,9 @@ tbody tr:hover { background: var(--panel-2); }
 .tag.us { color: #2563eb; }
 .tag.jp { color: #dc2626; }
 .tag.fund { color: #7c3aed; }
+.tag.detail-etf { color: #0891b2; border-color: #0891b2; }
+.tag.detail-fund { color: #7c3aed; border-color: #7c3aed; }
+.tag.detail-stock { color: var(--muted); }
 
 /* 残り下落率バッジ */
 .drop { font-weight: 600; }

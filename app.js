@@ -42,6 +42,7 @@ const STKM = ['US','JP','SIGNAL'];
 const MASTER_COLS = [
   { key: 'ticker',      label: 'コード',           left: true,  markets: ALLM, noSort: false, narrow: true },
   { key: 'name',        label: '銘柄名',           left: true,  markets: ALLM, noSort: false },
+  { key: 'detailType',  label: '詳細種別',         left: true,  markets: STKM, noSort: false },
   { key: 'market',      label: '市場',             left: true,  markets: ['SIGNAL'], noSort: false },
   { key: 'broker',      label: '証券会社',         left: true,  markets: ALLM, noSort: false },
   { key: 'sigType',     label: '種別',             left: true,  markets: ['SIGNAL'], noSort: false },
@@ -230,11 +231,15 @@ const store = {
       const totalCost = h.avgCost * h.quantity + t.price * t.quantity;
       h.quantity += t.quantity;
       h.avgCost = h.quantity > 0 ? totalCost / h.quantity : 0; // 加重平均
+      // 取得円(円)累計: 米国株の受渡金額(円)が入力されていれば加算（買=+）。SEC-59
+      if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) + t.settleJpy;
       // 購入回数を加算
       const sec = this.data.securities.find(s => s.id === t.securityId);
       if (sec) sec.buyCount = (sec.buyCount || 0) + 1;
     } else { // sell: 数量のみ減算（平均取得単価は不変）。ただし数量0なら保有解消につき単価もクリア
       h.quantity = Math.max(0, h.quantity - t.quantity);
+      // 取得円(円)累計: 受渡金額(円)が入力されていれば減算（売=−。台帳式に一致）。SEC-59
+      if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) - t.settleJpy;
       if (h.quantity === 0) h.avgCost = 0;
     }
   },
@@ -836,6 +841,7 @@ const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="lnk" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
   name:      (s,c) => `<td class="l"><strong class="lnk" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
+  detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   // 現在値: 価格があれば株探チャートへの外部リンク。未取得時は手入力ボタンのまま。
@@ -894,6 +900,7 @@ function render() {
     case 'splits': renderSplitsTab(); break;
     case 'report': renderReport(); break;
     case 'secmaster': renderSecMaster(); break;
+    case 'transfer': renderTransfer(); break;
     case 'master': renderMaster(); break;
   }
   fitListTables();
@@ -1036,6 +1043,7 @@ function sortValue(sec, key) {
     case 'name': return calc.displayName(sec).toLowerCase();
     case 'ticker': return (sec.ticker || '').toLowerCase();
     case 'market': return sec.market;
+    case 'detailType': return detailTypeOf(sec);
     case 'broker': return (calc.lastBroker(sec) || '').toLowerCase();
     case 'sigType': { const ev = calc.evaluate(sec); return ev ? ev.type : 'z'; }
     case 'category': return sec.category || '';
@@ -1429,11 +1437,33 @@ function importHistorySection() {
   </details>`;
 }
 
+// 証券会社ごとの最終取込日時（取込忘れ防止）。固定プロファイル単位で最終取込を表示。
+function importStatusHtml() {
+  const hist = store.data.importHistory || [];
+  const last = {};
+  for (const h of hist) {
+    const k = h.profile || h.broker || '';
+    if (!last[k] || (h.importedAt || '') > (last[k].importedAt || '')) last[k] = h;
+  }
+  const fixed = Object.entries(IMPORT_PROFILES).filter(([, p]) => p.fixed);
+  const rows = fixed.map(([k, p]) => {
+    const h = last[k];
+    const label = p.label.replace(/（.*$/, '').trim(); // 括弧以降を省略（例: SBI 米国株）
+    const when = h && h.importedAt ? fmtDateTime(h.importedAt) : '<span class="neg">未取込</span>';
+    const cnt = h ? `${h.count}件` : '—';
+    return `<tr><td class="l">${esc(label)}</td><td class="l">${when}</td><td>${cnt}</td></tr>`;
+  }).join('');
+  return `<div class="table-wrap"><table>
+    <thead><tr><th class="l">証券会社（取込形式）</th><th class="l">最終取込日時</th><th>件数</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
 // ---------- レポート（SEC-17） ----------
 let reportPeriod = 'all'; // 'all' | 'ytd'
 function setReportPeriod(p) { reportPeriod = p; renderReport(); }
 function renderReport() {
-  const byMarket = {}, byBroker = {}, matrix = {};
+  const byMarket = {}, byBroker = {}, matrix = {}, byTypeMarket = {};
   let fxMissing = false;
   const ensure = (o, k) => (o[k] || (o[k] = { valJpy: 0, costJpy: 0, secs: new Set() }));
   for (const h of store.data.holdings) {
@@ -1448,7 +1478,24 @@ function renderReport() {
     const mm = ensure(byMarket, m); mm.valJpy += valJ; mm.costJpy += costJ; mm.secs.add(sec.id);
     const bb = ensure(byBroker, b); bb.valJpy += valJ; bb.costJpy += costJ; bb.secs.add(sec.id);
     (matrix[b] || (matrix[b] = {}))[m] = (matrix[b][m] || 0) + valJ;
+    // 種別（個別株/ETF/投資信託）×市場
+    const dt = detailTypeOf(sec);
+    const tm = ensure(byTypeMarket, dt + '|' + m); tm.valJpy += valJ; tm.costJpy += costJ; tm.secs.add(sec.id);
   }
+  // 種別×市場の集計行（種別を親、日本株/米国株を子。各種別に小計）
+  const TYPE_ORDER = ['個別株', 'ETF', '投資信託'];
+  const presentTypes = TYPE_ORDER.filter(dt => ['US', 'JP'].some(m => byTypeMarket[dt + '|' + m]));
+  const tmRows = presentTypes.map(dt => {
+    let sv = 0, sc = 0; const sset = new Set();
+    const subs = ['JP', 'US'].filter(m => byTypeMarket[dt + '|' + m]).map(m => {
+      const d = byTypeMarket[dt + '|' + m]; sv += d.valJpy; sc += d.costJpy; d.secs.forEach(x => sset.add(x));
+      const p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : 0;
+      return `<tr><td class="l" style="padding-left:28px"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span></td><td>${yen(d.valJpy)}</td><td>${yen(d.costJpy)}</td><td class="${cls(p)}">${yen(p)}</td><td class="${cls(pp)}">${signed(pp)}%</td><td>${d.secs.size}</td></tr>`;
+    }).join('');
+    const sp = sv - sc, spp = sc > 0 ? sp / sc * 100 : 0;
+    const head = `<tr><td class="l"><strong><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${dt}</span></strong></td><td><strong>${yen(sv)}</strong></td><td><strong>${yen(sc)}</strong></td><td class="${cls(sp)}"><strong>${yen(sp)}</strong></td><td class="${cls(spp)}"><strong>${signed(spp)}%</strong></td><td><strong>${sset.size}</strong></td></tr>`;
+    return head + subs;
+  }).join('');
   let totalVal = 0, totalCost = 0;
   Object.values(byMarket).forEach(d => { totalVal += d.valJpy; totalCost += d.costJpy; });
   const pnl = totalVal - totalCost, pnlPct = totalCost > 0 ? pnl / totalCost * 100 : 0;
@@ -1481,6 +1528,10 @@ function renderReport() {
     <div class="section"><div class="section-head"><h2>市場別の集計（円換算）</h2></div>
       <div class="table-wrap"><table><thead><tr><th class="l">市場</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
       <tbody>${mkRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div></div>
+    <div class="section"><div class="section-head"><h2>種別 × 市場の集計（円換算）</h2></div>
+      <div class="table-wrap"><table><thead><tr><th class="l">種別 / 市場</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
+      <tbody>${tmRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div>
+      <p class="muted" style="padding:0 16px 12px">ETF・個別株・投資信託を分け、その下に日本株/米国株の内訳。種別行は小計です。詳細種別は「銘柄マスタ」で変更できます。</p></div>
     <div class="section"><div class="section-head"><h2>証券会社別の集計（円換算）</h2></div>
       <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
       <tbody>${bkRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div></div>
@@ -1501,6 +1552,17 @@ function renderReport() {
 
 // ---------- 銘柄マスタ（SEC-27） ----------
 // 全銘柄の固有データ（名前・セクター・業種・格付け・分析メタ・ルール）を一覧表示。編集は銘柄編集フォームへ。
+function smSelectAll(on) { document.querySelectorAll('.sm-check').forEach(c => c.checked = on); }
+function bulkSetDetailType() {
+  const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
+  if (!ids.length) { toast('銘柄を選択してください'); return; }
+  const sel = document.getElementById('sm-bulk-detail').value;
+  const val = sel === '（自動判定に戻す）' ? null : sel;
+  for (const id of ids) store.updateSecurity(id, { detailType: val });
+  store.save();
+  renderSecMaster();
+  toast(`${ids.length}件の詳細種別を「${val || '自動判定'}」に変更しました`);
+}
 let secMasterSort = { key: 'ticker', dir: 1 };
 function setSecMasterSort(key) {
   if (secMasterSort.key === key) secMasterSort.dir *= -1; else { secMasterSort.key = key; secMasterSort.dir = 1; }
@@ -1513,18 +1575,24 @@ function renderSecMaster() {
   // ソート可能なヘッダ（sortValue が各キーに対応）
   const SM_COLS = [
     { k: 'ticker', l: 'コード', c: 'l col-code' }, { k: 'name', l: '銘柄名', c: 'l' }, { k: 'market', l: '市場', c: 'l' },
+    { k: 'detailType', l: '詳細種別', c: 'l' },
     { k: 'sector', l: 'セクター', c: 'l' }, { k: 'industry', l: '業種', c: 'l' }, { k: 'rating', l: '格付', c: 'l' },
     { k: 'overallGrade', l: '総合評価', c: 'l' }, { k: 'buyGrade', l: '買い時評価', c: 'l' }, { k: 'recoCategory', l: 'AI推奨カテゴリ', c: 'l' },
     { k: 'priority', l: '優先順位', c: '' }, { k: 'ruleName', l: '買い増しルール', c: 'l' }, { k: 'category', l: 'AI判断', c: 'l' },
   ];
-  const smHead = SM_COLS.map(col => { const active = sk === col.k; const arrow = `<span class="sort-arrow">${active ? (dir > 0 ? '▲' : '▼') : ''}</span>`; return `<th class="${col.c} sortable${active ? ' active' : ''}" onclick="setSecMasterSort('${col.k}')">${col.l}${arrow}</th>`; }).join('') + '<th class="l"></th>';
+  const smHead = '<th class="l"><input type="checkbox" onclick="smSelectAll(this.checked)" title="全選択"></th>'
+    + SM_COLS.map(col => { const active = sk === col.k; const arrow = `<span class="sort-arrow">${active ? (dir > 0 ? '▲' : '▼') : ''}</span>`; return `<th class="${col.c} sortable${active ? ' active' : ''}" onclick="setSecMasterSort('${col.k}')">${col.l}${arrow}</th>`; }).join('') + '<th class="l"></th>';
   const rows = secs.map(s => {
     const rule = store.rule(s.ruleId);
     const ov = (k) => s[k + 'Override'] ? ' <span class="tag" title="手動上書き中">手</span>' : '';
+    const dt = detailTypeOf(s);
+    const dtTag = `<span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span>${s.detailType ? '' : ' <span class="muted" style="font-size:10px" title="自動判定（未設定）">auto</span>'}`;
     return `<tr>
+      <td class="l"><input type="checkbox" class="sm-check" value="${s.id}"></td>
       <td class="l col-code"><span class="lnk" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>
       <td class="l"><strong class="lnk" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
       <td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>
+      <td class="l">${dtTag}</td>
       <td class="l">${calc.field(s, 'sector') ? esc(calc.field(s, 'sector')) + ov('sector') : muted}</td>
       <td class="l">${calc.field(s, 'industry') ? esc(calc.field(s, 'industry')) + ov('industry') : muted}</td>
       <td class="l">${gradeBadge(s)}</td>
@@ -1542,10 +1610,15 @@ function renderSecMaster() {
       <div class="section-head"><h2>銘柄マスタ（${secs.length} 件）</h2>
         <button class="btn btn-sm btn-primary" onclick="openSecurityForm()">＋ 銘柄を追加</button></div>
       <div class="section-body">
-        <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます（自動取得では上書きされません）。「手」=手動上書き中。</p>
+        <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます。「手」=手動上書き中。詳細種別の「auto」=自動判定（未設定）。</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
+          <span class="muted">選択した銘柄の詳細種別を</span>
+          <select id="sm-bulk-detail">${['個別株', 'ETF', '投資信託', '（自動判定に戻す）'].map(o => `<option>${o}</option>`).join('')}</select>
+          <button class="btn btn-sm" onclick="bulkSetDetailType()">一括変更</button>
+        </div>
         <div class="table-wrap"><table>
           <thead><tr>${smHead}</tr></thead>
-          <tbody>${rows || `<tr><td colspan="13" class="empty">銘柄がありません。</td></tr>`}</tbody>
+          <tbody>${rows || `<tr><td colspan="15" class="empty">銘柄がありません。</td></tr>`}</tbody>
         </table></div>
       </div>
     </div>`;
@@ -1597,11 +1670,13 @@ function renderMaster() {
         <button class="btn" onclick="refreshAllMeta()">銘柄情報を更新（名前・セクター・PER等）</button>
       </div>
       <p class="muted" style="padding:0 16px 14px">Excelの該当シートをヘッダ行ごとコピーして貼り付け→ティッカーで既存銘柄に紐づけ（未登録は新規作成も可）。</p>
+      <div style="padding:0 16px 14px"><div class="muted" style="margin:0 0 6px">取込状況（最終取込日時）</div>${importStatusHtml()}</div>
       ${importHistorySection()}
     </div>
     <div class="section">
       <div class="section-head"><h2>データ管理</h2></div>
       <div class="section-body" style="padding:16px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" onclick="go('transfer')">資産貼付・転記（別タブ）</button>
         <button class="btn" onclick="exportData()">エクスポート(JSON)</button>
         <button class="btn" onclick="importData()">インポート(JSON)</button>
         <button class="btn" onclick="exportGeneric()">汎用出力(CSV)</button>
@@ -1701,6 +1776,11 @@ function openSecurityForm(id, presetMarket) {
       <div class="row">
         <div class="field"><label>買増固定値（次回購入をこの価格に固定・任意）</label>
           <input name="fixedBuyPrice" type="number" step="any" value="${sec && sec.fixedBuyPrice != null ? sec.fixedBuyPrice : ''}" placeholder="原通貨。入力するとルール計算より優先"></div>
+        <div class="field"><label>詳細種別（貼付出力用）</label>
+          <select name="detailType">
+            <option value="" ${!sec || !sec.detailType ? 'selected' : ''}>自動判定（${sec ? esc(autoDetailType(sec)) : '個別株'}）</option>
+            ${['個別株', 'ETF', '投資信託'].map(t => `<option ${sec && sec.detailType === t ? 'selected' : ''}>${t}</option>`).join('')}
+          </select></div>
       </div>
 
       <fieldset class="form-group"><legend>表示の手動上書き（任意・自動取得では上書きされません）</legend>
@@ -1790,6 +1870,8 @@ function openSecurityForm(id, presetMarket) {
       fixedBuyPrice: numOrNull(f.fixedBuyPrice.value),
       baseHighMode: f.baseHighMode.value || null,
       baseHighManual: f.baseHighMode.value === 'manual' ? numOrNull(f.baseHighManual.value) : null,
+      detailType: (f.detailType && f.detailType.value) || null, // 詳細種別マスタ（空=自動判定）
+
       buyAmount: numOrNull(f.buyAmount.value), buyCount: intOrNull(f.buyCount.value),
       overallGrade: f.overallGrade.value || null, rating: f.rating.value || null, buyGrade: f.buyGrade.value || null,
       starValuation: intOrNull(f.starValuation.value), starStrength: intOrNull(f.starStrength.value), starRisk: intOrNull(f.starRisk.value),
@@ -2112,6 +2194,12 @@ function openTxnForm(secId, presetType) {
         <div class="field"><label>証券会社</label><select name="broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
         <div class="field"><label>口座種別</label><select name="accountType">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
       </div>
+      ${sec.market === 'US' ? `
+      <div class="row">
+        <div class="field"><label>受渡金額(円)（手数料・税込／取得円用・任意）</label>
+          <input name="settleJpy" type="number" step="any" placeholder="取引報告書の国内受渡金額"></div>
+      </div>
+      <p class="muted">受渡金額(円)を入れると「取得円」に反映（買い=加算・売り=減算）。取得円エクスポート用で、買い増し判定には未使用。</p>` : ''}
       <p class="muted">買い=数量加算＆平均取得単価を更新 / 売り=数量のみ減算（単価は不変）</p>
       <div class="form-actions">
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
@@ -2121,10 +2209,12 @@ function openTxnForm(secId, presetType) {
   document.getElementById('txn-form').onsubmit = (e) => {
     e.preventDefault();
     const f = e.target;
+    const settleJpy = f.settleJpy ? parseFloat(f.settleJpy.value) : NaN;
     store.addTransaction({
       securityId: secId, type: f.type.value,
       price: parseFloat(f.price.value), quantity: parseFloat(f.quantity.value),
       broker: f.broker.value, accountType: f.accountType.value, tradedAt: f.tradedAt.value,
+      ...(isNaN(settleJpy) ? {} : { settleJpy }),
     });
     closeModal(); render();
   };
@@ -2435,7 +2525,7 @@ function normAccount(s) {
 
 // 取込フィールド設定（マスタ化）。CSVはヘッダ名、画面コピーはブロック内の数値の「何番目」(1始まり)
 const DEFAULT_IMPORT_MAPPINGS = {
-  'sbi-us':  { qtyPos: 1, avgCostPos: 2 },                                   // 数量, 取得単価, 現在値, 評価損益
+  'sbi-us':  { qtyPos: 1, avgCostPos: 2, evalJpyPos: 5, pnlJpyPos: 7 },      // 数量,取得単価,現在値,外貨評価額,円評価額,外貨損益,円損益
   'sbi-jp':  { ticker: '銘柄コード', quantity: '保有株数', avgCost: '取得単価' },
   'moomoo':  { ticker: 'コード', quantity: '数量', avgCost: '平均取得価額', account: '口座区分', currency: '通貨' },
   'rakuten': { kind: '種別', ticker: '銘柄コード・ティッカー', quantity: '保有数量', avgCost: '平均取得価額', account: '口座' },
@@ -2487,26 +2577,39 @@ function parseRakutenCsv(text, map) {
   }
   return out;
 }
+// SBI 米国株「保有証券一覧」画面のコピーを解析。
+// 1銘柄ブロック = 銘柄名 → 「ティッカー 取引所」 → 数値7つ → 買付/売却/積立。
+// 数値の並び: [0]保有数量 [1]取得単価 [2]現在値 [3]外貨建評価額 [4]円換算評価額 [5]外貨建評価損益 [6]円換算評価損益
+// 取得円(acqJpy) = 円換算評価額 − 円換算評価損益（SEC-59。xlsm と同じ算出）。
 function parseSbiUsScreen(text, map) {
   const m = map || DEFAULT_IMPORT_MAPPINGS['sbi-us'];
   const qp = (m.qtyPos || 1) - 1, ap = (m.avgCostPos || 2) - 1;
+  const ej = (m.evalJpyPos || 5) - 1, pj = (m.pnlJpyPos || 7) - 1;
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const skip = new Set(['現買', '現売', '積立', '(株価：リアルタイム)', '保有数量', '取得単価', '現在値', '外貨建評価損益']);
-  const isTicker = (s) => /^[A-Z][A-Z.]{0,5}\s*[^\x00-\x7F]/.test(s);
+  // ティッカー行: 「AAPL NASDAQ」「V NYSE」「QLD NYSEArca」「VNM CBOE」等（英字ティッカー＋取引所）
+  const tickerRe = /^([A-Z][A-Z.]{0,5})\s+[A-Za-z]{2,10}$/;
+  const isStop = (s) => /^(買付|売却|積立|現買|現売)$/.test(s);
   const out = []; let account = '特定', i = 0;
   while (i < lines.length) {
     const ln = lines[i];
     if (/特定預り/.test(ln)) { account = '特定'; i++; continue; }
     if (/NISA預り/.test(ln)) { account = 'NISA'; i++; continue; }
-    if (/米国株式|株価：リアルタイム/.test(ln) || skip.has(ln)) { i++; continue; }
-    const tm = ln.match(/^([A-Z][A-Z.]{0,5})\s*[^\x00-\x7F]/);
+    const tm = ln.match(tickerRe);
     if (tm) {
       const ticker = tm[1]; const nums = []; let j = i + 1;
-      while (j < lines.length && !isTicker(lines[j])) {
-        if (!skip.has(lines[j])) { const n = numClean(lines[j]); if (n != null) nums.push(n); }
+      while (j < lines.length && !tickerRe.test(lines[j]) && !/預り/.test(lines[j])) {
+        if (isStop(lines[j])) break;            // 買付/売却/積立でブロック終端
+        const n = numClean(lines[j]); if (n != null) nums.push(n);
         j++;
       }
-      if (nums.length > qp && nums.length > ap) out.push({ market: 'US', ticker, broker: 'SBI', account, quantity: nums[qp], avgCost: nums[ap] });
+      if (nums.length > qp && nums.length > ap) {
+        const row = { market: 'US', ticker, broker: 'SBI', account, quantity: nums[qp], avgCost: nums[ap] };
+        if (nums.length > ej && nums.length > pj) {
+          const acq = nums[ej] - nums[pj];      // 円換算評価額 − 円換算評価損益 = 取得円
+          if (!isNaN(acq)) row.acqJpy = acq;
+        }
+        out.push(row);
+      }
       i = j; continue;
     }
     i++;
@@ -2721,7 +2824,14 @@ function runBrokerImport() {
       const broker = row.broker || defBroker, account = row.account || '特定';
       const exists = store.data.holdings.some(h => h.securityId === sec.id && h.broker === broker && h.accountType === account);
       if (mode === 'append' && exists) { /* 既存はそのまま（上書きしない） */ }
-      else store.setHolding(sec.id, broker, account, row.quantity, row.avgCost ?? 0, 'import');
+      else {
+        store.setHolding(sec.id, broker, account, row.quantity, row.avgCost ?? 0, 'import');
+        // 取込データに円取得額があれば保有へ反映（SBI米株=円換算評価額−円換算評価損益）。SEC-59
+        if (row.acqJpy != null) {
+          const h = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
+          if (h) h.acqJpy = row.acqJpy;
+        }
+      }
     }
     touched.push(sec);
   }
@@ -2744,7 +2854,7 @@ const MAPPING_FIELDS = {
   'sbi-jp':  [['ticker', '銘柄コードの列名'], ['quantity', '保有株数の列名'], ['avgCost', '取得単価の列名']],
   'moomoo':  [['ticker', 'コード列名'], ['quantity', '数量列名'], ['avgCost', '平均取得価額列名'], ['account', '口座区分列名'], ['currency', '通貨列名']],
   'rakuten': [['kind', '種別列名'], ['ticker', '銘柄コード列名'], ['quantity', '保有数量列名'], ['avgCost', '平均取得価額列名'], ['account', '口座列名']],
-  'sbi-us':  [['qtyPos', '数量は数値の何番目か'], ['avgCostPos', '取得単価は数値の何番目か']],
+  'sbi-us':  [['qtyPos', '数量は数値の何番目か'], ['avgCostPos', '取得単価は数値の何番目か'], ['evalJpyPos', '円換算評価額は数値の何番目か'], ['pnlJpyPos', '円換算評価損益は数値の何番目か']],
   'smbc':    [['qtyPos', '数量は数値の何番目か'], ['avgCostPos', '平均取得単価は数値の何番目か']],
 };
 function openImportMapping() {
@@ -3043,6 +3153,257 @@ function resetData() {
   }
 }
 
+// ---------- 資産貼付用エクスポート（SEC-59）----------
+// 『証券会社データ変換用.xlsm』の日本株/米国株 出力シート（12列）を本ツールから出力。
+// 対象＝取込んだ証券会社データ（手入力は既定除外）。証券会社チェック＝取込バッチ選択。
+const EXCEL_EXPORT_COLS = ['銘柄', 'コード', '種別', '詳細種別', '証券会社', '証券区分等', '通貨', '評価円', '評価ドル', '取得円', '取得ドル', '積立'];
+
+// エクスポート対象になりうる保有（JP/US・数量>0）。
+function excelExportHoldings() {
+  return store.data.holdings.filter(h => {
+    if (!(h.quantity > 0)) return false;
+    const sec = store.data.securities.find(s => s.id === h.securityId);
+    return sec && (sec.market === 'JP' || sec.market === 'US');
+  });
+}
+
+// 取込単位＝取込プロファイル。SBIは米国株/日本株が別取込なので別単位、moomoo/楽天は一括なので1単位。
+function holdingImportUnit(h, sec) {
+  for (const [k, p] of Object.entries(IMPORT_PROFILES)) {
+    if (p.fixed && p.scope && p.scope.broker === h.broker && p.scope.markets.includes(sec.market)) return k;
+  }
+  return 'broker:' + (h.broker || '—'); // 固定プロファイル無し（汎用取込/手入力）
+}
+function exportUnitLabel(key) {
+  const p = IMPORT_PROFILES[key];
+  return p ? p.label.replace(/（.*$/, '').trim() : key.replace(/^broker:/, '');
+}
+// プロファイル単位の最終取込日時
+function lastImportByProfile() {
+  const last = {};
+  for (const e of (store.data.importHistory || [])) {
+    const k = e.profile; if (!k) continue;
+    if (!last[k] || (e.importedAt || '') > (last[k] || '')) last[k] = e.importedAt;
+  }
+  return last;
+}
+
+// 資産貼付用エクスポートの操作UI（転記タブ内にインライン表示）。
+function excelExportControlsHtml() {
+  const hs = excelExportHoldings();
+  const units = [...new Set(hs.map(h => {
+    const sec = store.data.securities.find(s => s.id === h.securityId);
+    return sec ? holdingImportUnit(h, sec) : null;
+  }).filter(Boolean))].sort();
+  if (!units.length) return `<p class="muted">出力できる保有がありません。「マスタ・設定」で証券会社データを取り込むと表示されます。</p>`;
+  const last = lastImportByProfile();
+  const boxes = units.map(u => {
+    const when = last[u]
+      ? `<span class="muted" style="font-size:11px">（最終取込 ${fmtDateTime(last[u])}）</span>`
+      : `<span class="neg" style="font-size:11px">（取込履歴なし）</span>`;
+    return `<label style="display:inline-flex;align-items:center;gap:6px;margin:0 16px 8px 0">
+      <input type="checkbox" class="xe-unit" value="${esc(u)}" checked> ${esc(exportUnitLabel(u))} ${when}</label>`;
+  }).join('');
+  return `
+    <p class="muted" style="margin:0 0 10px">取込んだ証券会社データを、資産管理エクセルの日本株/米国株シート（12列）形式で出力します。
+      貼り付けたい<strong>取込単位</strong>にチェックして「生成」。最終取込日時を見て、古い取込は外せます。</p>
+    <div class="field"><label>取込単位（取込のまとまり）</label><div>${boxes}</div></div>
+    <div class="row" style="align-items:center;gap:18px">
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="xe-manual"> 手入力の保有も含める</label>
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="xe-header" checked> ヘッダ行を含める</label>
+    </div>
+    <div class="form-actions" style="justify-content:flex-start">
+      <button type="button" class="btn btn-primary" onclick="excelExportGenerate()">生成</button>
+    </div>
+    <div id="xe-out" style="margin-top:12px"></div>`;
+}
+
+// 詳細種別の自動判定（初期値用）: Yahoo種別(quoteType) > 名前のETF/投信表記 > 資産クラス > 個別株。
+function autoDetailType(sec) {
+  const qt = (calc.metaOf(sec).quoteType || '').toUpperCase();
+  if (qt === 'ETF') return 'ETF';
+  if (qt === 'MUTUALFUND') return '投資信託';
+  const name = calc.displayName(sec) || '';
+  if (/ETF|ＥＴＦ/i.test(name)) return 'ETF';
+  if (/投資信託|ファンド/.test(name) || sec.assetClass === 'fund') return '投資信託';
+  return '個別株';
+}
+// 出力に使う詳細種別: 銘柄ごとの保存値(detailType=マスタ)を優先。空なら自動判定を初期値として使用。
+// → 誤判定は銘柄編集で詳細種別を選べば直せる（コード直書きに依存しない）。SEC-59
+function detailTypeOf(sec) {
+  return sec.detailType || autoDetailType(sec);
+}
+
+// 保有1件→出力1行（市場で評価/取得の入れ方を変える）。
+function excelExportRow(h, sec) {
+  const us = sec.market === 'US';
+  const price = calc.price(sec);
+  const valNative = (price != null ? price : h.avgCost) * h.quantity; // 価格未取得は取得原価で代替
+  const r1 = (n) => n == null ? '' : Math.round(n);
+  const r2 = (n) => n == null ? '' : Math.round(n * 100) / 100;
+  return [
+    calc.displayName(sec),                 // 銘柄
+    sec.ticker,                            // コード
+    MARKET_LABEL[sec.market],              // 種別（日本株/米国株）
+    detailTypeOf(sec),                     // 詳細種別（ETF/投資信託/個別株を自動判定）
+    h.broker || '',                        // 証券会社
+    h.accountType || '',                   // 証券区分等
+    us ? 'USD' : 'JPY',                    // 通貨
+    us ? '' : r1(valNative),               // 評価円（日本株のみ）
+    us ? r2(valNative) : '',               // 評価ドル（米国株のみ）
+    us ? (h.acqJpy != null ? r1(h.acqJpy) : '') : r1(h.avgCost * h.quantity), // 取得円
+    '',                                    // 取得ドル（現状の貼付に合わせ空欄）
+    '',                                    // 積立（対象外）
+  ];
+}
+
+function excelExportGenerate() {
+  const checked = [...document.querySelectorAll('.xe-unit:checked')].map(c => c.value);
+  const includeManual = document.getElementById('xe-manual').checked;
+  const includeHeader = document.getElementById('xe-header').checked;
+  const sheets = { JP: [], US: [] };
+  for (const h of excelExportHoldings()) {
+    const sec = store.data.securities.find(s => s.id === h.securityId);
+    if (!sec || !checked.includes(holdingImportUnit(h, sec))) continue;
+    if (!includeManual && h.source !== 'import') continue;
+    sheets[sec.market].push(excelExportRow(h, sec));
+  }
+  // 安定ソート: 証券会社→コード
+  for (const m of ['JP', 'US']) sheets[m].sort((a, b) => (a[4] + a[1]).localeCompare(b[4] + b[1], 'ja'));
+  const block = (label, rows) => {
+    const body = rows.map(r => r.join('\t')).join('\n');
+    const text = includeHeader && rows.length ? EXCEL_EXPORT_COLS.join('\t') + '\n' + body : body;
+    return `<div class="field" style="margin-top:8px">
+      <label>${label}シート（${rows.length}件）　<button type="button" class="btn" style="padding:2px 10px"
+        onclick="excelExportCopy('xe-ta-${label}')" ${rows.length ? '' : 'disabled'}>コピー</button></label>
+      <textarea id="xe-ta-${label}" rows="${Math.min(12, Math.max(3, rows.length + (includeHeader ? 1 : 0)))}"
+        style="width:100%;font-family:monospace;white-space:pre" readonly>${esc(text)}</textarea></div>`;
+  };
+  document.getElementById('xe-out').innerHTML =
+    block('日本株', sheets.JP) + block('米国株', sheets.US);
+}
+
+function excelExportCopy(id) {
+  const ta = document.getElementById(id);
+  if (!ta || !ta.value) { toast('コピーする内容がありません'); return; }
+  ta.select();
+  navigator.clipboard.writeText(ta.value).then(() => toast('コピーしました（Excelへ貼付）'),
+    () => { try { document.execCommand('copy'); toast('コピーしました'); } catch (_) { toast('コピーに失敗しました'); } });
+}
+
+// 現金・銀行 転記（マネーフォワード）。株のエクスポートとは別操作。SEC-59
+// 入力: タブ区切り「種類・名称␉残高␉保有金融機関␉…」（先頭ヘッダ行あり）。
+// 出力: 12列。種別=現金 / 詳細種別=銀行 / 証券会社=金融機関 / 通貨=JPY / 評価円=残高。
+function parseMfCash(text) {
+  const out = [];
+  for (const line of (text || '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const f = line.split('\t').map(s => s.trim());
+    const name = f[0] || '';
+    if (!name || /種類・名称/.test(name)) continue;        // ヘッダ行・空行はスキップ
+    const bal = numClean(f[1]);                            // "2,035,314円" → 2035314
+    if (bal == null) continue;                             // 残高が数値でない行はスキップ
+    out.push({ name, balance: bal, inst: f[2] || '' });
+  }
+  return out;
+}
+
+// 現金・銀行 転記の操作UI（転記タブ内にインライン表示）。
+function mfTransferControlsHtml() {
+  return `
+    <p class="muted" style="margin:0 0 10px">マネーフォワードの一覧をそのまま貼り付けて「変換」。
+      資産管理エクセルへ貼る12列形式（種別=現金／詳細種別=銀行／通貨=JPY／評価円=残高）で出力します。
+      ヘッダ行・空行は自動で無視します。</p>
+    <div class="field"><label>貼り付け（種類・名称␉残高␉保有金融機関 …）</label>
+      <textarea id="mf-text" rows="8" style="width:100%;font-family:monospace;font-size:12px"
+        placeholder="種類・名称␉残高␉保有金融機関␉変更␉削除&#10;残高別普通預金残高␉2,035,314円␉三井住友銀行"></textarea></div>
+    <div class="row" style="align-items:center;gap:18px">
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="mf-header" checked> ヘッダ行を含める</label>
+    </div>
+    <div class="form-actions" style="justify-content:flex-start">
+      <button type="button" class="btn btn-primary" onclick="mfTransferGenerate()">変換</button>
+    </div>
+    <div id="mf-out" style="margin-top:12px"></div>`;
+}
+
+function mfTransferGenerate() {
+  const items = parseMfCash(document.getElementById('mf-text').value);
+  const includeHeader = document.getElementById('mf-header').checked;
+  const rows = items.map(c => [
+    c.name, '', '現金', '銀行', c.inst, '', 'JPY', Math.round(c.balance), '', '', '', '',
+  ]);
+  const body = rows.map(r => r.join('\t')).join('\n');
+  const text = includeHeader && rows.length ? EXCEL_EXPORT_COLS.join('\t') + '\n' + body : body;
+  const total = rows.reduce((s, r) => s + (r[7] || 0), 0);
+  document.getElementById('mf-out').innerHTML = `<div class="field">
+    <label>現金・銀行（${rows.length}件・合計 ${total.toLocaleString('ja-JP')}円）
+      <button type="button" class="btn" style="padding:2px 10px" onclick="excelExportCopy('mf-ta')" ${rows.length ? '' : 'disabled'}>コピー</button></label>
+    <textarea id="mf-ta" rows="${Math.min(14, Math.max(3, rows.length + (includeHeader ? 1 : 0)))}"
+      style="width:100%;font-family:monospace;white-space:pre" readonly>${esc(text)}</textarea></div>`;
+}
+
+// 米国株 取得額(円) の一括取込（転記タブにインライン常設）。1行＝ティッカー＋取得額(円)〔＋証券会社〕。
+function acqJpyControlsHtml() {
+  return `
+    <p class="muted" style="margin:0 0 10px">米国株保有の「取得円」を一括で設定します。1行に
+      <strong>ティッカー</strong>と<strong>取得額(円)</strong>（任意で証券会社）を、タブ/カンマ/空白区切りで貼り付け。
+      既存の米国株保有にティッカー（＋証券会社）で紐づけて上書きします（SBI取込済みなら自動算出されるため通常は不要）。</p>
+    <textarea id="aj-text" rows="6" style="width:100%;font-family:monospace"
+      placeholder="例）&#10;AAPL\t38060&#10;AMD\t21167\tSBI&#10;MPWR,14934"></textarea>
+    <div class="form-actions" style="justify-content:flex-start">
+      <button type="button" class="btn btn-primary" onclick="runAcqJpyImport()">設定する</button>
+    </div>`;
+}
+
+function runAcqJpyImport() {
+  const text = (document.getElementById('aj-text').value || '').trim();
+  if (!text) { toast('入力がありません'); return; }
+  let applied = 0, skipped = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const toks = line.split(/[\t,\s]+/).filter(t => t !== '');
+    const ticker = (toks.shift() || '').toUpperCase();
+    const brokerTok = toks.find(t => BROKERS.includes(t));
+    const amtTok = toks.find(t => t !== brokerTok && !isNaN(parseFloat(t.replace(/,/g, ''))));
+    const amt = amtTok != null ? parseFloat(amtTok.replace(/,/g, '')) : NaN;
+    if (!ticker || isNaN(amt)) { skipped++; continue; }
+    const sec = store.data.securities.find(s => s.market === 'US' && s.ticker.toUpperCase() === ticker);
+    if (!sec) { skipped++; continue; }
+    let targets = store.data.holdings.filter(h => h.securityId === sec.id && h.quantity > 0);
+    if (brokerTok) targets = targets.filter(h => h.broker === brokerTok);
+    if (targets.length !== 1) { skipped++; continue; } // 一意に決まらない場合はスキップ
+    targets[0].acqJpy = amt; applied++;
+  }
+  store.save();
+  toast(`取得額を設定: ${applied}件${skipped ? ` / スキップ ${skipped}` : ''}`);
+  if (currentView === 'transfer') renderTransfer();
+}
+
+// ---------- 転記タブ（資産貼付用エクスポート ＋ 現金・銀行転記） ----------
+function renderTransfer() {
+  app.innerHTML = `
+    <div class="section">
+      <div class="section-head"><h2>取込状況（取込忘れ防止）</h2></div>
+      <div class="section-body" style="padding:16px">
+        <p class="muted" style="margin:0 0 10px">証券会社ごとの最終取込日時です。エクスポート前に「未取込」や古い日時がないか確認してください。</p>
+        ${importStatusHtml()}
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>資産貼付用エクスポート（日本株・米国株）</h2></div>
+      <div class="section-body" style="padding:16px">${excelExportControlsHtml()}</div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>米国株 取得額(円) 一括取込</h2></div>
+      <div class="section-body" style="padding:16px">${acqJpyControlsHtml()}</div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>現金・銀行 転記（マネーフォワード）</h2></div>
+      <div class="section-body" style="padding:16px">${mfTransferControlsHtml()}</div>
+    </div>
+    <p class="muted" style="padding:0 4px">資産管理エクセルへの貼付専用です（保有データには影響しません）。証券会社データの取込・各種マスタは「マスタ・設定」タブで行います。</p>`;
+}
+
 // ---------- ユーティリティ ----------
 function go(view) {
   currentView = view;
@@ -3139,6 +3500,12 @@ window.saApplyBulk = saApplyBulk;
 window.runSplitAdjust = runSplitAdjust;
 window.importData = importData;
 window.resetData = resetData;
+window.excelExportGenerate = excelExportGenerate;
+window.excelExportCopy = excelExportCopy;
+window.runAcqJpyImport = runAcqJpyImport;
+window.mfTransferGenerate = mfTransferGenerate;
+window.smSelectAll = smSelectAll;
+window.bulkSetDetailType = bulkSetDetailType;
 window.api = api;
 window.render = render;
 

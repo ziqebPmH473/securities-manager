@@ -60,6 +60,7 @@ async function fetchJpInfo(symbol) {
     dividend:  summary?.dividend ?? null,
     sharesOut: summary?.sharesOut ?? null,
     currency:  chart?.currency || 'JPY',
+    quoteType: chart?.instrumentType || null, // EQUITY/ETF/MUTUALFUND（詳細種別の判定に使用）
   };
 }
 
@@ -100,6 +101,7 @@ async function fetchUsInfo(symbol, finnhubKey) {
     dividend:  summary?.dividend ?? fh?.dividend ?? null,
     sharesOut: summary?.sharesOut ?? null,
     currency:  chart?.currency || 'USD',
+    quoteType: chart?.instrumentType || null, // EQUITY/ETF/MUTUALFUND（詳細種別の判定に使用）
   };
 }
 
@@ -112,6 +114,7 @@ async function fetchFundInfo(symbol) {
     sector:   null, industry: null, marketCap: null,
     per: null, eps: null, dividend: null,
     currency: 'JPY',
+    quoteType: 'MUTUALFUND',
     nav:      d?.nav ?? null, // 基準価額
   };
 }
@@ -175,7 +178,7 @@ async function fetchChartMeta(symbol) {
   const data = await res.json();
   const meta = data?.chart?.result?.[0]?.meta;
   if (!meta) throw new Error('chart データなし');
-  return { name: meta.longName || meta.shortName || null, currency: meta.currency || null };
+  return { name: meta.longName || meta.shortName || null, currency: meta.currency || null, instrumentType: meta.instrumentType || null };
 }
 
 async function fetchQuoteSummary(symbol) {
