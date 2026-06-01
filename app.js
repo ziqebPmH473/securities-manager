@@ -1351,15 +1351,6 @@ function renderSignals() {
     </div>`;
 }
 
-function signalTable(secs, visibleCols, st) {
-  if (secs.length === 0) return `<div class="empty" style="padding:14px">該当する銘柄はありません。</div>`;
-  const head = colHeadHtml(visibleCols, st, 'SIGNAL', null);
-  return `<div class="table-wrap"><table>
-    <thead><tr>${head}<th class="l"></th></tr></thead>
-    <tbody>${secs.map(sec => marketRow(sec, visibleCols, { actions: 'signal' })).join('')}</tbody>
-  </table></div>`;
-}
-
 // ダッシュボード用の簡易サイン表（到達のみ・上位）
 function dashSignalsTable() {
   const { reached } = signalRows();
@@ -1509,9 +1500,23 @@ function renderReport() {
 
 // ---------- 銘柄マスタ（SEC-27） ----------
 // 全銘柄の固有データ（名前・セクター・業種・格付け・分析メタ・ルール）を一覧表示。編集は銘柄編集フォームへ。
+let secMasterSort = { key: 'ticker', dir: 1 };
+function setSecMasterSort(key) {
+  if (secMasterSort.key === key) secMasterSort.dir *= -1; else { secMasterSort.key = key; secMasterSort.dir = 1; }
+  renderSecMaster();
+}
 function renderSecMaster() {
-  const secs = [...store.data.securities].sort((a, b) => (a.market + a.ticker).localeCompare(b.market + b.ticker));
+  const sk = secMasterSort.key, dir = secMasterSort.dir;
+  const secs = [...store.data.securities].sort((a, b) => { const va = sortValue(a, sk), vb = sortValue(b, sk); if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0; });
   const cell = (v, l) => `<td class="${l ? 'l ' : ''}">${v != null && v !== '' ? esc(String(v)) : muted}</td>`;
+  // ソート可能なヘッダ（sortValue が各キーに対応）
+  const SM_COLS = [
+    { k: 'ticker', l: 'コード', c: 'l col-code' }, { k: 'name', l: '銘柄名', c: 'l' }, { k: 'market', l: '市場', c: 'l' },
+    { k: 'sector', l: 'セクター', c: 'l' }, { k: 'industry', l: '業種', c: 'l' }, { k: 'rating', l: '格付', c: 'l' },
+    { k: 'overallGrade', l: '総合評価', c: 'l' }, { k: 'buyGrade', l: '買い時評価', c: 'l' }, { k: 'recoCategory', l: 'AI推奨カテゴリ', c: 'l' },
+    { k: 'priority', l: '優先順位', c: '' }, { k: 'ruleName', l: '買い増しルール', c: 'l' }, { k: 'category', l: 'AI判断', c: 'l' },
+  ];
+  const smHead = SM_COLS.map(col => { const active = sk === col.k; const arrow = active ? (dir > 0 ? ' ▲' : ' ▼') : ''; return `<th class="${col.c} sortable${active ? ' active' : ''}" onclick="setSecMasterSort('${col.k}')">${col.l}${arrow}</th>`; }).join('') + '<th class="l"></th>';
   const rows = secs.map(s => {
     const rule = store.rule(s.ruleId);
     const ov = (k) => s[k + 'Override'] ? ' <span class="tag" title="手動上書き中">手</span>' : '';
@@ -1538,12 +1543,7 @@ function renderSecMaster() {
       <div class="section-body">
         <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます（自動取得では上書きされません）。「手」=手動上書き中。</p>
         <div class="table-wrap"><table>
-          <thead><tr>
-            <th class="l col-code">コード</th><th class="l">銘柄名</th><th class="l">市場</th>
-            <th class="l">セクター</th><th class="l">業種</th><th class="l">格付</th>
-            <th class="l">総合評価</th><th class="l">買い時評価</th><th class="l">AI推奨カテゴリ</th>
-            <th>優先順位</th><th class="l">買い増しルール</th><th class="l">AI判断</th><th class="l"></th>
-          </tr></thead>
+          <thead><tr>${smHead}</tr></thead>
           <tbody>${rows || `<tr><td colspan="13" class="empty">銘柄がありません。</td></tr>`}</tbody>
         </table></div>
       </div>
@@ -3035,8 +3035,10 @@ function importData() {
   inp.click();
 }
 function resetData() {
-  if (confirm('すべてのデータを削除して初期状態に戻します。よろしいですか？')) {
+  if (confirm('すべてのデータを削除して初期状態に戻します。よろしいですか？\n（誤削除対策として、削除前に現在のデータをJSONで自動ダウンロードします）')) {
+    try { exportData(); } catch (_) { /* バックアップ失敗でも削除は続行 */ }
     localStorage.removeItem(STORAGE_KEY); store.data = null; store.load(); render();
+    toast('全データを削除しました（バックアップJSONをダウンロード済み）');
   }
 }
 
