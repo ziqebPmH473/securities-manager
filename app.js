@@ -1577,6 +1577,14 @@ function renderReport() {
 // ---------- 銘柄マスタ（SEC-27） ----------
 // 全銘柄の固有データ（名前・セクター・業種・格付け・分析メタ・ルール）を一覧表示。編集は銘柄編集フォームへ。
 function smSelectAll(on) { document.querySelectorAll('.sm-check').forEach(c => c.checked = on); }
+function bulkDeleteSecurities() {
+  const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
+  if (!ids.length) { toast('銘柄を選択してください'); return; }
+  if (!confirm(`${ids.length}件の銘柄を削除します（関連する保有・取引も削除）。元に戻せません。よろしいですか？`)) return;
+  ids.forEach(id => store.removeSecurity(id));
+  store.save(); renderSecMaster();
+  toast(`${ids.length}件の銘柄を削除しました`, 5000);
+}
 function bulkSetDetailType() {
   const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
   if (!ids.length) { toast('銘柄を選択してください'); return; }
@@ -1639,6 +1647,8 @@ function renderSecMaster() {
           <span class="muted">選択した銘柄の詳細種別を</span>
           <select id="sm-bulk-detail">${['個別株', 'ETF', '（自動判定に戻す）'].map(o => `<option>${o}</option>`).join('')}</select>
           <button class="btn btn-sm" onclick="bulkSetDetailType()">一括変更</button>
+          <span style="width:14px"></span>
+          <button class="btn btn-sm btn-danger" onclick="bulkDeleteSecurities()">選択した銘柄を削除</button>
         </div>
         <div class="table-wrap"><table>
           <thead><tr>${smHead}</tr></thead>
@@ -2441,8 +2451,8 @@ function openPasteImport(kind) {
     const result = isAnalysis
       ? importAnalysis(form.data.value, market, create)
       : importHoldings(form.data.value, market, create);
-    closeModal(); render();
-    toast(`取込完了: 更新 ${result.updated} 件 / 新規 ${result.created} 件${result.skipped ? ` / スキップ ${result.skipped}` : ''}`);
+    closeModal();
+    reportImport(result.touched, `取込完了: 更新 ${result.updated}件 / 新規 ${result.created}件${result.skipped ? ` / スキップ ${result.skipped}件` : ''}`);
   };
 }
 
@@ -2468,7 +2478,7 @@ function importAnalysis(text, market, create) {
   const rows = parsePasted(text);
   if (rows.length < 2) return { updated: 0, created: 0, skipped: 0 };
   const idx = mapHeader(rows[0], ANALYSIS_COLMAP);
-  let updated = 0, created = 0, skipped = 0;
+  let updated = 0, created = 0, skipped = 0; const touched = [];
   for (let i = 1; i < rows.length; i++) {
     const rec = {};
     rows[i].forEach((cell, j) => { if (idx[j]) rec[idx[j]] = (cell || '').trim(); });
@@ -2513,15 +2523,16 @@ function importAnalysis(text, market, create) {
       if (!isNaN(a)) patch.buyAmount = market === 'US' ? a / 100 : a;
     }
     store.updateSecurity(sec.id, patch);
+    touched.push(sec);
   }
-  return { updated, created, skipped };
+  return { updated, created, skipped, touched };
 }
 
 function importHoldings(text, market, create) {
   const rows = parsePasted(text);
-  if (rows.length < 2) return { updated: 0, created: 0, skipped: 0 };
+  if (rows.length < 2) return { updated: 0, created: 0, skipped: 0, touched: [] };
   const idx = mapHeader(rows[0], HOLDING_COLMAP);
-  let updated = 0, created = 0, skipped = 0;
+  let updated = 0, created = 0, skipped = 0; const touched = [];
   for (let i = 1; i < rows.length; i++) {
     const rec = {};
     rows[i].forEach((cell, j) => { if (idx[j]) rec[idx[j]] = (cell || '').trim(); });
@@ -2548,8 +2559,27 @@ function importHoldings(text, market, create) {
     if (rec.sector && rec.sector.trim()) metaPatch.sector = rec.sector.trim();
     if (rec.industry && rec.industry.trim()) metaPatch.industry = rec.industry.trim();
     if (Object.keys(metaPatch).length) store.setMeta(priceKey(sec), metaPatch);
+    touched.push(sec);
   }
-  return { updated, created, skipped };
+  return { updated, created, skipped, touched };
+}
+
+// 取込後の共通レポート: 価格/情報を取得し、件数＋取得できなかったティッカー（一部だけ取れない時）を表示
+function importedUnpriced(touched) {
+  const hp = (s) => { const p = store.data.prices[priceKey(s)]; return p && p.price != null; };
+  const priced = touched.filter(hp), unpriced = touched.filter(s => !hp(s));
+  return (priced.length > 0 && unpriced.length > 0) ? unpriced.map(s => s.ticker) : [];
+}
+async function reportImport(touched, baseMsg) {
+  touched = touched || [];
+  if (touched.length) {
+    const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
+    try { await (needPrice ? api.refreshAll() : api.refreshMeta(touched)); } catch (_) { /* 取得失敗は無視 */ }
+  }
+  render();
+  const bad = importedUnpriced(touched);
+  const msg = bad.length ? `${baseMsg} ／ ⚠ 価格取得できず ${bad.length}件: ${bad.join(', ')}（ティッカー要確認）` : baseMsg;
+  toast(msg, bad.length ? 9000 : 5000);
 }
 
 function normDate(v) {
@@ -2925,13 +2955,8 @@ function runBrokerImport() {
     importedAt: new Date().toISOString(), baseDate: baseDate || null,
   });
   store.save();
-  closeModal(); render();
-  toast(`取込完了: 更新 ${updated} / 新規 ${created}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
-  if (touched.length) {
-    // 価格未取得の銘柄があれば「価格更新」と同じ処理(refreshAll=価格+為替+指数+未取得名)を自動実行。無ければ銘柄情報だけ。
-    const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
-    (needPrice ? api.refreshAll() : api.refreshMeta(touched)).then(render);
-  }
+  closeModal();
+  reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
 }
 
 // 取込フィールド設定（マッピング）の編集UI。列名/位置が変わってもコード変更なしで調整可
@@ -3234,13 +3259,8 @@ function runGenericImport() {
       importedAt: new Date().toISOString(), baseDate: null,
     });
   }
-  store.save(); closeModal(); render();
-  toast(`汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
-  if (touched.length) {
-    // 価格未取得の銘柄があれば「価格更新」と同じ処理(refreshAll=価格+為替+指数+未取得名)を自動実行。無ければ銘柄情報だけ。
-    const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
-    (needPrice ? api.refreshAll() : api.refreshMeta(touched)).then(render);
-  }
+  store.save(); closeModal();
+  reportImport(touched, `汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
 }
 function giSaveFormat() {
   const name = (document.getElementById('gi-format-name').value || '').trim();
@@ -3890,10 +3910,10 @@ function fmtDateTime(iso) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms = 2500) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 2500);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, ms);
 }
 
 // 公開（onclick用）
@@ -3958,6 +3978,7 @@ window.mfTransferGenerate = mfTransferGenerate;
 window.fundGenerate = fundGenerate;
 window.smSelectAll = smSelectAll;
 window.bulkSetDetailType = bulkSetDetailType;
+window.bulkDeleteSecurities = bulkDeleteSecurities;
 window.openGenericImport = openGenericImport;
 window.giParse = giParse;
 window.giSetMap = giSetMap;
