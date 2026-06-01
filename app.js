@@ -768,6 +768,18 @@ function loadColPrefs() {
   try { colPrefs = JSON.parse(localStorage.getItem(COL_PREFS_KEY)) || {}; } catch(_) { colPrefs = {}; }
 }
 function saveColPrefs() { localStorage.setItem(COL_PREFS_KEY, JSON.stringify(colPrefs)); }
+// 列幅(px)。colPrefsのwidth上書き優先、無ければキー/種別ごとの既定。
+function colDefaultWidth(key) {
+  const mc = MASTER_COLS.find(c => c.key === key) || {};
+  if (key === 'ticker') return 64;
+  if (key === 'name') return 200;
+  if (key === 'market' || key === 'detailType') return 72;
+  if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
+  if (key === 'stars') return 120;
+  if (key === 'analysisNote') return 160;
+  return mc.left ? 110 : 84; // 左寄せ(テキスト系)は広め・数値は狭め
+}
+function colWidthPx(item) { return Math.max(40, item.width || colDefaultWidth(item.key)); }
 function getColOrder(market) {
   if (!colPrefs[market]) resetColPrefs(market);
   else reconcileColPrefs(market);
@@ -1128,10 +1140,12 @@ function renderMarket(market) {
 
   const ccy = MARKET_CCY[market];
   // 表示するカラム（ユーザー設定済みの順・表示フラグ反映）
-  const visibleCols = getColOrder(market).filter(c => c.visible)
-    .map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
+  const visOrder = getColOrder(market).filter(c => c.visible);
+  const visibleCols = visOrder.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
 
   const headHtml = colHeadHtml(visibleCols, st, market, ccy);
+  // 列幅（table-layout:fixed）。先頭=チェック / 末尾=操作 の固定列＋各列の幅
+  const colgroupHtml = `<colgroup><col style="width:36px">${visOrder.map(c => `<col style="width:${colWidthPx(c)}px">`).join('')}<col style="width:44px"></colgroup>`;
 
   app.innerHTML = `
     <div class="section">
@@ -1163,7 +1177,7 @@ function renderMarket(market) {
       </div>
       <div class="section-body">
         ${secs.length === 0 ? `<div class="empty">該当する銘柄がありません。</div>` : `
-        <div class="table-wrap"><table>
+        <div class="table-wrap"><table class="fixed-cols">${colgroupHtml}
           <thead><tr><th class="l"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>${headHtml}<th class="l"></th></tr></thead>
           <tbody>
             ${secs.map(sec => marketRow(sec, visibleCols, { select: true })).join('')}
@@ -1309,7 +1323,8 @@ function openColPicker(market) {
     return `<div class="cp-item" draggable="true" data-idx="${i}"
         ondragstart="cpDragStart(event,${i})" ondragover="cpDragOver(event,${i})" ondrop="cpDrop(event,${i})" ondragend="cpDragEnd()">
       <span class="cp-handle">⠿</span>
-      <label><input type="checkbox" onchange="cpToggle('${c.key}',this.checked)" ${c.visible ? 'checked' : ''}> ${esc(mc.label)}</label>
+      <label style="flex:1"><input type="checkbox" onchange="cpToggle('${c.key}',this.checked)" ${c.visible ? 'checked' : ''}> ${esc(mc.label)}</label>
+      <input type="number" min="40" step="2" value="${colWidthPx(c)}" title="列幅(px)" style="width:64px;text-align:right" onchange="cpSetWidth('${c.key}', this.value)"><span class="muted" style="font-size:11px">px</span>
     </div>`;
   }).join('');
   const other = market === 'US' ? 'JP' : market === 'JP' ? 'US' : null;
@@ -1338,6 +1353,11 @@ function cpToggle(key, checked) {
   const order = getColOrder(_colPickerMarket);
   const c = order.find(x => x.key === key);
   if (c) { c.visible = checked; saveColPrefs(); }
+}
+function cpSetWidth(key, px) {
+  const order = getColOrder(_colPickerMarket);
+  const c = order.find(x => x.key === key);
+  if (c) { const n = parseInt(px, 10); c.width = (isNaN(n) || n < 40) ? undefined : n; saveColPrefs(); }
 }
 function cpDragStart(e, idx) { _dragSrcIdx = idx; e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('cp-dragging'); }
 function cpDragOver(e, idx) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
@@ -4090,6 +4110,7 @@ window.bulkSetField = bulkSetField;
 window.bulkDeleteSecurities = bulkDeleteSecurities;
 window.copyDisplayedTable = copyDisplayedTable;
 window.copyColLayout = copyColLayout;
+window.cpSetWidth = cpSetWidth;
 window.openGenericImport = openGenericImport;
 window.giParse = giParse;
 window.giSetMap = giSetMap;
