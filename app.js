@@ -502,6 +502,28 @@ const calc = {
     if (price == null || th.qty <= 0 || !th.avgCost) return null;
     return (price - th.avgCost) / th.avgCost * 100;
   },
+  // 前日比の金額（円換算）。market指定で市場別、未指定で全体。{amount, prevValue, pct}
+  dayChangeJpy(market) {
+    let amt = 0, prevVal = 0;
+    for (const h of store.data.holdings) {
+      if (!(h.quantity > 0)) continue;
+      const sec = store.data.securities.find(s => s.id === h.securityId); if (!sec) continue;
+      if (market && sec.market !== market) continue;
+      const p = store.data.prices[priceKey(sec)] || {};
+      if (p.price == null || p.prevClose == null) continue;
+      const dJ = this.toJpy(sec.market, h.quantity * (p.price - p.prevClose));
+      const pJ = this.toJpy(sec.market, h.quantity * p.prevClose);
+      if (dJ == null || pJ == null) continue;
+      amt += dJ; prevVal += pJ;
+    }
+    return { amount: amt, prevValue: prevVal, pct: prevVal > 0 ? amt / prevVal * 100 : null };
+  },
+  // 参考指数の前日比%
+  indexChangePct(key) {
+    const ix = (store.data.indices || {})[key];
+    if (!ix || ix.price == null || !ix.prevClose) return null;
+    return (ix.price - ix.prevClose) / ix.prevClose * 100;
+  },
   // 原通貨→円換算（米株は為替、JP/FUNDはそのまま）。為替未取得の米株は null
   toJpy(market, nativeAmt) {
     if (nativeAmt == null) return null;
@@ -521,12 +543,22 @@ function yahooSymbol(sec) {
   return sec.ticker;
 }
 
+// 参考指数（前日比の参考表示用）。market は表示グループ。
+// ※TOPIXは Yahoo の指数シンボル(^TPX/998405.T等)が取得不可のため、1306.T（TOPIX連動ETF）を前日比の参考に使用。
+const INDICES = [
+  { key: 'n225', sym: '^N225', label: '日経平均', market: 'JP' },
+  { key: 'topix', sym: '1306.T', label: 'TOPIX', market: 'JP', note: '連動ETF' },
+  { key: 'sp500', sym: '^GSPC', label: 'S&P500', market: 'US' },
+  { key: 'ndx', sym: '^NDX', label: 'NASDAQ100', market: 'US' },
+];
+
 // ---------- 価格取得 ----------
 const api = {
   async refreshAll() {
     const secs = store.data.securities.filter(s => s.ticker);
     const symbols = secs.map(yahooSymbol);
     symbols.push('USDJPY=X');
+    INDICES.forEach(ix => symbols.push(ix.sym)); // 参考指数も一緒に取得
     if (symbols.length === 0) return;
     let res;
     try {
@@ -548,6 +580,12 @@ const api = {
     }
     const fx = quotes['USDJPY=X'];
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
+    // 参考指数の前日比用に price/prevClose を保存
+    store.data.indices = store.data.indices || {};
+    for (const ix of INDICES) {
+      const q = quotes[ix.sym];
+      if (q && !q.error && q.price != null) store.data.indices[ix.key] = { price: q.price, prevClose: q.prevClose, fetchedAt: q.fetchedAt };
+    }
     store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
     // 銘柄情報は名前未取得の銘柄だけ取得（名前はほぼ不変＝毎回取らない。APIリクエスト削減＋名称ブレ防止）
@@ -860,6 +898,22 @@ function renderDashboard() {
   if (fxMissing) notes.push('USD/JPY 為替が未取得のため、円換算合計に米国株を含めていません。「価格更新」で取得できます。');
   if (noPriceTotal > 0) notes.push(`価格未取得の保有銘柄が ${noPriceTotal} 件あります（評価額は取得原価で代用表示）。`);
 
+  // 前日比（金額・円換算）＋参考指数
+  const dcCell = (x) => `<span class="${cls(x.amount)}">${x.amount >= 0 ? '+' : ''}${yen(x.amount)}</span>${x.pct != null ? ` <span class="${cls(x.pct)}">(${signed(x.pct)}%)</span>` : ''}`;
+  const idxPct = (k) => { const v = calc.indexChangePct(k); return v == null ? '<span class="muted">—</span>' : `<span class="${cls(v)}">${signed(v)}%</span>`; };
+  const dayChangeSection = `<div class="section">
+      <div class="section-head"><h2>前日比（金額・円換算）</h2></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th class="l">区分</th><th class="l">前日比（金額）</th><th class="l">参考指数（前日比）</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>全体</strong></td><td class="l">${dcCell(calc.dayChangeJpy())}</td><td class="l muted">—</td></tr>
+          <tr><td class="l"><span class="tag jp">日本株</span></td><td class="l">${dcCell(calc.dayChangeJpy('JP'))}</td><td class="l">日経平均 ${idxPct('n225')}　／　TOPIX ${idxPct('topix')}</td></tr>
+          <tr><td class="l"><span class="tag us">米国株</span></td><td class="l">${dcCell(calc.dayChangeJpy('US'))}</td><td class="l">S&amp;P500 ${idxPct('sp500')}　／　NASDAQ100 ${idxPct('ndx')}</td></tr>
+        </tbody>
+      </table></div>
+      <p class="muted" style="padding:0 16px 12px">前日比金額＝Σ 数量×(現在値−前日終値) を円換算。指数は前日比%（TOPIXは連動ETF 1306.T を参考値として使用）。</p>
+    </div>`;
+
   app.innerHTML = `
     ${notes.map(n => `<div class="notice">${esc(n)}</div>`).join('')}
     <div class="cards">
@@ -868,6 +922,7 @@ function renderDashboard() {
       <div class="card"><div class="label">取得原価（円換算）</div><div class="value">${yen(costJpy)}</div></div>
       <div class="card"><div class="label">買い増しサイン</div><div class="value ${sigCount ? 'neg' : ''}">${sigCount} 件</div></div>
     </div>
+    ${dayChangeSection}
     <div class="section">
       <div class="section-head"><h2>市場別の内訳</h2></div>
       <div class="table-wrap"><table>
