@@ -134,6 +134,8 @@ const store = {
     this.data.lastPriceUpdate ||= null; // 価格更新日時
     this.data.importMappings ||= {};  // 取込フィールド設定（列名・位置）のマスタ
     this.data.lastInfoDate ||= null;  // 銘柄情報の日次更新を実行した日（YYYY-MM-DD）
+    this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
+    this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
       this.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k], ...(this.data.importMappings[k] || {}) };
     }
@@ -341,6 +343,75 @@ const store = {
     this.save();
   },
 };
+
+// ---------- Google連携（GIS＋Sheets。方式A=ブラウザ完結。clientId 未設定なら休眠） ----------
+// 設計は DESIGN.md §14。実機での動作確認はクライアントID入手後に行う（現状はスキャフォールド）。
+const gsync = {
+  _token: null, _email: null,
+  cfg() { return (store.data.settings && store.data.settings.google) || {}; },
+  // GISスクリプトを必要時のみ読み込む（未設定なら一切読み込まない）
+  async ensureGis() {
+    if (window.google && google.accounts && google.accounts.oauth2) return;
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true;
+      s.onload = res; s.onerror = () => rej(new Error('Google Identity Services の読み込みに失敗'));
+      document.head.appendChild(s);
+    });
+  },
+  async signIn() {
+    const cfg = this.cfg();
+    if (!cfg.clientId) { toast('クライアントIDを設定してください'); return false; }
+    await this.ensureGis();
+    const token = await new Promise((res, rej) => {
+      const tc = google.accounts.oauth2.initTokenClient({
+        client_id: cfg.clientId,
+        scope: 'https://www.googleapis.com/auth/spreadsheets openid email',
+        callback: (r) => (r && r.access_token) ? res(r.access_token) : rej(new Error('トークン取得失敗')),
+        error_callback: (e) => rej(new Error((e && e.type) || 'OAuthエラー')),
+      });
+      tc.requestAccessToken({ prompt: '' });
+    });
+    // 許可メール照合
+    const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } }).then(r => r.json());
+    const email = ((info && info.email) || '').toLowerCase();
+    const allow = (cfg.allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+    if (allow.length && !allow.includes(email)) { this._token = null; toast(`許可されていないアカウントです: ${email}`); return false; }
+    this._token = token; this._email = email; toast(`ログイン: ${email || 'OK'}`); return true;
+  },
+  async _call(method, range, body) {
+    const cfg = this.cfg();
+    if (!cfg.spreadsheetId) { toast('スプレッドシートIDを設定してください'); return null; }
+    if (!this._token) { const ok = await this.signIn(); if (!ok) return null; }
+    const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(cfg.spreadsheetId)}/values/${encodeURIComponent(range)}`;
+    const url = method === 'PUT' ? `${base}?valueInputOption=RAW` : base;
+    const res = await fetch(url, { method, headers: { Authorization: 'Bearer ' + this._token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    if (res.status === 401) { this._token = null; throw new Error('トークン失効。再ログインしてください'); }
+    if (!res.ok) throw new Error('Sheets API ' + res.status + '（_appdata シートの有無も確認）');
+    return res.json();
+  },
+  async save() {
+    try { await this._call('PUT', '_appdata!A1', { values: [[JSON.stringify(store.data)]] }); toast('スプレッドシートへ保存しました'); }
+    catch (e) { toast('保存失敗: ' + (e.message || e)); }
+  },
+  async load() {
+    if (!confirm('スプレッドシートの内容で現在のデータを上書きします。よろしいですか？')) return;
+    try {
+      const d = await this._call('GET', '_appdata!A1');
+      const cell = d && d.values && d.values[0] && d.values[0][0];
+      if (!cell) { toast('スプレッドシートにデータがありません'); return; }
+      store.data = JSON.parse(cell); store.save(); store.load(); render(); toast('スプレッドシートから読み込みました');
+    } catch (e) { toast('読込失敗: ' + (e.message || e)); }
+  },
+};
+function gsaveSettings(f) {
+  store.data.settings = store.data.settings || {};
+  store.data.settings.google = { clientId: f.gClientId.value.trim(), allowedEmails: f.gAllowed.value.trim(), spreadsheetId: f.gSheetId.value.trim() };
+  store.save(); toast('Google連携設定を保存しました'); renderMaster();
+}
+function gsyncSignIn() { gsync.signIn(); }
+function gsyncSave() { gsync.save(); }
+function gsyncLoad() { gsync.load(); }
 
 // ---------- 計算 ----------
 const calc = {
@@ -1536,7 +1607,39 @@ function renderMaster() {
         <button class="btn btn-danger" onclick="resetData()">全データ削除</button>
       </div>
       <p class="muted" style="padding:0 16px 14px">現在の保存先: このブラウザ(localStorage)。将来 Google スプレッドシートへ移行予定。</p>
-    </div>`;
+    </div>
+    ${googleSyncSection()}`;
+}
+
+// Google連携（実験的・任意）。クライアントID未設定なら休眠＝現行アプリに影響しない。
+function googleSyncSection() {
+  const g = (store.data.settings && store.data.settings.google) || {};
+  const configured = !!g.clientId;
+  return `<div class="section">
+    <div class="section-head"><h2>Google連携（実験的・任意）</h2>
+      <span class="tag ${configured ? 'jp' : ''}">${configured ? '設定済み' : '未設定'}</span></div>
+    <div class="section-body" style="padding:16px">
+      <p class="muted" style="margin:0 0 12px">ブラウザ完結方式(GIS)。Googleスプレッドシートへ手動で保存/読込（v1=JSONブロブ）。
+        クライアントID未設定なら何も起きません。<strong>実機での動作確認は未実施</strong>（クライアントID入手後に検証）。</p>
+      <form id="gsync-form" onsubmit="return false">
+        <div class="field"><label>OAuthクライアントID（…apps.googleusercontent.com）</label>
+          <input name="gClientId" value="${esc(g.clientId || '')}" placeholder="Google Cloudで作成したウェブ用クライアントID"></div>
+        <div class="row">
+          <div class="field"><label>許可メール（カンマ区切り・任意）</label>
+            <input name="gAllowed" value="${esc(g.allowedEmails || '')}" placeholder="you@gmail.com"></div>
+          <div class="field"><label>スプレッドシートID</label>
+            <input name="gSheetId" value="${esc(g.spreadsheetId || '')}" placeholder="スプレッドシートURLの /d/ と /edit の間"></div>
+        </div>
+        <div class="form-actions" style="justify-content:flex-start">
+          <button type="button" class="btn btn-primary" onclick="gsaveSettings(this.form)">設定を保存</button>
+          <button type="button" class="btn" onclick="gsyncSignIn()" ${configured ? '' : 'disabled'}>Googleでログイン</button>
+          <button type="button" class="btn" onclick="gsyncSave()" ${configured ? '' : 'disabled'}>シートへ保存</button>
+          <button type="button" class="btn" onclick="gsyncLoad()" ${configured ? '' : 'disabled'}>シートから読込</button>
+        </div>
+      </form>
+      <p class="muted" style="margin:10px 0 0">事前にスプレッドシートへ <code>_appdata</code> という名前のシート(タブ)を1つ作成してください（A1セルにJSONを保存）。</p>
+    </div>
+  </div>`;
 }
 
 // ---------- モーダル/フォーム ----------

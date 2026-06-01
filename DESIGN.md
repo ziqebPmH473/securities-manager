@@ -567,3 +567,43 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 
 > 解決済み: 売却=数量のみ減算・単価不変 / 認証=Googleログイン / 金額=カテゴリ別マスタ /
 > 通知時刻=日本株7:45,11:00,17:00・米国株24:00,7:00 / 保管先=Google スプレッドシート。
+
+---
+
+## 14. Googleログイン＋Sheets保存（方式A: ブラウザ完結 / GIS）（2026-06-01 設計）
+
+> 当初設計（§10）はサーバー集約＋サービスアカウントだったが、**個人利用1人**のため、
+> 秘密鍵を持たない **ブラウザ完結（Google Identity Services）** を採用する（すみぽん選定）。
+
+### 14.1 方式
+- **Google Identity Services (GIS)** の OAuth トークンフロー（`google.accounts.oauth2.initTokenClient`）で、
+  ブラウザから直接アクセストークンを取得し、**Sheets REST API をブラウザから呼ぶ**。
+- 必要なのは **OAuthクライアントID（公開・ウェブ用）のみ**。**クライアントシークレット不要**。
+- スコープ: `https://www.googleapis.com/auth/spreadsheets`（読み書き）＋ `openid email`（許可メール照合用）。
+- 許可アカウント制限: 取得したアクセストークンで `userinfo` を引き、メールを**アプリ内allowlist**と照合。
+  不一致ならトークン破棄＋拒否。
+- トークンは**メモリ保持のみ**（永続化しない）。失効（約1時間）したら再取得（GISが再プロンプト）。
+
+### 14.2 保存形式（v1 = JSONブロブ）
+- スプレッドシート（`spreadsheetId` を設定で保持）に専用タブ **`_appdata`** を用意し、
+  **セル A1 に `store.data` の JSON を丸ごと文字列で保存**。
+- 読込: `values.get(_appdata!A1)` → JSON.parse → `store.replaceAll()` で差し替え。
+- 保存: `values.update(_appdata!A1)` に JSON.stringify。
+- メタ情報（`_appmeta!A1` に updatedAt 等）で簡易な整合性確認。
+- v2（将来）: 保有/銘柄などを**表形式タブ**に展開（人が読める・元スプレッドシート風）。
+
+### 14.3 同期方針（単一ユーザー前提）
+- 自動上書きはしない。**明示操作**「Sheetsへ保存」「Sheetsから読込」をボタンで提供（v1）。
+- 競合: 読込時に Sheets の updatedAt と localStorage を比較し、新しい方を採用するか確認。
+- localStorage は引き続きローカルキャッシュとして併用（オフラインでも動く）。
+
+### 14.4 セキュリティ・設定
+- **OAuthクライアントIDは公開情報**（ブラウザ埋め込み前提）。リポジトリに置いてよいが、
+  当面は**マスタ・設定にユーザーが入力**して `store.data.settings.google.clientId` に保持（差し込み式）。
+- **承認済みJavaScript生成元**に「秘匿CFのURL」＋`http://localhost:8788` を登録（Google Cloud側・すみぽん）。
+- 秘匿CF URL・許可メールはチャット/コミットに残さない運用。
+
+### 14.5 実装状況（2026-06-01）
+- **土台スキャフォールドのみ実装**（`gsync` モジュール＋マスタ・設定の「Google連携（実験的）」）。
+  クライアントID未設定なら**完全に休眠**し、現行アプリ（ログイン不要・localStorage）に影響なし。
+- クライアントID入手後に動作確認（ログイン→保存→別端末で読込）して有効化する。
