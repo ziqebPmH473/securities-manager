@@ -1153,6 +1153,7 @@ function renderMarket(market) {
           </select></label>
         ${(st.broker || st.account || st.category) ? `<button class="btn btn-sm" onclick="clearFilter('${market}')">絞込解除</button>` : ''}
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${market}')" title="列の表示設定">⊞ 列</button>
+        <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">⧉ 表コピー</button>
         <span class="muted" style="margin-left:auto">${secs.length} 件</span>
       </div>
       <div class="bulkbar">
@@ -1278,6 +1279,25 @@ function clearFilter(market) { Object.assign(listState[market], { broker: '', ac
 // ---------- カラムピッカー ----------
 let _colPickerMarket = null;
 let _dragSrcIdx = null;
+
+// 表示中の一覧（見出し＋表示列・行）をTSVでコピー。コピー前に確認モーダルを表示。
+function copyDisplayedTable() {
+  const tbl = document.querySelector('#app .table-wrap table');
+  if (!tbl) { toast('コピーする表がありません'); return; }
+  const lines = [...tbl.querySelectorAll('tr')].map(tr => {
+    let cells = [...tr.querySelectorAll('th,td')].slice(1); // 先頭=チェックボックス列を除外
+    if (cells.length && cells[cells.length - 1].textContent.trim() === '') cells = cells.slice(0, -1); // 末尾の操作列（空）を除外
+    return cells.map(c => c.textContent.replace(/[▲▼]/g, '').trim().replace(/\s+/g, ' ')).join('\t');
+  });
+  const text = lines.join('\n');
+  showModal('表示中の一覧をコピー（確認）', `
+    <p class="muted" style="margin:0 0 8px">表示中の列・行をそのままコピーします（${lines.length - 1}件）。内容を確認して「コピー」。</p>
+    <textarea id="copytbl-ta" rows="12" style="width:100%;font-family:monospace;font-size:12px;white-space:pre" readonly>${esc(text)}</textarea>
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+      <button type="button" class="btn btn-primary" onclick="excelExportCopy('copytbl-ta')">コピー</button>
+    </div>`, { wide: true });
+}
 
 function openColPicker(market) {
   _colPickerMarket = market;
@@ -1588,6 +1608,14 @@ function bulkDeleteSecurities() {
   store.save(); renderSecMaster();
   toast(`${ids.length}件の銘柄を削除しました`, 5000);
 }
+function bulkSetField(field, value) {
+  const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
+  if (!ids.length) { toast('銘柄を選択してください'); return; }
+  for (const id of ids) store.updateSecurity(id, { [field]: value });
+  store.save(); renderSecMaster();
+  const label = field === 'enabled' ? (value ? '判定対象' : '判定対象外') : (value ? '注意' : '通常');
+  toast(`${ids.length}件を「${label}」に変更しました`, 4000);
+}
 function bulkSetDetailType() {
   const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
   if (!ids.length) { toast('銘柄を選択してください'); return; }
@@ -1668,7 +1696,14 @@ function renderSecMaster() {
           <span class="muted">選択した銘柄の詳細種別を</span>
           <select id="sm-bulk-detail">${['個別株', 'ETF', '（自動判定に戻す）'].map(o => `<option>${o}</option>`).join('')}</select>
           <button class="btn btn-sm" onclick="bulkSetDetailType()">一括変更</button>
-          <span style="width:14px"></span>
+          <span style="width:10px"></span>
+          <span class="muted">判定:</span>
+          <button class="btn btn-sm" onclick="bulkSetField('enabled',true)">対象に</button>
+          <button class="btn btn-sm" onclick="bulkSetField('enabled',false)">対象外に</button>
+          <span class="muted">注意:</span>
+          <button class="btn btn-sm" onclick="bulkSetField('watch',true)">付ける</button>
+          <button class="btn btn-sm" onclick="bulkSetField('watch',false)">外す</button>
+          <span style="width:10px"></span>
           <button class="btn btn-sm btn-danger" onclick="bulkDeleteSecurities()">選択した銘柄を削除</button>
         </div>
         <div class="table-wrap"><table>
@@ -4033,7 +4068,9 @@ window.fundGenerate = fundGenerate;
 window.smSelectAll = smSelectAll;
 window.setSecMasterFilter = setSecMasterFilter;
 window.bulkSetDetailType = bulkSetDetailType;
+window.bulkSetField = bulkSetField;
 window.bulkDeleteSecurities = bulkDeleteSecurities;
+window.copyDisplayedTable = copyDisplayedTable;
 window.openGenericImport = openGenericImport;
 window.giParse = giParse;
 window.giSetMap = giSetMap;
