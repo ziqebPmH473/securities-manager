@@ -2452,7 +2452,7 @@ function openPasteImport(kind) {
       ? importAnalysis(form.data.value, market, create)
       : importHoldings(form.data.value, market, create);
     closeModal();
-    reportImport(result.touched, `取込完了: 更新 ${result.updated}件 / 新規 ${result.created}件${result.skipped ? ` / スキップ ${result.skipped}件` : ''}`);
+    reportImport(result.touched, `取込完了: 更新 ${result.updated}件 / 新規 ${result.created}件${result.skipped ? ` / スキップ ${result.skipped}件` : ''}${result.stale ? ` / 古い分析 ${result.stale}件は取込まず` : ''}`);
   };
 }
 
@@ -2478,21 +2478,25 @@ function importAnalysis(text, market, create) {
   const rows = parsePasted(text);
   if (rows.length < 2) return { updated: 0, created: 0, skipped: 0 };
   const idx = mapHeader(rows[0], ANALYSIS_COLMAP);
-  let updated = 0, created = 0, skipped = 0; const touched = [];
+  let updated = 0, created = 0, skipped = 0, stale = 0; const touched = [];
   for (let i = 1; i < rows.length; i++) {
     const rec = {};
     rows[i].forEach((cell, j) => { if (idx[j]) rec[idx[j]] = (cell || '').trim(); });
     const ticker = (rec.ticker || '').trim();
     if (!ticker) { skipped++; continue; }
     let sec = store.findSecurity(market, ticker);
+    const isNew = !sec;
     if (!sec) {
       if (!create) { skipped++; continue; }
       sec = store.addSecurity({
         market, ticker: ticker.toUpperCase(), name: '', currency: market === 'US' ? 'USD' : 'JPY',
         assetClass: market === 'FUND' ? 'fund' : 'stock', enabled: market !== 'FUND', ruleId: store.defaultRule().id,
       });
-      created++;
-    } else updated++;
+    }
+    // 分析日が既存より古ければ取り込まない（最新の分析を保持）。同一取込内の重複も最新日が勝つ
+    const incDate = normDate(rec.analysisDate);
+    if (!isNew && sec.analysisDate && incDate && incDate < sec.analysisDate) { stale++; continue; }
+    if (isNew) created++; else updated++;
     const nf = (v) => (v && v.trim()) ? parseFloat(v) : null;
     const sf = (v, fb) => (v && v.trim()) || fb || null;
     // 分析の「判断」項目はレコードへ
@@ -2525,7 +2529,7 @@ function importAnalysis(text, market, create) {
     store.updateSecurity(sec.id, patch);
     touched.push(sec);
   }
-  return { updated, created, skipped, touched };
+  return { updated, created, skipped, stale, touched };
 }
 
 function importHoldings(text, market, create) {
