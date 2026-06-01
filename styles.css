@@ -94,6 +94,9 @@ tbody tr:hover { background: var(--panel-2); }
 /* クリックで銘柄詳細を開くリンク（コード・銘柄名） */
 .lnk { color: var(--accent); cursor: pointer; }
 .lnk:hover { text-decoration: underline; }
+/* 外部リンク（株探チャート）。文字色は元のまま（前日比の緑/赤等を維持）、ホバーで下線 */
+.lnk-ext { color: inherit; cursor: pointer; text-decoration: none; }
+.lnk-ext:hover { text-decoration: underline; }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
 .tag.us { color: #2563eb; }
 .tag.jp { color: #dc2626; }

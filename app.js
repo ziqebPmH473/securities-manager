@@ -542,6 +542,12 @@ function yahooSymbol(sec) {
   if (sec.market === 'FUND') return `${sec.ticker}.T`;
   return sec.ticker;
 }
+// 株探の個別銘柄チャートURL（米株 us.kabutan / 日本株 kabutan）。
+function kabutanUrl(sec) {
+  const tk = (sec.ticker || '').trim();
+  if (sec.market === 'US') return `https://us.kabutan.jp/stocks/${encodeURIComponent(tk)}/chart`;
+  return `https://kabutan.jp/stock/chart?code=${encodeURIComponent(tk)}`;
+}
 
 // 参考指数（前日比の参考表示用）。market は表示グループ。
 // ※TOPIXは Yahoo の指数シンボル(^TPX/998405.T等)が取得不可のため、1306.T（TOPIX連動ETF）を前日比の参考に使用。
@@ -761,8 +767,10 @@ const COL_RENDERERS = {
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
-  price:     (s,c) => `<td>${c.priceCell}</td>`,
-  day:       (s,c) => pctTdBg(c.dayChg, 'day'),
+  // 現在値: 価格があれば株探チャートへの外部リンク。未取得時は手入力ボタンのまま。
+  price:     (s,c) => `<td>${c.price != null ? `<a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${fmtAmt(c.price, c.market)}</a>` : c.priceCell}</td>`,
+  // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
+  day:       (s,c) => { const v = c.dayChg, st = condStyle('day', v); return `<td class="${st ? '' : cls(v)}"${st}><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a></td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
   base:      (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.base) : muted}</td>`,
   // 残り下落率: 到達後はマイナス値（超過幅）も表示（SEC-38）。到達=赤(reached)、残り5%以内=near。
