@@ -1312,15 +1312,27 @@ function openColPicker(market) {
       <label><input type="checkbox" onchange="cpToggle('${c.key}',this.checked)" ${c.visible ? 'checked' : ''}> ${esc(mc.label)}</label>
     </div>`;
   }).join('');
+  const other = market === 'US' ? 'JP' : market === 'JP' ? 'US' : null;
+  const copyBtn = other ? `<button type="button" class="btn btn-sm" onclick="copyColLayout('${market}','${other}')">この列設定を${MARKET_LABEL[other]}にもコピー</button>` : '';
   showModal('列の表示・並び替え', `
     <div class="cp-wrapper">
       <p class="muted" style="margin:0 0 10px">チェックで表示/非表示。ハンドル(⠿)をドラッグで並び替え。</p>
       <div id="cp-list">${itemsHtml}</div>
     </div>
-    <div class="form-actions" style="margin-top:12px">
+    <div class="form-actions" style="margin-top:12px;flex-wrap:wrap">
       <button type="button" class="btn btn-sm" onclick="cpReset()">デフォルトに戻す</button>
+      ${copyBtn}
       <button type="button" class="btn btn-primary" onclick="closeModal();render()">適用</button>
     </div>`);
+}
+// 列レイアウト（表示/非表示・並び順）を他の市場へコピー。米国株↔日本株。
+function copyColLayout(fromMarket, toMarket) {
+  reconcileColPrefs(fromMarket);
+  colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible }));
+  reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（米国株/日本株は同一列なので実質そのまま）
+  saveColPrefs();
+  toast(`列設定を${MARKET_LABEL[toMarket]}にコピーしました`, 4000);
+  openColPicker(_colPickerMarket);
 }
 function cpToggle(key, checked) {
   const order = getColOrder(_colPickerMarket);
@@ -4077,6 +4089,7 @@ window.bulkSetDetailType = bulkSetDetailType;
 window.bulkSetField = bulkSetField;
 window.bulkDeleteSecurities = bulkDeleteSecurities;
 window.copyDisplayedTable = copyDisplayedTable;
+window.copyColLayout = copyColLayout;
 window.openGenericImport = openGenericImport;
 window.giParse = giParse;
 window.giSetMap = giSetMap;
