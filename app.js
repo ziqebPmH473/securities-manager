@@ -162,10 +162,11 @@ const store = {
   _now() { return new Date().toISOString(); },
 
   // securities
-  addSecurity(s) { s.id = this.nextId(); this.data.securities.push(s); this.save(); return s; },
+  addSecurity(s) { s.id = this.nextId(); s.createdAt = this._now(); s.updatedAt = s.createdAt; this.data.securities.push(s); this.save(); return s; },
   updateSecurity(id, patch) {
     const s = this.data.securities.find(x => x.id === id);
     if (s) {
+      s.updatedAt = this._now();
       // カテゴリ変更時は、変更前カテゴリの適用金額をスナップショットに残す
       if (patch.category !== undefined && patch.category !== s.category && s.category) {
         const c = this.data.categories.find(x => x.category === s.category);
@@ -1053,6 +1054,8 @@ function sortValue(sec, key) {
     case 'ticker': return (sec.ticker || '').toLowerCase();
     case 'market': return sec.market;
     case 'detailType': return detailTypeOf(sec);
+    case 'createdAt': return sec.createdAt || '';
+    case 'updatedAt': return sec.updatedAt || '';
     case 'broker': return (calc.lastBroker(sec) || '').toLowerCase();
     case 'sigType': { const ev = calc.evaluate(sec); return ev ? ev.type : 'z'; }
     case 'category': return sec.category || '';
@@ -1621,6 +1624,7 @@ function renderSecMaster() {
     { k: 'sector', l: 'セクター', c: 'l' }, { k: 'industry', l: '業種', c: 'l' }, { k: 'rating', l: '格付', c: 'l' },
     { k: 'overallGrade', l: '総合評価', c: 'l' }, { k: 'buyGrade', l: '買い時評価', c: 'l' }, { k: 'recoCategory', l: 'AI推奨カテゴリ', c: 'l' },
     { k: 'priority', l: '優先順位', c: '' }, { k: 'ruleName', l: '買い増しルール', c: 'l' }, { k: 'category', l: 'AI判断', c: 'l' },
+    { k: 'createdAt', l: '追加日', c: 'l' }, { k: 'updatedAt', l: '更新日', c: 'l' },
   ];
   const smHead = '<th class="l"><input type="checkbox" onclick="smSelectAll(this.checked)" title="全選択"></th>'
     + SM_COLS.map(col => { const active = sk === col.k; const arrow = `<span class="sort-arrow">${active ? (dir > 0 ? '▲' : '▼') : ''}</span>`; return `<th class="${col.c} sortable${active ? ' active' : ''}" onclick="setSecMasterSort('${col.k}')">${col.l}${arrow}</th>`; }).join('') + '<th class="l"></th>';
@@ -1644,6 +1648,8 @@ function renderSecMaster() {
       <td>${s.priority != null ? num(s.priority) : muted}</td>
       <td class="l">${rule ? esc(rule.name) : muted}</td>
       <td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>
+      <td class="l">${s.createdAt ? fmtDate(s.createdAt) : muted}</td>
+      <td class="l">${s.updatedAt ? fmtDate(s.updatedAt) : muted}</td>
       <td class="l nowrap"><button class="btn btn-sm" onclick="openSecurityForm(${s.id})">編集</button></td>
     </tr>`;
   }).join('');
