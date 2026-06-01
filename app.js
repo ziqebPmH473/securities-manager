@@ -2956,7 +2956,8 @@ const GI_FIELDS = [
   { key: 'broker',        label: '証券会社' },
   { key: 'account',       label: '口座種別' },
   { key: 'quantity',      label: '数量' },
-  { key: 'avgCost',       label: '取得単価' },
+  { key: 'avgCost',       label: '取得単価（※約定価額と択一）' },
+  { key: 'acqValue',      label: '約定価額（※単価と択一・株数から単価を算出）' },
   { key: 'acqJpy',        label: '取得円(米株)' },
   { key: 'prevBuyPrice',  label: '前回購入価格' },
   { key: 'fixedBuyPrice', label: '買増固定値' },
@@ -2984,9 +2985,19 @@ const GI_FIELDS = [
   { key: 'starRisk',      label: '★リスク' },
 ];
 const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'recoCategory', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk']);
+// 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
+const GI_GROUPS = [
+  { g: '★必須', keys: ['ticker', 'market'] },
+  { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy'] },
+  { g: '判定・属性', keys: ['category', 'ruleName', 'detailType', 'prevBuyPrice', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch'] },
+  { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride'] },
+  { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'recoCategory', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
+];
+const GI_FIXED_KEYS = ['market', 'broker', 'account', 'detailType', 'category', 'ruleName'];
 // ヘッダ名→フィールドの自動対応（汎用出力の列もそのまま読める）
 const GI_AUTOMAP = { ...GENERIC_MAP,
   '取得円': 'acqJpy', '取得額(円)': 'acqJpy', '取得額（円）': 'acqJpy', '受渡金額(円)': 'acqJpy',
+  '約定価額': 'acqValue', '取得価額': 'acqValue', '約定代金': 'acqValue',
   '詳細種別': 'detailType', '総合評価': 'overallGrade', '銘柄格付': 'rating', '格付': 'rating', '買い時評価': 'buyGrade',
   '推奨カテゴリ': 'recoCategory', 'AI推奨カテゴリ': 'recoCategory', '購入優先順位': 'priority', '優先順位': 'priority',
   '評価日': 'analysisDate', '備考': 'analysisNote', '分析メモ': 'analysisNote',
@@ -3007,6 +3018,21 @@ function openGenericImport() {
     </div>
     <textarea id="gi-text" rows="6" style="width:100%;font-family:monospace;font-size:12px" placeholder="ヘッダ行を含めて貼り付け（タブ/カンマ区切り）" oninput="giParse(this.value)"></textarea>
     <div id="gi-map"></div>
+    <div class="grp-label" style="margin-top:8px">列に無い項目を固定値で指定（全行に適用・任意）</div>
+    <div class="btn-row" style="align-items:flex-end" id="gi-fixed">
+      <div class="field" style="width:auto"><label style="font-size:11px">市場</label>
+        <select id="gi-fix-market" onchange="giRenderPreview()"><option value="">―</option><option>US</option><option>JP</option></select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">証券会社</label>
+        <select id="gi-fix-broker" onchange="giRenderPreview()"><option value="">―</option>${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">口座</label>
+        <select id="gi-fix-account" onchange="giRenderPreview()"><option value="">―</option>${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">詳細種別</label>
+        <select id="gi-fix-detailType" onchange="giRenderPreview()"><option value="">―</option><option>個別株</option><option>ETF</option></select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">カテゴリ</label>
+        <select id="gi-fix-category" onchange="giRenderPreview()"><option value="">―</option>${[...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder).map(c => `<option>${esc(c.category)}</option>`).join('')}</select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">買い増しルール</label>
+        <select id="gi-fix-ruleName" onchange="giRenderPreview()"><option value="">―</option>${store.data.rules.map(r => `<option>${esc(r.name)}</option>`).join('')}</select></div>
+    </div>
     <div id="gi-preview"></div>
     <div class="btn-row" style="margin-top:10px;align-items:center">
       <input id="gi-format-name" placeholder="フォーマット名（保存用）" style="width:200px">
@@ -3022,6 +3048,12 @@ function giRefreshFormats() {
   const sel = document.getElementById('gi-format'); if (!sel) return;
   sel.innerHTML = `<option value="">― 保存フォーマット ―</option>` + (store.data.importFormats || []).map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
 }
+// 列に無い項目の固定値（全行に適用）
+function giFixedValues() {
+  const f = {};
+  for (const k of GI_FIXED_KEYS) { const e = document.getElementById('gi-fix-' + k); if (e && e.value) f[k] = e.value; }
+  return f;
+}
 function giParse(text) {
   const raw = text.includes('\t') ? text.split(/\r?\n/).map(l => l.split('\t')) : parseCsvText(text);
   const rows = raw.filter(r => r.some(c => String(c).trim() !== ''));
@@ -3033,7 +3065,8 @@ function giParse(text) {
   giRenderMap();
 }
 function giRenderMap() {
-  const opts = (sel) => `<option value="">（取込まない）</option>` + GI_FIELDS.map(f => `<option value="${f.key}" ${sel === f.key ? 'selected' : ''}>${esc(f.label)}${f.req ? ' *' : ''}</option>`).join('');
+  const fieldOpt = (k, sel) => { const f = GI_FIELDS.find(x => x.key === k); return `<option value="${k}" ${sel === k ? 'selected' : ''}>${esc(f.label)}${f.req ? ' *' : ''}</option>`; };
+  const opts = (sel) => `<option value="">（取込まない）</option>` + GI_GROUPS.map(g => `<optgroup label="${esc(g.g)}">${g.keys.map(k => fieldOpt(k, sel)).join('')}</optgroup>`).join('');
   const items = _giHeaders.map((h, i) => `<div class="field" style="min-width:170px;flex:0 0 auto">
     <label style="font-size:11px">${esc(h || '(空欄)')}</label>
     <select onchange="giSetMap(${i}, this.value)">${opts(_giMapping[i])}</select></div>`).join('');
@@ -3043,7 +3076,10 @@ function giRenderMap() {
 function giSetMap(i, v) { _giMapping[i] = v; giRenderPreview(); }
 function giRenderPreview() {
   const used = _giMapping.map((f, i) => ({ f, i })).filter(x => x.f);
-  const warn = (!_giMapping.includes('ticker') || !_giMapping.includes('market')) ? `<div class="notice">コード・市場の割当が必要です（必須 *）。</div>` : '';
+  const fixed = giFixedValues();
+  const needTicker = !_giMapping.includes('ticker');
+  const needMarket = !_giMapping.includes('market') && !fixed.market;
+  const warn = (needTicker || needMarket) ? `<div class="notice">${needTicker ? 'コード' : ''}${needTicker && needMarket ? '・' : ''}${needMarket ? '市場' : ''}の割当（市場は固定値でも可）が必要です。</div>` : '';
   const head = used.map(x => `<th class="l">${esc(GI_FIELDS.find(f => f.key === x.f).label)}</th>`).join('');
   const body = _giRows.slice(0, 5).map(r => `<tr>${used.map(x => `<td class="l">${esc(r[x.i] != null ? String(r[x.i]).trim() : '')}</td>`).join('')}</tr>`).join('');
   document.getElementById('gi-preview').innerHTML = warn + (used.length ? `<div class="muted" style="margin:0 0 4px">プレビュー（先頭5行 / 全${_giRows.length}行）</div><div class="table-wrap" style="max-height:200px"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>` : '');
@@ -3051,7 +3087,7 @@ function giRenderPreview() {
 function giParseValue(field, raw) {
   const v = raw == null ? '' : String(raw).trim();
   switch (field) {
-    case 'quantity': case 'avgCost': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount':
+    case 'quantity': case 'avgCost': case 'acqValue': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount':
       return numClean(v);
     case 'buyCount': case 'priority': case 'starValuation': case 'starStrength': case 'starRisk': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
     case 'enabled': return /有効|^1$|true|yes|○|有/i.test(v);
@@ -3065,13 +3101,19 @@ function giParseValue(field, raw) {
 }
 function runGenericImport() {
   if (!_giRows.length) { toast('データがありません'); return; }
-  if (!_giMapping.includes('ticker') || !_giMapping.includes('market')) { toast('コード・市場の割当が必要です'); return; }
+  const fixed = giFixedValues();
+  if (!_giMapping.includes('ticker')) { toast('コードの割当が必要です'); return; }
+  if (!_giMapping.includes('market') && !fixed.market) { toast('市場の割当（または固定値）が必要です'); return; }
   const create = document.getElementById('gi-create').checked;
   let updated = 0, created = 0, skipped = 0, holdingSet = 0;
   const touched = [];
   for (const row of _giRows) {
     const rec = {};
     _giMapping.forEach((f, i) => { if (f) rec[f] = giParseValue(f, row[i]); });
+    // 列に無い項目は固定値で補完（列値が空の時のみ）
+    for (const k of GI_FIXED_KEYS) { if (fixed[k] != null && (rec[k] == null || rec[k] === '')) rec[k] = giParseValue(k, fixed[k]); }
+    // 約定価額→取得単価（単価未指定かつ株数あり）
+    if (rec.avgCost == null && rec.acqValue != null && rec.quantity) rec.avgCost = rec.acqValue / rec.quantity;
     const market = rec.market, ticker = (rec.ticker || '').toString().trim();
     if (!ticker || !market) { skipped++; continue; }
     const tk = market === 'US' ? ticker.toUpperCase() : ticker;
@@ -3117,8 +3159,9 @@ function giSaveFormat() {
   if (!_giHeaders.length) { toast('先にデータを貼り付けてください'); return; }
   const mapping = {};
   _giHeaders.forEach((h, i) => { if (_giMapping[i]) mapping[h] = _giMapping[i]; });
+  const fixed = giFixedValues();
   const ex = store.data.importFormats.find(f => f.name === name);
-  if (ex) ex.mapping = mapping; else store.data.importFormats.push({ id: store.nextId(), name, mapping });
+  if (ex) { ex.mapping = mapping; ex.fixed = fixed; } else store.data.importFormats.push({ id: store.nextId(), name, mapping, fixed });
   store.save(); giRefreshFormats(); toast(`フォーマット「${name}」を保存しました`);
 }
 function giLoadFormat() {
@@ -3127,6 +3170,8 @@ function giLoadFormat() {
   if (!fmt) { toast('フォーマットを選択してください'); return; }
   if (!_giHeaders.length) { toast('先にデータを貼り付けてください'); return; }
   _giMapping = _giHeaders.map(h => fmt.mapping[h] || '');
+  const fx = fmt.fixed || {};
+  for (const k of GI_FIXED_KEYS) { const e = document.getElementById('gi-fix-' + k); if (e) e.value = fx[k] || ''; }
   giRenderMap();
   toast(`フォーマット「${fmt.name}」を適用`);
 }
