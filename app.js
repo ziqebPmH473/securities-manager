@@ -2880,7 +2880,11 @@ function runBrokerImport() {
   store.save();
   closeModal(); render();
   toast(`取込完了: 更新 ${updated} / 新規 ${created}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
-  if (touched.length) api.refreshMeta(touched).then(render);
+  if (touched.length) {
+    // 価格未取得の銘柄があれば「価格更新」と同じ処理(refreshAll=価格+為替+指数+未取得名)を自動実行。無ければ銘柄情報だけ。
+    const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
+    (needPrice ? api.refreshAll() : api.refreshMeta(touched)).then(render);
+  }
 }
 
 // 取込フィールド設定（マッピング）の編集UI。列名/位置が変わってもコード変更なしで調整可
@@ -3176,7 +3180,11 @@ function runGenericImport() {
   }
   store.save(); closeModal(); render();
   toast(`汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
-  if (touched.length) api.refreshMeta(touched).then(render);
+  if (touched.length) {
+    // 価格未取得の銘柄があれば「価格更新」と同じ処理(refreshAll=価格+為替+指数+未取得名)を自動実行。無ければ銘柄情報だけ。
+    const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
+    (needPrice ? api.refreshAll() : api.refreshMeta(touched)).then(render);
+  }
 }
 function giSaveFormat() {
   const name = (document.getElementById('gi-format-name').value || '').trim();
