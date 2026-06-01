@@ -1147,6 +1147,8 @@ function renderMarket(market) {
   const headHtml = colHeadHtml(visibleCols, st, market, ccy);
   // 列幅（table-layout:fixed）。先頭=チェック / 末尾=操作 の固定列＋各列の幅
   const colgroupHtml = `<colgroup><col style="width:36px">${visOrder.map(c => `<col style="width:${colWidthPx(c)}px">`).join('')}<col style="width:44px"></colgroup>`;
+  // テーブル幅＝列幅合計。width:100%だと固定幅が圧縮され横スクロールが出ないため、合計幅を明示（min-width:100%で不足時は伸長）
+  const tableW = 36 + 44 + visOrder.reduce((a, c) => a + colWidthPx(c), 0);
 
   app.innerHTML = `
     <div class="section">
@@ -1178,7 +1180,7 @@ function renderMarket(market) {
       </div>
       <div class="section-body">
         ${secs.length === 0 ? `<div class="empty">該当する銘柄がありません。</div>` : `
-        <div class="table-wrap"><table class="fixed-cols">${colgroupHtml}
+        <div class="table-wrap"><table class="fixed-cols" style="width:${tableW}px">${colgroupHtml}
           <thead><tr><th class="l"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>${headHtml}<th class="l"></th></tr></thead>
           <tbody>
             ${secs.map(sec => marketRow(sec, visibleCols, { select: true })).join('')}
