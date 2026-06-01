@@ -1483,7 +1483,7 @@ function renderReport() {
     const tm = ensure(byTypeMarket, dt + '|' + m); tm.valJpy += valJ; tm.costJpy += costJ; tm.secs.add(sec.id);
   }
   // 種別×市場の集計行（種別を親、日本株/米国株を子。各種別に小計）
-  const TYPE_ORDER = ['個別株', 'ETF', '投資信託'];
+  const TYPE_ORDER = ['個別株', 'ETF'];
   const presentTypes = TYPE_ORDER.filter(dt => ['US', 'JP'].some(m => byTypeMarket[dt + '|' + m]));
   const tmRows = presentTypes.map(dt => {
     let sv = 0, sc = 0; const sset = new Set();
@@ -1613,7 +1613,7 @@ function renderSecMaster() {
         <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます。「手」=手動上書き中。詳細種別の「auto」=自動判定（未設定）。</p>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
           <span class="muted">選択した銘柄の詳細種別を</span>
-          <select id="sm-bulk-detail">${['個別株', 'ETF', '投資信託', '（自動判定に戻す）'].map(o => `<option>${o}</option>`).join('')}</select>
+          <select id="sm-bulk-detail">${['個別株', 'ETF', '（自動判定に戻す）'].map(o => `<option>${o}</option>`).join('')}</select>
           <button class="btn btn-sm" onclick="bulkSetDetailType()">一括変更</button>
         </div>
         <div class="table-wrap"><table>
@@ -1779,7 +1779,7 @@ function openSecurityForm(id, presetMarket) {
         <div class="field"><label>詳細種別（貼付出力用）</label>
           <select name="detailType">
             <option value="" ${!sec || !sec.detailType ? 'selected' : ''}>自動判定（${sec ? esc(autoDetailType(sec)) : '個別株'}）</option>
-            ${['個別株', 'ETF', '投資信託'].map(t => `<option ${sec && sec.detailType === t ? 'selected' : ''}>${t}</option>`).join('')}
+            ${['個別株', 'ETF'].map(t => `<option ${sec && sec.detailType === t ? 'selected' : ''}>${t}</option>`).join('')}
           </select></div>
       </div>
 
@@ -3218,14 +3218,13 @@ function excelExportControlsHtml() {
     <div id="xe-out" style="margin-top:12px"></div>`;
 }
 
-// 詳細種別の自動判定（初期値用）: Yahoo種別(quoteType) > 名前のETF/投信表記 > 資産クラス > 個別株。
+// 詳細種別の自動判定（初期値用）: Yahoo種別(quoteType) > 名前のETF表記 > 個別株。
+// 投信はツール対象外のため詳細種別は 個別株/ETF の2種のみ。
 function autoDetailType(sec) {
   const qt = (calc.metaOf(sec).quoteType || '').toUpperCase();
   if (qt === 'ETF') return 'ETF';
-  if (qt === 'MUTUALFUND') return '投資信託';
   const name = calc.displayName(sec) || '';
   if (/ETF|ＥＴＦ/i.test(name)) return 'ETF';
-  if (/投資信託|ファンド/.test(name) || sec.assetClass === 'fund') return '投資信託';
   return '個別株';
 }
 // 出力に使う詳細種別: 銘柄ごとの保存値(detailType=マスタ)を優先。空なら自動判定を初期値として使用。

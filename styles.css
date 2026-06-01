@@ -107,8 +107,8 @@ tbody tr:hover { background: var(--panel-2); }
 
 /* 残り下落率バッジ */
 .drop { font-weight: 600; }
-.drop.reached { color: var(--red); }
-.drop.near { color: var(--amber); }
+.drop.reached { color: var(--red); background: rgba(220, 38, 38, 0.16); }
+.drop.near { color: var(--amber); background: rgba(245, 158, 11, 0.18); }
 .drop.far { color: var(--muted); }
 
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
