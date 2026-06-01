@@ -47,9 +47,9 @@ const MASTER_COLS = [
   { key: 'broker',      label: '証券会社',         left: true,  markets: ALLM, noSort: false },
   { key: 'sigType',     label: '種別',             left: true,  markets: ['SIGNAL'], noSort: false },
   { key: 'price',       label: '現在値',           left: false, markets: ALLM, noSort: false },
-  { key: 'day',         label: '前日比',           left: false, markets: ALLM, noSort: true  },
-  { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: true  },
-  { key: 'base',        label: '基準値',           left: false, markets: ['SIGNAL'], noSort: true },
+  { key: 'day',         label: '前日比',           left: false, markets: ALLM, noSort: false },
+  { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: false },
+  { key: 'base',        label: '基準値',           left: false, markets: ['SIGNAL'], noSort: false },
   { key: 'drop',        label: '残り下落率',       left: false, markets: STKM, noSort: false },
   { key: 'dropPrev',    label: '残り下落率(前日)', left: false, markets: STKM, noSort: false },
   { key: 'high5y',      label: '5年高値',          left: false, markets: STKM, noSort: false },
@@ -1103,6 +1103,7 @@ function sortValue(sec, key) {
     case 'dropFrom52w': return calc.dropFrom52w(sec) ?? Infinity;
     case 'value': return calc.valueOrCostNative(sec) ?? -Infinity;
     case 'pnl': return calc.pnlPctNative(sec) ?? -Infinity;
+    case 'day': { const p = store.data.prices[priceKey(sec)] || {}; return (p.price != null && p.prevClose) ? (p.price - p.prevClose) / p.prevClose * 100 : -Infinity; }
     case 'trigger': { const ev = calc.evaluate(sec); return ev ? ev.trigger : -Infinity; }
     case 'base': { const ev = calc.evaluate(sec); return ev ? ev.base : -Infinity; }
     case 'drop': { const ev = calc.evaluate(sec); return ev ? ev.remainingDropPct : Infinity; }
