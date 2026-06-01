@@ -1441,10 +1441,16 @@ function importHistorySection() {
 // 証券会社ごとの最終取込日時（取込忘れ防止）。固定プロファイル単位で最終取込を表示。
 function importStatusHtml() {
   const hist = store.data.importHistory || [];
-  const last = {};
+  const last = {};        // 固定プロファイル: profile→entry
+  const lastGeneric = {}; // 汎用洗い替え: broker|market→entry
   for (const h of hist) {
-    const k = h.profile || h.broker || '';
-    if (!last[k] || (h.importedAt || '') > (last[k].importedAt || '')) last[k] = h;
+    if (h.profile === 'generic' && h.broker) {
+      const gk = h.broker + '|' + ((h.markets && h.markets[0]) || '');
+      if (!lastGeneric[gk] || (h.importedAt || '') > (lastGeneric[gk].importedAt || '')) lastGeneric[gk] = h;
+    } else {
+      const k = h.profile || h.broker || '';
+      if (!last[k] || (h.importedAt || '') > (last[k].importedAt || '')) last[k] = h;
+    }
   }
   const fixed = Object.entries(IMPORT_PROFILES).filter(([, p]) => p.fixed);
   const rows = fixed.map(([k, p]) => {
@@ -1454,9 +1460,14 @@ function importStatusHtml() {
     const cnt = h ? `${h.count}件` : '—';
     return `<tr><td class="l">${esc(label)}</td><td class="l">${when}</td><td>${cnt}</td></tr>`;
   }).join('');
+  // 汎用洗い替えの取込（Webull等・固定形式なし）も表示
+  const grows = Object.entries(lastGeneric).map(([gk, h]) => {
+    const [b, m] = gk.split('|');
+    return `<tr><td class="l">${esc(b)} ${MARKET_LABEL[m] || m}（汎用）</td><td class="l">${fmtDateTime(h.importedAt)}</td><td>${h.count}件</td></tr>`;
+  }).join('');
   return `<div class="table-wrap"><table>
     <thead><tr><th class="l">証券会社（取込形式）</th><th class="l">最終取込日時</th><th>件数</th></tr></thead>
-    <tbody>${rows}</tbody>
+    <tbody>${rows}${grows}</tbody>
   </table></div>`;
 }
 
@@ -3178,6 +3189,14 @@ function runGenericImport() {
     }
     touched.push(sec);
   }
+  // 洗い替え時のみ取込日時を記録（取込状況に反映。Webull等フォーマット無しの証券会社向け）
+  if (mode === 'replace' && fixed.broker && fixed.market) {
+    store.data.importHistory.unshift({
+      id: store.nextId(), profile: 'generic', label: `汎用(${fixed.broker} ${MARKET_LABEL[fixed.market] || fixed.market})`,
+      broker: fixed.broker, markets: [fixed.market], mode: 'replace', count: holdingSet,
+      importedAt: new Date().toISOString(), baseDate: null,
+    });
+  }
   store.save(); closeModal(); render();
   toast(`汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
   if (touched.length) {
@@ -3499,6 +3518,8 @@ function lastImportByProfile() {
   for (const e of (store.data.importHistory || [])) {
     const k = e.profile; if (!k) continue;
     if (!last[k] || (e.importedAt || '') > (last[k] || '')) last[k] = e.importedAt;
+    // 汎用取込は取込単位キー(broker:〜)でも引けるようにする（エクスポートの取込単位表示用）
+    if (e.broker) { const bk = 'broker:' + e.broker; if (!last[bk] || (e.importedAt || '') > (last[bk] || '')) last[bk] = e.importedAt; }
   }
   return last;
 }
