@@ -32,7 +32,7 @@ const DEFAULT_RULE = {
 const MARKET_LABEL = { US: '米国株', JP: '日本株', FUND: '投信' };
 const MARKET_CCY = { US: '$', JP: '¥', FUND: '¥' };
 const BASE_HIGH_LABEL = { '5y': '5年高値', '52w': '52週高値', 'all': '上場来高値', 'manual': '手動指定' };
-const BROKERS = ['SBI', '楽天', 'Webull', 'moomoo', 'SMBC日興'];
+const BROKERS = ['SBI', '楽天', 'Webull', 'moomoo', 'SMBC日興', 'マネックス'];
 const ACCOUNTS = ['特定', 'NISA', '一般'];
 // ---------- カラム定義 ----------
 // 全カラムのマスタ定義。配列の順＝表示順のベース（ピッカーで個別に並び替え可）
@@ -3677,6 +3677,77 @@ function mfTransferGenerate() {
       style="width:100%;font-family:monospace;white-space:pre" readonly>${esc(text)}</textarea></div>`;
 }
 
+// 投資信託 転記（転記専用）。各社の保有一覧（投信部分）→ 12列の投資信託行。ツールには保存しない。SEC-59
+// ヘッダから 評価額/取得金額/ファンド名 の列を検出し、セクション見出し(株式/投信・特定/NISA)で口座と対象を切替。
+function detectFundHeader(cells) {
+  const idx = {};
+  cells.forEach((c, i) => {
+    const t = String(c).trim();
+    if (idx.name == null && /ファンド名|銘柄名称|^銘柄名$|^銘柄$|^ファンド$/.test(t)) idx.name = i;
+    if (idx.acq == null && /取得金額|取得額/.test(t)) idx.acq = i;
+    if (idx.eval == null && /(時価)?評価額(\[円\])?$/.test(t)) idx.eval = i;
+    if (idx.account == null && /口座|預り区分|口座区分/.test(t)) idx.account = i;
+  });
+  return (idx.name != null && idx.eval != null) ? idx : null;
+}
+function parseFundRows(text) {
+  const rows = parseCsvText(text || '');
+  let col = null, section = 'fund', acct = null;
+  const out = [];
+  for (const cells of rows) {
+    const joined = cells.join('').trim();
+    if (!joined) continue;
+    // セクション/口座/合計の見出し行は「短い行(2セル以下)」のみで判定（データ行の銘柄名に"株式"等が含まれても誤検知しない）
+    if (cells.length <= 2) {
+      if (/投資信託[（(]/.test(joined)) { section = 'fund'; acct = /NISA/.test(joined) ? 'NISA' : /一般/.test(joined) ? '一般' : '特定'; }
+      else if (/株式[（(]|債券[（(]/.test(joined)) { section = 'stock'; acct = /NISA/.test(joined) ? 'NISA' : /一般/.test(joined) ? '一般' : '特定'; }
+      continue; // 合計・見出し行はデータにしない
+    }
+    // ヘッダ行
+    const idx = detectFundHeader(cells);
+    if (idx) { col = idx; continue; }
+    if (section !== 'fund' || !col) continue;
+    const name = (cells[col.name] || '').trim();
+    const ev = numClean(cells[col.eval]);
+    if (!name || ev == null) continue;
+    const acq = col.acq != null ? numClean(cells[col.acq]) : null;
+    const account = (col.account != null && cells[col.account]) ? normAccount(cells[col.account]) : acct;
+    out.push({ name, evalJpy: ev, acqJpy: acq, account });
+  }
+  return out;
+}
+function fundTransferControlsHtml() {
+  return `
+    <p class="muted" style="margin:0 0 10px">各社の保有証券一覧（投信部分）を貼り付け→「変換」。評価額・取得金額をそのまま12列の投資信託行（種別・詳細種別＝投資信託）に変換します。口座は明細/見出し（特定・NISA）から自動判定、無ければ既定を使用。<strong>投信は買い増し判定・資産合計には含めません（転記専用）</strong>。</p>
+    <div class="btn-row" style="align-items:flex-end">
+      <div class="field" style="width:auto"><label style="font-size:11px">証券会社（必須）</label>
+        <select id="fund-broker"><option value="">―</option>${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">口座（明細に無い時の既定）</label>
+        <select id="fund-account">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="fund-header" checked> ヘッダ行を含める</label>
+    </div>
+    <textarea id="fund-text" rows="7" style="width:100%;font-family:monospace;font-size:12px" placeholder="保有証券一覧（投信部分）をヘッダごと貼り付け"></textarea>
+    <div class="btn-row"><button type="button" class="btn btn-primary" onclick="fundGenerate()">変換</button></div>
+    <div id="fund-out"></div>`;
+}
+function fundGenerate() {
+  const broker = document.getElementById('fund-broker').value;
+  if (!broker) { toast('証券会社を選択してください'); return; }
+  const defAcct = document.getElementById('fund-account').value || '特定';
+  const includeHeader = document.getElementById('fund-header').checked;
+  const items = parseFundRows(document.getElementById('fund-text').value);
+  const r1 = (n) => n == null ? '' : Math.round(n);
+  const rows = items.map(c => [c.name, '', '投資信託', '投資信託', broker, c.account || defAcct, 'JPY', r1(c.evalJpy), '', r1(c.acqJpy), '', '']);
+  const body = rows.map(r => r.join('\t')).join('\n');
+  const text = includeHeader && rows.length ? EXCEL_EXPORT_COLS.join('\t') + '\n' + body : body;
+  const total = rows.reduce((s, r) => s + (Number(r[7]) || 0), 0);
+  document.getElementById('fund-out').innerHTML = `<div class="field">
+    <label>投資信託（${rows.length}件・評価額合計 ${total.toLocaleString('ja-JP')}円）
+      <button type="button" class="btn" style="padding:2px 10px" onclick="excelExportCopy('fund-ta')" ${rows.length ? '' : 'disabled'}>コピー</button></label>
+    <textarea id="fund-ta" rows="${Math.min(14, Math.max(3, rows.length + (includeHeader ? 1 : 0)))}"
+      style="width:100%;font-family:monospace;white-space:pre" readonly>${esc(text)}</textarea></div>`;
+}
+
 // 米国株 取得額(円) の一括取込（転記タブにインライン常設）。1行＝ティッカー＋取得額(円)〔＋証券会社〕。
 function acqJpyControlsHtml() {
   return `
@@ -3731,6 +3802,10 @@ function renderTransfer() {
     <div class="section">
       <div class="section-head"><h2>米国株 取得額(円) 一括取込</h2></div>
       <div class="section-body" style="padding:16px">${acqJpyControlsHtml()}</div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>投資信託 転記（投信CSV→Excel貼付）</h2></div>
+      <div class="section-body" style="padding:16px">${fundTransferControlsHtml()}</div>
     </div>
     <div class="section">
       <div class="section-head"><h2>現金・銀行 転記（マネーフォワード）</h2></div>
@@ -3840,6 +3915,7 @@ window.excelExportGenerate = excelExportGenerate;
 window.excelExportCopy = excelExportCopy;
 window.runAcqJpyImport = runAcqJpyImport;
 window.mfTransferGenerate = mfTransferGenerate;
+window.fundGenerate = fundGenerate;
 window.smSelectAll = smSelectAll;
 window.bulkSetDetailType = bulkSetDetailType;
 window.openGenericImport = openGenericImport;
