@@ -1190,10 +1190,12 @@ function renderMarket(market) {
 
 // ヘッダHTML生成（一覧・サイン共通）
 function colHeadHtml(visibleCols, st, market, ccy) {
+  const ovMap = {}; getColOrder(market).forEach(c => { if (c.labelOverride) ovMap[c.key] = c.labelOverride; });
   return visibleCols.map(col => {
     const mc = MASTER_COLS.find(c => c.key === col.key);
     const cls2 = `${mc.left ? 'l' : ''} ${mc.narrow ? 'col-code' : ''}`.trim();
-    const label = (['value','cost','buyAmount','reco','high5y','high52w','prevBuyPrice'].includes(col.key) && ccy && ccy !== '¥')
+    const label = ovMap[col.key] ? ovMap[col.key]
+      : (['value','cost','buyAmount','reco','high5y','high52w','prevBuyPrice'].includes(col.key) && ccy && ccy !== '¥')
       ? `${mc.label}(${ccy})` : mc.label;
     if (mc.noSort) return `<th class="${cls2}">${label}</th>`;
     const active = st.sortKey === col.key;
@@ -1323,27 +1325,35 @@ function openColPicker(market) {
     return `<div class="cp-item" draggable="true" data-idx="${i}"
         ondragstart="cpDragStart(event,${i})" ondragover="cpDragOver(event,${i})" ondrop="cpDrop(event,${i})" ondragend="cpDragEnd()">
       <span class="cp-handle">⠿</span>
-      <label style="flex:1"><input type="checkbox" onchange="cpToggle('${c.key}',this.checked)" ${c.visible ? 'checked' : ''}> ${esc(mc.label)}</label>
-      <input type="number" min="40" step="2" value="${colWidthPx(c)}" title="列幅(px)" style="width:64px;text-align:right" onchange="cpSetWidth('${c.key}', this.value)"><span class="muted" style="font-size:11px">px</span>
+      <input type="checkbox" onchange="cpToggle('${c.key}',this.checked)" ${c.visible ? 'checked' : ''} title="表示/非表示" style="width:auto">
+      <input type="text" value="${esc(c.labelOverride || '')}" placeholder="${esc(mc.label)}" onchange="cpSetLabel('${c.key}', this.value)" title="列名（空欄＝既定: ${esc(mc.label)}）" style="flex:1;min-width:140px">
+      <input type="number" min="40" step="2" value="${colWidthPx(c)}" onfocus="this.select()" onchange="cpSetWidth('${c.key}', this.value)" title="列幅(px)" style="width:74px;text-align:right"><span class="muted" style="font-size:11px">px</span>
     </div>`;
   }).join('');
   const other = market === 'US' ? 'JP' : market === 'JP' ? 'US' : null;
-  const copyBtn = other ? `<button type="button" class="btn btn-sm" onclick="copyColLayout('${market}','${other}')">この列設定を${MARKET_LABEL[other]}にもコピー</button>` : '';
-  showModal('列の表示・並び替え', `
+  const copyBtn = other ? `<button type="button" class="btn btn-sm" onclick="copyColLayout('${market}','${other}')">この設定を${MARKET_LABEL[other]}にもコピー</button>` : '';
+  showModal('列の表示・並び替え・幅・列名', `
+    <p class="muted" style="margin:0 0 8px">チェック=表示/非表示、ハンドル(⠿)ドラッグで並び替え、テキスト=列名（空欄で既定）、数値=列幅(px)。</p>
+    <div class="btn-row" style="align-items:center;margin:0 0 8px">
+      <span class="muted">全列幅を</span>
+      <input type="number" id="cp-all-width" min="40" step="2" value="90" onfocus="this.select()" style="width:74px;text-align:right">
+      <span class="muted">px に</span>
+      <button type="button" class="btn btn-sm" onclick="cpSetAllWidths()">一括設定</button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn btn-sm" onclick="cpReset()">既定に戻す</button>
+    </div>
     <div class="cp-wrapper">
-      <p class="muted" style="margin:0 0 10px">チェックで表示/非表示。ハンドル(⠿)をドラッグで並び替え。</p>
       <div id="cp-list">${itemsHtml}</div>
     </div>
     <div class="form-actions" style="margin-top:12px;flex-wrap:wrap">
-      <button type="button" class="btn btn-sm" onclick="cpReset()">デフォルトに戻す</button>
       ${copyBtn}
       <button type="button" class="btn btn-primary" onclick="closeModal();render()">適用</button>
-    </div>`);
+    </div>`, { wide: true });
 }
 // 列レイアウト（表示/非表示・並び順）を他の市場へコピー。米国株↔日本株。
 function copyColLayout(fromMarket, toMarket) {
   reconcileColPrefs(fromMarket);
-  colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width }));
+  colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width, labelOverride: c.labelOverride }));
   reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（米国株/日本株は同一列なので実質そのまま）
   saveColPrefs();
   toast(`列設定を${MARKET_LABEL[toMarket]}にコピーしました`, 4000);
@@ -1358,6 +1368,18 @@ function cpSetWidth(key, px) {
   const order = getColOrder(_colPickerMarket);
   const c = order.find(x => x.key === key);
   if (c) { const n = parseInt(px, 10); c.width = (isNaN(n) || n < 40) ? undefined : n; saveColPrefs(); }
+}
+function cpSetAllWidths() {
+  const n = parseInt((document.getElementById('cp-all-width') || {}).value, 10);
+  if (isNaN(n) || n < 40) { toast('40以上の幅を入力してください'); return; }
+  getColOrder(_colPickerMarket).forEach(c => c.width = n);
+  saveColPrefs(); openColPicker(_colPickerMarket);
+  toast(`全列幅を ${n}px にしました`, 3000);
+}
+function cpSetLabel(key, val) {
+  const order = getColOrder(_colPickerMarket);
+  const c = order.find(x => x.key === key);
+  if (c) { const v = (val || '').trim(); c.labelOverride = v || undefined; saveColPrefs(); }
 }
 function cpDragStart(e, idx) { _dragSrcIdx = idx; e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('cp-dragging'); }
 function cpDragOver(e, idx) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
@@ -4111,6 +4133,8 @@ window.bulkDeleteSecurities = bulkDeleteSecurities;
 window.copyDisplayedTable = copyDisplayedTable;
 window.copyColLayout = copyColLayout;
 window.cpSetWidth = cpSetWidth;
+window.cpSetAllWidths = cpSetAllWidths;
+window.cpSetLabel = cpSetLabel;
 window.openGenericImport = openGenericImport;
 window.giParse = giParse;
 window.giSetMap = giSetMap;
