@@ -2455,10 +2455,27 @@ function openPasteImport(kind) {
     </form>`);
   const form = document.getElementById('import-form');
   const preview = document.getElementById('import-preview');
-  form.data.addEventListener('input', () => {
+  const colmap = isAnalysis ? ANALYSIS_COLMAP : HOLDING_COLMAP;
+  const renderPv = () => {
     const rows = parsePasted(form.data.value);
-    preview.textContent = rows.length ? `${rows.length} 行を検出（ヘッダ含む）。${rows.length - 1} 件を取り込みます。` : '';
-  });
+    if (!rows.length) { preview.innerHTML = ''; return; }
+    if (rows.length < 2) { preview.innerHTML = '<span class="neg">ヘッダ行＋データ行が必要です（1行目に列名）。</span>'; return; }
+    const idx = mapHeader(rows[0], colmap);
+    const tIdx = idx.indexOf('ticker');
+    if (tIdx < 0) { preview.innerHTML = '<span class="neg">「銘柄名/ティッカー（コード）」の列が見つかりません。1行目の列名を確認してください。</span>'; return; }
+    const market = form.market.value;
+    let bad = 0;
+    for (let i = 1; i < rows.length; i++) { if (!validTicker((rows[i][tIdx] || '').trim(), market)) bad++; }
+    const body = rows.slice(1, 11).map(r => {
+      const tk = (r[tIdx] || '').trim(); const ok = validTicker(tk, market);
+      const others = r.filter((_, j) => j !== tIdx).slice(0, 4).join(' / ');
+      return `<tr><td class="l">${ok ? '<span class="pos">✓</span>' : '<span class="neg" title="形式NG（取込まれません）">⚠</span>'}</td><td class="l">${esc(tk)}</td><td class="l muted">${esc(others)}</td></tr>`;
+    }).join('');
+    preview.innerHTML = `<div style="margin:4px 0">取込予定 ${rows.length - 1}件${bad ? ` ／ <span class="neg">形式NG ${bad}件（取込まれません）</span>` : ''}（先頭${Math.min(10, rows.length - 1)}行プレビュー）</div>
+      <div class="table-wrap" style="max-height:220px"><table><thead><tr><th class="l">形式</th><th class="l">コード</th><th class="l">他の列</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  };
+  form.data.addEventListener('input', renderPv);
+  form.market.addEventListener('change', renderPv);
   form.onsubmit = (e) => {
     e.preventDefault();
     const market = form.market.value;
@@ -2467,7 +2484,7 @@ function openPasteImport(kind) {
       ? importAnalysis(form.data.value, market, create)
       : importHoldings(form.data.value, market, create);
     closeModal();
-    reportImport(result.touched, `取込完了: 更新 ${result.updated}件 / 新規 ${result.created}件${result.skipped ? ` / スキップ ${result.skipped}件` : ''}${result.stale ? ` / 古い分析 ${result.stale}件は取込まず` : ''}`);
+    reportImport(result.touched, `取込完了: 更新 ${result.updated}件 / 新規 ${result.created}件${result.skipped ? ` / スキップ ${result.skipped}件` : ''}${result.badFmt ? ` / 形式NG ${result.badFmt}件は取込まず` : ''}${result.stale ? ` / 古い分析 ${result.stale}件は取込まず` : ''}`);
   };
 }
 
@@ -2489,16 +2506,25 @@ function mapHeader(headerCells, colmap) {
   return headerCells.map(h => colmap[(h || '').trim()] || null);
 }
 
+// ティッカー/コードの形式チェック。日本株=半角英数4桁（7203/278A等）、米国株=大文字英字（.含む）最大6
+function validTicker(ticker, market) {
+  const t = (ticker || '').trim();
+  if (!t) return false;
+  if (market === 'JP') return /^[0-9A-Za-z]{4}$/.test(t);
+  return /^[A-Z][A-Z.]{0,5}$/.test(t.toUpperCase());
+}
+
 function importAnalysis(text, market, create) {
   const rows = parsePasted(text);
   if (rows.length < 2) return { updated: 0, created: 0, skipped: 0 };
   const idx = mapHeader(rows[0], ANALYSIS_COLMAP);
-  let updated = 0, created = 0, skipped = 0, stale = 0; const touched = [];
+  let updated = 0, created = 0, skipped = 0, stale = 0, badFmt = 0; const touched = [];
   for (let i = 1; i < rows.length; i++) {
     const rec = {};
     rows[i].forEach((cell, j) => { if (idx[j]) rec[idx[j]] = (cell || '').trim(); });
     const ticker = (rec.ticker || '').trim();
     if (!ticker) { skipped++; continue; }
+    if (!validTicker(ticker, market)) { badFmt++; continue; }   // 形式NG（日本株4桁/米国株大文字英字）は取込まない
     let sec = store.findSecurity(market, ticker);
     const isNew = !sec;
     if (!sec) {
@@ -2544,19 +2570,20 @@ function importAnalysis(text, market, create) {
     store.updateSecurity(sec.id, patch);
     touched.push(sec);
   }
-  return { updated, created, skipped, stale, touched };
+  return { updated, created, skipped, stale, badFmt, touched };
 }
 
 function importHoldings(text, market, create) {
   const rows = parsePasted(text);
   if (rows.length < 2) return { updated: 0, created: 0, skipped: 0, touched: [] };
   const idx = mapHeader(rows[0], HOLDING_COLMAP);
-  let updated = 0, created = 0, skipped = 0; const touched = [];
+  let updated = 0, created = 0, skipped = 0, badFmt = 0; const touched = [];
   for (let i = 1; i < rows.length; i++) {
     const rec = {};
     rows[i].forEach((cell, j) => { if (idx[j]) rec[idx[j]] = (cell || '').trim(); });
     const ticker = (rec.ticker || '').trim();
     if (!ticker) { skipped++; continue; }
+    if (!validTicker(ticker, market)) { badFmt++; continue; }
     let sec = store.findSecurity(market, ticker);
     if (!sec) {
       if (!create) { skipped++; continue; }
@@ -2580,7 +2607,7 @@ function importHoldings(text, market, create) {
     if (Object.keys(metaPatch).length) store.setMeta(priceKey(sec), metaPatch);
     touched.push(sec);
   }
-  return { updated, created, skipped, touched };
+  return { updated, created, skipped, badFmt, touched };
 }
 
 // 取込後の共通レポート: 価格/情報を取得し、件数＋取得できなかったティッカー（一部だけ取れない時）を表示
@@ -2933,10 +2960,11 @@ function runBrokerImport() {
     store.data.holdings = keep;
   }
 
-  let updated = 0, created = 0, skipped = 0;
+  let updated = 0, created = 0, skipped = 0, badFmt = 0;
   const touched = [];
   for (const row of _importRows) {
     const tk = row.market === 'US' ? row.ticker.trim().toUpperCase() : row.ticker.trim();
+    if (!validTicker(tk, row.market)) { badFmt++; continue; }   // 形式NG（日本株4桁/米国株大文字英字）は取込まない
     let sec = store.findSecurity(row.market, tk);
     if (!sec) {
       if (!create) { skipped++; continue; }
@@ -2975,7 +3003,7 @@ function runBrokerImport() {
   });
   store.save();
   closeModal();
-  reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
+  reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
 }
 
 // 取込フィールド設定（マッピング）の編集UI。列名/位置が変わってもコード変更なしで調整可
@@ -3223,7 +3251,7 @@ function runGenericImport() {
     }
     store.data.holdings = keep;
   }
-  let updated = 0, created = 0, skipped = 0, holdingSet = 0;
+  let updated = 0, created = 0, skipped = 0, holdingSet = 0, badFmt = 0;
   const touched = [];
   for (const row of _giRows) {
     const rec = {};
@@ -3235,6 +3263,7 @@ function runGenericImport() {
     const market = rec.market, ticker = (rec.ticker || '').toString().trim();
     if (!ticker || !market) { skipped++; continue; }
     const tk = market === 'US' ? ticker.toUpperCase() : ticker;
+    if (!validTicker(tk, market)) { badFmt++; continue; }   // 形式NG（日本株4桁/米国株大文字英字）は取込まない
     let sec = store.findSecurity(market, tk);
     if (!sec) {
       if (!create) { skipped++; continue; }
@@ -3279,7 +3308,7 @@ function runGenericImport() {
     });
   }
   store.save(); closeModal();
-  reportImport(touched, `汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
+  reportImport(touched, `汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
 }
 function giSaveFormat() {
   const name = (document.getElementById('gi-format-name').value || '').trim();
