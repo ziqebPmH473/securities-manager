@@ -1711,8 +1711,11 @@ function renderMaster() {
     <div class="section">
       <div class="section-head"><h2>データ削除</h2></div>
       <div class="section-body" style="padding:16px">
-        <button class="btn btn-danger" onclick="resetData()">全データ削除</button>
-        <p class="muted grp-note">全データを初期化します（誤削除対策として、削除前にJSONバックアップを自動ダウンロード）。</p>
+        <div class="btn-row">
+          <button class="btn btn-danger" onclick="resetTxnData()">保有・取引データだけ削除（マスタ・銘柄は残す）</button>
+          <button class="btn btn-danger" onclick="resetData()">全データ削除</button>
+        </div>
+        <p class="muted grp-note">「保有・取引だけ削除」＝カテゴリ金額/ルール/銘柄マスタ（銘柄の定義・属性）を残し、保有・取引・取込履歴・価格キャッシュなど下部データのみ削除。「全データ削除」＝マスタ含め初期化。いずれも削除前にJSONバックアップを自動ダウンロード。</p>
       </div>
     </div>
     ${googleSyncSection()}`;
@@ -3011,6 +3014,12 @@ function openGenericImport() {
     <p class="muted" style="margin:0 0 8px">Excel等をヘッダ行ごと貼り付け→列ごとに取込先を選択。<strong>コード・市場は必須</strong>。選んだ列だけ既存銘柄に上書き（ticker×market、未登録は新規作成可）。</p>
     <div class="btn-row" style="align-items:center">
       <label class="check" style="margin:0"><input type="checkbox" id="gi-create" checked> 未登録は新規作成</label>
+      <label style="margin:0;font-size:12px">取込モード
+        <select id="gi-mode">
+          <option value="upsert">上書き（一致を更新・無ければ追加）</option>
+          <option value="append">追加（既存はそのまま）</option>
+          <option value="replace">洗い替え（固定の証券会社×市場を入替）</option>
+        </select></label>
       <span style="flex:1"></span>
       <select id="gi-format"></select>
       <button class="btn btn-sm" onclick="giLoadFormat()">読込</button>
@@ -3105,6 +3114,19 @@ function runGenericImport() {
   if (!_giMapping.includes('ticker')) { toast('コードの割当が必要です'); return; }
   if (!_giMapping.includes('market') && !fixed.market) { toast('市場の割当（または固定値）が必要です'); return; }
   const create = document.getElementById('gi-create').checked;
+  const mode = (document.getElementById('gi-mode') || {}).value || 'upsert';
+  // 洗い替え: 固定の証券会社×市場が必須。そのスコープの保有を先に削除
+  let removed = 0;
+  if (mode === 'replace') {
+    if (!fixed.broker || !fixed.market) { toast('洗い替えは「固定値」で証券会社と市場の指定が必要です'); return; }
+    const keep = [];
+    for (const h of store.data.holdings) {
+      const s = store.data.securities.find(x => x.id === h.securityId);
+      if (s && h.broker === fixed.broker && s.market === fixed.market) { removed++; continue; }
+      keep.push(h);
+    }
+    store.data.holdings = keep;
+  }
   let updated = 0, created = 0, skipped = 0, holdingSet = 0;
   const touched = [];
   for (const row of _giRows) {
@@ -3136,12 +3158,15 @@ function runGenericImport() {
     if (hasQty || hasAcq) {
       const broker = rec.broker || null, account = rec.account || '特定';
       if (broker) {
-        if (hasQty) {
-          const ex = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
-          const ac = rec.avgCost != null ? rec.avgCost : (ex ? ex.avgCost : 0);
-          store.setHolding(sec.id, broker, account, rec.quantity, ac, 'import'); holdingSet++;
+        const ex = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
+        if (mode === 'append' && ex) { /* 追加モード: 既存はそのまま（上書きしない） */ }
+        else {
+          if (hasQty) {
+            const ac = rec.avgCost != null ? rec.avgCost : (ex ? ex.avgCost : 0);
+            store.setHolding(sec.id, broker, account, rec.quantity, ac, 'import'); holdingSet++;
+          }
+          if (hasAcq) { const h = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account); if (h) h.acqJpy = rec.acqJpy; }
         }
-        if (hasAcq) { const h = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account); if (h) h.acqJpy = rec.acqJpy; }
       } else if (hasAcq) {
         const hs = store.data.holdings.filter(x => x.securityId === sec.id && x.quantity > 0);
         if (hs.length === 1) { hs[0].acqJpy = rec.acqJpy; holdingSet++; }
@@ -3150,7 +3175,7 @@ function runGenericImport() {
     touched.push(sec);
   }
   store.save(); closeModal(); render();
-  toast(`汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
+  toast(`汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
   if (touched.length) api.refreshMeta(touched).then(render);
 }
 function giSaveFormat() {
@@ -3417,6 +3442,22 @@ function resetData() {
     localStorage.removeItem(STORAGE_KEY); store.data = null; store.load(); render();
     toast('全データを削除しました（バックアップJSONをダウンロード済み）');
   }
+}
+// マスタ（カテゴリ金額/ルール/銘柄マスタ＝securities・meta/各種設定）は残し、保有・取引など下部データだけ削除。
+function resetTxnData() {
+  if (!confirm('保有・取引データを削除します。\nカテゴリ金額マスタ・ルール・銘柄マスタ（銘柄の定義/属性）は残ります。\n（削除前に現在のデータをJSONで自動ダウンロードします）よろしいですか？')) return;
+  try { exportData(); } catch (_) { /* バックアップ失敗でも続行 */ }
+  store.data.holdings = [];
+  store.data.transactions = [];
+  store.data.importHistory = [];
+  store.data.amountSnapshots = [];
+  store.data.prices = {};
+  store.data.indices = {};
+  store.data.lastPriceUpdate = null;
+  // 保持: securities(銘柄マスタ) / meta(名前・セクター等) / categories / rules / amountHistory /
+  //       importMappings / importFormats / settings / fx(為替レートはキャッシュとして残す)
+  store.save(); render();
+  toast('保有・取引データを削除しました（マスタ・銘柄は保持）');
 }
 
 // ---------- 資産貼付用エクスポート（SEC-59）----------
@@ -3765,6 +3806,7 @@ window.saApplyBulk = saApplyBulk;
 window.runSplitAdjust = runSplitAdjust;
 window.importData = importData;
 window.resetData = resetData;
+window.resetTxnData = resetTxnData;
 window.excelExportGenerate = excelExportGenerate;
 window.excelExportCopy = excelExportCopy;
 window.runAcqJpyImport = runAcqJpyImport;
