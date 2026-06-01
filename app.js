@@ -134,6 +134,7 @@ const store = {
     this.data.importHistory ||= [];   // 取込履歴
     this.data.lastPriceUpdate ||= null; // 価格更新日時
     this.data.importMappings ||= {};  // 取込フィールド設定（列名・位置）のマスタ
+    this.data.importFormats ||= [];   // 汎用取込のフォーマット（列名→フィールド対応）保存
     this.data.lastInfoDate ||= null;  // 銘柄情報の日次更新を実行した日（YYYY-MM-DD）
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
@@ -1690,12 +1691,21 @@ function renderMaster() {
           <button class="btn" onclick="importData()">バックアップ読込（JSON）</button>
         </div>
         <p class="muted grp-note">このブラウザ(localStorage)の全データをファイルに保存／復元します。保存先は現在このブラウザのみ（将来 Google スプレッドシートへ移行予定）。</p>
-        <div class="grp-label" style="margin-top:18px">その他の出力</div>
+        <div class="grp-label" style="margin-top:18px">資産貼付・転記</div>
         <div class="btn-row">
           <button class="btn" onclick="go('transfer')">資産貼付・転記（転記用タブへ）</button>
+        </div>
+        <p class="muted grp-note">資産管理エクセルへの貼付・現金転記は専用の「転記用」タブで行います。</p>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>汎用データ（取込 ⇄ 出力）</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="openGenericImport()">汎用取込（列を選んで取込）</button>
           <button class="btn" onclick="exportGeneric()">汎用出力（CSV）</button>
         </div>
-        <p class="muted grp-note">資産管理エクセルへの貼付・現金転記は専用の「転記用」タブで行います。汎用CSVは全銘柄・保有の書き出し（再取込用）。</p>
+        <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます。</p>
       </div>
     </div>
     <div class="section">
@@ -2721,7 +2731,7 @@ const IMPORT_PROFILES = {
   'smbc':    { label: 'SMBC日興証券 日本株（画面コピーを貼り付け）', input: 'paste', parse: parseSmbcScreen, fixed: true, scope: { broker: 'SMBC日興', markets: ['JP'] } },
   'moomoo':  { label: 'moomoo（CSVファイル）', input: 'file', parse: parseMoomooCsv, fixed: true, scope: { broker: 'moomoo', markets: ['JP', 'US'] } },
   'rakuten': { label: '楽天証券（保有商品一覧CSV）', input: 'file', parse: parseRakutenCsv, fixed: true, scope: { broker: '楽天', markets: ['JP', 'US'] } },
-  'generic': { label: '汎用（貼り付け: ティッカー,市場,数量,取得単価）', input: 'paste', parse: parseGeneric, fixed: false },
+  // 汎用取込は「汎用データ（取込⇄出力）」セクションの専用UI(openGenericImport)へ分離（証券会社取込とは別枠）
 };
 
 // データ内の基準日（基準日/作成日/出力日/評価日 等のラベル付き日付）を抽出。無ければnull
@@ -2936,6 +2946,196 @@ function exportGeneric() {
   a.href = URL.createObjectURL(blob);
   a.download = `securities-generic-${today()}.csv`;
   a.click();
+}
+
+// ---------- 汎用取込（列選択式・フォーマット保存）----------
+// 貼り付けたヘッダを見て列ごとに取込先フィールドを選択。コード・市場は必須、選んだ列だけ ticker×market で上書き。
+const GI_FIELDS = [
+  { key: 'ticker',        label: 'コード/ティッカー', req: true },
+  { key: 'market',        label: '市場(US/JP)',       req: true },
+  { key: 'broker',        label: '証券会社' },
+  { key: 'account',       label: '口座種別' },
+  { key: 'quantity',      label: '数量' },
+  { key: 'avgCost',       label: '取得単価' },
+  { key: 'acqJpy',        label: '取得円(米株)' },
+  { key: 'prevBuyPrice',  label: '前回購入価格' },
+  { key: 'fixedBuyPrice', label: '買増固定値' },
+  { key: 'baseHighMode',  label: '基準高値モード' },
+  { key: 'baseHighManual', label: '手動基準高値' },
+  { key: 'ruleName',      label: '買い増しルール' },
+  { key: 'category',      label: 'カテゴリ(AI判断)' },
+  { key: 'detailType',    label: '詳細種別' },
+  { key: 'buyAmount',     label: '買い増し予定額' },
+  { key: 'buyCount',      label: '購入回数' },
+  { key: 'enabled',       label: '判定対象' },
+  { key: 'watch',         label: 'ウォッチ' },
+  { key: 'nameOverride',  label: '銘柄名(上書き)' },
+  { key: 'sectorOverride', label: 'セクター(上書き)' },
+  { key: 'industryOverride', label: '業種(上書き)' },
+  { key: 'overallGrade',  label: '総合評価' },
+  { key: 'rating',        label: '銘柄格付' },
+  { key: 'buyGrade',      label: '買い時評価' },
+  { key: 'recoCategory',  label: 'AI推奨カテゴリ' },
+  { key: 'priority',      label: '購入優先順位' },
+  { key: 'analysisDate',  label: '評価日' },
+  { key: 'analysisNote',  label: '分析メモ' },
+  { key: 'starValuation', label: '★バリュエーション' },
+  { key: 'starStrength',  label: '★独自の強み' },
+  { key: 'starRisk',      label: '★リスク' },
+];
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'recoCategory', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk']);
+// ヘッダ名→フィールドの自動対応（汎用出力の列もそのまま読める）
+const GI_AUTOMAP = { ...GENERIC_MAP,
+  '取得円': 'acqJpy', '取得額(円)': 'acqJpy', '取得額（円）': 'acqJpy', '受渡金額(円)': 'acqJpy',
+  '詳細種別': 'detailType', '総合評価': 'overallGrade', '銘柄格付': 'rating', '格付': 'rating', '買い時評価': 'buyGrade',
+  '推奨カテゴリ': 'recoCategory', 'AI推奨カテゴリ': 'recoCategory', '購入優先順位': 'priority', '優先順位': 'priority',
+  '評価日': 'analysisDate', '備考': 'analysisNote', '分析メモ': 'analysisNote',
+  'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
+  'セクター': 'sectorOverride', '業種': 'industryOverride', '銘柄名': 'nameOverride',
+};
+let _giHeaders = [], _giRows = [], _giMapping = []; // _giMapping[colIdx] = fieldKey | ''
+
+function openGenericImport() {
+  showModal('汎用取込（列を選んで取込）', `
+    <p class="muted" style="margin:0 0 8px">Excel等をヘッダ行ごと貼り付け→列ごとに取込先を選択。<strong>コード・市場は必須</strong>。選んだ列だけ既存銘柄に上書き（ticker×market、未登録は新規作成可）。</p>
+    <div class="btn-row" style="align-items:center">
+      <label class="check" style="margin:0"><input type="checkbox" id="gi-create" checked> 未登録は新規作成</label>
+      <span style="flex:1"></span>
+      <select id="gi-format"></select>
+      <button class="btn btn-sm" onclick="giLoadFormat()">読込</button>
+      <button class="btn btn-sm btn-danger" onclick="giDeleteFormat()">削除</button>
+    </div>
+    <textarea id="gi-text" rows="6" style="width:100%;font-family:monospace;font-size:12px" placeholder="ヘッダ行を含めて貼り付け（タブ/カンマ区切り）" oninput="giParse(this.value)"></textarea>
+    <div id="gi-map"></div>
+    <div id="gi-preview"></div>
+    <div class="btn-row" style="margin-top:10px;align-items:center">
+      <input id="gi-format-name" placeholder="フォーマット名（保存用）" style="width:200px">
+      <button class="btn btn-sm" onclick="giSaveFormat()">フォーマット保存</button>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeModal()">閉じる</button>
+      <button class="btn btn-primary" onclick="runGenericImport()">取込実行</button>
+    </div>`, { wide: true });
+  _giHeaders = []; _giRows = []; _giMapping = [];
+  giRefreshFormats();
+}
+function giRefreshFormats() {
+  const sel = document.getElementById('gi-format'); if (!sel) return;
+  sel.innerHTML = `<option value="">― 保存フォーマット ―</option>` + (store.data.importFormats || []).map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+}
+function giParse(text) {
+  const raw = text.includes('\t') ? text.split(/\r?\n/).map(l => l.split('\t')) : parseCsvText(text);
+  const rows = raw.filter(r => r.some(c => String(c).trim() !== ''));
+  const mapDiv = document.getElementById('gi-map'), pvDiv = document.getElementById('gi-preview');
+  if (!rows.length) { _giHeaders = []; _giRows = []; _giMapping = []; if (mapDiv) mapDiv.innerHTML = ''; if (pvDiv) pvDiv.innerHTML = ''; return; }
+  _giHeaders = rows[0].map(h => String(h).trim());
+  _giRows = rows.slice(1);
+  _giMapping = _giHeaders.map(h => GI_AUTOMAP[h] || '');
+  giRenderMap();
+}
+function giRenderMap() {
+  const opts = (sel) => `<option value="">（取込まない）</option>` + GI_FIELDS.map(f => `<option value="${f.key}" ${sel === f.key ? 'selected' : ''}>${esc(f.label)}${f.req ? ' *' : ''}</option>`).join('');
+  const items = _giHeaders.map((h, i) => `<div class="field" style="min-width:170px;flex:0 0 auto">
+    <label style="font-size:11px">${esc(h || '(空欄)')}</label>
+    <select onchange="giSetMap(${i}, this.value)">${opts(_giMapping[i])}</select></div>`).join('');
+  document.getElementById('gi-map').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0">${items}</div>`;
+  giRenderPreview();
+}
+function giSetMap(i, v) { _giMapping[i] = v; giRenderPreview(); }
+function giRenderPreview() {
+  const used = _giMapping.map((f, i) => ({ f, i })).filter(x => x.f);
+  const warn = (!_giMapping.includes('ticker') || !_giMapping.includes('market')) ? `<div class="notice">コード・市場の割当が必要です（必須 *）。</div>` : '';
+  const head = used.map(x => `<th class="l">${esc(GI_FIELDS.find(f => f.key === x.f).label)}</th>`).join('');
+  const body = _giRows.slice(0, 5).map(r => `<tr>${used.map(x => `<td class="l">${esc(r[x.i] != null ? String(r[x.i]).trim() : '')}</td>`).join('')}</tr>`).join('');
+  document.getElementById('gi-preview').innerHTML = warn + (used.length ? `<div class="muted" style="margin:0 0 4px">プレビュー（先頭5行 / 全${_giRows.length}行）</div><div class="table-wrap" style="max-height:200px"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>` : '');
+}
+function giParseValue(field, raw) {
+  const v = raw == null ? '' : String(raw).trim();
+  switch (field) {
+    case 'quantity': case 'avgCost': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount':
+      return numClean(v);
+    case 'buyCount': case 'priority': case 'starValuation': case 'starStrength': case 'starRisk': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
+    case 'enabled': return /有効|^1$|true|yes|○|有/i.test(v);
+    case 'watch': return /注意|^1$|true|yes|○/i.test(v);
+    case 'baseHighMode': return normBaseHighMode(v);
+    case 'account': return normAccount(v);
+    case 'market': { const u = v.toUpperCase(); return (u === 'US' || u === 'JP') ? u : (/米/.test(v) ? 'US' : /日|国内/.test(v) ? 'JP' : /^\d/.test(v) ? 'JP' : 'US'); }
+    case 'detailType': return /ETF|ＥＴＦ/i.test(v) ? 'ETF' : (v || null);
+    default: return v || null;
+  }
+}
+function runGenericImport() {
+  if (!_giRows.length) { toast('データがありません'); return; }
+  if (!_giMapping.includes('ticker') || !_giMapping.includes('market')) { toast('コード・市場の割当が必要です'); return; }
+  const create = document.getElementById('gi-create').checked;
+  let updated = 0, created = 0, skipped = 0, holdingSet = 0;
+  const touched = [];
+  for (const row of _giRows) {
+    const rec = {};
+    _giMapping.forEach((f, i) => { if (f) rec[f] = giParseValue(f, row[i]); });
+    const market = rec.market, ticker = (rec.ticker || '').toString().trim();
+    if (!ticker || !market) { skipped++; continue; }
+    const tk = market === 'US' ? ticker.toUpperCase() : ticker;
+    let sec = store.findSecurity(market, tk);
+    if (!sec) {
+      if (!create) { skipped++; continue; }
+      sec = store.addSecurity({ market, ticker: tk, currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, ruleId: store.defaultRule().id });
+      created++;
+    } else updated++;
+    // 銘柄属性（割り当てた列だけ上書き）
+    const patch = {};
+    for (const k of Object.keys(rec)) {
+      if (k === 'ruleName') { const r = store.data.rules.find(x => x.name === rec.ruleName); if (r) patch.ruleId = r.id; continue; }
+      if (GI_SEC_FIELDS.has(k)) patch[k] = rec[k];
+    }
+    if (Object.keys(patch).length) store.updateSecurity(sec.id, patch);
+    // 保有・取得円
+    const hasQty = ('quantity' in rec) && rec.quantity != null;
+    const hasAcq = ('acqJpy' in rec) && rec.acqJpy != null;
+    if (hasQty || hasAcq) {
+      const broker = rec.broker || null, account = rec.account || '特定';
+      if (broker) {
+        if (hasQty) {
+          const ex = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
+          const ac = rec.avgCost != null ? rec.avgCost : (ex ? ex.avgCost : 0);
+          store.setHolding(sec.id, broker, account, rec.quantity, ac, 'import'); holdingSet++;
+        }
+        if (hasAcq) { const h = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account); if (h) h.acqJpy = rec.acqJpy; }
+      } else if (hasAcq) {
+        const hs = store.data.holdings.filter(x => x.securityId === sec.id && x.quantity > 0);
+        if (hs.length === 1) { hs[0].acqJpy = rec.acqJpy; holdingSet++; }
+      }
+    }
+    touched.push(sec);
+  }
+  store.save(); closeModal(); render();
+  toast(`汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
+  if (touched.length) api.refreshMeta(touched).then(render);
+}
+function giSaveFormat() {
+  const name = (document.getElementById('gi-format-name').value || '').trim();
+  if (!name) { toast('フォーマット名を入力してください'); return; }
+  if (!_giHeaders.length) { toast('先にデータを貼り付けてください'); return; }
+  const mapping = {};
+  _giHeaders.forEach((h, i) => { if (_giMapping[i]) mapping[h] = _giMapping[i]; });
+  const ex = store.data.importFormats.find(f => f.name === name);
+  if (ex) ex.mapping = mapping; else store.data.importFormats.push({ id: store.nextId(), name, mapping });
+  store.save(); giRefreshFormats(); toast(`フォーマット「${name}」を保存しました`);
+}
+function giLoadFormat() {
+  const id = parseInt(document.getElementById('gi-format').value, 10);
+  const fmt = (store.data.importFormats || []).find(f => f.id === id);
+  if (!fmt) { toast('フォーマットを選択してください'); return; }
+  if (!_giHeaders.length) { toast('先にデータを貼り付けてください'); return; }
+  _giMapping = _giHeaders.map(h => fmt.mapping[h] || '');
+  giRenderMap();
+  toast(`フォーマット「${fmt.name}」を適用`);
+}
+function giDeleteFormat() {
+  const id = parseInt(document.getElementById('gi-format').value, 10);
+  const fmt = (store.data.importFormats || []).find(f => f.id === id);
+  if (!fmt) { toast('削除するフォーマットを選択'); return; }
+  store.data.importFormats = store.data.importFormats.filter(f => f.id !== id);
+  store.save(); giRefreshFormats(); toast(`「${fmt.name}」を削除しました`);
 }
 
 // 銘柄情報マスタ（名前・セクター・ファンダ）を全銘柄ぶん再取得（任意タイミング）
@@ -3526,6 +3726,13 @@ window.runAcqJpyImport = runAcqJpyImport;
 window.mfTransferGenerate = mfTransferGenerate;
 window.smSelectAll = smSelectAll;
 window.bulkSetDetailType = bulkSetDetailType;
+window.openGenericImport = openGenericImport;
+window.giParse = giParse;
+window.giSetMap = giSetMap;
+window.runGenericImport = runGenericImport;
+window.giSaveFormat = giSaveFormat;
+window.giLoadFormat = giLoadFormat;
+window.giDeleteFormat = giDeleteFormat;
 window.api = api;
 window.render = render;
 
