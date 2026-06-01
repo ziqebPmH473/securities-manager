@@ -86,8 +86,7 @@ th.col-code, td.col-code { max-width: 72px; width: 72px; }
 tbody tr:hover { background: var(--panel-2); }
 /* 列幅固定（米国株/日本株）。列幅は colgroup で指定し、はみ出しは省略表示。ヘッダは折り返して長い列名で幅を取らない */
 table.fixed-cols { table-layout: fixed; }
-table.fixed-cols th, table.fixed-cols td { overflow: hidden; text-overflow: ellipsis; }
-table.fixed-cols th { white-space: normal; word-break: break-word; vertical-align: bottom; }
+table.fixed-cols th, table.fixed-cols td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 横スクロールは枠内で完結。max-height は描画後に JS(fitListTables) が画面に合わせて設定し、
    その枠の中で thead(sticky top:0) を固定する（横スクロールを保ったまま見出し固定） */
 .table-wrap { overflow: auto; }

@@ -1343,7 +1343,7 @@ function openColPicker(market) {
 // 列レイアウト（表示/非表示・並び順）を他の市場へコピー。米国株↔日本株。
 function copyColLayout(fromMarket, toMarket) {
   reconcileColPrefs(fromMarket);
-  colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible }));
+  colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width }));
   reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（米国株/日本株は同一列なので実質そのまま）
   saveColPrefs();
   toast(`列設定を${MARKET_LABEL[toMarket]}にコピーしました`, 4000);
