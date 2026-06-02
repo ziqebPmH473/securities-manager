@@ -1026,6 +1026,16 @@ function fitListTables() {
 let _fitTimer = null;
 window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(fitListTables, 120); });
 
+// 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート等で左端に戻らないように）
+function preserveTableScroll(fn) {
+  const w = document.querySelector('#app .table-wrap');
+  const sl = w ? w.scrollLeft : 0, st = w ? w.scrollTop : 0;
+  fn();
+  if (!(sl || st)) return;
+  const apply = () => { const w2 = document.querySelector('#app .table-wrap'); if (w2) { w2.scrollLeft = sl; w2.scrollTop = st; } };
+  apply(); requestAnimationFrame(apply); setTimeout(apply, 30);
+}
+
 // colgroup の <col> タグ。auto=データ幅自動（描画後に実測）／既定=固定px
 function colTag(c) {
   return c.auto ? `<col data-autocol="1" style="width:64px">` : `<col style="width:${colWidthPx(c)}px">`;
@@ -1513,7 +1523,7 @@ function priceInputBtn(sec) {
 function setSort(market, key) {
   const st = listState[market];
   if (st.sortKey === key) st.sortDir *= -1; else { st.sortKey = key; st.sortDir = 1; }
-  render();
+  preserveTableScroll(render);
 }
 function setFilter(market, field, value) { listState[market][field] = value; render(); }
 function clearFilter(market) { Object.assign(listState[market], { broker: '', account: '', category: '', detailType: '' }); render(); }
@@ -1988,7 +1998,7 @@ function smBulkApply() {
 }
 function setSecMasterSort(key) {
   if (secMasterSort.key === key) secMasterSort.dir *= -1; else { secMasterSort.key = key; secMasterSort.dir = 1; }
-  renderSecMaster();
+  preserveTableScroll(renderSecMaster);
 }
 function setSecMasterFilter(v) { secMasterFilter = v; renderSecMaster(); }
 function renderSecMaster() {
