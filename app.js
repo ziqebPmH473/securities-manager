@@ -389,27 +389,22 @@ const gsync = {
   },
   async _call(method, range, body) {
     const cfg = this.cfg();
-    if (!cfg.spreadsheetId) { toast('スプレッドシートIDを設定してください'); return null; }
-    if (!this._token) { const ok = await this.signIn(); if (!ok) return null; }
+    if (!cfg.spreadsheetId) throw new Error('スプレッドシートIDが未設定です');
+    if (!this._token) { const ok = await this.signIn(); if (!ok) throw new Error('Googleログインが必要です'); }
     const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(cfg.spreadsheetId)}/values/${encodeURIComponent(range)}`;
     const url = method === 'PUT' ? `${base}?valueInputOption=RAW` : base;
     const res = await fetch(url, { method, headers: { Authorization: 'Bearer ' + this._token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     if (res.status === 401) { this._token = null; throw new Error('トークン失効。再ログインしてください'); }
-    if (!res.ok) throw new Error('Sheets API ' + res.status + '（_appdata シートの有無も確認）');
+    if (!res.ok) { let d = ''; try { d = (await res.json()).error?.message || ''; } catch (_) {} throw new Error(`Sheets API ${res.status}${d ? '：' + d : '（_appdata シートの有無/編集権限を確認）'}`); }
     return res.json();
   },
-  async save() {
-    try { await this._call('PUT', '_appdata!A1', { values: [[JSON.stringify(store.data)]] }); toast('スプレッドシートへ保存しました'); }
-    catch (e) { toast('保存失敗: ' + (e.message || e)); }
-  },
+  async save() { await this._call('PUT', '_appdata!A1', { values: [[JSON.stringify(store.data)]] }); toast('スプレッドシートへ保存しました'); },
   async load() {
-    if (!confirm('スプレッドシートの内容で現在のデータを上書きします。よろしいですか？')) return;
-    try {
-      const d = await this._call('GET', '_appdata!A1');
-      const cell = d && d.values && d.values[0] && d.values[0][0];
-      if (!cell) { toast('スプレッドシートにデータがありません'); return; }
-      store.data = JSON.parse(cell); store.save(); store.load(); render(); toast('スプレッドシートから読み込みました');
-    } catch (e) { toast('読込失敗: ' + (e.message || e)); }
+    if (!confirm('スプレッドシートの内容で現在のデータを上書きします。よろしいですか？')) return false;
+    const d = await this._call('GET', '_appdata!A1');
+    const cell = d && d.values && d.values[0] && d.values[0][0];
+    if (!cell) throw new Error('スプレッドシートにデータがありません（_appdata!A1 が空）');
+    store.data = JSON.parse(cell); store.save(); store.load(); render(); toast('スプレッドシートから読み込みました'); return true;
   },
 };
 function gsaveSettings(f) {
@@ -417,9 +412,22 @@ function gsaveSettings(f) {
   store.data.settings.google = { clientId: f.gClientId.value.trim(), allowedEmails: f.gAllowed.value.trim(), spreadsheetId: f.gSheetId.value.trim() };
   store.save(); toast('Google連携設定を保存しました'); renderMaster();
 }
-function gsyncSignIn() { gsync.signIn(); }
-function gsyncSave() { gsync.save(); }
-function gsyncLoad() { gsync.load(); }
+function gsyncStatus(html) { const el = document.getElementById('gsync-status'); if (el) el.innerHTML = html; }
+async function gsyncSignIn() {
+  gsyncStatus('<span class="muted">ログイン中…（ポップアップで承認してください）</span>');
+  try { const ok = await gsync.signIn(); gsyncStatus(ok ? `<span class="pos">✓ ログイン中：${esc(gsync._email || 'OK')}</span>` : '<span class="neg">ログインできませんでした（許可アカウント/テストユーザーを確認）</span>'); }
+  catch (e) { gsyncStatus('<span class="neg">ログイン失敗：' + esc(e.message || String(e)) + '</span>'); }
+}
+async function gsyncSave() {
+  gsyncStatus('<span class="muted">シートへ保存中…</span>');
+  try { await gsync.save(); gsyncStatus(`<span class="pos">✓ 保存しました ${new Date().toLocaleString('ja-JP')}${gsync._email ? '（' + esc(gsync._email) + '）' : ''}</span>`); }
+  catch (e) { gsyncStatus('<span class="neg">保存失敗：' + esc(e.message || String(e)) + '</span>'); }
+}
+async function gsyncLoad() {
+  gsyncStatus('<span class="muted">シートから読込中…</span>');
+  try { const ok = await gsync.load(); gsyncStatus(ok ? `<span class="pos">✓ シートから読み込みました ${new Date().toLocaleString('ja-JP')}</span>` : '<span class="muted">読込をキャンセルしました</span>'); }
+  catch (e) { gsyncStatus('<span class="neg">読込失敗：' + esc(e.message || String(e)) + '</span>'); }
+}
 
 // ---------- 計算 ----------
 const calc = {
@@ -2334,8 +2342,8 @@ function googleSyncSection() {
     <div class="section-head"><h2>Google連携（実験的・任意）</h2>
       <span class="tag ${configured ? 'jp' : ''}">${configured ? '設定済み' : '未設定'}</span></div>
     <div class="section-body" style="padding:16px">
-      <p class="muted" style="margin:0 0 12px">ブラウザ完結方式(GIS)。Googleスプレッドシートへ手動で保存/読込（v1=JSONブロブ）。
-        クライアントID未設定なら何も起きません。<strong>実機での動作確認は未実施</strong>（クライアントID入手後に検証）。</p>
+      <p class="muted" style="margin:0 0 10px">ブラウザ完結方式(GIS)。Googleスプレッドシートへ手動で保存/読込（v1=JSONブロブ）。クライアントID未設定なら何も起きません。</p>
+      <div id="gsync-status" style="margin:0 0 12px;font-size:13px;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px">${gsync._token ? `<span class="pos">✓ ログイン中：${esc(gsync._email || '')}</span>` : '<span class="muted">未ログイン（「Googleでログイン」を押してください）</span>'}</div>
       <form id="gsync-form" onsubmit="return false">
         <div class="field"><label>OAuthクライアントID（…apps.googleusercontent.com）</label>
           <input name="gClientId" value="${esc(g.clientId || '')}" placeholder="Google Cloudで作成したウェブ用クライアントID"></div>
