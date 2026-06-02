@@ -14,11 +14,16 @@ export async function onRequestGet(context) {
 
   if (symbols.length === 0) return json({ error: 'symbols パラメータが必要です' }, 400);
 
+  // mode=light: 指数・為替など「現在値と前日比だけ」必要な軽量取得。
+  //   5年分の日足を取らず短期間(range既定5d)だけ取得し、Finnhub経由も避けて高速化する。
+  const mode = url.searchParams.get('mode');
+  const range = url.searchParams.get('range') || (mode === 'light' ? '5d' : null);
+
   const finnhubKey = context.env && context.env.FINNHUB_API_KEY;
   const out = {};
   await Promise.all(symbols.map(async (sym) => {
     try {
-      out[sym] = await fetchOne(sym, finnhubKey);
+      out[sym] = await fetchOne(sym, finnhubKey, { mode, range });
     } catch (e) {
       out[sym] = { error: String(e && e.message || e) };
     }
@@ -38,10 +43,12 @@ function symbolType(sym) {
   return 'us';
 }
 
-async function fetchOne(symbol, finnhubKey) {
+async function fetchOne(symbol, finnhubKey, opts = {}) {
   const type = symbolType(symbol);
+  // 軽量モード: 高値不要・短期間のみ。Finnhub経由(米株3往復)を避けYahooの短期間取得に統一して高速化
+  if (opts.mode === 'light') return fetchYahoo(symbol, type, opts.range || '5d');
   if (type === 'us' && finnhubKey) return fetchFinnhub(symbol, finnhubKey);
-  return fetchYahoo(symbol, type);
+  return fetchYahoo(symbol, type, opts.range);
 }
 
 // ---------- Finnhub（米株ほぼリアルタイム） ----------
@@ -82,8 +89,8 @@ async function fetchFinnhub(symbol, token) {
 }
 
 // ---------- Yahoo Finance ----------
-async function fetchYahoo(symbol, type) {
-  const range = type === 'fund' ? '1y' : '5y';
+async function fetchYahoo(symbol, type, rangeOverride) {
+  const range = rangeOverride || (type === 'fund' ? '1y' : '5y');
   // 日足で取得する。週足だと chartPreviousClose が「前週終値」になり前日比が壊れるため。
   // 前日終値は日足の終値配列の最後から2番目を使う（下記 fetchYahooChart）。
   const interval = '1d';

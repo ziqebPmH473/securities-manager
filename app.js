@@ -493,19 +493,21 @@ const calc = {
   },
 
   // 前回購入単価の情報 {price, source, date}。source: 'txn'(買い取引)|'manual'(登録値)|'みなし'(取得単価)|null
-  // date(YYYY-MM-DD): 高値更新判定で「前回購入後に高値更新したか」を見るため。取引履歴の日付を使う。
-  // manual/みなしは購入日が不明なため date=null（→高値更新判定は発動せず通常の買い増しルールにフォールバック）
+  // date(YYYY-MM-DD): 高値更新判定で「前回購入後に高値更新したか」を見るため。
+  //   取引履歴があればその日付。無ければ手動入力の前回購入日(prevBuyDate)を使う（価格は手動値でも取得単価=みなしでもよい）。
   lastBuyInfo(sec) {
     const buys = store.data.transactions
       .filter(t => t.securityId === sec.id && t.type === 'buy')
       .sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
     if (buys.length) return { price: buys[0].price, source: 'txn', date: buys[0].tradedAt || null };
+    // 取引履歴が無い場合の前回購入日は手動入力(prevBuyDate)を採用。価格は手動値→みなし(取得単価)の順で決める。
+    const manualDate = sec.prevBuyDate || null;
     // 手動の前回購入価格。前回購入日(prevBuyDate)も任意入力可（高値更新判定の日付比較に使う）
-    if (typeof sec.prevBuyPrice === 'number') return { price: sec.prevBuyPrice, source: 'manual', date: sec.prevBuyDate || null };
-    // 未登録なら取得単価を「みなし前回購入単価」として使用
+    if (typeof sec.prevBuyPrice === 'number') return { price: sec.prevBuyPrice, source: 'manual', date: manualDate };
+    // 未登録なら取得単価を「みなし前回購入単価」として使用（前回購入日を入れていれば高値更新判定に使える）
     const th = this.totalHolding(sec.id);
-    if (th.qty > 0 && th.avgCost > 0) return { price: th.avgCost, source: 'みなし', date: null };
-    return { price: null, source: null, date: null };
+    if (th.qty > 0 && th.avgCost > 0) return { price: th.avgCost, source: 'みなし', date: manualDate };
+    return { price: null, source: null, date: manualDate };
   },
   lastBuyPrice(sec) { return this.lastBuyInfo(sec).price; },
 
@@ -695,19 +697,24 @@ const INDICES = [
 const api = {
   async refreshAll() {
     const secs = store.data.securities.filter(s => s.ticker);
-    const symbols = secs.map(yahooSymbol);
-    symbols.push('USDJPY=X');
-    INDICES.forEach(ix => symbols.push(ix.sym)); // 参考指数も一緒に取得
-    if (symbols.length === 0) return;
-    let res;
+    // 保有銘柄は5年高値が必要なので通常取得。指数・為替は現在値/前日比だけなので mode=light（短期間・高速）で別取得し並列実行。
+    const holdSymbols = secs.map(yahooSymbol);
+    const lightSymbols = ['USDJPY=X', ...INDICES.map(ix => ix.sym)];
+    if (holdSymbols.length === 0 && lightSymbols.length === 0) return;
+    let quotes = {}, lightQuotes = {};
     try {
-      res = await fetch(`/api/price?symbols=${encodeURIComponent(symbols.join(','))}`);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const reqs = [];
+      // 保有銘柄（5年高値あり）
+      reqs.push(holdSymbols.length
+        ? fetch(`/api/price?symbols=${encodeURIComponent(holdSymbols.join(','))}`).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        : Promise.resolve({}));
+      // 指数・為替（軽量・短期間）
+      reqs.push(fetch(`/api/price?mode=light&symbols=${encodeURIComponent(lightSymbols.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({})));
+      [quotes, lightQuotes] = await Promise.all(reqs);
     } catch (e) {
       toast('価格取得に失敗（手入力で更新できます）');
       return;
     }
-    const quotes = await res.json();
     for (const sec of secs) {
       const q = quotes[yahooSymbol(sec)];
       if (q && !q.error && q.price != null) {
@@ -719,12 +726,12 @@ const api = {
         };
       }
     }
-    const fx = quotes['USDJPY=X'];
+    const fx = lightQuotes['USDJPY=X'];
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
-    // 参考指数の前日比用に price/prevClose を保存
+    // 参考指数の前日比用に price/prevClose を保存（軽量取得）
     store.data.indices = store.data.indices || {};
     for (const ix of INDICES) {
-      const q = quotes[ix.sym];
+      const q = lightQuotes[ix.sym];
       if (q && !q.error && q.price != null) store.data.indices[ix.key] = { price: q.price, prevClose: q.prevClose, fetchedAt: q.fetchedAt };
     }
     store.data.lastPriceUpdate = new Date().toISOString();
