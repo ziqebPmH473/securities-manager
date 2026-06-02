@@ -715,6 +715,30 @@ const api = {
     toast('価格を更新しました');
   },
 
+  // 指定銘柄だけ価格（＋5年/52週高値）を取得して保存。新規追加銘柄（保有/ウォッチ問わず）の即時反映用。
+  // refreshAll は全銘柄＋指数を取り日次更新後の新規追加では走らないため、ピンポイント取得を用意。
+  async refreshPrice(secs) {
+    secs = (secs || []).filter(s => s && s.ticker);
+    if (secs.length === 0) return;
+    const symbols = [...new Set(secs.map(yahooSymbol))];
+    let res;
+    try {
+      res = await fetch(`/api/price?symbols=${encodeURIComponent(symbols.join(','))}`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+    } catch (e) { return; }
+    const quotes = await res.json();
+    for (const sec of secs) {
+      const q = quotes[yahooSymbol(sec)];
+      if (q && !q.error && q.price != null) {
+        store.data.prices[priceKey(sec)] = {
+          price: q.price, prevClose: q.prevClose,
+          high5y: q.high5y, high52w: q.high52w, fetchedAt: q.fetchedAt,
+        };
+      }
+    }
+    store.save();
+  },
+
   // 銘柄情報マスタを一括取得して store.data.meta にキャッシュ
   async refreshMeta(secs) {
     secs = secs || store.data.securities.filter(s => s.ticker);
@@ -1121,12 +1145,19 @@ function updateHeader() {
   // トップバーの参考指数（全指数）＋ USD/JPY チップ。値は小数2桁まで表示
   const tickers = document.getElementById('tickers');
   if (tickers) {
+    const idxNum = (v) => v == null ? '—' : Number(v).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const tk = (ixDef) => {
       const ix = (store.data.indices || {})[ixDef.key] || {};
       const pct = calc.indexChangePct(ixDef.key);
-      const val = ix.price != null ? num(ix.price) : '—';
+      const val = ix.price != null ? idxNum(ix.price) : '—';
       const pc = pct == null ? '<span class="muted">—</span>' : `<span class="t-pct ${cls(pct)}">${signed(pct)}%</span>`;
-      return `<div class="ticker"><span class="t-label">${ixDef.label}</span><span class="t-val num">${val}</span>${pc}</div>`;
+      // 日経平均のみ変動幅（前日比の値幅）も表示
+      let chg = '';
+      if (ixDef.key === 'n225' && ix.price != null && ix.prevClose != null) {
+        const d = ix.price - ix.prevClose;
+        chg = `<span class="t-pct ${cls(d)}" style="margin-left:4px">${d >= 0 ? '+' : '−'}${idxNum(Math.abs(d))}</span>`;
+      }
+      return `<div class="ticker"><span class="t-label">${ixDef.label}</span><span class="t-val num">${val}</span>${pc}${chg}</div>`;
     };
     tickers.innerHTML = INDICES.map(tk).join('')
       + `<div class="fx-chip"><span class="t-label">USD/JPY</span><span class="t-val num">${fx ? fx.toFixed(2) : '—'}</span></div>`;
@@ -1220,7 +1251,7 @@ function renderDashboard() {
     const ix = (store.data.indices || {})[k] || {};
     const v = calc.indexChangePct(k);
     return `<div class="idx-card"><div class="idx-label">${INDICES.find(i => i.key === k)?.label || k}</div>
-      <div class="idx-row"><span class="num" style="font-weight:700">${ix.price != null ? num(ix.price) : '—'}</span>
+      <div class="idx-row"><span class="num" style="font-weight:700">${ix.price != null ? Number(ix.price).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</span>
       <span class="delta ${cls(v)}">${v == null ? '—' : (v > 0 ? '▲' : v < 0 ? '▼' : '') + signed(v) + '%'}</span></div></div>`;
   };
   const mkColor = { JP: '#b23a36', US: '#2a5599' };
@@ -1393,9 +1424,11 @@ function renderMarket(market) {
 
   const headHtml = colHeadHtml(visibleCols, st, colMkt, ccy);
   // 列幅（table-layout:fixed）。先頭=チェック / 末尾=操作 の固定列＋各列の幅
-  const colgroupHtml = `<colgroup><col style="width:36px">${visOrder.map(c => colTag(c)).join('')}<col style="width:44px"></colgroup>`;
+  // 末尾=操作列（取引/保有/編集の3ボタン）。狭いとボタンが切れるため十分な幅を確保
+  const ACTION_W = 196;
+  const colgroupHtml = `<colgroup><col style="width:36px">${visOrder.map(c => colTag(c)).join('')}<col style="width:${ACTION_W}px"></colgroup>`;
   // テーブル幅＝列幅合計。width:100%だと固定幅が圧縮され横スクロールが出ないため、合計幅を明示（min-width:100%で不足時は伸長）
-  const tableW = 36 + 44 + visOrder.reduce((a, c) => a + colWidthPx(c), 0);
+  const tableW = 36 + ACTION_W + visOrder.reduce((a, c) => a + colWidthPx(c), 0);
 
   // サマリー帯の集計（表示中の銘柄＝secs に対して）
   let sumV = 0, sumC = 0, sumD = 0, sumSig = 0;
@@ -1728,8 +1761,10 @@ function renderSignals() {
   const visibleCols = visOrderS.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
   const colCount = visibleCols.length + 1; // +1 = アクション列
   const head = colHeadHtml(visibleCols, st, 'SIGNAL', null);
-  const sigColgroup = `<colgroup>${visOrderS.map(c => colTag(c)).join('')}<col style="width:44px"></colgroup>`;
-  const sigTableW = 44 + visOrderS.reduce((a, c) => a + colWidthPx(c), 0);
+  // 末尾=操作列（購入を記録ボタン）。狭いと切れるため十分な幅を確保
+  const SIG_ACTION_W = 116;
+  const sigColgroup = `<colgroup>${visOrderS.map(c => colTag(c)).join('')}<col style="width:${SIG_ACTION_W}px"></colgroup>`;
+  const sigTableW = SIG_ACTION_W + visOrderS.reduce((a, c) => a + colWidthPx(c), 0);
   // 到達／もうすぐ を1つの表にまとめ、グループ見出し行で区切る（列幅を揃えるため）
   const groupRow = (label, cls2, n) => `<tr class="sig-group ${cls2}"><td class="l" colspan="${colCount}" style="position:sticky;left:0;text-align:left">${label}　${n} 件</td></tr>`;
   const bodyRows = (secs) => secs.length
@@ -1938,7 +1973,14 @@ function renderReport() {
     const bars = SEGS.filter(s => segs[s.k]).map(s => `<i style="width:${Math.max(0, Math.min(100, segs[s.k] / shareBase * 100))}%;background:${s.color}" title="${s.label} ${yen(segs[s.k])}"></i>`).join('');
     return `<div class="bd-row"><div style="min-width:96px;font-weight:600">${esc(b)}<span class="muted" style="font-size:11px;font-weight:400"> ${d.secs.size}</span></div><div class="bd-bar" style="display:flex" title="${num(share)}%">${bars}</div><div style="text-align:right;min-width:128px"><div class="num" style="font-weight:700">${yen(d.valJpy)}</div><div class="num ${cls(pp)}" style="font-size:12px">${pp != null ? signed(pp) + '%' : '—'} ・ ${num(share)}%</div></div></div>`;
   }).join('');
-  const mxRows = brokers.map(b => { const us = (matrix[b] || {}).US || 0, jp = (matrix[b] || {}).JP || 0; return `<tr><td class="l">${esc(b)}</td><td>${us ? yen(us) : muted}</td><td>${jp ? yen(jp) : muted}</td><td><strong>${yen(us + jp)}</strong></td></tr>`; }).join('');
+  // 証券会社 × 市場×種別（米国株個別/米国株ETF/日本株個別/日本株ETF）
+  const mxRows = brokers.map(b => {
+    const s = byBrokerSeg[b] || {};
+    const v = (k) => s[k] || 0;
+    const tot = v('US|個別株') + v('US|ETF') + v('JP|個別株') + v('JP|ETF');
+    const cell = (x) => x ? yen(x) : muted;
+    return `<tr><td class="l">${esc(b)}</td><td>${cell(v('US|個別株'))}</td><td>${cell(v('US|ETF'))}</td><td>${cell(v('JP|個別株'))}</td><td>${cell(v('JP|ETF'))}</td><td><strong>${yen(tot)}</strong></td></tr>`;
+  }).join('');
 
   // 取引サマリー（期間: 全期間 / 今年）
   const yStart = `${new Date().getFullYear()}-01-01`;
@@ -1971,9 +2013,9 @@ function renderReport() {
       <p class="muted" style="padding:0 16px 12px">ETF・個別株・投資信託を分け、その下に日本株/米国株の内訳。種別行は小計です。詳細種別は「銘柄マスタ」で変更できます。</p></div>
     <div class="section"><div class="section-head"><h2>証券会社別の集計（円換算）</h2><span class="muted" style="margin-left:auto;font-size:11px">バー＝総資産比・色＝市場×種別</span></div>
       ${bkBreak ? `${segLegend}<div class="breakdown">${bkBreak}</div>` : '<div class="empty">保有銘柄がありません。</div>'}</div>
-    <div class="section"><div class="section-head"><h2>証券会社 × 市場（評価額・円換算）</h2></div>
-      <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>米国株</th><th>日本株</th><th>合計</th></tr></thead>
-      <tbody>${mxRows || `<tr><td colspan="4" class="empty">—</td></tr>`}</tbody></table></div></div>
+    <div class="section"><div class="section-head"><h2>証券会社 × 市場×種別（評価額・円換算）</h2></div>
+      <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>米国株 個別株</th><th>米国株 ETF</th><th>日本株 個別株</th><th>日本株 ETF</th><th>合計</th></tr></thead>
+      <tbody>${mxRows || `<tr><td colspan="6" class="empty">—</td></tr>`}</tbody></table></div></div>
     <div class="section"><div class="section-head"><h2>取引サマリー（${reportPeriod === 'ytd' ? '今年' : '全期間'}・円換算）</h2>
         <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
       <div class="table-wrap"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
@@ -2648,8 +2690,14 @@ function openSecurityForm(id, presetMarket) {
       if (!isNaN(qty) && qty !== 0) store.setHolding(target.id, f.broker.value, f.accountType.value, qty, isNaN(cost) ? 0 : cost);
     }
     closeModal(); render();
-    // マスタ情報を取得（名前・セクター等）。未取得なら裏で取得して再描画
-    if (target && !store.data.meta[priceKey(target)]?.name) api.refreshMeta([target]).then(render);
+    // 新規追加かつティッカーありなら、価格＋マスタ情報を裏で取得して再描画
+    // （保有・ウォッチ問わず、日次更新済みでも即座に価格が出るように。task B）
+    if (target && target.ticker) {
+      const tasks = [];
+      if (!id && store.data.prices[priceKey(target)]?.price == null) tasks.push(api.refreshPrice([target]));
+      if (!store.data.meta[priceKey(target)]?.name) tasks.push(api.refreshMeta([target]));
+      if (tasks.length) Promise.all(tasks).then(render);
+    }
   };
 }
 
