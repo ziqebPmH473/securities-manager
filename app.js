@@ -1844,6 +1844,17 @@ function renderReport() {
   const mkRows = ['US', 'JP'].filter(m => byMarket[m]).map(m => { const d = byMarket[m], p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : 0; return `<tr><td class="l"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span></td><td>${yen(d.valJpy)}</td><td>${yen(d.costJpy)}</td><td class="${cls(p)}">${yen(p)}</td><td class="${cls(pp)}">${signed(pp)}%</td><td>${d.secs.size}</td></tr>`; }).join('');
   const brokers = Object.keys(byBroker).sort((a, b) => byBroker[b].valJpy - byBroker[a].valJpy);
   const bkRows = brokers.map(b => { const d = byBroker[b], p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : 0; return `<tr><td class="l">${esc(b)}</td><td>${yen(d.valJpy)}</td><td>${yen(d.costJpy)}</td><td class="${cls(p)}">${yen(p)}</td><td class="${cls(pp)}">${signed(pp)}%</td><td>${d.secs.size}</td></tr>`; }).join('');
+  // 視覚化: 構成比バー（評価額の総資産に対する割合）
+  const shareBase = totalVal || 1;
+  const BK_COLORS = ['#2a5599', '#b23a36', '#a8854a', '#3a7d44', '#7c5cbf', '#0891b2', '#b97d18'];
+  const mkBreak = ['US', 'JP'].filter(m => byMarket[m]).map(m => {
+    const d = byMarket[m], p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : null, share = d.valJpy / shareBase * 100;
+    return `<div class="bd-row"><div style="display:flex;align-items:center;gap:8px;min-width:96px"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span><span class="muted" style="font-size:11px">${d.secs.size}銘柄</span></div><div class="bd-bar" title="${num(share)}%"><i style="width:${Math.max(0, Math.min(100, share))}%;background:${m === 'JP' ? '#b23a36' : '#2a5599'}"></i></div><div style="text-align:right;min-width:128px"><div class="num" style="font-weight:700">${yen(d.valJpy)}</div><div class="num ${cls(pp)}" style="font-size:12px">${pp != null ? signed(pp) + '%' : '—'} ・ ${num(share)}%</div></div></div>`;
+  }).join('');
+  const bkBreak = brokers.map((b, i) => {
+    const d = byBroker[b], p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : null, share = d.valJpy / shareBase * 100;
+    return `<div class="bd-row"><div style="min-width:96px;font-weight:600">${esc(b)}<span class="muted" style="font-size:11px;font-weight:400"> ${d.secs.size}</span></div><div class="bd-bar" title="${num(share)}%"><i style="width:${Math.max(0, Math.min(100, share))}%;background:${BK_COLORS[i % BK_COLORS.length]}"></i></div><div style="text-align:right;min-width:128px"><div class="num" style="font-weight:700">${yen(d.valJpy)}</div><div class="num ${cls(pp)}" style="font-size:12px">${pp != null ? signed(pp) + '%' : '—'} ・ ${num(share)}%</div></div></div>`;
+  }).join('');
   const mxRows = brokers.map(b => { const us = (matrix[b] || {}).US || 0, jp = (matrix[b] || {}).JP || 0; return `<tr><td class="l">${esc(b)}</td><td>${us ? yen(us) : muted}</td><td>${jp ? yen(jp) : muted}</td><td><strong>${yen(us + jp)}</strong></td></tr>`; }).join('');
 
   // 取引サマリー（期間: 全期間 / 今年）
@@ -1869,16 +1880,14 @@ function renderReport() {
       <div class="stat"><div class="s-label">評価損益</div><div class="s-value num ${pnlCls}">${yen(pnl)}</div><div class="s-sub ${cls(pnlPct)}" style="font-weight:700">${signed(pnlPct)}%</div></div>
     </div>
     ${fxMissing ? '<div class="notice">USD/JPY 為替が未取得のため、円換算に米国株を含めていません。「価格更新」で取得できます。</div>' : ''}
-    <div class="section"><div class="section-head"><h2>市場別の集計（円換算）</h2></div>
-      <div class="table-wrap"><table><thead><tr><th class="l">市場</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
-      <tbody>${mkRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div></div>
+    <div class="section"><div class="section-head"><h2>市場別の集計（円換算）</h2><span class="muted" style="margin-left:auto;font-size:11px">バー＝総資産に対する構成比</span></div>
+      ${mkBreak ? `<div class="breakdown">${mkBreak}</div>` : '<div class="empty">保有銘柄がありません。</div>'}</div>
     <div class="section"><div class="section-head"><h2>種別 × 市場の集計（円換算）</h2></div>
       <div class="table-wrap"><table><thead><tr><th class="l">種別 / 市場</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
       <tbody>${tmRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div>
       <p class="muted" style="padding:0 16px 12px">ETF・個別株・投資信託を分け、その下に日本株/米国株の内訳。種別行は小計です。詳細種別は「銘柄マスタ」で変更できます。</p></div>
-    <div class="section"><div class="section-head"><h2>証券会社別の集計（円換算）</h2></div>
-      <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
-      <tbody>${bkRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div></div>
+    <div class="section"><div class="section-head"><h2>証券会社別の集計（円換算）</h2><span class="muted" style="margin-left:auto;font-size:11px">バー＝総資産に対する構成比</span></div>
+      ${bkBreak ? `<div class="breakdown">${bkBreak}</div>` : '<div class="empty">保有銘柄がありません。</div>'}</div>
     <div class="section"><div class="section-head"><h2>証券会社 × 市場（評価額・円換算）</h2></div>
       <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>米国株</th><th>日本株</th><th>合計</th></tr></thead>
       <tbody>${mxRows || `<tr><td colspan="4" class="empty">—</td></tr>`}</tbody></table></div></div>
