@@ -2102,20 +2102,22 @@ function openFundCodeMaster() {
     const importNames = [s.name, ...(s.aliasNames || [])].filter(Boolean);
     const impHtml = importNames.length ? importNames.map(n => esc(n)).join('<br>') : '—';
     return `<tr>
-      <td class="l" style="width:150px"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:130px;font-family:monospace" title="協会コード等に変更可"></td>
-      <td class="l"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="協会コードから取得した正式名称">取得</span>' : ' <span class="muted" style="font-size:11px">未取得</span>'}</td>
-      <td class="l muted" style="font-size:11px">${impHtml}</td>
-      <td style="width:80px">${accts}口座</td>
+      <td class="l" style="width:150px;white-space:nowrap"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:130px;font-family:monospace" title="協会コード等に変更可"></td>
+      <td class="l" style="white-space:normal"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="協会コードから取得した正式名称">取得</span>' : ' <span class="muted" style="font-size:11px">未取得</span>'}</td>
+      <td class="l muted" style="font-size:11px;white-space:normal">${impHtml}</td>
+      <td style="width:70px;white-space:nowrap">${accts}口座</td>
       <td class="l nowrap" style="width:96px"><button class="btn btn-sm" onclick="fetchFundName(${s.id})" title="協会コードから名称を取得">名称取得</button></td>
     </tr>`;
   }).join('');
   showModal('投資信託 コードマスタ（名称↔コード）', `
     <p class="muted" style="margin:0 0 10px">投信はコードが無いため内部コード（FND…）を自動採番しています。<strong>協会コード（8桁）</strong>を入れて「名称取得」すると正式名称を取得し表示名に反映します（取込時は<strong>取込名</strong>でこのコードに紐づきます）。同じコードを付けると同一ファンドとして統合します。</p>
-    ${fundSecs.length ? `<div class="table-wrap" style="max-height:60vh"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名（取得した正式名称）</th><th class="l">取込名（CSVの名称・証券会社別に複数可）</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
+    ${fundSecs.length ? `<div class="table-wrap" style="max-height:66vh"><table class="holdings dense no-rowclick" style="width:100%;table-layout:auto">${'<thead><tr><th class="l">コード</th><th class="l">表示名（取得した正式名称）</th><th class="l">取込名（CSVの名称・証券会社別に複数可）</th><th>保有</th><th></th></tr></thead>'}<tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
     <div class="form-actions">
       ${fundSecs.length ? '<button type="button" class="btn" onclick="fetchFundName()">全件 名称取得</button>' : ''}
       <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
     </div>`, { wide: true });
+  // 横スクロール不要なように画面いっぱいに広げる（名称は折り返し）
+  const mw = document.querySelector('#modal-overlay .modal'); if (mw) mw.style.maxWidth = 'min(1500px,95vw)';
 }
 // 編集後の再描画: コードマスタのモーダルが開いていればそれを、無ければマスタ画面を再描画
 function refreshFundCodeMaster() {
@@ -2224,10 +2226,10 @@ function renderMaster() {
       </div>
     </div>
     <div class="section">
-      <div class="section-head"><h2>投資信託 コードマスタ</h2>
-        <button class="btn btn-sm btn-primary" style="margin-left:auto" onclick="openFundCodeMaster()">開く（名称↔コード）</button></div>
+      <div class="section-head"><h2>投資信託 コードマスタ</h2></div>
       <div class="section-body" style="padding:16px">
-        <p class="muted grp-note" style="margin:0">取り込んだ投信のコード（協会コード）編集・名称取得・統合を行います。ボタンから開きます。</p>
+        <div class="btn-row"><button class="btn btn-primary" onclick="openFundCodeMaster()">開く（名称↔コード）</button></div>
+        <p class="muted grp-note" style="margin:8px 0 0">取り込んだ投信のコード（協会コード）編集・名称取得・統合を行います。ボタンから開きます。</p>
       </div>
     </div>
     <div class="section">
@@ -3647,12 +3649,13 @@ function runBrokerImport() {
     touched.push(sec);
   }
   // 同じCSV/貼付に含まれる投資信託を自動仕分け（FUND保有として内部保存）。コードは名称↔内部コードで補完
-  let fundCount = 0;
+  let fundCount = 0, newFundCount = 0;
   const fundItems = parseFundRows(_importText);
   if (fundItems.length) {
     if (mode === 'replace') {
       store.data.holdings = store.data.holdings.filter(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !(s && s.market === 'FUND' && h.broker === scope.broker); });
     }
+    const fundBefore = store.data.securities.filter(s => s.market === 'FUND').length;
     for (const it of fundItems) {
       const fsec = findOrCreateFund(it.name); if (!fsec) continue;
       const q = (it.qty && it.qty > 0) ? it.qty : 1;
@@ -3660,6 +3663,7 @@ function runBrokerImport() {
       if (it.evalJpy != null) store.data.prices['FUND:' + fsec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
       fundCount++;
     }
+    newFundCount = store.data.securities.filter(s => s.market === 'FUND').length - fundBefore;
   }
   store.save();
   // 取込履歴
@@ -3672,6 +3676,10 @@ function runBrokerImport() {
   store.save();
   closeModal();
   reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
+  // 新規の投信があれば、コード入力（協会コード）→マスタ登録を促してコードマスタを開く
+  if (newFundCount > 0) {
+    setTimeout(() => { openFundCodeMaster(); toast(`新規の投資信託 ${newFundCount} 件。協会コード（8桁）を入力して登録してください（未入力なら内部コードFNDのまま）`, 8000); }, 400);
+  }
 }
 
 // 取込フィールド設定（マッピング）の編集UI。列名/位置が変わってもコード変更なしで調整可
