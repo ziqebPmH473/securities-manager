@@ -2616,11 +2616,23 @@ function openSecurityDetail(secId) {
   _detailChartCtx = { sec, ev, price, lb };
   loadDetailChart(sec, ev, price, lb, detailChartRange);
 }
-// 詳細チャートをクリックで拡大表示（同じSVGを広いモーダルに。viewBoxで自動スケール）
+// 詳細チャートをクリックで拡大表示（画面いっぱいの専用オーバーレイ。viewBoxで自動スケール）
 function enlargeDetailChart() {
   const el = document.getElementById('detail-chart'); if (!el) return;
-  if (!el.querySelector('svg')) return; // 読み込み中・取得失敗時は無視
-  showModal('価格チャート', `<div style="width:100%">${el.innerHTML}</div>`, { wide: true });
+  const svg = el.querySelector('svg'); if (!svg) return; // 読み込み中・取得失敗時は無視
+  let ov = document.getElementById('chart-zoom-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'chart-zoom-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,24,40,.55);z-index:300;display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out';
+    ov.onclick = () => ov.remove();
+    document.body.appendChild(ov);
+  }
+  // SVG を width:100% にして大きな器いっぱいに拡大（viewBox 760x300 がスケール）
+  ov.innerHTML = `<div style="background:var(--panel);border-radius:14px;padding:20px;width:min(1400px,94vw);box-shadow:var(--shadow-lg);cursor:default" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><strong style="font-size:15px">価格チャート</strong><button class="x-btn" onclick="document.getElementById('chart-zoom-overlay').remove()">&times;</button></div>
+      <div style="width:100%">${el.innerHTML.replace('width="100%"', 'width="100%" style="height:auto;max-height:74vh"')}</div>
+    </div>`;
 }
 // 詳細チャートの期間（1y/3y/5y）。デフォルト5年
 let detailChartRange = '5y';
