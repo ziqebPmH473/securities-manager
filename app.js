@@ -1936,6 +1936,8 @@ function bulkSetDetailType() {
 }
 let secMasterSort = { key: 'ticker', dir: 1 };
 let secMasterFilter = 'all'; // all | noprice | noholding | holding
+let secMasterMarket = 'ALL'; // ALL(=全株式 US+JP) | US | JP | FUND
+function setSecMasterMarket(m) { secMasterMarket = m; renderSecMaster(); }
 let secMasterSearch = '';
 function setSecMasterSearch(v) {
   secMasterSearch = v; renderSecMaster();
@@ -2000,6 +2002,8 @@ function renderSecMaster() {
     if (secMasterFilter === 'holding') return smHasHolding(s);
     return true;
   });
+  // 市場フィルター（全株式=US+JP / 米国株 / 日本株 / 投資信託）
+  secs = secs.filter(s => secMasterMarket === 'ALL' ? (s.market === 'US' || s.market === 'JP') : s.market === secMasterMarket);
   if (secMasterSearch.trim()) {
     const k = secMasterSearch.trim().toLowerCase();
     secs = secs.filter(s => (s.ticker || '').toLowerCase().includes(k) || calc.displayName(s).toLowerCase().includes(k) || (calc.field(s, 'sector') || '').toLowerCase().includes(k));
@@ -2048,7 +2052,13 @@ function renderSecMaster() {
       <div class="section-body">
         <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます。「手」=手動上書き中。詳細種別の「auto」=自動判定（未設定）。<strong>「価格未取得」は実在しないティッカー/コードの可能性</strong>（価格更新後に抽出→全選択→一括削除で整理できます）。</p>
         <div class="toolbar" style="border:none;padding:10px 16px 0">
-          <div class="search" style="max-width:300px">${svgIcon('search', '')}<input id="sm-search" placeholder="コード・銘柄名・セクターで検索" value="${esc(secMasterSearch)}" oninput="setSecMasterSearch(this.value)" autocomplete="off">${secMasterSearch ? `<button class="clr" onclick="setSecMasterSearch('')">×</button>` : ''}</div>
+          <div class="seg">
+            <button class="${secMasterMarket === 'ALL' ? 'active' : ''}" onclick="setSecMasterMarket('ALL')">全株式</button>
+            <button class="${secMasterMarket === 'US' ? 'active' : ''}" onclick="setSecMasterMarket('US')">米国株</button>
+            <button class="${secMasterMarket === 'JP' ? 'active' : ''}" onclick="setSecMasterMarket('JP')">日本株</button>
+          </div>
+          <div class="seg" style="margin-left:6px"><button class="${secMasterMarket === 'FUND' ? 'active' : ''}" onclick="setSecMasterMarket('FUND')">投資信託</button></div>
+          <div class="search" style="max-width:260px">${svgIcon('search', '')}<input id="sm-search" placeholder="コード・銘柄名・セクターで検索" value="${esc(secMasterSearch)}" oninput="setSecMasterSearch(this.value)" autocomplete="off">${secMasterSearch ? `<button class="clr" onclick="setSecMasterSearch('')">×</button>` : ''}</div>
           <span class="muted">抽出</span>
           <div class="seg">${['all', '全て', 'noprice', '価格未取得', 'noholding', '保有なし', 'holding', '保有あり'].reduce((acc, _, i, arr) => { if (i % 2) acc.push(`<button class="${secMasterFilter === arr[i - 1] ? 'active' : ''}" onclick="setSecMasterFilter('${arr[i - 1]}')">${arr[i]}</button>`); return acc; }, []).join('')}</div>
           <span class="muted">${secs.length}/${allSecs.length}件</span>
@@ -4697,6 +4707,7 @@ window.runFundImport = runFundImport;
 window.fundTransferSavedGenerate = fundTransferSavedGenerate;
 window.smSelectAll = smSelectAll;
 window.setSecMasterFilter = setSecMasterFilter;
+window.setSecMasterMarket = setSecMasterMarket;
 window.setSecMasterSearch = setSecMasterSearch;
 window.smBulkFieldChange = smBulkFieldChange;
 window.smBulkApply = smBulkApply;
