@@ -1081,10 +1081,12 @@ function renderDashboard() {
   // 市場ごとの円換算・前日比（円）
   const perJpy = {};
   for (const m of markets) {
+    const dc = calc.dayChangeJpy(m);
     perJpy[m] = {
       valJpy: calc.toJpy(m, per[m].valN) || 0,
       costJpy: calc.toJpy(m, per[m].costN) || 0,
-      dayJpy: calc.dayChangeJpy(m).amount || 0,
+      dayJpy: dc.amount || 0,
+      dayPct: dc.pct,
       cnt: per[m].held,
     };
   }
@@ -1169,7 +1171,7 @@ function renderDashboard() {
       <div class="section" style="margin-bottom:0">
         <div class="section-head"><h2>本日の動き</h2></div>
         <div style="padding:6px 18px 16px">
-          ${markets.map(m => `<div class="dr-row"><span class="k"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span></span><span class="v ${cls(perJpy[m].dayJpy)}">${perJpy[m].dayJpy >= 0 ? '▲' : '▼'} ${yen(Math.abs(perJpy[m].dayJpy))}</span></div>`).join('')}
+          ${markets.map(m => `<div class="dr-row"><span class="k"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span></span><span class="v ${cls(perJpy[m].dayJpy)}">${perJpy[m].dayJpy >= 0 ? '▲' : '▼'} ${yen(Math.abs(perJpy[m].dayJpy))}${perJpy[m].dayPct != null ? ` <span style="font-size:12px">（${signed(perJpy[m].dayPct)}%）</span>` : ''}</span></div>`).join('')}
           <div class="dr-section-t" style="margin-top:16px">参考指数（前日比）</div>
           <div class="idx-grid">${['n225', 'topix', 'sp500', 'ndx'].map(idxCard).join('')}</div>
         </div>
