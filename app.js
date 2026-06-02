@@ -2136,7 +2136,13 @@ function setFundCode(secId, raw) {
   const nc = (raw || '').trim();
   if (!nc) { toast('コードを入力してください'); renderMaster(); return; }
   if (nc === sec.ticker) return;
-  if (store.data.securities.some(s => s.market === 'FUND' && s.id !== secId && s.ticker === nc)) { toast('そのコードは既に使われています'); renderMaster(); return; }
+  // 同じコードが既にある＝同じファンド（証券会社で名称が違うだけ）→ 統合する
+  const dup = store.data.securities.find(s => s.market === 'FUND' && s.id !== secId && s.ticker === nc);
+  if (dup) {
+    if (!confirm(`コード ${nc} は既に「${dup.name}」に使われています。同じファンドとして「${sec.name}」を統合しますか？\n（保有は両方ぶん合算され、「${sec.name}」の登録は削除されます）`)) { renderMaster(); return; }
+    mergeFundInto(sec, dup);
+    return;
+  }
   const old = sec.ticker;
   if (store.data.prices['FUND:' + old]) { store.data.prices['FUND:' + nc] = store.data.prices['FUND:' + old]; delete store.data.prices['FUND:' + old]; }
   // meta も付け替え（名称キャッシュ等）
@@ -2144,6 +2150,26 @@ function setFundCode(secId, raw) {
   sec.ticker = nc; sec.updatedAt = store._now();
   store.save(); renderMaster();
   toast(`コードを ${nc} に変更しました`, 3000);
+}
+// 投信銘柄 from を to へ統合（保有を移管。同一証券会社・口座は数量合算＝加重平均取得単価）。from は削除
+function mergeFundInto(from, to) {
+  for (const h of store.data.holdings.filter(x => x.securityId === from.id)) {
+    const same = store.data.holdings.find(x => x.securityId === to.id && x.broker === h.broker && x.accountType === h.accountType);
+    if (same) {
+      const q = (same.quantity || 0) + (h.quantity || 0);
+      same.avgCost = q ? ((same.quantity || 0) * (same.avgCost || 0) + (h.quantity || 0) * (h.avgCost || 0)) / q : 0;
+      same.quantity = q; same.updatedAt = store._now();
+      h.quantity = 0; h._merged = true;
+    } else {
+      h.securityId = to.id; h.updatedAt = store._now();
+    }
+  }
+  store.data.holdings = store.data.holdings.filter(h => !h._merged);
+  delete store.data.prices['FUND:' + from.ticker];
+  delete store.data.meta['FUND:' + from.ticker];
+  store.data.securities = store.data.securities.filter(s => s.id !== from.id);
+  store.save(); renderMaster();
+  toast(`「${from.name}」を ${to.ticker}（${to.name}）に統合しました`, 4000);
 }
 
 // ---------- マスタ・設定 ----------
