@@ -500,7 +500,8 @@ const calc = {
       .filter(t => t.securityId === sec.id && t.type === 'buy')
       .sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
     if (buys.length) return { price: buys[0].price, source: 'txn', date: buys[0].tradedAt || null };
-    if (typeof sec.prevBuyPrice === 'number') return { price: sec.prevBuyPrice, source: 'manual', date: null };
+    // 手動の前回購入価格。前回購入日(prevBuyDate)も任意入力可（高値更新判定の日付比較に使う）
+    if (typeof sec.prevBuyPrice === 'number') return { price: sec.prevBuyPrice, source: 'manual', date: sec.prevBuyDate || null };
     // 未登録なら取得単価を「みなし前回購入単価」として使用
     const th = this.totalHolding(sec.id);
     if (th.qty > 0 && th.avgCost > 0) return { price: th.avgCost, source: 'みなし', date: null };
@@ -1171,14 +1172,15 @@ function updateHeader() {
       const ix = (store.data.indices || {})[ixDef.key] || {};
       const pct = calc.indexChangePct(ixDef.key);
       const val = ix.price != null ? idxNum(ix.price) : '—';
-      const pc = pct == null ? '<span class="muted">—</span>' : `<span class="t-pct ${cls(pct)}">${signed(pct)}%</span>`;
-      // 日経平均のみ変動幅（前日比の値幅）も表示
-      let chg = '';
-      if (ixDef.key === 'n225' && ix.price != null && ix.prevClose != null) {
+      // 日経平均のみ「変動幅（変動率）」を表示: 例 +404.74（+0.61%）。他指数は変動率のみ
+      let metric;
+      if (ixDef.key === 'n225' && ix.price != null && ix.prevClose != null && pct != null) {
         const d = ix.price - ix.prevClose;
-        chg = `<span class="t-pct ${cls(d)}" style="margin-left:4px">${d >= 0 ? '+' : '−'}${idxNum(Math.abs(d))}</span>`;
+        metric = `<span class="t-pct ${cls(d)}">${d >= 0 ? '+' : '−'}${idxNum(Math.abs(d))}（${signed(pct)}%）</span>`;
+      } else {
+        metric = pct == null ? '<span class="muted">—</span>' : `<span class="t-pct ${cls(pct)}">${signed(pct)}%</span>`;
       }
-      return `<div class="ticker"><span class="t-label">${ixDef.label}</span><span class="t-val num">${val}</span>${pc}${chg}</div>`;
+      return `<div class="ticker"><span class="t-label">${ixDef.label}</span><span class="t-val num">${val}</span>${metric}</div>`;
     };
     tickers.innerHTML = INDICES.map(tk).join('')
       + `<div class="fx-chip"><span class="t-label">USD/JPY</span><span class="t-val num">${fx ? fx.toFixed(2) : '—'}</span></div>`;
@@ -2185,8 +2187,8 @@ function renderSecMaster() {
     const dtTag = `<span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span>${s.detailType ? '' : ' <span class="muted" style="font-size:10px" title="自動判定（未設定）">auto</span>'}`;
     return `<tr>
       <td class="l"><input type="checkbox" class="sm-check" value="${s.id}"></td>
-      <td class="l col-code"><span class="lnk" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>
-      <td class="l"><strong class="lnk" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
+      <td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>
+      <td class="l"><strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
       <td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>
       <td class="l">${dtTag}</td>
       <td class="l">${calc.field(s, 'sector') ? esc(calc.field(s, 'sector')) + ov('sector') : muted}</td>
@@ -2571,8 +2573,11 @@ function openSecurityForm(id, presetMarket) {
       <div class="row">
         <div class="field"><label>注意銘柄(ウォッチ)</label>
           <select name="watch"><option value="0" ${!sec || !sec.watch ? 'selected' : ''}>通常</option><option value="1" ${sec && sec.watch ? 'selected' : ''}>注意</option></select></div>
-        <div class="field"><label>前回購入価格（買い取引が無い場合の基準・任意）</label>
-          <input name="prevBuyPrice" type="number" step="any" value="${sec && sec.prevBuyPrice != null ? sec.prevBuyPrice : ''}" placeholder="原通貨"></div>
+        <div class="field"><label>前回購入価格 / 前回購入日（買い取引が無い場合の基準・任意）</label>
+          <div style="display:flex;gap:6px">
+            <input name="prevBuyPrice" type="number" step="any" value="${sec && sec.prevBuyPrice != null ? sec.prevBuyPrice : ''}" placeholder="価格(原通貨)" style="flex:1">
+            <input name="prevBuyDate" type="date" value="${sec && sec.prevBuyDate ? esc(sec.prevBuyDate) : ''}" title="前回購入日。高値更新判定（最高値が購入後か）の比較に使用。取引履歴があればそちらを優先" style="flex:1">
+          </div></div>
       </div>
       <div class="row">
         <div class="field"><label>基準高値（個別上書き・任意）</label>
@@ -2677,6 +2682,7 @@ function openSecurityForm(id, presetMarket) {
       currency: market === 'US' ? 'USD' : 'JPY',
       assetClass: market === 'FUND' ? 'fund' : 'stock',
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
+      prevBuyDate: (f.prevBuyDate && f.prevBuyDate.value) || null, // 前回購入日（手動・高値更新判定の比較用。取引履歴があればそちら優先）
       fixedBuyPrice: numOrNull(f.fixedBuyPrice.value),
       baseHighMode: f.baseHighMode.value || null,
       baseHighManual: f.baseHighMode.value === 'manual' ? numOrNull(f.baseHighManual.value) : null,
