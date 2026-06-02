@@ -49,6 +49,7 @@ const MASTER_COLS = [
   { key: 'price',       label: '現在値',           left: false, markets: ALLM, noSort: false },
   { key: 'day',         label: '前日比',           left: false, markets: ALLM, noSort: false },
   { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: false },
+  { key: 'trigBasis',   label: '適用区分',         left: true,  markets: STKM, noSort: true, narrow: true },
   { key: 'base',        label: '基準値',           left: false, markets: ['SIGNAL'], noSort: false },
   { key: 'drop',        label: '残り下落率',       left: false, markets: STKM, noSort: false },
   { key: 'dropPrev',    label: '残り下落率(前日)', left: false, markets: STKM, noSort: false },
@@ -89,10 +90,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','trigger','drop','dropPrev','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','trigger','drop','dropPrev','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -957,6 +958,7 @@ function colDefaultWidth(key) {
   if (key === 'ticker') return 64;
   if (key === 'name') return 200;
   if (key === 'market' || key === 'detailType') return 72;
+  if (key === 'trigBasis') return 64; // 1文字バッジ（初/増/高/固）
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
   if (key === 'analysisNote') return 160;
@@ -1047,6 +1049,17 @@ const COL_RENDERERS = {
   // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
   day:       (s,c) => { const v = c.dayChg, st = condStyle('day', v); return `<td class="${st ? '' : cls(v)}"${st}><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a></td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
+  // 適用区分: 次回購入・残り下落率がどのルール分岐で算出されたか（初=初回 / 増=買い増し / 高=高値更新 / 固=買増固定値 / —=判定外）
+  trigBasis: (s,c) => {
+    const ev = c.ev;
+    if (!ev) return `<td class="l">${muted}</td>`;
+    let code, title;
+    if (ev.baseSource === '固定') { code = '固'; title = '買増固定値（手入力の固定トリガー）'; }
+    else if (ev.baseSource === '高値更新') { code = '高'; title = '高値更新（前回購入より後に最高値更新→初回ルールで判定）'; }
+    else if (ev.type === 'initial') { code = '初'; title = '初回購入（基準高値から初回下落率）'; }
+    else { code = '増'; title = '買い増し（前回購入単価から買い増し下落率）'; }
+    return `<td class="l"><span class="tag basis-${code === '初' ? 'init' : code === '増' ? 'addon' : code === '高' ? 'high' : 'fixed'}" title="${title}">${code}</span></td>`;
+  },
   base:      (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.base) : muted}</td>`,
   // 残り下落率: 到達後はマイナス値（超過幅）も表示（SEC-38）。到達=赤(reached)、残り5%以内=near。
   drop:      (s,c) => !c.ev ? `<td>${muted}</td>`

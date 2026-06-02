@@ -107,6 +107,11 @@ table.fixed-cols th, table.fixed-cols td { overflow: hidden; text-overflow: elli
 .tag.detail-etf { color: #0891b2; border-color: #0891b2; }
 .tag.detail-fund { color: #7c3aed; border-color: #7c3aed; }
 .tag.detail-stock { color: var(--muted); }
+/* 適用区分バッジ（初=初回 / 増=買い増し / 高=高値更新 / 固=買増固定値） */
+.tag.basis-init  { color: #2563eb; border-color: #2563eb; }
+.tag.basis-addon { color: #0891b2; border-color: #0891b2; }
+.tag.basis-high  { color: #dc2626; border-color: #dc2626; }
+.tag.basis-fixed { color: #7c3aed; border-color: #7c3aed; }
 
 /* 残り下落率バッジ */
 .drop { font-weight: 600; }
