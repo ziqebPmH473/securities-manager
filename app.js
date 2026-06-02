@@ -805,6 +805,9 @@ const ICON_PATHS = {
   search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3',
   columns: 'M3 3h18v18H3zM12 3v18M3 9h18',
   copy: 'M9 9h11v11H9zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1',
+  trade: 'M7 10 3 6l4-4M3 6h12a4 4 0 0 1 4 4M17 14l4 4-4 4M21 18H9a4 4 0 0 1-4-4',
+  edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
+  external: 'M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
 };
 // SVGアイコン生成。クラス省略時はナビ用(nav-ico)
 function svgIcon(name, cls = 'nav-ico') {
@@ -2150,8 +2153,10 @@ function showModal(title, bodyHtml, opts = {}) {
 function closeModal() { document.getElementById('modal-overlay').hidden = true; }
 
 // 右からスライドするドロワー（銘柄詳細用）。body と foot を分けて表示。
-function showDrawer(title, bodyHtml, footHtml) {
+function showDrawer(title, bodyHtml, footHtml, subHtml) {
   document.getElementById('drawer-title').textContent = title;
+  const sub = document.getElementById('drawer-subtitle');
+  if (sub) { sub.innerHTML = subHtml || ''; sub.style.display = subHtml ? 'flex' : 'none'; }
   document.getElementById('drawer-body').innerHTML = bodyHtml;
   const foot = document.getElementById('drawer-foot');
   foot.innerHTML = footHtml || '';
@@ -2549,27 +2554,73 @@ function openSecurityDetail(secId) {
     kv('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     kv('時価総額(百万) / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? num(Math.round(calc.marketCap(sec))) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
   ].join('');
-  const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
-  showDrawer(`${calc.displayName(sec)}（${sec.ticker}）`, `
-    <div style="margin:-4px 0 10px"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span></div>
-    <fieldset class="form-group"><legend>価格チャート（週足終値）</legend>
-      <div class="seg" id="chart-range-seg" style="margin:0 0 8px;width:fit-content">
-        <button data-r="1y" class="${detailChartRange === '1y' ? 'active' : ''}" onclick="setDetailChartRange('1y')">1年</button>
-        <button data-r="3y" class="${detailChartRange === '3y' ? 'active' : ''}" onclick="setDetailChartRange('3y')">3年</button>
-        <button data-r="5y" class="${detailChartRange === '5y' ? 'active' : ''}" onclick="setDetailChartRange('5y')">5年</button>
-      </div>
-      <div id="detail-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
-      <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice==='number'||lb.price!=null?' / 橙破線=前回購入':''} / ◆高値・安値 / 灰=補助目盛</p>
-    </fieldset>
-    ${sectionBox('判定', judge)}
-    ${sectionBox('保有', holdRows + (holdSummary || ''))}
-    ${sectionBox('購入・取引履歴', txnRows)}
-    ${sectionBox('分析メタ', meta)}
-    ${sectionBox('ファンダ', fund)}`, `
-    <button type="button" class="btn" onclick="closeDrawer();openTxnForm(${sec.id})">取引を記録</button>
-    <button type="button" class="btn" onclick="closeDrawer();openSecurityForm(${sec.id})">編集</button>
-    <div style="flex:1"></div>
-    <button type="button" class="btn btn-primary" onclick="closeDrawer()">閉じる</button>`);
+  // 基本情報の派生値
+  const held = th.qty > 0;
+  const valJpy = calc.toJpy(sec.market, calc.valueOrCostNative(sec));
+  const costJpyV = calc.toJpy(sec.market, calc.costNative(sec));
+  const pnlJpyV = (valJpy != null && costJpyV != null) ? valJpy - costJpyV : null;
+  const pnlPctN = calc.pnlPctNative(sec);
+  const pr = store.data.prices[priceKey(sec)] || {};
+  const dayPct = (pr.price != null && pr.prevClose) ? (pr.price - pr.prevClose) / pr.prevClose * 100 : null;
+  const row = (k, v, cl = '') => `<div class="dr-row"><span class="k">${k}</span><span class="v ${cl}">${v}</span></div>`;
+  const gradeTag = g => g ? `<span class="grade grade-${esc(String(g).toLowerCase())}">${esc(g)}</span>` : '<span class="muted">—</span>';
+  const starsFmt = n => n == null ? '<span class="muted">—</span>' : `<span style="color:var(--brass);letter-spacing:1px">${'★'.repeat(n)}<span style="color:var(--border-strong)">${'☆'.repeat(Math.max(0, 5 - n))}</span></span>`;
+  const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${detailTypeOf(sec) === 'ETF' ? '<span class="tag detail-etf">ETF</span>' : ''}${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}`;
+
+  showDrawer(`${calc.displayName(sec)}`, `
+    ${held ? `<div style="display:flex;gap:24px;align-items:flex-end;flex-wrap:wrap;margin-bottom:2px">
+      <div><div class="muted" style="font-size:12px">評価額（円換算）</div><div class="num" style="font-family:var(--serif);font-size:28px;font-weight:600;line-height:1.15">${yen(valJpy)}</div></div>
+      <div style="padding-bottom:3px"><div class="muted" style="font-size:12px">評価損益</div><div class="num ${cls(pnlJpyV)}" style="font-size:17px;font-weight:700;white-space:nowrap">${yen(pnlJpyV)}${pnlPctN != null ? ` <span style="font-size:13px">（${signed(pnlPctN)}%）</span>` : ''}</div></div>
+    </div>` : `<div class="notice" style="margin-top:0">この銘柄は現在保有していません（ウォッチ対象）。</div>`}
+
+    <div class="kv">
+      <div class="cell"><div class="k">現在値</div><div class="v">${m(price)}</div></div>
+      <div class="cell"><div class="k">前日比</div><div class="v ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}</div></div>
+      ${held ? `<div class="cell"><div class="k">保有数量</div><div class="v">${fmtQty(th.qty, sec.market)}</div></div>` : ''}
+      ${held ? `<div class="cell"><div class="k">平均取得単価</div><div class="v">${m(th.avgCost)}</div></div>` : ''}
+      ${held ? `<div class="cell"><div class="k">取得原価（円）</div><div class="v">${yen(costJpyV)}</div></div>` : ''}
+      <div class="cell"><div class="k">5年高値 / 52週高値</div><div class="v">${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}</div></div>
+    </div>
+
+    <div class="dr-section-t">価格チャート（週足終値）</div>
+    <div class="seg" id="chart-range-seg" style="margin:0 0 8px;width:fit-content">
+      <button data-r="1y" class="${detailChartRange === '1y' ? 'active' : ''}" onclick="setDetailChartRange('1y')">1年</button>
+      <button data-r="3y" class="${detailChartRange === '3y' ? 'active' : ''}" onclick="setDetailChartRange('3y')">3年</button>
+      <button data-r="5y" class="${detailChartRange === '5y' ? 'active' : ''}" onclick="setDetailChartRange('5y')">5年</button>
+    </div>
+    <div id="detail-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
+    <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice === 'number' || lb.price != null ? ' / 橙破線=前回購入' : ''} / ◆高値・安値</p>
+
+    <div class="dr-section-t">ファンダメンタルズ</div>
+    ${row('セクター / 業種', `${esc(calc.field(sec, 'sector') || '—')} / ${esc(calc.field(sec, 'industry') || '—')}`)}
+    ${row('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`)}
+    ${row('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`)}
+    ${row('時価総額（百万）', calc.marketCap(sec) != null ? num(Math.round(calc.marketCap(sec))) : '—')}
+
+    <div class="dr-section-t">評価</div>
+    ${row('銘柄格付', gradeTag(sec.rating))}
+    ${sec.overallGrade ? row('総合グレード', gradeTag(sec.overallGrade)) : ''}
+    ${sec.buyGrade ? row('買い時評価', gradeTag(sec.buyGrade)) : ''}
+    ${sec.starValuation != null ? row('バリュエーション', starsFmt(sec.starValuation)) : ''}
+    ${sec.starStrength != null ? row('事業の強さ', starsFmt(sec.starStrength)) : ''}
+    ${sec.starRisk != null ? row('リスク', starsFmt(sec.starRisk)) : ''}
+    ${sec.analysisNote ? `<div style="background:var(--brass-soft);border:1px solid #e8dcc2;border-radius:10px;padding:11px 13px;margin-top:10px;font-size:13px;line-height:1.6"><div style="font-size:11px;font-weight:700;color:var(--brass-d);margin-bottom:4px">分析メモ${sec.analysisDate ? `（${esc(sec.analysisDate)}）` : ''}</div>${esc(sec.analysisNote)}</div>` : ''}
+
+    <div class="dr-section-t">買い増しサイン・判定</div>
+    <div class="auto-info">${judge}</div>
+
+    <div class="dr-section-t">保有（口座別）</div>
+    <div class="auto-info">${holdRows}${holdSummary || ''}</div>
+
+    <div class="dr-section-t">取引履歴</div>
+    <div class="auto-info">${txnRows}</div>
+
+    <div class="dr-section-t">分類</div>
+    ${row('カテゴリ', sec.category ? `<span class="tag cat">${esc(sec.category)}</span>` : '—')}
+    ${sec.recoCategory && sec.recoCategory !== sec.category ? row('推奨カテゴリ', esc(sec.recoCategory)) : ''}
+    ${row('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`)}`, `
+    <button type="button" class="btn btn-brass" style="flex:1" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引を記録</button>
+    <button type="button" class="btn" onclick="closeDrawer();openSecurityForm(${sec.id})">${svgIcon('edit', '')} 編集</button>`, subHtml);
   _detailChartCtx = { sec, ev, price, lb };
   loadDetailChart(sec, ev, price, lb, detailChartRange);
 }

@@ -664,7 +664,7 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .notice .ico { width: 17px; height: 17px; color: var(--brass-d); flex: none; margin-top: 1px; }
 
 /* ============================ ドロワー（銘柄詳細） ============================ */
-.drawer-overlay { position: fixed; inset: 0; background: rgba(15,24,40,.42); backdrop-filter: blur(2px); z-index: 80; opacity: 0; transition: opacity .2s; }
+.drawer-overlay { position: fixed; inset: 0; background: rgba(15,24,40,.32); z-index: 80; opacity: 0; transition: opacity .2s; }
 .drawer-overlay.show { opacity: 1; }
 .drawer {
   position: fixed; top: 0; right: 0; height: 100vh; width: 480px; max-width: 94vw; background: var(--panel);
