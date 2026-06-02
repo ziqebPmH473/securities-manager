@@ -559,10 +559,17 @@ const calc = {
       if (base == null) return null;
       trigger = base * (1 - rule.initialDropPct / 100);
     } else {
-      base = lb.price != null ? lb.price : this.baseHigh(sec);
-      baseSource = lb.price != null ? lb.source : 'high';
-      if (base == null) return null;
-      trigger = base * (1 - rule.addonDropPct / 100);
+      const bh = this.baseHigh(sec);
+      // 高値更新時は初回ルールで判定（rule.highResetMode）: 直近の基準高値が前回購入単価より上＝最高値更新中なら、
+      // 前回購入単価基準ではなく「高値から initialDropPct 下落」で判定（前回購入が二度と来ない銘柄向け）
+      if (rule.highResetMode && lb.price != null && bh != null && bh > lb.price) {
+        base = bh; baseSource = '高値更新'; trigger = base * (1 - rule.initialDropPct / 100);
+      } else {
+        base = lb.price != null ? lb.price : bh;
+        baseSource = lb.price != null ? lb.source : 'high';
+        if (base == null) return null;
+        trigger = base * (1 - rule.addonDropPct / 100);
+      }
     }
     // 次回購入の丸め（固定値以外・端数切捨て）: 米株=1ドル単位（10ドル未満は0.1ドル）、日本株=円未満切捨て
     if (fixed == null) {
@@ -660,8 +667,10 @@ function kabutanUrl(sec) {
 const INDICES = [
   { key: 'n225', sym: '^N225', label: '日経平均', market: 'JP' },
   { key: 'topix', sym: '1306.T', label: 'TOPIX', market: 'JP', note: '連動ETF' },
+  { key: 'nikkeifut', sym: 'NIY=F', label: '日経先物', market: 'JP' },
   { key: 'sp500', sym: '^GSPC', label: 'S&P500', market: 'US' },
   { key: 'ndx', sym: '^NDX', label: 'NASDAQ100', market: 'US' },
+  { key: 'soxx', sym: 'SOXX', label: 'SOX(半導体)', market: 'US' },
 ];
 
 // ---------- 価格取得 ----------
@@ -784,6 +793,9 @@ const app = document.getElementById('app');
 let currentView = 'dashboard';
 // 保有銘柄タブ内の市場（US/JP 切替）。列設定は市場ごとに保持される
 let holdingsMarket = 'US';
+// ダッシュボードの値動きTopの市場フィルタ
+let dashMoverMarket = 'ALL';
+function setDashMoverMarket(m) { dashMoverMarket = m; renderDashboard(); }
 // 一覧のコード/銘柄名フリーワード検索
 let holdingsSearch = '';
 function setHoldingsSearch(v) {
@@ -1106,17 +1118,17 @@ function updateHeader() {
   const pt = document.getElementById('page-title');
   if (pt) pt.textContent = PAGE_TITLE[currentView] || '証券管理';
   const fx = calc.fx();
-  // トップバーの参考指数（日経平均 / S&P500）＋ USD/JPY チップ
+  // トップバーの参考指数（全指数）＋ USD/JPY チップ。値は小数2桁まで表示
   const tickers = document.getElementById('tickers');
   if (tickers) {
-    const tk = (key, label) => {
-      const ix = (store.data.indices || {})[key] || {};
-      const pct = calc.indexChangePct(key);
-      const val = ix.price != null ? num(Math.round(ix.price)) : '—';
+    const tk = (ixDef) => {
+      const ix = (store.data.indices || {})[ixDef.key] || {};
+      const pct = calc.indexChangePct(ixDef.key);
+      const val = ix.price != null ? num(ix.price) : '—';
       const pc = pct == null ? '<span class="muted">—</span>' : `<span class="t-pct ${cls(pct)}">${signed(pct)}%</span>`;
-      return `<div class="ticker"><span class="t-label">${label}</span><span class="t-val num">${val}</span>${pc}</div>`;
+      return `<div class="ticker"><span class="t-label">${ixDef.label}</span><span class="t-val num">${val}</span>${pc}</div>`;
     };
-    tickers.innerHTML = tk('n225', '日経平均') + tk('sp500', 'S&P500')
+    tickers.innerHTML = INDICES.map(tk).join('')
       + `<div class="fx-chip"><span class="t-label">USD/JPY</span><span class="t-val num">${fx ? fx.toFixed(2) : '—'}</span></div>`;
   }
   const um = document.getElementById('update-meta');
@@ -1190,15 +1202,16 @@ function renderDashboard() {
   const dayPct = dayAll.pct;
   const { reached: reachedSecs, near: nearSecs } = signalRows();
 
-  // 本日の値上がり / 値下がり Top5
+  // 本日の値上がり / 値下がり Top5（全株式/米国株/日本株で切替）
   const heldSecs = store.data.securities.filter(s => calc.totalHolding(s.id).qty > 0);
-  const moverData = heldSecs.map(s => {
+  const moverData = heldSecs.filter(s => dashMoverMarket === 'ALL' ? (s.market === 'US' || s.market === 'JP') : s.market === dashMoverMarket).map(s => {
     const p = store.data.prices[priceKey(s)] || {};
     const dp = (p.price != null && p.prevClose) ? (p.price - p.prevClose) / p.prevClose * 100 : null;
     return { s, dp };
   }).filter(x => x.dp != null).sort((a, b) => b.dp - a.dp);
   const gainers = moverData.slice(0, 5);
   const losers = moverData.slice(-5).reverse();
+  const moverSeg = `<div class="seg" style="margin-left:auto">${[['ALL', '全株式'], ['US', '米国株'], ['JP', '日本株']].map(([m, l]) => `<button class="${dashMoverMarket === m ? 'active' : ''}" onclick="setDashMoverMarket('${m}')">${l}</button>`).join('')}</div>`;
   const tkChip = (s) => `<span class="tk ${s.market.toLowerCase()}">${esc(s.market === 'JP' ? s.ticker : (s.ticker || '').slice(0, 4))}</span>`;
   const moverRow = (x) => `<div class="mover-row">${tkChip(x.s)}<span class="mv-name">${esc(calc.displayName(x.s))}</span><span class="${cls(x.dp)}">${signed(x.dp)}%</span></div>`;
   const moverList = (title, list) => `<div class="mover-col"><div class="dr-section-t">${title}</div>${list.length ? list.map(moverRow).join('') : '<div class="muted" style="font-size:12px;padding:4px 0">—</div>'}</div>`;
@@ -1207,7 +1220,7 @@ function renderDashboard() {
     const ix = (store.data.indices || {})[k] || {};
     const v = calc.indexChangePct(k);
     return `<div class="idx-card"><div class="idx-label">${INDICES.find(i => i.key === k)?.label || k}</div>
-      <div class="idx-row"><span class="num" style="font-weight:700">${ix.price != null ? num(Math.round(ix.price)) : '—'}</span>
+      <div class="idx-row"><span class="num" style="font-weight:700">${ix.price != null ? num(ix.price) : '—'}</span>
       <span class="delta ${cls(v)}">${v == null ? '—' : (v > 0 ? '▲' : v < 0 ? '▼' : '') + signed(v) + '%'}</span></div></div>`;
   };
   const mkColor = { JP: '#b23a36', US: '#2a5599' };
@@ -1260,6 +1273,7 @@ function renderDashboard() {
             </div>`;
           }).join('')}
         </div>
+        <div style="display:flex;align-items:center;padding:10px 16px 0;border-top:1px solid var(--hair)"><span class="dr-section-t" style="margin:0">本日の値動き Top</span>${moverSeg}</div>
         <div class="mover-grid">${moverList('本日の値上がり', gainers)}${moverList('本日の値下がり', losers)}</div>
       </div>
 
@@ -1268,7 +1282,7 @@ function renderDashboard() {
         <div style="padding:6px 18px 16px">
           ${markets.map(m => `<div class="dr-row"><span class="k"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span></span><span class="v ${cls(perJpy[m].dayJpy)}">${perJpy[m].dayJpy >= 0 ? '▲' : '▼'} ${yen(Math.abs(perJpy[m].dayJpy))}${perJpy[m].dayPct != null ? ` <span style="font-size:12px">（${signed(perJpy[m].dayPct)}%）</span>` : ''}</span></div>`).join('')}
           <div class="dr-section-t" style="margin-top:16px">参考指数（前日比）</div>
-          <div class="idx-grid">${['n225', 'topix', 'sp500', 'ndx'].map(idxCard).join('')}</div>
+          <div class="idx-grid">${INDICES.map(i => idxCard(i.key)).join('')}</div>
         </div>
       </div>
     </div>
@@ -1441,9 +1455,15 @@ function renderMarket(market) {
         <div class="tb-spacer"></div>
         <div class="ss"><span class="ss-k">表示</span><span class="ss-v num">${secs.length} 銘柄</span></div>
       </div>
-      <div class="bulkbar">
-        <button class="btn btn-sm btn-danger" onclick="bulkSellAll()">選択を全売却</button>
+      <div class="bulkbar" style="flex-wrap:wrap">
         <span class="muted" id="bulk-count">選択 0 件</span>
+        <span class="muted">を</span>
+        <select onchange="holdBulkFieldChange(this.value)">${SM_BULK_FIELDS.map(f => `<option value="${f.key}" ${holdBulkField === f.key ? 'selected' : ''}>${f.label}</option>`).join('')}</select>
+        <span class="muted">→</span>
+        <span id="hold-bulk-value-wrap">${bulkValueHtml(holdBulkField, 'hold-bulk-value')}</span>
+        <button class="btn btn-sm btn-primary" onclick="holdBulkApply()">一括変更</button>
+        <span style="width:8px"></span>
+        <button class="btn btn-sm btn-danger" onclick="bulkSellAll()">選択を全売却</button>
         <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openSecurityForm(null, '${colMkt}')">＋ 銘柄を追加</button>
       </div>
       <div class="section-body">
@@ -1852,7 +1872,7 @@ function importStatusHtml() {
 let reportPeriod = 'all'; // 'all' | 'ytd'
 function setReportPeriod(p) { reportPeriod = p; renderReport(); }
 function renderReport() {
-  const byMarket = {}, byBroker = {}, matrix = {}, byTypeMarket = {};
+  const byMarket = {}, byBroker = {}, matrix = {}, byTypeMarket = {}, byBrokerSeg = {};
   let fxMissing = false;
   const ensure = (o, k) => (o[k] || (o[k] = { valJpy: 0, costJpy: 0, secs: new Set() }));
   for (const h of store.data.holdings) {
@@ -1870,6 +1890,10 @@ function renderReport() {
     // 種別（個別株/ETF/投資信託）×市場
     const dt = detailTypeOf(sec);
     const tm = ensure(byTypeMarket, dt + '|' + m); tm.valJpy += valJ; tm.costJpy += costJ; tm.secs.add(sec.id);
+    // 証券会社 × (市場・種別) セグメント（スタックバー用）
+    const bs = byBrokerSeg[b] || (byBrokerSeg[b] = {});
+    const segK = m + '|' + (dt === 'ETF' ? 'ETF' : '個別株');
+    bs[segK] = (bs[segK] || 0) + valJ;
   }
   // 種別×市場の集計行（種別を親、日本株/米国株を子。各種別に小計）
   const TYPE_ORDER = ['個別株', 'ETF'];
@@ -1900,9 +1924,19 @@ function renderReport() {
     const d = byMarket[m], p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : null, share = d.valJpy / shareBase * 100;
     return `<div class="bd-row"><div style="display:flex;align-items:center;gap:8px;min-width:96px"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span><span class="muted" style="font-size:11px">${d.secs.size}銘柄</span></div><div class="bd-bar" title="${num(share)}%"><i style="width:${Math.max(0, Math.min(100, share))}%;background:${m === 'JP' ? '#b23a36' : '#2a5599'}"></i></div><div style="text-align:right;min-width:128px"><div class="num" style="font-weight:700">${yen(d.valJpy)}</div><div class="num ${cls(pp)}" style="font-size:12px">${pp != null ? signed(pp) + '%' : '—'} ・ ${num(share)}%</div></div></div>`;
   }).join('');
-  const bkBreak = brokers.map((b, i) => {
+  // 証券会社別バーを 米国株/日本株 × ETF/個別株 のセグメントでスタック表示
+  const SEGS = [
+    { k: 'US|個別株', label: '米国株 個別株', color: '#2a5599' },
+    { k: 'US|ETF', label: '米国株 ETF', color: '#7aa6e0' },
+    { k: 'JP|個別株', label: '日本株 個別株', color: '#b23a36' },
+    { k: 'JP|ETF', label: '日本株 ETF', color: '#e0928d' },
+  ];
+  const segLegend = `<div style="display:flex;gap:14px;flex-wrap:wrap;padding:10px 16px 0">${SEGS.map(s => `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)"><i style="width:11px;height:11px;border-radius:2px;background:${s.color};display:inline-block"></i>${s.label}</span>`).join('')}</div>`;
+  const bkBreak = brokers.map((b) => {
     const d = byBroker[b], p = d.valJpy - d.costJpy, pp = d.costJpy > 0 ? p / d.costJpy * 100 : null, share = d.valJpy / shareBase * 100;
-    return `<div class="bd-row"><div style="min-width:96px;font-weight:600">${esc(b)}<span class="muted" style="font-size:11px;font-weight:400"> ${d.secs.size}</span></div><div class="bd-bar" title="${num(share)}%"><i style="width:${Math.max(0, Math.min(100, share))}%;background:${BK_COLORS[i % BK_COLORS.length]}"></i></div><div style="text-align:right;min-width:128px"><div class="num" style="font-weight:700">${yen(d.valJpy)}</div><div class="num ${cls(pp)}" style="font-size:12px">${pp != null ? signed(pp) + '%' : '—'} ・ ${num(share)}%</div></div></div>`;
+    const segs = byBrokerSeg[b] || {};
+    const bars = SEGS.filter(s => segs[s.k]).map(s => `<i style="width:${Math.max(0, Math.min(100, segs[s.k] / shareBase * 100))}%;background:${s.color}" title="${s.label} ${yen(segs[s.k])}"></i>`).join('');
+    return `<div class="bd-row"><div style="min-width:96px;font-weight:600">${esc(b)}<span class="muted" style="font-size:11px;font-weight:400"> ${d.secs.size}</span></div><div class="bd-bar" style="display:flex" title="${num(share)}%">${bars}</div><div style="text-align:right;min-width:128px"><div class="num" style="font-weight:700">${yen(d.valJpy)}</div><div class="num ${cls(pp)}" style="font-size:12px">${pp != null ? signed(pp) + '%' : '—'} ・ ${num(share)}%</div></div></div>`;
   }).join('');
   const mxRows = brokers.map(b => { const us = (matrix[b] || {}).US || 0, jp = (matrix[b] || {}).JP || 0; return `<tr><td class="l">${esc(b)}</td><td>${us ? yen(us) : muted}</td><td>${jp ? yen(jp) : muted}</td><td><strong>${yen(us + jp)}</strong></td></tr>`; }).join('');
 
@@ -1935,8 +1969,8 @@ function renderReport() {
       <div class="table-wrap"><table><thead><tr><th class="l">種別 / 市場</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
       <tbody>${tmRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div>
       <p class="muted" style="padding:0 16px 12px">ETF・個別株・投資信託を分け、その下に日本株/米国株の内訳。種別行は小計です。詳細種別は「銘柄マスタ」で変更できます。</p></div>
-    <div class="section"><div class="section-head"><h2>証券会社別の集計（円換算）</h2><span class="muted" style="margin-left:auto;font-size:11px">バー＝総資産に対する構成比</span></div>
-      ${bkBreak ? `<div class="breakdown">${bkBreak}</div>` : '<div class="empty">保有銘柄がありません。</div>'}</div>
+    <div class="section"><div class="section-head"><h2>証券会社別の集計（円換算）</h2><span class="muted" style="margin-left:auto;font-size:11px">バー＝総資産比・色＝市場×種別</span></div>
+      ${bkBreak ? `${segLegend}<div class="breakdown">${bkBreak}</div>` : '<div class="empty">保有銘柄がありません。</div>'}</div>
     <div class="section"><div class="section-head"><h2>証券会社 × 市場（評価額・円換算）</h2></div>
       <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>米国株</th><th>日本株</th><th>合計</th></tr></thead>
       <tbody>${mxRows || `<tr><td colspan="4" class="empty">—</td></tr>`}</tbody></table></div></div>
@@ -2004,34 +2038,48 @@ const SM_BULK_FIELDS = [
   { key: 'recoCategory', label: 'AI推奨カテゴリ' },
 ];
 let smBulkField = 'detailType';
-function smBulkValueHtml(field) {
+// 一括変更の値コントロール（id指定で銘柄マスタ/保有の両方から使う）
+function bulkValueHtml(field, id) {
   const gradeOpts = ['', 'S', 'A', 'B', 'C', 'D'].map(g => `<option value="${g}">${g || '（クリア）'}</option>`).join('');
   const catOpts = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder).map(c => `<option>${esc(c.category)}</option>`).join('');
   switch (field) {
-    case 'detailType': return `<select id="sm-bulk-value"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
-    case 'enabled': return `<select id="sm-bulk-value"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
-    case 'watch': return `<select id="sm-bulk-value"><option value="true">付ける</option><option value="false">外す</option></select>`;
-    case 'category': case 'recoCategory': return `<select id="sm-bulk-value">${catOpts}</select>`;
-    case 'ruleId': return `<select id="sm-bulk-value">${store.data.rules.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
-    case 'rating': case 'overallGrade': case 'buyGrade': return `<select id="sm-bulk-value">${gradeOpts}</select>`;
-    default: return `<input id="sm-bulk-value" type="text">`;
+    case 'detailType': return `<select id="${id}"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
+    case 'enabled': return `<select id="${id}"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
+    case 'watch': return `<select id="${id}"><option value="true">付ける</option><option value="false">外す</option></select>`;
+    case 'category': case 'recoCategory': return `<select id="${id}">${catOpts}</select>`;
+    case 'ruleId': return `<select id="${id}">${store.data.rules.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
+    case 'rating': case 'overallGrade': case 'buyGrade': return `<select id="${id}">${gradeOpts}</select>`;
+    default: return `<input id="${id}" type="text">`;
   }
 }
-function smBulkFieldChange(f) { smBulkField = f; const c = document.getElementById('sm-bulk-value-wrap'); if (c) c.innerHTML = smBulkValueHtml(f); }
+function bulkConvert(field, raw) {
+  if (field === 'enabled' || field === 'watch') return raw === 'true';
+  if (field === 'detailType') return raw === '__null' ? null : raw;
+  if (field === 'ruleId') return parseInt(raw, 10);
+  if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return raw || null;
+  return raw;
+}
+function smBulkFieldChange(f) { smBulkField = f; const c = document.getElementById('sm-bulk-value-wrap'); if (c) c.innerHTML = bulkValueHtml(f, 'sm-bulk-value'); }
 function smBulkApply() {
   const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
   if (!ids.length) { toast('銘柄を選択してください'); return; }
-  const field = smBulkField; const raw = (document.getElementById('sm-bulk-value') || {}).value;
-  let val;
-  if (field === 'enabled' || field === 'watch') val = raw === 'true';
-  else if (field === 'detailType') val = raw === '__null' ? null : raw;
-  else if (field === 'ruleId') val = parseInt(raw, 10);
-  else if (['rating', 'overallGrade', 'buyGrade'].includes(field)) val = raw || null;
-  else val = raw;
-  for (const id of ids) store.updateSecurity(id, { [field]: val });
+  const val = bulkConvert(smBulkField, (document.getElementById('sm-bulk-value') || {}).value);
+  for (const id of ids) store.updateSecurity(id, { [smBulkField]: val });
   store.save(); renderSecMaster();
-  const fl = SM_BULK_FIELDS.find(f => f.key === field);
-  toast(`${ids.length}件の「${fl ? fl.label : field}」を変更しました`, 4000);
+  const fl = SM_BULK_FIELDS.find(f => f.key === smBulkField);
+  toast(`${ids.length}件の「${fl ? fl.label : smBulkField}」を変更しました`, 4000);
+}
+// 保有銘柄一覧の一括変更（選択した .row-select に対して）
+let holdBulkField = 'detailType';
+function holdBulkFieldChange(f) { holdBulkField = f; const c = document.getElementById('hold-bulk-value-wrap'); if (c) c.innerHTML = bulkValueHtml(f, 'hold-bulk-value'); }
+function holdBulkApply() {
+  const ids = [...document.querySelectorAll('.row-select:checked')].map(b => parseInt(b.dataset.id, 10));
+  if (!ids.length) { toast('銘柄を選択してください'); return; }
+  const val = bulkConvert(holdBulkField, (document.getElementById('hold-bulk-value') || {}).value);
+  for (const id of ids) store.updateSecurity(id, { [holdBulkField]: val });
+  store.save(); render();
+  const fl = SM_BULK_FIELDS.find(f => f.key === holdBulkField);
+  toast(`${ids.length}件の「${fl ? fl.label : holdBulkField}」を変更しました`, 4000);
 }
 function setSecMasterSort(key) {
   if (secMasterSort.key === key) secMasterSort.dir *= -1; else { secMasterSort.key = key; secMasterSort.dir = 1; }
@@ -2114,7 +2162,7 @@ function renderSecMaster() {
           <span class="muted">選択した銘柄の</span>
           <select onchange="smBulkFieldChange(this.value)">${SM_BULK_FIELDS.map(f => `<option value="${f.key}" ${smBulkField === f.key ? 'selected' : ''}>${f.label}</option>`).join('')}</select>
           <span class="muted">を</span>
-          <span id="sm-bulk-value-wrap">${smBulkValueHtml(smBulkField)}</span>
+          <span id="sm-bulk-value-wrap">${bulkValueHtml(smBulkField, 'sm-bulk-value')}</span>
           <span class="muted">に</span>
           <button class="btn btn-sm btn-primary" onclick="smBulkApply()">一括変更</button>
           <span style="flex:1"></span>
@@ -3096,6 +3144,10 @@ function openRuleEdit(id) {
         <select name="mode">
           ${Object.entries(BASE_HIGH_LABEL).map(([v, lbl]) => `<option value="${v}" ${(r ? r.baseHighMode : '5y') === v ? 'selected' : ''}>${lbl}</option>`).join('')}
         </select></div>
+      <label class="check" style="display:flex;align-items:center;gap:8px;margin:4px 0 8px">
+        <input type="checkbox" name="highReset" ${r && r.highResetMode ? 'checked' : ''} style="width:auto">
+        高値更新時は初回ルールで判定（前回購入単価ではなく「高値から初回下落率」で判定。最高値更新中の銘柄向け）
+      </label>
       <div class="form-actions">
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="submit" class="btn btn-primary">保存</button>
@@ -3108,6 +3160,7 @@ function openRuleEdit(id) {
       name: f.name.value.trim(),
       initialDropPct: parseFloat(f.initial.value), addonDropPct: parseFloat(f.addon.value),
       baseHighMode: f.mode.value,
+      highResetMode: !!(f.highReset && f.highReset.checked),
     };
     if (r) store.updateRule(id, patch);
     else store.addRule({ ...patch, isDefault: false });
@@ -4860,6 +4913,7 @@ function toast(msg, ms = 2500) {
 // 公開（onclick用）
 window.go = go;
 window.setHoldingsMarket = setHoldingsMarket;
+window.setDashMoverMarket = setDashMoverMarket;
 window.setHoldingsSearch = setHoldingsSearch;
 window.clearHoldFilters = clearHoldFilters;
 window.openSecurityForm = openSecurityForm;
@@ -4936,6 +4990,8 @@ window.registerPendingFunds = registerPendingFunds;
 window.setSecMasterSearch = setSecMasterSearch;
 window.smBulkFieldChange = smBulkFieldChange;
 window.smBulkApply = smBulkApply;
+window.holdBulkFieldChange = holdBulkFieldChange;
+window.holdBulkApply = holdBulkApply;
 window.bulkSetDetailType = bulkSetDetailType;
 window.bulkSetField = bulkSetField;
 window.bulkDeleteSecurities = bulkDeleteSecurities;
