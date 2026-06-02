@@ -4,32 +4,37 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>証券管理ツール</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Shippori+Mincho:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="app-header">
-    <h1>証券管理ツール</h1>
-    <div class="header-actions">
-      <span id="fx-indicator" class="fx" title="USD/JPY">USD/JPY: --</span>
-      <span id="last-update" class="fx" title="価格の最終更新日時">更新: 未取得</span>
-      <button id="btn-refresh" class="btn btn-primary">価格更新</button>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">証</div>
+        <div>
+          <div class="brand-name">証券管理</div>
+          <div class="brand-sub">PORTFOLIO</div>
+        </div>
+      </div>
+      <nav class="nav" id="nav"></nav>
+      <div class="sidebar-foot" id="sidebar-foot"></div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <h1 id="page-title">ダッシュボード</h1>
+        <div class="topbar-spacer"></div>
+        <div class="tickers" id="tickers"></div>
+        <div class="tdiv"></div>
+        <div class="update-meta" id="update-meta">更新<br /><b>—</b></div>
+        <button id="btn-refresh" class="btn btn-primary">価格更新</button>
+      </header>
+      <main class="content"><div id="app"></div></main>
     </div>
-  </header>
-
-  <nav class="tabs" id="tabs">
-    <button class="tab" data-view="import">取込</button>
-    <button class="tab active" data-view="dashboard">ダッシュボード</button>
-    <button class="tab" data-view="signals">サイン<span id="signal-badge" class="badge" hidden>0</span></button>
-    <button class="tab" data-view="us">米国株</button>
-    <button class="tab" data-view="jp">日本株</button>
-    <button class="tab" data-view="transfer">転記用</button>
-    <button class="tab" data-view="report">レポート</button>
-    <button class="tab" data-view="splits">分割<span id="split-badge" class="badge" hidden>0</span></button>
-    <button class="tab" data-view="secmaster">銘柄マスタ</button>
-    <button class="tab" data-view="master">マスタ・設定</button>
-  </nav>
-
-  <main id="app"></main>
+  </div>
 
   <!-- 汎用モーダル -->
   <div id="modal-overlay" class="modal-overlay" hidden>

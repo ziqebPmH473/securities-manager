@@ -755,6 +755,68 @@ function clean(o) {
 // ---------- ルーター/描画 ----------
 const app = document.getElementById('app');
 let currentView = 'dashboard';
+// 保有銘柄タブ内の市場（US/JP 切替）。列設定は市場ごとに保持される
+let holdingsMarket = 'US';
+
+// ---------- サイドナビ（リデザイン） ----------
+const NAV_GROUPS = [
+  { group: 'メイン', items: [
+    { id: 'dashboard', label: 'ダッシュボード', icon: 'dashboard' },
+    { id: 'holdings',  label: '保有銘柄',       icon: 'holdings' },
+    { id: 'signals',   label: '買い増しサイン', icon: 'signal', badge: 'sig' },
+    { id: 'report',    label: 'レポート',       icon: 'report' },
+  ] },
+  { group: 'データ', items: [
+    { id: 'import',    label: '取込',           icon: 'upload' },
+    { id: 'secmaster', label: '銘柄マスタ',     icon: 'master' },
+    { id: 'splits',    label: '株式分割',       icon: 'splits', badge: 'split' },
+    { id: 'transfer',  label: '転記用',         icon: 'transfer' },
+  ] },
+  { group: '設定', items: [
+    { id: 'master',    label: 'マスタ・設定',   icon: 'settings' },
+  ] },
+];
+const PAGE_TITLE = {
+  dashboard: 'ダッシュボード', holdings: '保有銘柄', signals: '買い増しサイン',
+  report: 'レポート', import: '取込', secmaster: '銘柄マスタ', splits: '株式分割',
+  transfer: '転記用', master: 'マスタ・設定', us: '米国株', jp: '日本株',
+};
+const ICON_PATHS = {
+  dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
+  holdings: 'M3 5h18M3 12h18M3 19h18',
+  signal: 'M3 17l6-6 4 4 8-8M21 7v5h-5',
+  report: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  upload: 'M12 16V4M7 9l5-5 5 5M5 20h14',
+  master: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  splits: 'M6 3v6a3 3 0 0 0 3 3h6a3 3 0 0 1 3 3v6M18 3v6a3 3 0 0 1-3 3H9a3 3 0 0 0-3 3v6',
+  transfer: 'M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7',
+  settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H2a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 3.6 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H22a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z',
+};
+function navIcon(name) {
+  const d = ICON_PATHS[name] || '';
+  const paths = d.split('M').filter(Boolean).map(seg => `<path d="M${seg}"/>`).join('');
+  return `<svg class="ico nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+}
+function renderNav() {
+  const nav = document.getElementById('nav');
+  if (!nav) return;
+  const active = (id) => (id === currentView || (id === 'holdings' && (currentView === 'us' || currentView === 'jp')));
+  const ready = !!(typeof store !== 'undefined' && store && store.data);
+  const sig = (ready && typeof allSignals === 'function') ? allSignals().length : 0;
+  const split = (ready && typeof pendingSplits === 'function') ? pendingSplits().length : 0;
+  const badgeVal = (b) => b === 'sig' ? sig : b === 'split' ? split : 0;
+  nav.innerHTML = NAV_GROUPS.map(grp => `
+    <div class="nav-group">
+      <div class="nav-label">${grp.group}</div>
+      ${grp.items.map(it => {
+        const bv = it.badge ? badgeVal(it.badge) : 0;
+        const badge = (it.badge && bv > 0) ? `<span class="nav-badge ${it.badge === 'split' ? 'amber' : ''}">${bv}</span>` : '';
+        return `<button class="nav-item ${active(it.id) ? 'active' : ''}" data-view="${it.id}">${navIcon(it.icon)}<span class="lbl">${it.label}</span>${badge}</button>`;
+      }).join('')}
+    </div>`).join('');
+  nav.querySelectorAll('.nav-item').forEach(b => b.onclick = () => go(b.dataset.view));
+}
+
 // 一覧のソート/フィルタ・カラム設定（市場ごと）。デフォルトはティッカー順
 const listState = {
   US:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '' },
@@ -916,6 +978,7 @@ function render() {
   updateSplitBadge();
   switch (currentView) {
     case 'dashboard': renderDashboard(); break;
+    case 'holdings': renderMarket(holdingsMarket); break;
     case 'us': renderMarket('US'); break;
     case 'jp': renderMarket('JP'); break;
     case 'signals': renderSignals(); break;
@@ -945,23 +1008,31 @@ let _fitTimer = null;
 window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(fitListTables, 120); });
 
 function updateHeader() {
+  const pt = document.getElementById('page-title');
+  if (pt) pt.textContent = PAGE_TITLE[currentView] || '証券管理';
   const fx = calc.fx();
-  document.getElementById('fx-indicator').textContent = `USD/JPY: ${fx ? fx.toFixed(2) : '--'}`;
-  const lu = document.getElementById('last-update');
-  if (lu) lu.textContent = store.data.lastPriceUpdate ? `更新: ${fmtDateTime(store.data.lastPriceUpdate)}` : '更新: 未取得';
+  // トップバーの参考指数（日経平均 / S&P500）＋ USD/JPY チップ
+  const tickers = document.getElementById('tickers');
+  if (tickers) {
+    const tk = (key, label) => {
+      const ix = (store.data.indices || {})[key] || {};
+      const pct = calc.indexChangePct(key);
+      const val = ix.price != null ? num(Math.round(ix.price)) : '—';
+      const pc = pct == null ? '<span class="muted">—</span>' : `<span class="t-pct ${cls(pct)}">${signed(pct)}%</span>`;
+      return `<div class="ticker"><span class="t-label">${label}</span><span class="t-val num">${val}</span>${pc}</div>`;
+    };
+    tickers.innerHTML = tk('n225', '日経平均') + tk('sp500', 'S&P500')
+      + `<div class="fx-chip"><span class="t-label">USD/JPY</span><span class="t-val num">${fx ? fx.toFixed(2) : '—'}</span></div>`;
+  }
+  const um = document.getElementById('update-meta');
+  if (um) {
+    const t = store.data.lastPriceUpdate ? fmtDateTime(store.data.lastPriceUpdate).replace(/^\S+\s/, '') : '—';
+    um.innerHTML = `更新<br><b>${t}</b>`;
+  }
 }
 
-function updateSignalBadge() {
-  const n = allSignals().length;
-  const b = document.getElementById('signal-badge');
-  b.textContent = n; b.hidden = n === 0;
-}
-
-function updateSplitBadge() {
-  const n = pendingSplits().length;
-  const b = document.getElementById('split-badge');
-  if (b) { b.textContent = n; b.hidden = n === 0; }
-}
+function updateSignalBadge() { renderNav(); }
+function updateSplitBadge() { /* renderNav() がバッジを描画 */ }
 
 function allSignals() {
   const list = [];
@@ -1154,6 +1225,10 @@ function renderMarket(market) {
     <div class="section">
       <div class="section-head">
         <h2><span class="tag ${market.toLowerCase()}">${MARKET_LABEL[market]}</span> 保有・ウォッチ銘柄</h2>
+        <div class="seg" role="tablist" style="margin-left:auto;margin-right:12px">
+          <button class="${market === 'US' ? 'on' : ''}" onclick="setHoldingsMarket('US')">米国株</button>
+          <button class="${market === 'JP' ? 'on' : ''}" onclick="setHoldingsMarket('JP')">日本株</button>
+        </div>
         <button class="btn btn-primary btn-sm" onclick="openSecurityForm(null, '${market}')">＋ 銘柄を追加</button>
       </div>
       <div class="filterbar">
@@ -4029,7 +4104,14 @@ function renderTransfer() {
 // ---------- ユーティリティ ----------
 function go(view) {
   currentView = view;
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
+  renderNav();
+  render();
+}
+// 保有銘柄タブ内の US/JP 切替（列設定は市場ごとに保持）
+function setHoldingsMarket(m) {
+  holdingsMarket = m;
+  if (currentView !== 'holdings') currentView = 'holdings';
+  renderNav();
   render();
 }
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -4070,6 +4152,7 @@ function toast(msg, ms = 2500) {
 
 // 公開（onclick用）
 window.go = go;
+window.setHoldingsMarket = setHoldingsMarket;
 window.openSecurityForm = openSecurityForm;
 window.autoFetchInfo = autoFetchInfo;
 window.refetchInfo = refetchInfo;
@@ -4149,7 +4232,7 @@ window.api = api;
 window.render = render;
 
 // ---------- 起動 ----------
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => go(t.dataset.view));
+renderNav();
 document.getElementById('modal-close').onclick = closeModal;
 // モーダル外クリックでは閉じない（意図しない消失を防止）。× か各フォームのボタンのみで閉じる
 document.getElementById('btn-refresh').onclick = () => api.refreshAll().then(render);
