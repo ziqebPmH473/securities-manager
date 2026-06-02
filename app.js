@@ -2096,12 +2096,11 @@ function fundCodeMasterSection() {
   const fundSecs = store.data.securities.filter(s => s.market === 'FUND').sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ja'));
   const rows = fundSecs.map(s => {
     const accts = store.data.holdings.filter(h => h.securityId === s.id && h.quantity > 0).length;
-    const disp = calc.displayName(s);
     const fetched = (store.data.meta[priceKey(s)] || {}).name;
+    const disp = fetched || s.name || s.ticker;
     return `<tr>
       <td class="l col-code"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:120px;font-family:monospace" title="協会コード等に変更可"></td>
-      <td class="l"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="コードから取得した名称">取得</span>' : ' <span class="muted" style="font-size:11px">取込名</span>'}</td>
-      <td class="l muted" style="font-size:11px">${esc(s.name)}</td>
+      <td class="l"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="協会コードから取得した正式名称">取得済</span>' : ''}</td>
       <td>${accts}口座</td>
       <td class="l nowrap"><button class="btn btn-sm" onclick="fetchFundName(${s.id})" title="協会コードから名称を取得">名称取得</button></td>
     </tr>`;
@@ -2111,7 +2110,7 @@ function fundCodeMasterSection() {
       ${fundSecs.length ? '<button class="btn btn-sm" style="margin-left:auto" onclick="fetchFundName()">全件 名称取得</button>' : ''}</div>
     <div class="section-body">
       <p class="muted" style="padding:10px 16px 0">投信はコードが無いため内部コード（FND…）を自動採番しています。<strong>協会コード（8桁）</strong>を入れて「名称取得」すると、正式名称を取得して表示名に反映します（銘柄マスタ等にもこの名称で表示）。取込時は<strong>取込名</strong>でこのコードに紐づきます。</p>
-      ${fundSecs.length ? `<div class="table-wrap"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名</th><th class="l">取込名</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
+      ${fundSecs.length ? `<div class="table-wrap"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
     </div>
   </div>`;
 }
@@ -2140,8 +2139,9 @@ function setFundCode(secId, raw) {
   if (store.data.securities.some(s => s.market === 'FUND' && s.id !== secId && s.ticker === nc)) { toast('そのコードは既に使われています'); renderMaster(); return; }
   const old = sec.ticker;
   if (store.data.prices['FUND:' + old]) { store.data.prices['FUND:' + nc] = store.data.prices['FUND:' + old]; delete store.data.prices['FUND:' + old]; }
+  // meta も付け替え（名称キャッシュ等）
+  if (store.data.meta['FUND:' + old]) { store.data.meta['FUND:' + nc] = store.data.meta['FUND:' + old]; delete store.data.meta['FUND:' + old]; }
   sec.ticker = nc; sec.updatedAt = store._now();
-  if (sec.name) (store.data.fundCodes = store.data.fundCodes || {})[sec.name] = nc;
   store.save(); renderMaster();
   toast(`コードを ${nc} に変更しました`, 3000);
 }
@@ -3608,13 +3608,10 @@ function runBrokerImport() {
       store.data.holdings = store.data.holdings.filter(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !(s && s.market === 'FUND' && h.broker === scope.broker); });
     }
     for (const it of fundItems) {
-      const code = fundCodeFor(it.name); if (!code) continue;
-      let fsec = store.findSecurity('FUND', code);
-      if (!fsec) fsec = store.addSecurity({ market: 'FUND', ticker: code, name: it.name, currency: 'JPY', assetClass: 'fund', enabled: false });
-      else if (it.name && fsec.name !== it.name) store.updateSecurity(fsec.id, { name: it.name });
+      const fsec = findOrCreateFund(it.name); if (!fsec) continue;
       const q = (it.qty && it.qty > 0) ? it.qty : 1;
       store.setHolding(fsec.id, scope.broker, it.account || '特定', q, it.acqJpy != null ? it.acqJpy / q : 0, 'import');
-      if (it.evalJpy != null) store.data.prices['FUND:' + code] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+      if (it.evalJpy != null) store.data.prices['FUND:' + fsec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
       fundCount++;
     }
   }
@@ -4509,15 +4506,22 @@ function fundGenerate() {
 
 // ---------- 投信の取込（内部保持: 市場FUND） ----------
 // 投信はコードが無いため、名称↔内部コードのマスタで補完（自動採番・銘柄マスタで編集可）
-function fundCodeFor(name) {
-  const map = store.data.fundCodes || (store.data.fundCodes = {});
-  const key = (name || '').trim();
-  if (!key) return null;
-  if (map[key]) return map[key];
-  let max = 0; Object.values(map).forEach(c => { const m = /^FND(\d+)$/.exec(c); if (m) max = Math.max(max, +m[1]); });
-  const code = 'FND' + String(max + 1).padStart(3, '0');
-  map[key] = code; store.save();
-  return code;
+// ファンド名の正規化キー（全角→半角・空白除去・小文字化）。証券会社ごとの表記差を吸収して同一視
+function normFundName(name) {
+  return String(name || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+}
+// 既存FUND銘柄の最大連番＋1（内部コード自動採番）
+function nextFundCode() {
+  let max = 0;
+  store.data.securities.forEach(s => { if (s.market === 'FUND') { const m = /^FND(\d+)$/.exec(s.ticker || ''); if (m) max = Math.max(max, +m[1]); } });
+  return 'FND' + String(max + 1).padStart(3, '0');
+}
+// 正規化名で既存FUND銘柄を検索し、無ければ新規作成（証券会社ごとの表記差で重複しない）
+function findOrCreateFund(name) {
+  const key = normFundName(name); if (!key) return null;
+  let sec = store.data.securities.find(s => s.market === 'FUND' && normFundName(s.name) === key);
+  if (sec) return sec;
+  return store.addSecurity({ market: 'FUND', ticker: nextFundCode(), name, currency: 'JPY', assetClass: 'fund', enabled: false });
 }
 function openFundImport() {
   showModal('投資信託の取込', `
@@ -4548,14 +4552,11 @@ function runFundImport() {
   }
   let n = 0;
   for (const it of items) {
-    const code = fundCodeFor(it.name); if (!code) continue;
-    let sec = store.findSecurity('FUND', code);
-    if (!sec) sec = store.addSecurity({ market: 'FUND', ticker: code, name: it.name, currency: 'JPY', assetClass: 'fund', enabled: false });
-    else if (it.name && sec.name !== it.name) store.updateSecurity(sec.id, { name: it.name });
+    const sec = findOrCreateFund(it.name); if (!sec) continue;
     const q = (it.qty && it.qty > 0) ? it.qty : 1;
     const avgCost = it.acqJpy != null ? it.acqJpy / q : 0;
     store.setHolding(sec.id, broker, it.account || defAcct, q, avgCost, 'import');
-    if (it.evalJpy != null) store.data.prices['FUND:' + code] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+    if (it.evalJpy != null) store.data.prices['FUND:' + sec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
     n++;
   }
   store.save(); closeModal(); render();
