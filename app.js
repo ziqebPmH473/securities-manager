@@ -932,7 +932,7 @@ const pctTdBg = (v, key) => {
 };
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
-  name:      (s,c) => `<td class="l"><strong class="lnk nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
+  name:      (s,c) => `<td class="l"><strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
@@ -1348,16 +1348,15 @@ function renderMarket(market) {
   const sumPnl = sumV - sumC; const sumPnlPct = sumC > 0 ? sumPnl / sumC * 100 : null;
 
   const hasFilter = st.broker || st.account || st.category || st.detailType || holdingsSearch;
-  const headTag = isAll ? `<span class="tag" style="border-style:dashed">全市場</span>` : `<span class="tag ${market.toLowerCase()}">${MARKET_LABEL[market]}</span>`;
   app.innerHTML = `
     <div class="section">
       <div class="section-head">
-        <h2>${headTag} 保有・ウォッチ銘柄</h2>
-        <div class="seg" role="tablist" style="margin-left:auto;margin-right:12px">
+        <div class="seg" role="tablist">
           <button class="${market === 'ALL' ? 'active' : ''}" onclick="setHoldingsMarket('ALL')">全て</button>
           <button class="${market === 'US' ? 'active' : ''}" onclick="setHoldingsMarket('US')">米国株</button>
           <button class="${market === 'JP' ? 'active' : ''}" onclick="setHoldingsMarket('JP')">日本株</button>
         </div>
+        <div style="flex:1"></div>
         <button class="btn btn-primary btn-sm" onclick="openSecurityForm(null, '${colMkt}')">＋ 銘柄を追加</button>
       </div>
       <div class="toolbar">
@@ -1655,22 +1654,16 @@ function renderSignals() {
   const sigColgroup = `<colgroup>${visOrderS.map(c => colTag(c)).join('')}<col style="width:44px"></colgroup>`;
   const sigTableW = 44 + visOrderS.reduce((a, c) => a + colWidthPx(c), 0);
   // 到達／もうすぐ を1つの表にまとめ、グループ見出し行で区切る（列幅を揃えるため）
-  const groupRow = (label, cls2, n) => `<tr class="sig-group ${cls2}"><td colspan="${colCount}">${label}　${n} 件</td></tr>`;
+  const groupRow = (label, cls2, n) => `<tr class="sig-group ${cls2}"><td class="l" colspan="${colCount}" style="position:sticky;left:0;text-align:left">${label}　${n} 件</td></tr>`;
   const bodyRows = (secs) => secs.length
     ? secs.map(sec => marketRow(sec, visibleCols, { actions: 'signal' })).join('')
     : `<tr><td class="muted" colspan="${colCount}" style="padding:12px 16px">該当する銘柄はありません。</td></tr>`;
   const seg = (m, label) => `<button class="${signalMarketFilter === m ? 'active' : ''}" onclick="setSignalMarket('${m}')">${label}</button>`;
-  const rule = store.defaultRule ? store.defaultRule() : null;
-  const ruleNote = rule ? `標準ルール（5年高値から −${rule.initialDropPct}% で初回 / 前回購入単価から −${rule.addonDropPct}% で買い増し）に基づき抽出。` : '買い増しサインの一覧。';
   app.innerHTML = `
-    <div class="page-intro">
-      <h2>買い増しサイン</h2>
-      <p>${esc(ruleNote)} 到達 ${reached.length} 件 / もうすぐ ${near.length} 件。</p>
-    </div>
     <div class="section">
       <div class="section-head">
-        <h2>サイン一覧</h2>
-        <div class="seg" role="tablist" style="margin-left:auto;margin-right:12px">${seg('all', '全市場')}${seg('JP', '日本株')}${seg('US', '米国株')}</div>
+        <div class="seg" role="tablist">${seg('all', '全市場')}${seg('JP', '日本株')}${seg('US', '米国株')}</div>
+        <div style="flex:1"></div>
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
       </div>
       <div class="section-body">
