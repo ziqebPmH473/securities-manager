@@ -2099,17 +2099,19 @@ function openFundCodeMaster() {
     const accts = store.data.holdings.filter(h => h.securityId === s.id && h.quantity > 0).length;
     const fetched = (store.data.meta[priceKey(s)] || {}).name;
     const disp = fetched || s.name || s.ticker;
+    const importNames = [s.name, ...(s.aliasNames || [])].filter(Boolean);
+    const impHtml = importNames.length ? importNames.map(n => esc(n)).join('<br>') : '—';
     return `<tr>
       <td class="l" style="width:150px"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:130px;font-family:monospace" title="協会コード等に変更可"></td>
       <td class="l"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="協会コードから取得した正式名称">取得</span>' : ' <span class="muted" style="font-size:11px">未取得</span>'}</td>
-      <td class="l muted">${esc(s.name || '—')}</td>
+      <td class="l muted" style="font-size:11px">${impHtml}</td>
       <td style="width:80px">${accts}口座</td>
       <td class="l nowrap" style="width:96px"><button class="btn btn-sm" onclick="fetchFundName(${s.id})" title="協会コードから名称を取得">名称取得</button></td>
     </tr>`;
   }).join('');
   showModal('投資信託 コードマスタ（名称↔コード）', `
     <p class="muted" style="margin:0 0 10px">投信はコードが無いため内部コード（FND…）を自動採番しています。<strong>協会コード（8桁）</strong>を入れて「名称取得」すると正式名称を取得し表示名に反映します（取込時は<strong>取込名</strong>でこのコードに紐づきます）。同じコードを付けると同一ファンドとして統合します。</p>
-    ${fundSecs.length ? `<div class="table-wrap" style="max-height:60vh"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名（取得した正式名称）</th><th class="l">取込名（CSVの名称）</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
+    ${fundSecs.length ? `<div class="table-wrap" style="max-height:60vh"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名（取得した正式名称）</th><th class="l">取込名（CSVの名称・証券会社別に複数可）</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
     <div class="form-actions">
       ${fundSecs.length ? '<button type="button" class="btn" onclick="fetchFundName()">全件 名称取得</button>' : ''}
       <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
@@ -2172,6 +2174,11 @@ function mergeFundInto(from, to) {
     }
   }
   store.data.holdings = store.data.holdings.filter(h => !h._merged);
+  // 消す側の取込名（証券会社ごとの別表記）をエイリアスとして保持→次回取込でも同一ファンドに紐づく
+  const toKey = normFundName(to.name);
+  const names = [...(to.aliasNames || []), ...(from.aliasNames || []), from.name]
+    .filter(Boolean).filter(n => normFundName(n) !== toKey);
+  to.aliasNames = [...new Set(names)]; to.updatedAt = store._now();
   delete store.data.prices['FUND:' + from.ticker];
   delete store.data.meta['FUND:' + from.ticker];
   store.data.securities = store.data.securities.filter(s => s.id !== from.id);
@@ -4555,12 +4562,22 @@ function nextFundCode() {
   store.data.securities.forEach(s => { if (s.market === 'FUND') { const m = /^FND(\d+)$/.exec(s.ticker || ''); if (m) max = Math.max(max, +m[1]); } });
   return 'FND' + String(max + 1).padStart(3, '0');
 }
+// その投信が持つ全取込名（主名称＋証券会社ごとのエイリアス）の正規化キー一覧
+function fundNameKeys(sec) {
+  return [sec.name, ...(sec.aliasNames || [])].filter(Boolean).map(normFundName);
+}
 // 正規化名で既存FUND銘柄を検索し、無ければ新規作成（証券会社ごとの表記差で重複しない）
+// 別表記の取込名は aliasNames に保持し、次回以降の取込でも同一ファンドに紐づける
 function findOrCreateFund(name) {
   const key = normFundName(name); if (!key) return null;
-  let sec = store.data.securities.find(s => s.market === 'FUND' && normFundName(s.name) === key);
-  if (sec) return sec;
-  return store.addSecurity({ market: 'FUND', ticker: nextFundCode(), name, currency: 'JPY', assetClass: 'fund', enabled: false });
+  let sec = store.data.securities.find(s => s.market === 'FUND' && fundNameKeys(s).includes(key));
+  if (sec) {
+    if (normFundName(sec.name) !== key && !(sec.aliasNames || []).some(a => normFundName(a) === key)) {
+      sec.aliasNames = [...(sec.aliasNames || []), name]; store.save();
+    }
+    return sec;
+  }
+  return store.addSecurity({ market: 'FUND', ticker: nextFundCode(), name, aliasNames: [], currency: 'JPY', assetClass: 'fund', enabled: false });
 }
 function openFundImport() {
   showModal('投資信託の取込', `
