@@ -2149,6 +2149,27 @@ function showModal(title, bodyHtml, opts = {}) {
 }
 function closeModal() { document.getElementById('modal-overlay').hidden = true; }
 
+// 右からスライドするドロワー（銘柄詳細用）。body と foot を分けて表示。
+function showDrawer(title, bodyHtml, footHtml) {
+  document.getElementById('drawer-title').textContent = title;
+  document.getElementById('drawer-body').innerHTML = bodyHtml;
+  const foot = document.getElementById('drawer-foot');
+  foot.innerHTML = footHtml || '';
+  foot.style.display = footHtml ? 'flex' : 'none';
+  const ov = document.getElementById('drawer-overlay');
+  const dr = document.getElementById('detail-drawer');
+  ov.hidden = false;
+  document.getElementById('drawer-body').scrollTop = 0;
+  // setTimeout で次フレーム以降にクラス付与（バックグラウンドでも発火＝rAFより堅牢）
+  setTimeout(() => { ov.classList.add('show'); dr.classList.add('show'); }, 20);
+}
+function closeDrawer() {
+  const ov = document.getElementById('drawer-overlay'); const dr = document.getElementById('detail-drawer');
+  if (!ov) return;
+  ov.classList.remove('show'); if (dr) dr.classList.remove('show');
+  setTimeout(() => { ov.hidden = true; }, 200);
+}
+
 function openSecurityForm(id, presetMarket) {
   const sec = id ? store.data.securities.find(s => s.id === id) : null;
   const m = sec ? sec.market : (presetMarket || 'US');
@@ -2529,7 +2550,7 @@ function openSecurityDetail(secId) {
     kv('時価総額(百万) / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? num(Math.round(calc.marketCap(sec))) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
   ].join('');
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
-  showModal(`${calc.displayName(sec)}（${sec.ticker}）`, `
+  showDrawer(`${calc.displayName(sec)}（${sec.ticker}）`, `
     <div style="margin:-4px 0 10px"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span></div>
     <fieldset class="form-group"><legend>価格チャート（週足終値）</legend>
       <div class="seg" id="chart-range-seg" style="margin:0 0 8px;width:fit-content">
@@ -2544,12 +2565,11 @@ function openSecurityDetail(secId) {
     ${sectionBox('保有', holdRows + (holdSummary || ''))}
     ${sectionBox('購入・取引履歴', txnRows)}
     ${sectionBox('分析メタ', meta)}
-    ${sectionBox('ファンダ', fund)}
-    <div class="form-actions">
-      <button type="button" class="btn" onclick="openTxnForm(${sec.id})">取引を記録</button>
-      <button type="button" class="btn" onclick="openSecurityForm(${sec.id})">編集</button>
-      <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
-    </div>`, { wide: true });
+    ${sectionBox('ファンダ', fund)}`, `
+    <button type="button" class="btn" onclick="closeDrawer();openTxnForm(${sec.id})">取引を記録</button>
+    <button type="button" class="btn" onclick="closeDrawer();openSecurityForm(${sec.id})">編集</button>
+    <div style="flex:1"></div>
+    <button type="button" class="btn btn-primary" onclick="closeDrawer()">閉じる</button>`);
   _detailChartCtx = { sec, ev, price, lb };
   loadDetailChart(sec, ev, price, lb, detailChartRange);
 }
@@ -4345,6 +4365,7 @@ window.removeHolding = removeHolding;
 window.sellAll = sellAll;
 window.openTxnForm = openTxnForm;
 window.setDetailChartRange = setDetailChartRange;
+window.closeDrawer = closeDrawer;
 window.openPriceInput = openPriceInput;
 window.openCategoryEdit = openCategoryEdit;
 window.openAmountHistory = openAmountHistory;
@@ -4416,6 +4437,8 @@ window.render = render;
 // ---------- 起動 ----------
 renderNav();
 document.getElementById('modal-close').onclick = closeModal;
+document.getElementById('drawer-close').onclick = closeDrawer;
+document.getElementById('drawer-overlay').addEventListener('click', (e) => { if (e.target.id === 'drawer-overlay') closeDrawer(); });
 // モーダル外クリックでは閉じない（意図しない消失を防止）。× か各フォームのボタンのみで閉じる
 document.getElementById('btn-refresh').onclick = () => api.refreshAll().then(render);
 
