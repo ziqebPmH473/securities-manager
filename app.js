@@ -2918,13 +2918,28 @@ function openSecurityDetail(secId) {
   // 適用ルールの内容（初回/買い増しの下落率・基準高値）。判定対象外でも表示。
   const bhMode = (sec.baseHighMode || (rule && rule.baseHighMode) || '5y');
   const ruleInfo = rule ? kv('適用ルール', `${esc(rule.name)}<br><span class="muted">初回 −${rule.initialDropPct}% ／ 買い増し −${rule.addonDropPct}% ／ 基準高値 ${esc(BASE_HIGH_LABEL[bhMode] || bhMode)}</span>`) : '';
+  // 種別（高値更新・固定値も区別）
+  const typeLabel = ev ? (ev.baseSource === '固定' ? '買い増し（買増固定値）'
+    : ev.baseSource === '高値更新' ? '買い増し（高値更新→初回ルールで判定）'
+    : ev.type === 'initial' ? '初回購入' : '買い増し') : '';
+  // 高値更新オプションがONなのに高値更新が適用されていない時、その理由を表示（サイレント失敗の可視化）
+  let highResetNote = '';
+  if (ev && rule && rule.highResetMode && ev.type === 'addon' && ev.baseSource !== '高値更新' && ev.baseSource !== '固定') {
+    const bhDate = calc.baseHighDate(sec);
+    let reason;
+    if (!lb.date) reason = '前回購入日が未設定です。取引履歴の買い、または銘柄編集の「前回購入日」を入力してください。';
+    else if (!bhDate) reason = '高値の日付が未取得です。上部の「価格更新」を実行すると取得され、判定に反映されます（以後は日次で自動更新）。';
+    else reason = `最高値の日付（${esc(bhDate)}）が前回購入日（${esc(lb.date)}）より前のため、高値更新ではありません。`;
+    highResetNote = `<div class="ai-row" style="background:var(--warn-soft,#fff7e6);border-radius:6px"><span class="muted">高値更新が未適用</span><span style="font-size:12px;text-align:right">${reason}</span></div>`;
+  }
   // 判定
   const judge = ruleInfo + (ev ? [
-    kv('種別', ev.type === 'initial' ? '初回購入' : '買い増し'),
+    kv('種別', typeLabel),
     kv('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
     kv('次回購入(トリガー)', (ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.trigger)),
     kv('現在値', m(price)),
     kv('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%</span>` + (ev.reached ? '（到達）' : '') : '—'),
+    highResetNote,
   ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>');
   // 保有（口座別）
   const hs = store.data.holdings.filter(h => h.securityId === sec.id);
