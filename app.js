@@ -1023,6 +1023,35 @@ function fitListTables() {
 let _fitTimer = null;
 window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(fitListTables, 120); });
 
+// colgroup の <col> タグ。auto=データ幅自動（描画後に実測）／既定=固定px
+function colTag(c) {
+  return c.auto ? `<col data-autocol="1" style="width:64px">` : `<col style="width:${colWidthPx(c)}px">`;
+}
+// 自動列（data-autocol）の幅を、ヘッダではなくデータセルの最大実描画幅に合わせて設定する。
+// table-layout:fixed を保ったまま、オフスクリーンに各セルのHTMLを複製して幅を実測。
+function autoFitColumns(table) {
+  if (!table) return;
+  const cols = [...table.querySelectorAll('colgroup col')];
+  if (!cols.some(c => c.dataset.autocol === '1')) return;
+  const sample = table.querySelector('tbody td');
+  let font = '13px sans-serif';
+  if (sample) { const cs = getComputedStyle(sample); font = (cs.font && cs.font.trim()) ? cs.font : `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; }
+  const meas = document.createElement('span');
+  meas.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden;white-space:nowrap;font:' + font;
+  document.body.appendChild(meas);
+  // colspan のグループ見出し行などは列数が合わないので除外
+  const rows = [...table.querySelectorAll('tbody tr')].filter(tr => tr.children.length === cols.length);
+  cols.forEach((col, ci) => {
+    if (col.dataset.autocol !== '1') return;
+    let max = 0;
+    rows.forEach(tr => { const td = tr.children[ci]; if (!td) return; meas.innerHTML = td.innerHTML; const w = meas.offsetWidth; if (w > max) max = w; });
+    col.style.width = Math.max(44, Math.ceil(max) + 26) + 'px'; // +26 ≒ セル左右パディング
+  });
+  meas.remove();
+  let total = 0; cols.forEach(c => total += parseFloat(c.style.width) || 0);
+  if (total) table.style.width = total + 'px';
+}
+
 function updateHeader() {
   const pt = document.getElementById('page-title');
   if (pt) pt.textContent = PAGE_TITLE[currentView] || '証券管理';
@@ -1300,7 +1329,7 @@ function renderMarket(market) {
 
   const headHtml = colHeadHtml(visibleCols, st, colMkt, ccy);
   // 列幅（table-layout:fixed）。先頭=チェック / 末尾=操作 の固定列＋各列の幅
-  const colgroupHtml = `<colgroup><col style="width:36px">${visOrder.map(c => `<col style="width:${colWidthPx(c)}px">`).join('')}<col style="width:44px"></colgroup>`;
+  const colgroupHtml = `<colgroup><col style="width:36px">${visOrder.map(c => colTag(c)).join('')}<col style="width:44px"></colgroup>`;
   // テーブル幅＝列幅合計。width:100%だと固定幅が圧縮され横スクロールが出ないため、合計幅を明示（min-width:100%で不足時は伸長）
   const tableW = 36 + 44 + visOrder.reduce((a, c) => a + colWidthPx(c), 0);
 
@@ -1379,6 +1408,7 @@ function renderMarket(market) {
       </div>
     </div>`;
   bindRowSelect();
+  autoFitColumns(document.querySelector('#app table.fixed-cols'));
 }
 
 // ヘッダHTML生成（一覧・サイン共通）
@@ -1520,7 +1550,8 @@ function openColPicker(market) {
       <span class="cp-handle">⠿</span>
       <input type="checkbox" onchange="cpToggle('${c.key}',this.checked)" ${c.visible ? 'checked' : ''} title="表示/非表示" style="width:auto">
       <input type="text" value="${esc(c.labelOverride || '')}" placeholder="${esc(mc.label)}" onchange="cpSetLabel('${c.key}', this.value)" title="列名（空欄＝既定: ${esc(mc.label)}）" style="flex:1;min-width:140px">
-      <input type="number" min="40" step="2" value="${colWidthPx(c)}" onfocus="this.select()" onchange="cpSetWidth('${c.key}', this.value)" title="列幅(px)" style="width:74px;text-align:right"><span class="muted" style="font-size:11px">px</span>
+      <label class="muted" style="display:flex;align-items:center;gap:3px;font-size:11px;white-space:nowrap" title="データの最大幅に自動調整（列名は無視）"><input type="checkbox" ${c.auto ? 'checked' : ''} onchange="cpSetAuto('${c.key}',this.checked)" style="width:auto">自動</label>
+      <input type="number" min="40" step="2" value="${colWidthPx(c)}" ${c.auto ? 'disabled' : ''} onfocus="this.select()" onchange="cpSetWidth('${c.key}', this.value)" title="列幅(px)" style="width:74px;text-align:right${c.auto ? ';opacity:.4' : ''}"><span class="muted" style="font-size:11px">px</span>
     </div>`;
   }).join('');
   const other = market === 'US' ? 'JP' : market === 'JP' ? 'US' : null;
@@ -1546,7 +1577,7 @@ function openColPicker(market) {
 // 列レイアウト（表示/非表示・並び順）を他の市場へコピー。米国株↔日本株。
 function copyColLayout(fromMarket, toMarket) {
   reconcileColPrefs(fromMarket);
-  colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width, labelOverride: c.labelOverride }));
+  colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width, labelOverride: c.labelOverride, auto: c.auto }));
   reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（米国株/日本株は同一列なので実質そのまま）
   saveColPrefs();
   toast(`列設定を${MARKET_LABEL[toMarket]}にコピーしました`, 4000);
@@ -1561,6 +1592,12 @@ function cpSetWidth(key, px) {
   const order = getColOrder(_colPickerMarket);
   const c = order.find(x => x.key === key);
   if (c) { const n = parseInt(px, 10); c.width = (isNaN(n) || n < 40) ? undefined : n; saveColPrefs(); }
+}
+// 列幅モード: auto=データ最大幅に自動調整（列名無視）／固定=px指定
+function cpSetAuto(key, checked) {
+  const order = getColOrder(_colPickerMarket);
+  const c = order.find(x => x.key === key);
+  if (c) { c.auto = !!checked; saveColPrefs(); openColPicker(_colPickerMarket); }
 }
 function cpSetAllWidths() {
   const n = parseInt((document.getElementById('cp-all-width') || {}).value, 10);
@@ -1611,10 +1648,12 @@ function renderSignals() {
     reached = reached.filter(s => s.market === signalMarketFilter);
     near = near.filter(s => s.market === signalMarketFilter);
   }
-  const visibleCols = getColOrder('SIGNAL').filter(c => c.visible)
-    .map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
+  const visOrderS = getColOrder('SIGNAL').filter(c => c.visible);
+  const visibleCols = visOrderS.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
   const colCount = visibleCols.length + 1; // +1 = アクション列
   const head = colHeadHtml(visibleCols, st, 'SIGNAL', null);
+  const sigColgroup = `<colgroup>${visOrderS.map(c => colTag(c)).join('')}<col style="width:44px"></colgroup>`;
+  const sigTableW = 44 + visOrderS.reduce((a, c) => a + colWidthPx(c), 0);
   // 到達／もうすぐ を1つの表にまとめ、グループ見出し行で区切る（列幅を揃えるため）
   const groupRow = (label, cls2, n) => `<tr class="sig-group ${cls2}"><td colspan="${colCount}">${label}　${n} 件</td></tr>`;
   const bodyRows = (secs) => secs.length
@@ -1635,7 +1674,7 @@ function renderSignals() {
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
       </div>
       <div class="section-body">
-        <div class="table-wrap"><table class="holdings dense">
+        <div class="table-wrap"><table class="fixed-cols holdings dense" style="width:${sigTableW}px">${sigColgroup}
           <thead><tr>${head}<th class="l"></th></tr></thead>
           <tbody>
             ${groupRow('🔴 到達（今が買い時）', 'reached', reached.length)}
@@ -1646,6 +1685,7 @@ function renderSignals() {
         </table></div>
       </div>
     </div>`;
+  autoFitColumns(document.querySelector('#app table.fixed-cols'));
 }
 
 // ダッシュボード用の簡易サイン表（到達のみ・上位）
@@ -4363,6 +4403,7 @@ window.bulkDeleteSecurities = bulkDeleteSecurities;
 window.copyDisplayedTable = copyDisplayedTable;
 window.copyColLayout = copyColLayout;
 window.cpSetWidth = cpSetWidth;
+window.cpSetAuto = cpSetAuto;
 window.cpSetAllWidths = cpSetAllWidths;
 window.cpSetLabel = cpSetLabel;
 window.openGenericImport = openGenericImport;
