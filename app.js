@@ -1983,9 +1983,9 @@ function renderSecMaster() {
         <button class="btn btn-sm btn-primary" onclick="openSecurityForm()">＋ 銘柄を追加</button></div>
       <div class="section-body">
         <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます。「手」=手動上書き中。詳細種別の「auto」=自動判定（未設定）。<strong>「価格未取得」は実在しないティッカー/コードの可能性</strong>（価格更新後に抽出→全選択→一括削除で整理できます）。</p>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
           <span class="muted">抽出:</span>
-          ${['all', '全て', 'noprice', '価格未取得', 'noholding', '保有なし', 'holding', '保有あり'].reduce((acc, _, i, arr) => { if (i % 2) acc.push(`<button class="btn btn-sm${secMasterFilter === arr[i - 1] ? ' btn-primary' : ''}" onclick="setSecMasterFilter('${arr[i - 1]}')">${arr[i]}</button>`); return acc; }, []).join('')}
+          <div class="seg">${['all', '全て', 'noprice', '価格未取得', 'noholding', '保有なし', 'holding', '保有あり'].reduce((acc, _, i, arr) => { if (i % 2) acc.push(`<button class="${secMasterFilter === arr[i - 1] ? 'active' : ''}" onclick="setSecMasterFilter('${arr[i - 1]}')">${arr[i]}</button>`); return acc; }, []).join('')}</div>
           <span class="muted">${secs.length}/${allSecs.length}件</span>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
@@ -2002,7 +2002,7 @@ function renderSecMaster() {
           <span style="width:10px"></span>
           <button class="btn btn-sm btn-danger" onclick="bulkDeleteSecurities()">選択した銘柄を削除</button>
         </div>
-        <div class="table-wrap"><table>
+        <div class="table-wrap"><table class="holdings dense no-rowclick">
           <thead><tr>${smHead}</tr></thead>
           <tbody>${rows || `<tr><td colspan="15" class="empty">銘柄がありません。</td></tr>`}</tbody>
         </table></div>

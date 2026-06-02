@@ -753,3 +753,7 @@ table.fixed-cols.holdings.dense .tk { width: 34px; height: 22px; font-size: 10.5
 table.fixed-cols.holdings.dense .nm-strong { font-weight: 600; }
 /* サインのグループ見出し行（横スクロールしても左に固定して見える） */
 table.fixed-cols .sig-group td { background: var(--panel-2); font-weight: 700; }
+
+/* 一覧でない holdings テーブル（行クリック不可）はカーソルを通常に */
+table.holdings.no-rowclick tbody tr { cursor: default; }
+table.holdings.no-rowclick tbody tr:hover { background: var(--panel-2); }
