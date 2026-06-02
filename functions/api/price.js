@@ -59,21 +59,22 @@ async function fetchFinnhub(symbol, token) {
   const metric = metricRes.ok ? (await metricRes.json()).metric || {} : {};
 
   // 5年高値: Finnhub の metric には 52w high があるが 5y は無いため、直近 52w high を採用
-  // より正確な5年高値は Yahoo で補完取得（失敗してもフォールバック）
+  // より正確な5年高値は Yahoo で補完取得（失敗してもフォールバック）。高値の日付も取得（高値更新判定用）
   let high5y = num(metric['52WeekHigh']);
+  let high5yDate = null, high52wDate = null;
   try {
     const yq = await fetchYahooChart(symbol, '5y', '1mo');
-    const highs = yq.highs || [];
-    let maxH = 0;
-    for (const h of highs) if (h > maxH) maxH = h;
-    if (maxH > 0) high5y = maxH;
-  } catch (_) { /* Yahoo5y失敗→Finnhubの52w highで代用 */ }
+    if (yq.high5y > 0) { high5y = yq.high5y; high5yDate = yq.high5yDate; }
+    high52wDate = yq.high52wDate;
+  } catch (_) { /* Yahoo5y失敗→Finnhubの52w highで代用（日付は不明） */ }
 
   return {
     price:    num(q.c),
     prevClose: num(q.pc),
     high5y,
     high52w:  num(metric['52WeekHigh']),
+    high5yDate,
+    high52wDate,
     currency: 'USD',
     source:   'finnhub',
     fetchedAt: new Date().toISOString(),
@@ -92,6 +93,8 @@ async function fetchYahoo(symbol, type) {
     prevClose: q.prevClose,
     high5y:   type === 'fund' ? null : q.high5y,   // 投信は高値不要（判定対象外）
     high52w:  q.high52w,
+    high5yDate:  type === 'fund' ? null : q.high5yDate,   // 高値が付いた日（高値更新判定用）
+    high52wDate: type === 'fund' ? null : q.high52wDate,
     currency: q.currency,
     source:   'yahoo',
     fundNav:  type === 'fund' ? q.price : null,     // 投信の場合は基準価額として扱う
@@ -121,22 +124,25 @@ async function fetchYahooChart(symbol, range, interval) {
     ? closes[closes.length - 2]
     : num(meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose);
 
-  // 52週高値（直近52週の最大値）
+  // 52週高値（直近52週の最大値）。高値が付いた日付も記録（高値更新判定で「前回購入後に高値更新したか」を見るため）
   const now = Date.now() / 1000;
   const ts = r.timestamp || [];
   const yr52 = 52 * 7 * 24 * 3600;
-  let high52w = 0, high5y = 0;
+  let high52w = 0, high5y = 0, high5yTs = null, high52wTs = null;
   highs.forEach((h, i) => {
     if (typeof h !== 'number') return;
-    if (h > high5y) high5y = h;
-    if (ts[i] && (now - ts[i]) < yr52 && h > high52w) high52w = h;
+    if (h > high5y) { high5y = h; high5yTs = ts[i] || null; }
+    if (ts[i] && (now - ts[i]) < yr52 && h > high52w) { high52w = h; high52wTs = ts[i]; }
   });
+  const toDate = (t) => (typeof t === 'number') ? new Date(t * 1000).toISOString().slice(0, 10) : null;
 
   return {
     price:    num(meta.regularMarketPrice),
     prevClose: num(prevClose),
     high5y:   high5y || num(meta.fiftyTwoWeekHigh),
     high52w:  high52w || num(meta.fiftyTwoWeekHigh),
+    high5yDate:  toDate(high5yTs),   // 5年高値が付いた日（YYYY-MM-DD）
+    high52wDate: toDate(high52wTs),  // 52週高値が付いた日
     currency: meta.currency || null,
     highs,
   };

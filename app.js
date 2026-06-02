@@ -492,17 +492,19 @@ const calc = {
     return { qty, avgCost: qty > 0 ? cost / qty : 0, acquiredCost: cost };
   },
 
-  // 前回購入単価の情報 {price, source}。source: 'txn'(買い取引)|'manual'(登録値)|'みなし'(取得単価)|null
+  // 前回購入単価の情報 {price, source, date}。source: 'txn'(買い取引)|'manual'(登録値)|'みなし'(取得単価)|null
+  // date(YYYY-MM-DD): 高値更新判定で「前回購入後に高値更新したか」を見るため。取引履歴の日付を使う。
+  // manual/みなしは購入日が不明なため date=null（→高値更新判定は発動せず通常の買い増しルールにフォールバック）
   lastBuyInfo(sec) {
     const buys = store.data.transactions
       .filter(t => t.securityId === sec.id && t.type === 'buy')
       .sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
-    if (buys.length) return { price: buys[0].price, source: 'txn' };
-    if (typeof sec.prevBuyPrice === 'number') return { price: sec.prevBuyPrice, source: 'manual' };
+    if (buys.length) return { price: buys[0].price, source: 'txn', date: buys[0].tradedAt || null };
+    if (typeof sec.prevBuyPrice === 'number') return { price: sec.prevBuyPrice, source: 'manual', date: null };
     // 未登録なら取得単価を「みなし前回購入単価」として使用
     const th = this.totalHolding(sec.id);
-    if (th.qty > 0 && th.avgCost > 0) return { price: th.avgCost, source: 'みなし' };
-    return { price: null, source: null };
+    if (th.qty > 0 && th.avgCost > 0) return { price: th.avgCost, source: 'みなし', date: null };
+    return { price: null, source: null, date: null };
   },
   lastBuyPrice(sec) { return this.lastBuyInfo(sec).price; },
 
@@ -539,6 +541,18 @@ const calc = {
     return p.high5y || null; // 5y デフォルト
   },
 
+  // 基準高値が「付いた日付」(YYYY-MM-DD)。高値更新判定（前回購入後に高値更新したか）で使う。
+  // manualモードや日付未取得（旧キャッシュ）は null → 高値更新判定は発動しない（安全側）
+  baseHighDate(sec) {
+    const rule = store.rule(sec.ruleId);
+    const mode = sec.baseHighMode || rule.baseHighMode || '5y';
+    if (mode === 'manual') return null;
+    const p = store.data.prices[priceKey(sec)] || {};
+    if (mode === '52w') return p.high52wDate || null;
+    if (mode === 'all') return p.highAllDate || p.high5yDate || null;
+    return p.high5yDate || null; // 5y デフォルト
+  },
+
   // 判定結果: { type, base, trigger, price, remainingDropPct, reached, recoAmount, recoCcy }
   evaluate(sec) {
     if (sec.market === 'FUND' || sec.enabled === false) return null;
@@ -560,9 +574,12 @@ const calc = {
       trigger = base * (1 - rule.initialDropPct / 100);
     } else {
       const bh = this.baseHigh(sec);
-      // 高値更新時は初回ルールで判定（rule.highResetMode）: 直近の基準高値が前回購入単価より上＝最高値更新中なら、
-      // 前回購入単価基準ではなく「高値から initialDropPct 下落」で判定（前回購入が二度と来ない銘柄向け）
-      if (rule.highResetMode && lb.price != null && bh != null && bh > lb.price) {
+      const bhDate = this.baseHighDate(sec);
+      // 高値更新時は初回ルールで判定（rule.highResetMode）。
+      // 「前回購入より後に最高値を更新した」場合のみ＝基準高値が付いた日付が前回購入日より後（時間軸で判定）。
+      // 取引履歴の日付(lb.date)と高値の日付(bhDate)が両方そろう時だけ発動。
+      // 旧ロジック（bh>lb.price の値比較）は、暴落後に買った銘柄が常に高値更新扱いになる誤判定があったため日付ベースに変更。
+      if (rule.highResetMode && lb.date && bhDate && bhDate > lb.date && bh != null) {
         base = bh; baseSource = '高値更新'; trigger = base * (1 - rule.initialDropPct / 100);
       } else {
         base = lb.price != null ? lb.price : bh;
@@ -695,7 +712,9 @@ const api = {
       if (q && !q.error && q.price != null) {
         store.data.prices[priceKey(sec)] = {
           price: q.price, prevClose: q.prevClose,
-          high5y: q.high5y, high52w: q.high52w, fetchedAt: q.fetchedAt,
+          high5y: q.high5y, high52w: q.high52w,
+          high5yDate: q.high5yDate ?? null, high52wDate: q.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
+          fetchedAt: q.fetchedAt,
         };
       }
     }
@@ -732,7 +751,9 @@ const api = {
       if (q && !q.error && q.price != null) {
         store.data.prices[priceKey(sec)] = {
           price: q.price, prevClose: q.prevClose,
-          high5y: q.high5y, high52w: q.high52w, fetchedAt: q.fetchedAt,
+          high5y: q.high5y, high52w: q.high52w,
+          high5yDate: q.high5yDate ?? null, high52wDate: q.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
+          fetchedAt: q.fetchedAt,
         };
       }
     }
