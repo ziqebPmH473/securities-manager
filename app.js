@@ -1924,6 +1924,54 @@ function bulkSetDetailType() {
 }
 let secMasterSort = { key: 'ticker', dir: 1 };
 let secMasterFilter = 'all'; // all | noprice | noholding | holding
+let secMasterSearch = '';
+function setSecMasterSearch(v) {
+  secMasterSearch = v; renderSecMaster();
+  const el = document.getElementById('sm-search');
+  if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); }
+}
+// 銘柄マスタ 一括変更: 項目＋値の汎用UI。コード/銘柄名など銘柄固有の項目は対象外
+const SM_BULK_FIELDS = [
+  { key: 'detailType', label: '詳細種別' },
+  { key: 'enabled', label: '判定対象' },
+  { key: 'watch', label: '注意銘柄' },
+  { key: 'category', label: 'カテゴリ(AI判断)' },
+  { key: 'ruleId', label: '買い増しルール' },
+  { key: 'rating', label: '銘柄格付' },
+  { key: 'overallGrade', label: '総合評価' },
+  { key: 'buyGrade', label: '買い時評価' },
+  { key: 'recoCategory', label: 'AI推奨カテゴリ' },
+];
+let smBulkField = 'detailType';
+function smBulkValueHtml(field) {
+  const gradeOpts = ['', 'S', 'A', 'B', 'C', 'D'].map(g => `<option value="${g}">${g || '（クリア）'}</option>`).join('');
+  const catOpts = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder).map(c => `<option>${esc(c.category)}</option>`).join('');
+  switch (field) {
+    case 'detailType': return `<select id="sm-bulk-value"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
+    case 'enabled': return `<select id="sm-bulk-value"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
+    case 'watch': return `<select id="sm-bulk-value"><option value="true">付ける</option><option value="false">外す</option></select>`;
+    case 'category': case 'recoCategory': return `<select id="sm-bulk-value">${catOpts}</select>`;
+    case 'ruleId': return `<select id="sm-bulk-value">${store.data.rules.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
+    case 'rating': case 'overallGrade': case 'buyGrade': return `<select id="sm-bulk-value">${gradeOpts}</select>`;
+    default: return `<input id="sm-bulk-value" type="text">`;
+  }
+}
+function smBulkFieldChange(f) { smBulkField = f; const c = document.getElementById('sm-bulk-value-wrap'); if (c) c.innerHTML = smBulkValueHtml(f); }
+function smBulkApply() {
+  const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
+  if (!ids.length) { toast('銘柄を選択してください'); return; }
+  const field = smBulkField; const raw = (document.getElementById('sm-bulk-value') || {}).value;
+  let val;
+  if (field === 'enabled' || field === 'watch') val = raw === 'true';
+  else if (field === 'detailType') val = raw === '__null' ? null : raw;
+  else if (field === 'ruleId') val = parseInt(raw, 10);
+  else if (['rating', 'overallGrade', 'buyGrade'].includes(field)) val = raw || null;
+  else val = raw;
+  for (const id of ids) store.updateSecurity(id, { [field]: val });
+  store.save(); renderSecMaster();
+  const fl = SM_BULK_FIELDS.find(f => f.key === field);
+  toast(`${ids.length}件の「${fl ? fl.label : field}」を変更しました`, 4000);
+}
 function setSecMasterSort(key) {
   if (secMasterSort.key === key) secMasterSort.dir *= -1; else { secMasterSort.key = key; secMasterSort.dir = 1; }
   renderSecMaster();
@@ -1934,12 +1982,16 @@ function renderSecMaster() {
   const smHasPrice = (s) => { const p = store.data.prices[priceKey(s)]; return !!(p && p.price != null); };
   const smHasHolding = (s) => store.data.holdings.some(h => h.securityId === s.id && h.quantity > 0);
   const allSecs = [...store.data.securities].sort((a, b) => { const va = sortValue(a, sk), vb = sortValue(b, sk); if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0; });
-  const secs = allSecs.filter(s => {
+  let secs = allSecs.filter(s => {
     if (secMasterFilter === 'noprice') return !smHasPrice(s);
     if (secMasterFilter === 'noholding') return !smHasHolding(s);
     if (secMasterFilter === 'holding') return smHasHolding(s);
     return true;
   });
+  if (secMasterSearch.trim()) {
+    const k = secMasterSearch.trim().toLowerCase();
+    secs = secs.filter(s => (s.ticker || '').toLowerCase().includes(k) || calc.displayName(s).toLowerCase().includes(k) || (calc.field(s, 'sector') || '').toLowerCase().includes(k));
+  }
   const cell = (v, l) => `<td class="${l ? 'l ' : ''}">${v != null && v !== '' ? esc(String(v)) : muted}</td>`;
   // ソート可能なヘッダ（sortValue が各キーに対応）
   const SM_COLS = [
@@ -1983,23 +2035,20 @@ function renderSecMaster() {
         <button class="btn btn-sm btn-primary" onclick="openSecurityForm()">＋ 銘柄を追加</button></div>
       <div class="section-body">
         <p class="muted" style="padding:10px 16px 0">名前・セクター・業種は「編集」から手動で上書きできます。「手」=手動上書き中。詳細種別の「auto」=自動判定（未設定）。<strong>「価格未取得」は実在しないティッカー/コードの可能性</strong>（価格更新後に抽出→全選択→一括削除で整理できます）。</p>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
-          <span class="muted">抽出:</span>
+        <div class="toolbar" style="border:none;padding:10px 16px 0">
+          <div class="search" style="max-width:300px">${svgIcon('search', '')}<input id="sm-search" placeholder="コード・銘柄名・セクターで検索" value="${esc(secMasterSearch)}" oninput="setSecMasterSearch(this.value)" autocomplete="off">${secMasterSearch ? `<button class="clr" onclick="setSecMasterSearch('')">×</button>` : ''}</div>
+          <span class="muted">抽出</span>
           <div class="seg">${['all', '全て', 'noprice', '価格未取得', 'noholding', '保有なし', 'holding', '保有あり'].reduce((acc, _, i, arr) => { if (i % 2) acc.push(`<button class="${secMasterFilter === arr[i - 1] ? 'active' : ''}" onclick="setSecMasterFilter('${arr[i - 1]}')">${arr[i]}</button>`); return acc; }, []).join('')}</div>
           <span class="muted">${secs.length}/${allSecs.length}件</span>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
-          <span class="muted">選択した銘柄の詳細種別を</span>
-          <select id="sm-bulk-detail">${['個別株', 'ETF', '（自動判定に戻す）'].map(o => `<option>${o}</option>`).join('')}</select>
-          <button class="btn btn-sm" onclick="bulkSetDetailType()">一括変更</button>
-          <span style="width:10px"></span>
-          <span class="muted">判定:</span>
-          <button class="btn btn-sm" onclick="bulkSetField('enabled',true)">対象に</button>
-          <button class="btn btn-sm" onclick="bulkSetField('enabled',false)">対象外に</button>
-          <span class="muted">注意:</span>
-          <button class="btn btn-sm" onclick="bulkSetField('watch',true)">付ける</button>
-          <button class="btn btn-sm" onclick="bulkSetField('watch',false)">外す</button>
-          <span style="width:10px"></span>
+          <span class="muted">選択した銘柄の</span>
+          <select onchange="smBulkFieldChange(this.value)">${SM_BULK_FIELDS.map(f => `<option value="${f.key}" ${smBulkField === f.key ? 'selected' : ''}>${f.label}</option>`).join('')}</select>
+          <span class="muted">を</span>
+          <span id="sm-bulk-value-wrap">${smBulkValueHtml(smBulkField)}</span>
+          <span class="muted">に</span>
+          <button class="btn btn-sm btn-primary" onclick="smBulkApply()">一括変更</button>
+          <span style="flex:1"></span>
           <button class="btn btn-sm btn-danger" onclick="bulkDeleteSecurities()">選択した銘柄を削除</button>
         </div>
         <div class="table-wrap"><table class="holdings dense no-rowclick">
@@ -4477,6 +4526,9 @@ window.mfTransferGenerate = mfTransferGenerate;
 window.fundGenerate = fundGenerate;
 window.smSelectAll = smSelectAll;
 window.setSecMasterFilter = setSecMasterFilter;
+window.setSecMasterSearch = setSecMasterSearch;
+window.smBulkFieldChange = smBulkFieldChange;
+window.smBulkApply = smBulkApply;
 window.bulkSetDetailType = bulkSetDetailType;
 window.bulkSetField = bulkSetField;
 window.bulkDeleteSecurities = bulkDeleteSecurities;
