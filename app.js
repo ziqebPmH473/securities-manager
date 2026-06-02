@@ -2099,10 +2099,10 @@ function fundCodeMasterSection() {
     const fetched = (store.data.meta[priceKey(s)] || {}).name;
     const disp = fetched || s.name || s.ticker;
     return `<tr>
-      <td class="l col-code"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:120px;font-family:monospace" title="協会コード等に変更可"></td>
+      <td class="l" style="width:150px"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:130px;font-family:monospace" title="協会コード等に変更可"></td>
       <td class="l"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="協会コードから取得した正式名称">取得済</span>' : ''}</td>
-      <td>${accts}口座</td>
-      <td class="l nowrap"><button class="btn btn-sm" onclick="fetchFundName(${s.id})" title="協会コードから名称を取得">名称取得</button></td>
+      <td style="width:80px">${accts}口座</td>
+      <td class="l nowrap" style="width:96px"><button class="btn btn-sm" onclick="fetchFundName(${s.id})" title="協会コードから名称を取得">名称取得</button></td>
     </tr>`;
   }).join('');
   return `<div class="section">
