@@ -2168,14 +2168,8 @@ function renderImport() {
       <div class="section-head"><h2>① 保有を取り込む — 取込元を選択</h2>
         <button class="btn btn-sm" style="margin-left:auto" onclick="openImportMapping()">取込フィールド設定</button></div>
       <div style="padding:18px">
-        <div class="source-grid">${IMPORT_SOURCES.map(importSourceCard).join('')}
-          <button class="source-card" onclick="openFundImport()">
-            <div class="sc-top"><div class="sc-logo" style="background:#6a4ca8">投</div>
-              <div><div class="sc-name">投資信託（各社）</div><div class="sc-meta">保有一覧を貼付</div></div></div>
-            <div class="sc-tags"><span class="tag fund">投資信託</span><span class="mini">貼付</span></div>
-          </button>
-        </div>
-        <p class="muted grp-note" style="margin:14px 0 0">カードを選ぶと貼付/CSVの取込画面が開きます。ティッカー・コードで銘柄に紐づけ（未登録は新規作成可）。各社形式は「洗い替え（その証券会社の保有を入れ替え）」です。投資信託はコードが無いため名称で内部コードを補完して保存します。</p>
+        <div class="source-grid">${IMPORT_SOURCES.map(importSourceCard).join('')}</div>
+        <p class="muted grp-note" style="margin:14px 0 0">カードを選ぶと貼付/CSVの取込画面が開きます。ティッカー・コードで銘柄に紐づけ（未登録は新規作成可）。各社形式は「洗い替え（その証券会社の保有を入れ替え）」。<strong>同じCSV内の投資信託は自動で仕分けして保存</strong>（コードが無いため名称で内部コードを補完）し、保有銘柄の「投資信託」で確認できます。</p>
       </div>
     </div>
     <div class="section">
@@ -3473,7 +3467,7 @@ function setImportPreview() {
   el.innerHTML = `<strong>${_importRows.length} 件</strong>を検出${bd ? `（基準日: ${bd}）` : ''}:<br>${sample}${_importRows.length > 4 ? '<br>…' : ''}`;
 }
 function runBrokerImport() {
-  if (!_importRows.length) { toast('取込データがありません'); return; }
+  if (!_importRows.length && !parseFundRows(_importText).length) { toast('取込データがありません'); return; }
   const f = document.getElementById('bimport-form');
   const create = f.create.checked;
   const prof = IMPORT_PROFILES[_importProfile];
@@ -3528,6 +3522,24 @@ function runBrokerImport() {
     }
     touched.push(sec);
   }
+  // 同じCSV/貼付に含まれる投資信託を自動仕分け（FUND保有として内部保存）。コードは名称↔内部コードで補完
+  let fundCount = 0;
+  const fundItems = parseFundRows(_importText);
+  if (fundItems.length) {
+    if (mode === 'replace') {
+      store.data.holdings = store.data.holdings.filter(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !(s && s.market === 'FUND' && h.broker === scope.broker); });
+    }
+    for (const it of fundItems) {
+      const code = fundCodeFor(it.name); if (!code) continue;
+      let fsec = store.findSecurity('FUND', code);
+      if (!fsec) fsec = store.addSecurity({ market: 'FUND', ticker: code, name: it.name, currency: 'JPY', assetClass: 'fund', enabled: false });
+      else if (it.name && fsec.name !== it.name) store.updateSecurity(fsec.id, { name: it.name });
+      const q = (it.qty && it.qty > 0) ? it.qty : 1;
+      store.setHolding(fsec.id, scope.broker, it.account || '特定', q, it.acqJpy != null ? it.acqJpy / q : 0, 'import');
+      if (it.evalJpy != null) store.data.prices['FUND:' + code] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+      fundCount++;
+    }
+  }
   store.save();
   // 取込履歴
   const baseDate = extractBaseDate(_importText);
@@ -3538,7 +3550,7 @@ function runBrokerImport() {
   });
   store.save();
   closeModal();
-  reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
+  reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
 }
 
 // 取込フィールド設定（マッピング）の編集UI。列名/位置が変わってもコード変更なしで調整可
@@ -4328,9 +4340,14 @@ function detectFundHeader(cells) {
     if (idx.eval == null && /(時価|概算|当日)?評価額(\[円\])?$/.test(t)) idx.eval = i;     // 概算評価額/当日評価額[円] 等も
     if (idx.pnl == null && /評価損益(\[円\])?$/.test(t)) idx.pnl = i;                    // 取得金額が無い時 評価額−損益 で算出
     if (idx.qty == null && /保有数量|保有口数|^数量$|口数/.test(t)) idx.qty = i;          // 口数（投信の数量）
+    if (idx.unitCost == null && /取得単価|平均取得(金額|価額)|取得価額/.test(t)) idx.unitCost = i; // 取得金額が無い時 単価×口数/10000 で算出
+    if (idx.kind == null && /^種別$/.test(t)) idx.kind = i;                             // SBI明細: 行ごとの種別（投資信託判定）
+    if (idx.code == null && /銘柄コード|ティッカー|^コード$/.test(t)) idx.code = i;
     if (idx.account == null && /口座|預り区分|口座区分/.test(t)) idx.account = i;
   });
-  return (idx.name != null && idx.eval != null) ? idx : null;
+  // SBI明細形式: 銘柄名の列見出しが無く コード列の次が名称 → name を補完
+  if (idx.name == null && idx.kind != null && idx.code != null) idx.name = idx.code + 1;
+  return (idx.eval != null && idx.name != null) ? idx : null;
 }
 function parseFundRows(text) {
   const rows = parseCsvText(text || '');
@@ -4348,15 +4365,20 @@ function parseFundRows(text) {
     // ヘッダ行
     const idx = detectFundHeader(cells);
     if (idx) { col = idx; continue; }
-    if (section !== 'fund' || !col) continue;
+    if (!col) continue;
+    // SBI明細形式（種別列あり）: 行の種別が「投資信託」の行だけを対象。それ以外はセクション判定（株式/投信）で対象を絞る
+    if (col.kind != null) {
+      if (!/投資信託|投信/.test(cells[col.kind] || '')) continue;
+    } else if (section !== 'fund') continue;
     const name = (cells[col.name] || '').trim();
     const ev = numClean(cells[col.eval]);
     if (!name || ev == null) continue;
-    // 取得金額: 列があればそれ、無ければ 評価額−評価損益（マネックス投信CSV等）
-    const acq = col.acq != null ? numClean(cells[col.acq])
-      : (col.pnl != null ? ev - (numClean(cells[col.pnl]) || 0) : null);
-    const account = (col.account != null && cells[col.account]) ? normAccount(cells[col.account]) : acct;
     const qty = col.qty != null ? numClean(cells[col.qty]) : null;
+    // 取得金額: 取得金額列→（取得単価/平均取得金額×口数/10000）→（評価額−評価損益）の順で算出
+    const acq = col.acq != null ? numClean(cells[col.acq])
+      : (col.unitCost != null && qty ? (numClean(cells[col.unitCost]) || 0) * qty / 10000
+        : (col.pnl != null ? ev - (numClean(cells[col.pnl]) || 0) : null));
+    const account = (col.account != null && cells[col.account]) ? normAccount(cells[col.account]) : acct;
     out.push({ name, evalJpy: ev, acqJpy: acq, qty, account });
   }
   return out;
