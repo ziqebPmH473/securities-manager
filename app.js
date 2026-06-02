@@ -757,9 +757,15 @@ const app = document.getElementById('app');
 let currentView = 'dashboard';
 // 保有銘柄タブ内の市場（US/JP 切替）。列設定は市場ごとに保持される
 let holdingsMarket = 'US';
-// 一覧の行密度（コンパクト/ゆったり）
-let holdingsDense = true;
-function setHoldingsDense(v) { holdingsDense = !!v; render(); }
+// 一覧のコード/銘柄名フリーワード検索
+let holdingsSearch = '';
+function setHoldingsSearch(v) {
+  holdingsSearch = v;
+  renderMarket(holdingsMarket);
+  const el = document.getElementById('hold-search');
+  if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); }
+}
+function clearHoldFilters(m) { holdingsSearch = ''; clearFilter(m); }
 
 // ---------- サイドナビ（リデザイン） ----------
 const NAV_GROUPS = [
@@ -796,6 +802,9 @@ const ICON_PATHS = {
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H2a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 3.6 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H22a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z',
   dense: 'M3 5h18M3 9h18M3 13h18M3 17h18M3 21h18',
   loose: 'M3 5h18M3 12h18M3 19h18',
+  search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3',
+  columns: 'M3 3h18v18H3zM12 3v18M3 9h18',
+  copy: 'M9 9h11v11H9zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1',
 };
 // SVGアイコン生成。クラス省略時はナビ用(nav-ico)
 function svgIcon(name, cls = 'nav-ico') {
@@ -1007,7 +1016,7 @@ function fitListTables() {
     const top = wrap.getBoundingClientRect().top;            // ビューポート上端からの位置
     // 画面下端まで（最低200px）。枠下の余白（section margin16 + main padding16 + border ≒ 36px）を引いて
     // ページ自体がスクロールしないようにする
-    const avail = Math.max(200, window.innerHeight - top - 36);
+    const avail = Math.max(240, window.innerHeight - top - 14);
     if (wrap.scrollHeight > avail) wrap.style.maxHeight = avail + 'px'; // はみ出す時だけ枠内スクロール化
   });
 }
@@ -1194,6 +1203,8 @@ function renderDashboard() {
 }
 
 // ---------- 市場別 一覧 ----------
+// 格付のランク順（S が最上位＝昇順で先頭）。アルファベット順ではなくランク順でソート
+const GRADE_RANK = { S: 0, A: 1, B: 2, C: 3, D: 4 };
 // ソート用の比較値（一覧・サイン共通）
 function sortValue(sec, key) {
   const th = calc.totalHolding(sec.id);
@@ -1222,8 +1233,8 @@ function sortValue(sec, key) {
     case 'per': return calc.per(sec) ?? Infinity;
     case 'divYield': return calc.divYield(sec) ?? -Infinity;
     case 'eps': return calc.field(sec, 'eps') ?? -Infinity;
-    case 'overallGrade': return sec.overallGrade || 'zzz';
-    case 'buyGrade': return sec.buyGrade || 'zzz';
+    case 'overallGrade': return GRADE_RANK[sec.overallGrade] ?? 99;
+    case 'buyGrade': return GRADE_RANK[sec.buyGrade] ?? 99;
     case 'recoCategory': return sec.recoCategory || 'zzz';
     case 'analysisDate': return sec.analysisDate || '';
     case 'buyCount': return calc.buyCount(sec) || 0;
@@ -1269,6 +1280,10 @@ function renderMarket(market) {
   if (st.broker)   secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.broker === st.broker && h.quantity > 0));
   if (st.account)  secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.accountType === st.account && h.quantity > 0));
   if (st.category) secs = secs.filter(s => s.category === st.category);
+  if (holdingsSearch.trim()) {
+    const k = holdingsSearch.trim().toLowerCase();
+    secs = secs.filter(s => (s.ticker || '').toLowerCase().includes(k) || calc.displayName(s).toLowerCase().includes(k));
+  }
   secs = sortSecurities(secs, market);
 
   const catOpts = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder)
@@ -1299,11 +1314,8 @@ function renderMarket(market) {
   }
   const sumPnl = sumV - sumC; const sumPnlPct = sumC > 0 ? sumPnl / sumC * 100 : null;
 
+  const hasFilter = st.broker || st.account || st.category || holdingsSearch;
   app.innerHTML = `
-    <div class="page-intro">
-      <h2>保有銘柄</h2>
-      <p>表示中 ${secs.length} 銘柄。買い増しサインは色で把握。コード/銘柄名クリックで詳細。</p>
-    </div>
     <div class="section">
       <div class="section-head">
         <h2><span class="tag ${market.toLowerCase()}">${MARKET_LABEL[market]}</span> 保有・ウォッチ銘柄</h2>
@@ -1311,11 +1323,26 @@ function renderMarket(market) {
           <button class="${market === 'US' ? 'on' : ''}" onclick="setHoldingsMarket('US')">米国株</button>
           <button class="${market === 'JP' ? 'on' : ''}" onclick="setHoldingsMarket('JP')">日本株</button>
         </div>
-        <div class="density-toggle" title="行の高さ" style="margin-right:12px">
-          <button class="${holdingsDense ? 'active' : ''}" title="コンパクト" onclick="setHoldingsDense(true)">${svgIcon('dense', '')}</button>
-          <button class="${!holdingsDense ? 'active' : ''}" title="ゆったり" onclick="setHoldingsDense(false)">${svgIcon('loose', '')}</button>
-        </div>
         <button class="btn btn-primary btn-sm" onclick="openSecurityForm(null, '${market}')">＋ 銘柄を追加</button>
+      </div>
+      <div class="toolbar">
+        <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
+        <label class="chip">会社
+          <select onchange="setFilter('${market}','broker',this.value)">
+            <option value="">全て</option>${BROKERS.map(b => `<option ${st.broker === b ? 'selected' : ''}>${b}</option>`).join('')}
+          </select></label>
+        <label class="chip">口座
+          <select onchange="setFilter('${market}','account',this.value)">
+            <option value="">全て</option>${ACCOUNTS.map(a => `<option ${st.account === a ? 'selected' : ''}>${a}</option>`).join('')}
+          </select></label>
+        <label class="chip">カテゴリ
+          <select onchange="setFilter('${market}','category',this.value)">
+            <option value="">全て</option>${catOpts}
+          </select></label>
+        ${hasFilter ? `<button class="btn btn-ghost btn-sm" onclick="clearHoldFilters('${market}')">絞込解除</button>` : ''}
+        <div class="tb-spacer"></div>
+        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${market}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
+        <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
       </div>
       <div class="summary-strip">
         <div class="ss"><span class="ss-k">評価額（円換算）</span><span class="ss-v num">${yen(sumV)}</span></div>
@@ -1325,31 +1352,13 @@ function renderMarket(market) {
         <div class="tb-spacer"></div>
         <div class="ss"><span class="ss-k">表示</span><span class="ss-v num">${secs.length} 銘柄</span></div>
       </div>
-      <div class="filterbar">
-        <label>証券会社
-          <select onchange="setFilter('${market}','broker',this.value)">
-            <option value="">すべて</option>${BROKERS.map(b => `<option ${st.broker === b ? 'selected' : ''}>${b}</option>`).join('')}
-          </select></label>
-        <label>口座
-          <select onchange="setFilter('${market}','account',this.value)">
-            <option value="">すべて</option>${ACCOUNTS.map(a => `<option ${st.account === a ? 'selected' : ''}>${a}</option>`).join('')}
-          </select></label>
-        <label>カテゴリ
-          <select onchange="setFilter('${market}','category',this.value)">
-            <option value="">すべて</option>${catOpts}
-          </select></label>
-        ${(st.broker || st.account || st.category) ? `<button class="btn btn-sm" onclick="clearFilter('${market}')">絞込解除</button>` : ''}
-        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${market}')" title="列の表示設定">⊞ 列</button>
-        <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">⧉ 表コピー</button>
-        <span class="muted" style="margin-left:auto">${secs.length} 件</span>
-      </div>
       <div class="bulkbar">
         <button class="btn btn-sm btn-danger" onclick="bulkSellAll()">選択を全売却</button>
         <span class="muted" id="bulk-count">選択 0 件</span>
       </div>
       <div class="section-body">
         ${secs.length === 0 ? `<div class="empty">該当する銘柄がありません。</div>` : `
-        <div class="table-wrap"><table class="fixed-cols holdings ${holdingsDense ? 'dense' : ''}" style="width:${tableW}px">${colgroupHtml}
+        <div class="table-wrap"><table class="fixed-cols holdings dense" style="width:${tableW}px">${colgroupHtml}
           <thead><tr><th class="l"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>${headHtml}<th class="l"></th></tr></thead>
           <tbody>
             ${secs.map(sec => marketRow(sec, visibleCols, { select: true })).join('')}
@@ -4247,7 +4256,8 @@ function toast(msg, ms = 2500) {
 // 公開（onclick用）
 window.go = go;
 window.setHoldingsMarket = setHoldingsMarket;
-window.setHoldingsDense = setHoldingsDense;
+window.setHoldingsSearch = setHoldingsSearch;
+window.clearHoldFilters = clearHoldFilters;
 window.openSecurityForm = openSecurityForm;
 window.autoFetchInfo = autoFetchInfo;
 window.refetchInfo = refetchInfo;
