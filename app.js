@@ -1078,53 +1078,108 @@ function renderDashboard() {
   if (fxMissing) notes.push('USD/JPY 為替が未取得のため、円換算合計に米国株を含めていません。「価格更新」で取得できます。');
   if (noPriceTotal > 0) notes.push(`価格未取得の保有銘柄が ${noPriceTotal} 件あります（評価額は取得原価で代用表示）。`);
 
-  // 前日比（金額・円換算）＋参考指数
-  const dcCell = (x) => `<span class="${cls(x.amount)}">${x.amount >= 0 ? '+' : ''}${yen(x.amount)}</span>${x.pct != null ? ` <span class="${cls(x.pct)}">(${signed(x.pct)}%)</span>` : ''}`;
-  const idxPct = (k) => { const v = calc.indexChangePct(k); return v == null ? '<span class="muted">—</span>' : `<span class="${cls(v)}">${signed(v)}%</span>`; };
-  const dayChangeSection = `<div class="section">
-      <div class="section-head"><h2>前日比（金額・円換算）</h2></div>
-      <div class="table-wrap"><table>
-        <thead><tr><th class="l">区分</th><th class="l">前日比（金額）</th><th class="l">参考指数（前日比）</th></tr></thead>
-        <tbody>
-          <tr><td class="l"><strong>全体</strong></td><td class="l">${dcCell(calc.dayChangeJpy())}</td><td class="l muted">—</td></tr>
-          <tr><td class="l"><span class="tag jp">日本株</span></td><td class="l">${dcCell(calc.dayChangeJpy('JP'))}</td><td class="l">日経平均 ${idxPct('n225')}　／　TOPIX ${idxPct('topix')}</td></tr>
-          <tr><td class="l"><span class="tag us">米国株</span></td><td class="l">${dcCell(calc.dayChangeJpy('US'))}</td><td class="l">S&amp;P500 ${idxPct('sp500')}　／　NASDAQ100 ${idxPct('ndx')}</td></tr>
-        </tbody>
-      </table></div>
-      <p class="muted" style="padding:0 16px 12px">前日比金額＝Σ 数量×(現在値−前日終値) を円換算。指数は前日比%（TOPIXは連動ETF 1306.T を参考値として使用）。</p>
-    </div>`;
+  // 市場ごとの円換算・前日比（円）
+  const perJpy = {};
+  for (const m of markets) {
+    perJpy[m] = {
+      valJpy: calc.toJpy(m, per[m].valN) || 0,
+      costJpy: calc.toJpy(m, per[m].costN) || 0,
+      dayJpy: calc.dayChangeJpy(m).amount || 0,
+      cnt: per[m].held,
+    };
+  }
+  const dayAll = calc.dayChangeJpy();
+  const dayJpy = dayAll.amount || 0;
+  const dayPct = dayAll.pct;
+  const { reached: reachedSecs, near: nearSecs } = signalRows();
+
+  // 本日の値上がり / 値下がり Top5
+  const heldSecs = store.data.securities.filter(s => calc.totalHolding(s.id).qty > 0);
+  const moverData = heldSecs.map(s => {
+    const p = store.data.prices[priceKey(s)] || {};
+    const dp = (p.price != null && p.prevClose) ? (p.price - p.prevClose) / p.prevClose * 100 : null;
+    return { s, dp };
+  }).filter(x => x.dp != null).sort((a, b) => b.dp - a.dp);
+  const gainers = moverData.slice(0, 5);
+  const losers = moverData.slice(-5).reverse();
+  const tkChip = (s) => `<span class="tk ${s.market.toLowerCase()}">${esc(s.market === 'JP' ? s.ticker : (s.ticker || '').slice(0, 4))}</span>`;
+  const moverRow = (x) => `<div class="mover-row">${tkChip(x.s)}<span class="mv-name">${esc(calc.displayName(x.s))}</span><span class="${cls(x.dp)}">${signed(x.dp)}%</span></div>`;
+  const moverList = (title, list) => `<div class="mover-col"><div class="dr-section-t">${title}</div>${list.length ? list.map(moverRow).join('') : '<div class="muted" style="font-size:12px;padding:4px 0">—</div>'}</div>`;
+
+  const idxCard = (k) => {
+    const ix = (store.data.indices || {})[k] || {};
+    const v = calc.indexChangePct(k);
+    return `<div class="idx-card"><div class="idx-label">${INDICES.find(i => i.key === k)?.label || k}</div>
+      <div class="idx-row"><span class="num" style="font-weight:700">${ix.price != null ? num(Math.round(ix.price)) : '—'}</span>
+      <span class="delta ${cls(v)}">${v == null ? '—' : (v > 0 ? '▲' : v < 0 ? '▼' : '') + signed(v) + '%'}</span></div></div>`;
+  };
+  const mkColor = { JP: '#b23a36', US: '#2a5599' };
+  const fxNow = fx ? fx.toFixed(2) : '—';
+  const luStr = store.data.lastPriceUpdate ? fmtDateTime(store.data.lastPriceUpdate) : '未取得';
 
   app.innerHTML = `
+    <div class="page-intro">
+      <h2>ダッシュボード</h2>
+      <p>ポートフォリオ全体のサマリーと本日の動き。${esc(luStr)} 時点・USD/JPY ${fxNow}。</p>
+    </div>
     ${notes.map(n => `<div class="notice">${esc(n)}</div>`).join('')}
     <div class="cards">
-      <div class="card"><div class="label">総資産（円換算${fxMissing ? '・米株除く' : ''}）</div><div class="value">${yen(totalJpy)}</div></div>
-      <div class="card"><div class="label">評価損益（円換算）</div><div class="value ${cls(pnl)}">${yen(pnl)}</div><div class="sub ${cls(pnl)}">${signed(pnlPct)}%</div></div>
-      <div class="card"><div class="label">取得原価（円換算）</div><div class="value">${yen(costJpy)}</div></div>
-      <div class="card"><div class="label">買い増しサイン</div><div class="value ${sigCount ? 'neg' : ''}">${sigCount} 件</div></div>
+      <div class="stat feature">
+        <div class="s-label">総資産（円換算${fxMissing ? '・米株除く' : ''}）</div>
+        <div class="s-value"><span class="cur">¥</span>${num(Math.round(totalJpy))}</div>
+        <div class="s-sub"><span style="opacity:.7">本日</span>
+          <span style="font-weight:700;color:${dayJpy >= 0 ? '#6fd99a' : '#f0928c'}">${dayJpy >= 0 ? '▲' : '▼'} ${yen(Math.abs(dayJpy))}${dayPct != null ? `（${signed(dayPct)}%）` : ''}</span></div>
+      </div>
+      <div class="stat">
+        <div class="s-label">評価損益（円換算）</div>
+        <div class="s-value num ${cls(pnl)}">${yen(pnl)}</div>
+        <div class="s-sub ${cls(pnl)}" style="font-weight:700">${signed(pnlPct)}%</div>
+        <div class="s-foot">取得原価 ${yen(costJpy)}</div>
+      </div>
+      <div class="stat">
+        <div class="s-label">買い増しサイン</div>
+        <div class="s-value num ${reachedSecs.length ? 'neg' : ''}">${reachedSecs.length}<span class="s-unit"> 件</span></div>
+        <div class="s-sub"><span class="drop reached" style="padding:1px 8px;border-radius:6px">到達 ${reachedSecs.length}</span> <span class="drop near" style="padding:1px 8px;border-radius:6px">もうすぐ ${nearSecs.length}</span></div>
+        <div class="s-foot"><span class="lnk" onclick="go('signals')">サイン一覧を見る →</span></div>
+      </div>
+      <div class="stat">
+        <div class="s-label">保有銘柄数</div>
+        <div class="s-value num">${heldSecs.length}<span class="s-unit"> 銘柄</span></div>
+        <div class="s-sub muted">米 ${perJpy.US.cnt} / 日 ${perJpy.JP.cnt}</div>
+      </div>
     </div>
-    ${dayChangeSection}
-    <div class="section">
-      <div class="section-head"><h2>市場別の内訳</h2></div>
-      <div class="table-wrap"><table>
-        <thead><tr><th class="l">市場</th><th>評価額(原通貨)</th><th>取得原価(原通貨)</th><th>損益率</th><th>評価額(円換算)</th><th>銘柄数</th></tr></thead>
-        <tbody>
+
+    <div class="dash-grid">
+      <div class="section" style="margin-bottom:0">
+        <div class="section-head"><h2>市場別の内訳</h2><span class="muted" style="margin-left:auto;font-size:11px">構成比は評価額（円換算）</span></div>
+        <div class="breakdown">
           ${markets.map(m => {
-            const d = per[m];
-            const ccy = MARKET_CCY[m];
-            const p = d.valN - d.costN; const pp = d.costN > 0 ? p / d.costN * 100 : null;
-            const vj = calc.toJpy(m, d.valN);
-            return `<tr><td class="l"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span></td>
-              <td>${money(d.valN, ccy)}</td><td>${money(d.costN, ccy)}</td>
-              <td class="${cls(pp)}">${pp != null ? signed(pp) + '%' : '—'}</td>
-              <td>${vj != null ? yen(vj) : '<span class="muted">為替未取得</span>'}</td>
-              <td>${d.held}/${d.cnt}</td></tr>`;
+            const p = perJpy[m]; const pnlM = p.valJpy - p.costJpy; const pp = p.costJpy ? pnlM / p.costJpy * 100 : null;
+            const share = totalJpy ? p.valJpy / totalJpy * 100 : 0;
+            return `<div class="bd-row">
+              <div style="display:flex;align-items:center;gap:8px"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span><span class="muted" style="font-size:11px">${p.cnt}銘柄</span></div>
+              <div class="bd-bar" title="${num(share)}%"><i style="width:${Math.max(0, Math.min(100, share))}%;background:${mkColor[m]}"></i></div>
+              <div style="text-align:right"><div class="num" style="font-weight:700">${yen(p.valJpy)}</div><div class="num ${cls(pnlM)}" style="font-size:12px">${pp != null ? signed(pp) + '%' : '—'}</div></div>
+            </div>`;
           }).join('')}
-        </tbody>
-      </table></div>
+        </div>
+        <div class="mover-grid">${moverList('本日の値上がり', gainers)}${moverList('本日の値下がり', losers)}</div>
+      </div>
+
+      <div class="section" style="margin-bottom:0">
+        <div class="section-head"><h2>本日の動き</h2></div>
+        <div style="padding:6px 18px 16px">
+          ${markets.map(m => `<div class="dr-row"><span class="k"><span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span></span><span class="v ${cls(perJpy[m].dayJpy)}">${perJpy[m].dayJpy >= 0 ? '▲' : '▼'} ${yen(Math.abs(perJpy[m].dayJpy))}</span></div>`).join('')}
+          <div class="dr-section-t" style="margin-top:16px">参考指数（前日比）</div>
+          <div class="idx-grid">${['n225', 'topix', 'sp500', 'ndx'].map(idxCard).join('')}</div>
+        </div>
+      </div>
     </div>
-    <div class="section">
+
+    <div class="section" style="margin-top:20px">
       <div class="section-head"><h2>買い増しサイン（到達済み）</h2>
-        <button class="btn btn-sm" onclick="go('signals')">一覧へ</button></div>
+        <span class="muted" style="margin-left:8px;font-size:12px">${reachedSecs.length} 件</span>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="go('signals')">一覧へ</button></div>
       <div class="section-body">${dashSignalsTable()}</div>
     </div>`;
 }
