@@ -1358,6 +1358,8 @@ function renderMarket(market) {
           <button class="${market === 'ALL' ? 'active' : ''}" onclick="setHoldingsMarket('ALL')">全株式</button>
           <button class="${market === 'US' ? 'active' : ''}" onclick="setHoldingsMarket('US')">米国株</button>
           <button class="${market === 'JP' ? 'active' : ''}" onclick="setHoldingsMarket('JP')">日本株</button>
+        </div>
+        <div class="seg" role="tablist" style="margin-left:10px">
           <button class="${market === 'FUND' ? 'active' : ''}" onclick="setHoldingsMarket('FUND')">投資信託</button>
         </div>
         <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
