@@ -398,13 +398,32 @@ const gsync = {
     if (!res.ok) { let d = ''; try { d = (await res.json()).error?.message || ''; } catch (_) {} throw new Error(`Sheets API ${res.status}${d ? '：' + d : '（_appdata シートの有無/編集権限を確認）'}`); }
     return res.json();
   },
-  async save() { await this._call('PUT', '_appdata!A1', { values: [[JSON.stringify(store.data)]] }); toast('スプレッドシートへ保存しました'); },
+  // 列Aの値を全消去（POST values/{range}:clear）。:clear はパスのリテラル接尾辞
+  async _clear(range) {
+    const cfg = this.cfg();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(cfg.spreadsheetId)}/values/${encodeURIComponent(range)}:clear`;
+    const res = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + this._token }, body: '{}' });
+    if (res.status === 401) { this._token = null; throw new Error('トークン失効。再ログインしてください'); }
+    if (!res.ok) { let m = ''; try { m = (await res.json()).error?.message || ''; } catch (_) {} throw new Error(`Sheets API ${res.status}${m ? '：' + m : ''}`); }
+  },
+  async save() {
+    if (!this._token) { const ok = await this.signIn(); if (!ok) throw new Error('Googleログインが必要です'); }
+    // 1セル50,000文字制限を回避: JSONを分割して列A（A1,A2,…）に保存
+    const json = JSON.stringify(store.data);
+    const CHUNK = 45000; const rows = [];
+    for (let i = 0; i < json.length; i += CHUNK) rows.push([json.slice(i, i + CHUNK)]);
+    if (!rows.length) rows.push(['']);
+    await this._clear('_appdata!A:A');                                   // 旧データを消去（縮小時の残骸対策）
+    await this._call('PUT', `_appdata!A1:A${rows.length}`, { values: rows });
+    toast(`スプレッドシートへ保存しました（${rows.length}分割）`);
+  },
   async load() {
     if (!confirm('スプレッドシートの内容で現在のデータを上書きします。よろしいですか？')) return false;
-    const d = await this._call('GET', '_appdata!A1');
-    const cell = d && d.values && d.values[0] && d.values[0][0];
-    if (!cell) throw new Error('スプレッドシートにデータがありません（_appdata!A1 が空）');
-    store.data = JSON.parse(cell); store.save(); store.load(); render(); toast('スプレッドシートから読み込みました'); return true;
+    const d = await this._call('GET', '_appdata!A1:A100000');
+    const cells = (d && d.values || []).map(r => (r && r[0]) || '');
+    const json = cells.join('');
+    if (!json) throw new Error('スプレッドシートにデータがありません（_appdata 列Aが空）');
+    store.data = JSON.parse(json); store.save(); store.load(); render(); toast('スプレッドシートから読み込みました'); return true;
   },
 };
 function gsaveSettings(f) {
