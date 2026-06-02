@@ -835,10 +835,10 @@ function renderNav() {
 
 // 一覧のソート/フィルタ・カラム設定（市場ごと）。デフォルトはティッカー順
 const listState = {
-  US:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '' },
-  JP:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '' },
-  FUND:   { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '' },
-  SIGNAL: { sortKey: 'drop',   sortDir: 1, broker: '', account: '', category: '' },
+  US:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
+  JP:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
+  FUND:   { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
+  SIGNAL: { sortKey: 'drop',   sortDir: 1, broker: '', account: '', category: '', detailType: '' },
 };
 // カラム設定: 市場ごとに [{key, visible}] の配列
 let colPrefs = {};
@@ -1254,7 +1254,7 @@ function sortValue(sec, key) {
     case 'base': { const ev = calc.evaluate(sec); return ev ? ev.base : -Infinity; }
     case 'drop': { const ev = calc.evaluate(sec); return ev ? ev.remainingDropPct : Infinity; }
     case 'dropPrev': return calc.remainingDropPrev(sec) ?? Infinity;
-    case 'rating': return sec.rating || sec.overallGrade || 'zzz';
+    case 'rating': return GRADE_RANK[sec.rating || sec.overallGrade] ?? 99;
     case 'priority': return sec.priority ?? Infinity;
     default: return '';
   }
@@ -1271,30 +1271,34 @@ function sortSecurities(secs, market) {
 }
 
 function renderMarket(market) {
-  const st = listState[market];
+  // market は 'US' | 'JP' | 'ALL'。ALL は両市場を1表に表示（列・ソート・フィルタ状態は US 設定を流用）
+  const isAll = market === 'ALL';
+  const colMkt = isAll ? 'US' : market;       // 列レイアウト/ソート/フィルタ状態のキー
+  const st = listState[colMkt];
   const isStock = market !== 'FUND';
-  let secs = store.data.securities.filter(s => s.market === market);
+  let secs = store.data.securities.filter(s => isAll ? (s.market === 'US' || s.market === 'JP') : s.market === market);
   // 一覧に出すのは「保有あり(数量>0) または 注意銘柄」のみ。
   // 保有なし＆非注意（例: 分析後に全売却した銘柄）は一覧から外し、銘柄マスタタブで管理する。
   secs = secs.filter(s => s.watch || store.data.holdings.some(h => h.securityId === s.id && h.quantity > 0));
   if (st.broker)   secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.broker === st.broker && h.quantity > 0));
   if (st.account)  secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.accountType === st.account && h.quantity > 0));
   if (st.category) secs = secs.filter(s => s.category === st.category);
+  if (st.detailType) secs = secs.filter(s => detailTypeOf(s) === st.detailType);
   if (holdingsSearch.trim()) {
     const k = holdingsSearch.trim().toLowerCase();
     secs = secs.filter(s => (s.ticker || '').toLowerCase().includes(k) || calc.displayName(s).toLowerCase().includes(k));
   }
-  secs = sortSecurities(secs, market);
+  secs = sortSecurities(secs, colMkt);
 
   const catOpts = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder)
     .map(c => `<option value="${esc(c.category)}" ${st.category === c.category ? 'selected' : ''}>${esc(c.category)}</option>`).join('');
 
-  const ccy = MARKET_CCY[market];
+  const ccy = MARKET_CCY[colMkt];
   // 表示するカラム（ユーザー設定済みの順・表示フラグ反映）
-  const visOrder = getColOrder(market).filter(c => c.visible);
+  const visOrder = getColOrder(colMkt).filter(c => c.visible);
   const visibleCols = visOrder.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
 
-  const headHtml = colHeadHtml(visibleCols, st, market, ccy);
+  const headHtml = colHeadHtml(visibleCols, st, colMkt, ccy);
   // 列幅（table-layout:fixed）。先頭=チェック / 末尾=操作 の固定列＋各列の幅
   const colgroupHtml = `<colgroup><col style="width:36px">${visOrder.map(c => `<col style="width:${colWidthPx(c)}px">`).join('')}<col style="width:44px"></colgroup>`;
   // テーブル幅＝列幅合計。width:100%だと固定幅が圧縮され横スクロールが出ないため、合計幅を明示（min-width:100%で不足時は伸長）
@@ -1314,34 +1318,42 @@ function renderMarket(market) {
   }
   const sumPnl = sumV - sumC; const sumPnlPct = sumC > 0 ? sumPnl / sumC * 100 : null;
 
-  const hasFilter = st.broker || st.account || st.category || holdingsSearch;
+  const hasFilter = st.broker || st.account || st.category || st.detailType || holdingsSearch;
+  const headTag = isAll ? `<span class="tag" style="border-style:dashed">全市場</span>` : `<span class="tag ${market.toLowerCase()}">${MARKET_LABEL[market]}</span>`;
   app.innerHTML = `
     <div class="section">
       <div class="section-head">
-        <h2><span class="tag ${market.toLowerCase()}">${MARKET_LABEL[market]}</span> 保有・ウォッチ銘柄</h2>
+        <h2>${headTag} 保有・ウォッチ銘柄</h2>
         <div class="seg" role="tablist" style="margin-left:auto;margin-right:12px">
+          <button class="${market === 'ALL' ? 'active' : ''}" onclick="setHoldingsMarket('ALL')">全て</button>
           <button class="${market === 'US' ? 'active' : ''}" onclick="setHoldingsMarket('US')">米国株</button>
           <button class="${market === 'JP' ? 'active' : ''}" onclick="setHoldingsMarket('JP')">日本株</button>
         </div>
-        <button class="btn btn-primary btn-sm" onclick="openSecurityForm(null, '${market}')">＋ 銘柄を追加</button>
+        <button class="btn btn-primary btn-sm" onclick="openSecurityForm(null, '${colMkt}')">＋ 銘柄を追加</button>
       </div>
       <div class="toolbar">
         <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
+        <label class="chip">種別
+          <select onchange="setFilter('${colMkt}','detailType',this.value)">
+            <option value="">全て</option>
+            <option value="個別株" ${st.detailType === '個別株' ? 'selected' : ''}>個別株</option>
+            <option value="ETF" ${st.detailType === 'ETF' ? 'selected' : ''}>ETF</option>
+          </select></label>
         <label class="chip">会社
-          <select onchange="setFilter('${market}','broker',this.value)">
+          <select onchange="setFilter('${colMkt}','broker',this.value)">
             <option value="">全て</option>${BROKERS.map(b => `<option ${st.broker === b ? 'selected' : ''}>${b}</option>`).join('')}
           </select></label>
         <label class="chip">口座
-          <select onchange="setFilter('${market}','account',this.value)">
+          <select onchange="setFilter('${colMkt}','account',this.value)">
             <option value="">全て</option>${ACCOUNTS.map(a => `<option ${st.account === a ? 'selected' : ''}>${a}</option>`).join('')}
           </select></label>
         <label class="chip">カテゴリ
-          <select onchange="setFilter('${market}','category',this.value)">
+          <select onchange="setFilter('${colMkt}','category',this.value)">
             <option value="">全て</option>${catOpts}
           </select></label>
-        ${hasFilter ? `<button class="btn btn-ghost btn-sm" onclick="clearHoldFilters('${market}')">絞込解除</button>` : ''}
+        ${hasFilter ? `<button class="btn btn-ghost btn-sm" onclick="clearHoldFilters('${colMkt}')">絞込解除</button>` : ''}
         <div class="tb-spacer"></div>
-        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${market}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
+        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${colMkt}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
       </div>
       <div class="summary-strip">
@@ -1472,7 +1484,7 @@ function setSort(market, key) {
   render();
 }
 function setFilter(market, field, value) { listState[market][field] = value; render(); }
-function clearFilter(market) { Object.assign(listState[market], { broker: '', account: '', category: '' }); render(); }
+function clearFilter(market) { Object.assign(listState[market], { broker: '', account: '', category: '', detailType: '' }); render(); }
 
 // ---------- カラムピッカー ----------
 let _colPickerMarket = null;
