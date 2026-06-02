@@ -1350,16 +1350,12 @@ function renderMarket(market) {
   const hasFilter = st.broker || st.account || st.category || st.detailType || holdingsSearch;
   app.innerHTML = `
     <div class="section">
-      <div class="section-head">
+      <div class="toolbar">
         <div class="seg" role="tablist">
           <button class="${market === 'ALL' ? 'active' : ''}" onclick="setHoldingsMarket('ALL')">全て</button>
           <button class="${market === 'US' ? 'active' : ''}" onclick="setHoldingsMarket('US')">米国株</button>
           <button class="${market === 'JP' ? 'active' : ''}" onclick="setHoldingsMarket('JP')">日本株</button>
         </div>
-        <div style="flex:1"></div>
-        <button class="btn btn-primary btn-sm" onclick="openSecurityForm(null, '${colMkt}')">＋ 銘柄を追加</button>
-      </div>
-      <div class="toolbar">
         <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
         <label class="chip">種別
           <select onchange="setFilter('${colMkt}','detailType',this.value)">
@@ -1391,6 +1387,7 @@ function renderMarket(market) {
         <div class="ss"><span class="ss-k">買い増しサイン</span><span class="ss-v num ${sumSig ? 'neg' : 'muted'}">${sumSig} 件</span></div>
         <div class="tb-spacer"></div>
         <div class="ss"><span class="ss-k">表示</span><span class="ss-v num">${secs.length} 銘柄</span></div>
+        <button class="btn btn-primary btn-sm" style="align-self:center" onclick="openSecurityForm(null, '${colMkt}')">＋ 銘柄を追加</button>
       </div>
       <div class="bulkbar">
         <button class="btn btn-sm btn-danger" onclick="bulkSellAll()">選択を全売却</button>
