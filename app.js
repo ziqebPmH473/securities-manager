@@ -3648,38 +3648,91 @@ function runBrokerImport() {
     }
     touched.push(sec);
   }
-  // 同じCSV/貼付に含まれる投資信託を自動仕分け（FUND保有として内部保存）。コードは名称↔内部コードで補完
-  let fundCount = 0, newFundCount = 0;
+  // 同じCSV/貼付に含まれる投資信託を自動仕分け（FUND保有として内部保存）
+  // 既存ファンド（名称/エイリアス一致）は即取込。未登録（新規）は登録せず保留し、後でコード入力させてから登録する
+  let fundCount = 0, pendingTotal = 0;
   const fundItems = parseFundRows(_importText);
+  const pending = {}; // normName -> { name, items:[{broker,account,qty,acqJpy,evalJpy}] }
   if (fundItems.length) {
     if (mode === 'replace') {
       store.data.holdings = store.data.holdings.filter(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !(s && s.market === 'FUND' && h.broker === scope.broker); });
     }
-    const fundBefore = store.data.securities.filter(s => s.market === 'FUND').length;
     for (const it of fundItems) {
-      const fsec = findOrCreateFund(it.name); if (!fsec) continue;
-      const q = (it.qty && it.qty > 0) ? it.qty : 1;
-      store.setHolding(fsec.id, scope.broker, it.account || '特定', q, it.acqJpy != null ? it.acqJpy / q : 0, 'import');
-      if (it.evalJpy != null) store.data.prices['FUND:' + fsec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
-      fundCount++;
+      const key = normFundName(it.name);
+      const existing = store.data.securities.find(s => s.market === 'FUND' && fundNameKeys(s).includes(key));
+      if (existing) {
+        if (normFundName(existing.name) !== key && !(existing.aliasNames || []).some(a => normFundName(a) === key)) existing.aliasNames = [...(existing.aliasNames || []), it.name];
+        const q = (it.qty && it.qty > 0) ? it.qty : 1;
+        store.setHolding(existing.id, scope.broker, it.account || '特定', q, it.acqJpy != null ? it.acqJpy / q : 0, 'import');
+        if (it.evalJpy != null) store.data.prices['FUND:' + existing.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+        fundCount++;
+      } else {
+        (pending[key] = pending[key] || { name: it.name, items: [] }).items.push({ broker: scope.broker, account: it.account || '特定', qty: it.qty, acqJpy: it.acqJpy, evalJpy: it.evalJpy });
+        pendingTotal++;
+      }
     }
-    newFundCount = store.data.securities.filter(s => s.market === 'FUND').length - fundBefore;
   }
   store.save();
   // 取込履歴
   const baseDate = extractBaseDate(_importText);
   store.data.importHistory.unshift({
     id: store.nextId(), profile: _importProfile, label: prof.label,
-    broker: scope.broker, markets: scope.markets, mode, count: _importRows.length + fundCount,
+    broker: scope.broker, markets: scope.markets, mode, count: _importRows.length + fundCount + pendingTotal,
     importedAt: new Date().toISOString(), baseDate: baseDate || null,
   });
   store.save();
   closeModal();
-  reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
-  // 新規の投信があれば、コード入力（協会コード）→マスタ登録を促してコードマスタを開く
-  if (newFundCount > 0) {
-    setTimeout(() => { openFundCodeMaster(); toast(`新規の投資信託 ${newFundCount} 件。協会コード（8桁）を入力して登録してください（未入力なら内部コードFNDのまま）`, 8000); }, 400);
+  reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${pendingTotal ? ` / 新規投信 ${Object.keys(pending).length}件はコード入力待ち` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
+  // 新規投信は「コード入力→登録」モーダルを出す（自動採番で銘柄マスタに載せない）
+  if (Object.keys(pending).length) { _pendingFundReg = pending; setTimeout(openNewFundCodeModal, 450); }
+}
+// 新規投信のコード入力モーダル。協会コードを入れて登録（空欄なら内部コードFND）
+let _pendingFundReg = null;
+function openNewFundCodeModal() {
+  const entries = Object.entries(_pendingFundReg || {});
+  if (!entries.length) return;
+  const rows = entries.map(([key, v], i) => {
+    const accts = v.items.length;
+    return `<tr>
+      <td class="l" style="white-space:normal">${esc(v.name)}</td>
+      <td class="l" style="white-space:nowrap"><input type="text" id="nf-code-${i}" placeholder="協会コード(8桁)/空欄でFND" style="width:170px;font-family:monospace"></td>
+      <td style="white-space:nowrap">${accts}件</td>
+    </tr>`;
+  }).join('');
+  showModal('新規投資信託のコード登録', `
+    <p class="muted" style="margin:0 0 10px">取込んだCSVに<strong>未登録の投資信託</strong>がありました。投信はCSVにコードが無いため、<strong>協会コード（8桁）</strong>を入力して登録してください（空欄なら内部コードFND…を自動採番。後でコードマスタで変更・統合できます）。</p>
+    <div class="table-wrap" style="max-height:60vh"><table class="holdings dense no-rowclick" style="width:100%"><thead><tr><th class="l">取込名（CSVの名称）</th><th class="l">協会コード</th><th>明細</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="registerPendingFunds(true)">コード無しで登録（FND）</button>
+      <button type="button" class="btn btn-primary" onclick="registerPendingFunds(false)">登録して取込</button>
+    </div>`, { wide: true });
+  const mw = document.querySelector('#modal-overlay .modal'); if (mw) mw.style.maxWidth = 'min(1100px,92vw)';
+}
+function registerPendingFunds(skipCode) {
+  const entries = Object.entries(_pendingFundReg || {});
+  let n = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const [, v] = entries[i];
+    let code = skipCode ? '' : ((document.getElementById('nf-code-' + i) || {}).value || '').trim();
+    let sec;
+    if (code) {
+      sec = store.data.securities.find(s => s.market === 'FUND' && s.ticker === code);
+      if (sec) { // 同コード既存＝同一ファンド。別表記をエイリアスに
+        if (!fundNameKeys(sec).includes(normFundName(v.name))) sec.aliasNames = [...(sec.aliasNames || []), v.name];
+      } else sec = store.addSecurity({ market: 'FUND', ticker: code, name: v.name, aliasNames: [], currency: 'JPY', assetClass: 'fund', enabled: false });
+    } else {
+      sec = store.addSecurity({ market: 'FUND', ticker: nextFundCode(), name: v.name, aliasNames: [], currency: 'JPY', assetClass: 'fund', enabled: false });
+    }
+    for (const it of v.items) {
+      const q = (it.qty && it.qty > 0) ? it.qty : 1;
+      store.setHolding(sec.id, it.broker, it.account || '特定', q, it.acqJpy != null ? it.acqJpy / q : 0, 'import');
+      if (it.evalJpy != null) store.data.prices['FUND:' + sec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+    }
+    n++;
   }
+  _pendingFundReg = null;
+  store.save(); closeModal(); render();
+  toast(`新規投信 ${n} 件を登録しました`, 4000);
 }
 
 // 取込フィールド設定（マッピング）の編集UI。列名/位置が変わってもコード変更なしで調整可
@@ -4842,6 +4895,7 @@ window.setSecMasterMarket = setSecMasterMarket;
 window.setFundCode = setFundCode;
 window.fetchFundName = fetchFundName;
 window.openFundCodeMaster = openFundCodeMaster;
+window.registerPendingFunds = registerPendingFunds;
 window.setSecMasterSearch = setSecMasterSearch;
 window.smBulkFieldChange = smBulkFieldChange;
 window.smBulkApply = smBulkApply;
