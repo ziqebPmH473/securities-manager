@@ -1387,11 +1387,11 @@ function renderMarket(market) {
         <div class="ss"><span class="ss-k">買い増しサイン</span><span class="ss-v num ${sumSig ? 'neg' : 'muted'}">${sumSig} 件</span></div>
         <div class="tb-spacer"></div>
         <div class="ss"><span class="ss-k">表示</span><span class="ss-v num">${secs.length} 銘柄</span></div>
-        <button class="btn btn-primary btn-sm" style="align-self:center" onclick="openSecurityForm(null, '${colMkt}')">＋ 銘柄を追加</button>
       </div>
       <div class="bulkbar">
         <button class="btn btn-sm btn-danger" onclick="bulkSellAll()">選択を全売却</button>
         <span class="muted" id="bulk-count">選択 0 件</span>
+        <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openSecurityForm(null, '${colMkt}')">＋ 銘柄を追加</button>
       </div>
       <div class="section-body">
         ${secs.length === 0 ? `<div class="empty">該当する銘柄がありません。</div>` : `
