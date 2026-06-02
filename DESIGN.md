@@ -325,9 +325,18 @@ for each enabled holding h:
     else:
         # 買い増しトリガー
         last_buy = latest buy transaction price of h
-        base = last_buy
-        trigger = base * (1 - rule.addon_drop_pct/100)      # 例 ×0.80
+        last_buy_date = latest buy transaction date of h   # tradedAt(YYYY-MM-DD)
         type = 'addon'
+        # 高値更新オプション（rule.high_reset_mode）: 「前回購入より後に最高値を更新した」場合は初回ルールで判定。
+        # 判定は時間軸（最高値の付いた日 > 前回購入日）。値の大小ではなく日付で比較する。
+        #   ※旧実装は base_high > last_buy の値比較で、暴落後に買った銘柄が常に高値更新扱いになる誤判定があった。
+        #   高値の日付(high_5y_date 等)・前回購入日(取引履歴)が両方そろう時のみ発動。片方でも無ければ通常addon。
+        if rule.high_reset_mode and last_buy_date and base_high_date(h) and base_high_date(h) > last_buy_date:
+            base = base_high(h)
+            trigger = base * (1 - rule.initial_drop_pct/100)   # 高値から初回下落率
+        else:
+            base = last_buy
+            trigger = base * (1 - rule.addon_drop_pct/100)      # 例 ×0.80
 
     if price <= trigger:
         amt_jpy = category_amount_jpy(s.category)     # カテゴリ→金額（円）
