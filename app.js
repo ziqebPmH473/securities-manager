@@ -1620,18 +1620,22 @@ function renderSignals() {
   const bodyRows = (secs) => secs.length
     ? secs.map(sec => marketRow(sec, visibleCols, { actions: 'signal' })).join('')
     : `<tr><td class="muted" colspan="${colCount}" style="padding:12px 16px">該当する銘柄はありません。</td></tr>`;
-  const seg = (m, label) => `<button class="btn btn-sm${signalMarketFilter === m ? ' btn-primary' : ''}" onclick="setSignalMarket('${m}')">${label}</button>`;
+  const seg = (m, label) => `<button class="${signalMarketFilter === m ? 'active' : ''}" onclick="setSignalMarket('${m}')">${label}</button>`;
+  const rule = store.defaultRule ? store.defaultRule() : null;
+  const ruleNote = rule ? `標準ルール（5年高値から −${rule.initialDropPct}% で初回 / 前回購入単価から −${rule.addonDropPct}% で買い増し）に基づき抽出。` : '買い増しサインの一覧。';
   app.innerHTML = `
+    <div class="page-intro">
+      <h2>買い増しサイン</h2>
+      <p>${esc(ruleNote)} 到達 ${reached.length} 件 / もうすぐ ${near.length} 件。</p>
+    </div>
     <div class="section">
       <div class="section-head">
-        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-          <h2>買い増しサイン</h2>
-          <div class="seg-toggle">${seg('all', '全市場')}${seg('JP', '日本株')}${seg('US', '米国株')}</div>
-        </div>
-        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">⊞ 列</button>
+        <h2>サイン一覧</h2>
+        <div class="seg" role="tablist" style="margin-left:auto;margin-right:12px">${seg('all', '全市場')}${seg('JP', '日本株')}${seg('US', '米国株')}</div>
+        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
       </div>
       <div class="section-body">
-        <div class="table-wrap"><table>
+        <div class="table-wrap"><table class="holdings dense">
           <thead><tr>${head}<th class="l"></th></tr></thead>
           <tbody>
             ${groupRow('🔴 到達（今が買い時）', 'reached', reached.length)}
@@ -1652,7 +1656,7 @@ function dashSignalsTable() {
     .map(k => MASTER_COLS.find(m => m.key === k));
   const head = cols.map(c => `<th class="${c.left ? 'l' : ''}">${c.label}</th>`).join('');
   const sorted = sortSecurities(reached, 'SIGNAL');
-  return `<div class="table-wrap"><table>
+  return `<div class="table-wrap"><table class="holdings dense">
     <thead><tr>${head}</tr></thead>
     <tbody>${sorted.map(sec => marketRow(sec, cols, { actions: 'none' })).join('')}</tbody>
   </table></div>`;
@@ -1811,13 +1815,17 @@ function renderReport() {
     if (t.type === 'buy') { buyTot += amt; buyN++; } else if (t.type === 'sell') { sellTot += amt; sellN++; }
   }
   const net = buyTot - sellTot;
-  const seg = (p, l) => `<button class="btn btn-sm${reportPeriod === p ? ' btn-primary' : ''}" onclick="setReportPeriod('${p}')">${l}</button>`;
+  const seg = (p, l) => `<button class="${reportPeriod === p ? 'active' : ''}" onclick="setReportPeriod('${p}')">${l}</button>`;
 
   app.innerHTML = `
+    <div class="page-intro">
+      <h2>レポート</h2>
+      <p>市場・種別・証券会社ごとの資産集計と取引サマリー（円換算）。</p>
+    </div>
     <div class="cards">
-      <div class="card"><div class="label">総資産（円換算）</div><div class="value">${yen(totalVal)}</div></div>
-      <div class="card"><div class="label">取得原価（円換算）</div><div class="value">${yen(totalCost)}</div></div>
-      <div class="card"><div class="label">評価損益</div><div class="value ${pnlCls}">${yen(pnl)}</div><div class="sub ${cls(pnlPct)}">${signed(pnlPct)}%</div></div>
+      <div class="stat feature"><div class="s-label">総資産（円換算）</div><div class="s-value"><span class="cur">¥</span>${num(Math.round(totalVal))}</div></div>
+      <div class="stat"><div class="s-label">取得原価（円換算）</div><div class="s-value num">${yen(totalCost)}</div></div>
+      <div class="stat"><div class="s-label">評価損益</div><div class="s-value num ${pnlCls}">${yen(pnl)}</div><div class="s-sub ${cls(pnlPct)}" style="font-weight:700">${signed(pnlPct)}%</div></div>
     </div>
     ${fxMissing ? '<div class="notice">USD/JPY 為替が未取得のため、円換算に米国株を含めていません。「価格更新」で取得できます。</div>' : ''}
     <div class="section"><div class="section-head"><h2>市場別の集計（円換算）</h2></div>
@@ -1834,7 +1842,7 @@ function renderReport() {
       <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>米国株</th><th>日本株</th><th>合計</th></tr></thead>
       <tbody>${mxRows || `<tr><td colspan="4" class="empty">—</td></tr>`}</tbody></table></div></div>
     <div class="section"><div class="section-head"><h2>取引サマリー（${reportPeriod === 'ytd' ? '今年' : '全期間'}・円換算）</h2>
-        <div class="seg-toggle">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
+        <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
       <div class="table-wrap"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
         <tbody>
           <tr><td class="l">買い</td><td>${buyN}</td><td>${yen(buyTot)}</td></tr>
