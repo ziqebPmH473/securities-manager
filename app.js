@@ -2138,21 +2138,50 @@ function renderMaster() {
 }
 
 // ---------- 取込タブ（銘柄・保有データの取込を集約） ----------
+// ソースカード定義（各社のロゴ色・入力方式）。key は IMPORT_PROFILES に対応
+const IMPORT_SOURCES = [
+  { key: 'sbi-us',   name: 'SBI証券 米国株', logo: 'SBI', color: '#0a8f3c' },
+  { key: 'sbi-jp',   name: 'SBI証券 日本株', logo: 'SBI', color: '#0a8f3c' },
+  { key: 'rakuten',  name: '楽天証券',       logo: '楽',  color: '#bf0000' },
+  { key: 'moomoo',   name: 'moomoo証券',     logo: 'mo',  color: '#ff7a00' },
+  { key: 'monex-jp', name: 'マネックス 日本株', logo: 'MO', color: '#005bac' },
+  { key: 'smbc',     name: 'SMBC日興証券',   logo: '日',  color: '#00529b' },
+];
+function importSourceCard(s) {
+  const p = IMPORT_PROFILES[s.key]; if (!p) return '';
+  const method = p.input === 'file' ? 'CSVファイル' : '画面コピーを貼付';
+  const tags = (p.scope.markets || []).map(m => `<span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span>`).join('')
+    + `<span class="mini">${p.input === 'file' ? 'CSV' : '貼付'}</span>`;
+  return `<button class="source-card" onclick="openBrokerImport('${s.key}')">
+    <div class="sc-top"><div class="sc-logo" style="background:${s.color}">${esc(s.logo)}</div>
+      <div><div class="sc-name">${esc(s.name)}</div><div class="sc-meta">${method}</div></div></div>
+    <div class="sc-tags">${tags}</div>
+  </button>`;
+}
 function renderImport() {
   app.innerHTML = `
+    <div class="page-intro">
+      <h2>取込</h2>
+      <p>各証券会社の保有データ（CSV・画面コピー）を取り込み、保有・銘柄マスタへ反映します。取込元を選んでください。</p>
+    </div>
     <div class="section">
-      <div class="section-head"><h2>保有・銘柄データの取込</h2></div>
+      <div class="section-head"><h2>① 保有を取り込む — 取込元を選択</h2>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="openImportMapping()">取込フィールド設定</button></div>
+      <div style="padding:18px">
+        <div class="source-grid">${IMPORT_SOURCES.map(importSourceCard).join('')}</div>
+        <p class="muted grp-note" style="margin:14px 0 0">カードを選ぶと貼付/CSVの取込画面が開きます。ティッカー・コードで銘柄に紐づけ（未登録は新規作成可）。各社形式は「洗い替え（その証券会社の保有を入れ替え）」です。</p>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>取込状況（最終取込日時）</h2></div>
       <div class="section-body" style="padding:16px">
-        <div class="grp-label">① 保有を取り込む（証券会社のデータ）</div>
-        <div class="btn-row">
-          <button class="btn btn-primary" onclick="openBrokerImport()">保有を取込（証券会社別）</button>
-          <button class="btn" onclick="openImportMapping()">取込フィールド設定</button>
-        </div>
-        <p class="muted grp-note">各社の画面コピー/CSVを貼り付け→ティッカーで銘柄に紐づけ（未登録は新規作成可）。「取込フィールド設定」は列名・位置が変わった時だけ調整します。</p>
-        <div class="grp-label">取込状況（最終取込日時）</div>
         ${importStatusHtml()}
         ${importHistorySection()}
-        <div class="grp-label" style="margin-top:18px">② 銘柄情報・分析を取り込む</div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>② 銘柄情報・分析を取り込む</h2></div>
+      <div class="section-body" style="padding:16px">
         <div class="btn-row">
           <button class="btn" onclick="refreshAllMeta()">銘柄情報を更新（名前・セクター・PER等）</button>
           <button class="btn" onclick="openPasteImport('analysis')">銘柄分析結果を取込</button>
@@ -3368,9 +3397,10 @@ function extractBaseDate(text) {
 
 let _importRows = [], _importProfile = 'sbi-us', _importText = '';
 
-function openBrokerImport() {
-  const profOpts = Object.entries(IMPORT_PROFILES).map(([k, p]) => `<option value="${k}">${esc(p.label)}</option>`).join('');
-  _importRows = []; _importProfile = 'sbi-us'; _importText = '';
+function openBrokerImport(preKey) {
+  const startKey = (preKey && IMPORT_PROFILES[preKey]) ? preKey : 'sbi-us';
+  const profOpts = Object.entries(IMPORT_PROFILES).map(([k, p]) => `<option value="${k}" ${k === startKey ? 'selected' : ''}>${esc(p.label)}</option>`).join('');
+  _importRows = []; _importProfile = startKey; _importText = '';
   showModal('保有を取込（証券会社別）', `
     <form id="bimport-form" onsubmit="return false">
       <div class="field"><label>形式（証券会社）</label>
@@ -3395,7 +3425,7 @@ function openBrokerImport() {
         <button type="button" class="btn btn-primary" onclick="runBrokerImport()">取込を実行</button>
       </div>
     </form>`);
-  onImportProfileChange('sbi-us');
+  onImportProfileChange(startKey);
 }
 function onImportProfileChange(key) {
   _importProfile = key; _importRows = []; _importText = '';
