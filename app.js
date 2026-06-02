@@ -1320,8 +1320,8 @@ function renderMarket(market) {
       <div class="section-head">
         <h2><span class="tag ${market.toLowerCase()}">${MARKET_LABEL[market]}</span> 保有・ウォッチ銘柄</h2>
         <div class="seg" role="tablist" style="margin-left:auto;margin-right:12px">
-          <button class="${market === 'US' ? 'on' : ''}" onclick="setHoldingsMarket('US')">米国株</button>
-          <button class="${market === 'JP' ? 'on' : ''}" onclick="setHoldingsMarket('JP')">日本株</button>
+          <button class="${market === 'US' ? 'active' : ''}" onclick="setHoldingsMarket('US')">米国株</button>
+          <button class="${market === 'JP' ? 'active' : ''}" onclick="setHoldingsMarket('JP')">日本株</button>
         </div>
         <button class="btn btn-primary btn-sm" onclick="openSecurityForm(null, '${market}')">＋ 銘柄を追加</button>
       </div>
@@ -2474,7 +2474,12 @@ function openSecurityDetail(secId) {
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
   showModal(`${calc.displayName(sec)}（${sec.ticker}）`, `
     <div style="margin:-4px 0 10px"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span></div>
-    <fieldset class="form-group"><legend>価格チャート（5年・週足終値）</legend>
+    <fieldset class="form-group"><legend>価格チャート（週足終値）</legend>
+      <div class="seg" id="chart-range-seg" style="margin:0 0 8px;width:fit-content">
+        <button data-r="1y" class="${detailChartRange === '1y' ? 'active' : ''}" onclick="setDetailChartRange('1y')">1年</button>
+        <button data-r="3y" class="${detailChartRange === '3y' ? 'active' : ''}" onclick="setDetailChartRange('3y')">3年</button>
+        <button data-r="5y" class="${detailChartRange === '5y' ? 'active' : ''}" onclick="setDetailChartRange('5y')">5年</button>
+      </div>
       <div id="detail-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
       <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice==='number'||lb.price!=null?' / 橙破線=前回購入':''} / ◆高値・安値 / 灰=補助目盛</p>
     </fieldset>
@@ -2488,13 +2493,26 @@ function openSecurityDetail(secId) {
       <button type="button" class="btn" onclick="openSecurityForm(${sec.id})">編集</button>
       <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
     </div>`, { wide: true });
-  loadDetailChart(sec, ev, price, lb);
+  _detailChartCtx = { sec, ev, price, lb };
+  loadDetailChart(sec, ev, price, lb, detailChartRange);
+}
+// 詳細チャートの期間（1y/3y/5y）。デフォルト5年
+let detailChartRange = '5y';
+let _detailChartCtx = null;
+function setDetailChartRange(r) {
+  detailChartRange = r;
+  document.querySelectorAll('#chart-range-seg button').forEach(b => b.classList.toggle('active', b.dataset.r === r));
+  const c = _detailChartCtx;
+  if (c) loadDetailChart(c.sec, c.ev, c.price, c.lb, r);
 }
 // 終値時系列を取得してSVGチャートを描画（トリガー/現在値/前回購入の水平線つき）
-async function loadDetailChart(sec, ev, price, lb) {
+async function loadDetailChart(sec, ev, price, lb, range = '5y') {
   const el = document.getElementById('detail-chart'); if (!el) return;
+  el.classList.add('muted'); el.textContent = '読み込み中…';
+  // 1年は日足、3年/5年は週足
+  const interval = range === '1y' ? '1d' : '1wk';
   try {
-    const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(sec))}&range=5y&interval=1wk`);
+    const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(sec))}&range=${encodeURIComponent(range)}&interval=${interval}`);
     const d = await res.json();
     if (d.error || !d.points || !d.points.length) { el.textContent = '価格履歴を取得できませんでした（ローカルは wrangler 起動時のみ取得可）。'; return; }
     const overlays = [];
@@ -4269,6 +4287,7 @@ window.openHoldingsForm = openHoldingsForm;
 window.removeHolding = removeHolding;
 window.sellAll = sellAll;
 window.openTxnForm = openTxnForm;
+window.setDetailChartRange = setDetailChartRange;
 window.openPriceInput = openPriceInput;
 window.openCategoryEdit = openCategoryEdit;
 window.openAmountHistory = openAmountHistory;
