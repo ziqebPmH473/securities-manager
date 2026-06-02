@@ -1,0 +1,26 @@
+name: Deploy to Cloudflare Pages
+
+# push（作業ブランチ）または手動実行でデプロイ。git管理ファイルのみ配信＝re-design等は公開されない
+on:
+  push:
+    branches:
+      - claude/securities-portfolio-tool-WGIsF
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # プロジェクト名＝推測されにくいランダム付き。本番ブランチ=作業ブランチ
+          command: pages deploy . --project-name=securities-manager-9fno6acdqirgdgb76qks --branch=claude/securities-portfolio-tool-WGIsF --commit-dirty=true
