@@ -2100,7 +2100,8 @@ function fundCodeMasterSection() {
     const disp = fetched || s.name || s.ticker;
     return `<tr>
       <td class="l" style="width:150px"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:130px;font-family:monospace" title="協会コード等に変更可"></td>
-      <td class="l"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="協会コードから取得した正式名称">取得済</span>' : ''}</td>
+      <td class="l"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="協会コードから取得した正式名称">取得</span>' : ' <span class="muted" style="font-size:11px">未取得</span>'}</td>
+      <td class="l muted">${esc(s.name || '—')}</td>
       <td style="width:80px">${accts}口座</td>
       <td class="l nowrap" style="width:96px"><button class="btn btn-sm" onclick="fetchFundName(${s.id})" title="協会コードから名称を取得">名称取得</button></td>
     </tr>`;
@@ -2110,7 +2111,7 @@ function fundCodeMasterSection() {
       ${fundSecs.length ? '<button class="btn btn-sm" style="margin-left:auto" onclick="fetchFundName()">全件 名称取得</button>' : ''}</div>
     <div class="section-body">
       <p class="muted" style="padding:10px 16px 0">投信はコードが無いため内部コード（FND…）を自動採番しています。<strong>協会コード（8桁）</strong>を入れて「名称取得」すると、正式名称を取得して表示名に反映します（銘柄マスタ等にもこの名称で表示）。取込時は<strong>取込名</strong>でこのコードに紐づきます。</p>
-      ${fundSecs.length ? `<div class="table-wrap"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
+      ${fundSecs.length ? `<div class="table-wrap"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名（取得した正式名称）</th><th class="l">取込名（CSVの名称）</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
     </div>
   </div>`;
 }
