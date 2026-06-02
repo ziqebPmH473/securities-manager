@@ -2091,6 +2091,39 @@ function renderSecMaster() {
     </div>`;
 }
 
+// 投資信託コード（名称↔内部コード）マスタ。投信はコードが無いため自動採番＝ここで協会コード等に編集可
+function fundCodeMasterSection() {
+  const fundSecs = store.data.securities.filter(s => s.market === 'FUND').sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ja'));
+  const rows = fundSecs.map(s => {
+    const accts = store.data.holdings.filter(h => h.securityId === s.id && h.quantity > 0).length;
+    return `<tr>
+      <td class="l">${esc(s.name)}</td>
+      <td class="l col-code"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:130px;font-family:monospace" title="協会コード等に変更可"></td>
+      <td>${accts}口座</td>
+    </tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-head"><h2>投資信託 コードマスタ（名称↔コード）</h2></div>
+    <div class="section-body">
+      <p class="muted" style="padding:10px 16px 0">投信はコードが無いため内部コード（FND…）を自動採番しています。協会コード等へ変更したい場合はここで編集してください（取込時は<strong>名称</strong>でこのコードに紐づきます）。</p>
+      ${fundSecs.length ? `<div class="table-wrap"><table class="holdings dense no-rowclick"><thead><tr><th class="l">ファンド名</th><th class="l">コード</th><th>保有</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
+    </div>
+  </div>`;
+}
+function setFundCode(secId, raw) {
+  const sec = store.data.securities.find(s => s.id === secId); if (!sec) return;
+  const nc = (raw || '').trim();
+  if (!nc) { toast('コードを入力してください'); renderMaster(); return; }
+  if (nc === sec.ticker) return;
+  if (store.data.securities.some(s => s.market === 'FUND' && s.id !== secId && s.ticker === nc)) { toast('そのコードは既に使われています'); renderMaster(); return; }
+  const old = sec.ticker;
+  if (store.data.prices['FUND:' + old]) { store.data.prices['FUND:' + nc] = store.data.prices['FUND:' + old]; delete store.data.prices['FUND:' + old]; }
+  sec.ticker = nc; sec.updatedAt = store._now();
+  if (sec.name) (store.data.fundCodes = store.data.fundCodes || {})[sec.name] = nc;
+  store.save(); renderMaster();
+  toast(`コードを ${nc} に変更しました`, 3000);
+}
+
 // ---------- マスタ・設定 ----------
 function renderMaster() {
   const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -2128,6 +2161,7 @@ function renderMaster() {
       <p class="muted" style="padding:0 16px 14px">銘柄ごとの割当は各銘柄の「編集」から。未割当の銘柄は既定ルールを使用します。</p>
       </div>
     </div>
+    ${fundCodeMasterSection()}
     <div class="section">
       <div class="section-head"><h2>バックアップ・出力</h2></div>
       <div class="section-body" style="padding:16px">
@@ -4718,6 +4752,7 @@ window.fundTransferSavedGenerate = fundTransferSavedGenerate;
 window.smSelectAll = smSelectAll;
 window.setSecMasterFilter = setSecMasterFilter;
 window.setSecMasterMarket = setSecMasterMarket;
+window.setFundCode = setFundCode;
 window.setSecMasterSearch = setSecMasterSearch;
 window.smBulkFieldChange = smBulkFieldChange;
 window.smBulkApply = smBulkApply;
