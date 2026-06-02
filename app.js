@@ -409,7 +409,7 @@ const gsync = {
   async save() {
     if (!this._token) { const ok = await this.signIn(); if (!ok) throw new Error('Googleログインが必要です'); }
     // 1セル50,000文字制限を回避: JSONを分割して列A（A1,A2,…）に保存
-    const json = JSON.stringify(store.data);
+    const json = JSON.stringify(dataBundle());
     const CHUNK = 45000; const rows = [];
     for (let i = 0; i < json.length; i += CHUNK) rows.push([json.slice(i, i + CHUNK)]);
     if (!rows.length) rows.push(['']);
@@ -423,7 +423,7 @@ const gsync = {
     const cells = (d && d.values || []).map(r => (r && r[0]) || '');
     const json = cells.join('');
     if (!json) throw new Error('スプレッドシートにデータがありません（_appdata 列Aが空）');
-    store.data = JSON.parse(json); store.save(); store.load(); render(); toast('スプレッドシートから読み込みました'); return true;
+    restoreBundle(JSON.parse(json)); render(); toast('スプレッドシートから読み込みました（列設定も復元）'); return true;
   },
 };
 function gsaveSettings(f) {
@@ -876,6 +876,16 @@ function loadColPrefs() {
   try { colPrefs = JSON.parse(localStorage.getItem(COL_PREFS_KEY)) || {}; } catch(_) { colPrefs = {}; }
 }
 function saveColPrefs() { localStorage.setItem(COL_PREFS_KEY, JSON.stringify(colPrefs)); }
+// バックアップ/同期用の“全状態”バンドル。store.data に加え列設定(colPrefs)も同梱（_colPrefs）
+function dataBundle() { return Object.assign({}, store.data, { _colPrefs: colPrefs }); }
+// バンドルを復元（store.data ＋ 列設定）。_colPrefs が無い旧バックアップとも互換
+function restoreBundle(obj) {
+  if (!obj || typeof obj !== 'object') throw new Error('データ形式が不正です');
+  const cp = obj._colPrefs; delete obj._colPrefs;
+  store.data = obj; store.save();
+  if (cp && typeof cp === 'object') { colPrefs = cp; saveColPrefs(); }
+  store.load(); loadColPrefs();
+}
 // 列幅(px)。colPrefsのwidth上書き優先、無ければキー/種別ごとの既定。
 function colDefaultWidth(key) {
   const mc = MASTER_COLS.find(c => c.key === key) || {};
@@ -4304,7 +4314,7 @@ function runSplitAdjust() {
 
 // ---------- データ管理 ----------
 function exportData() {
-  const blob = new Blob([JSON.stringify(store.data, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(dataBundle(), null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `securities-${today()}.json`;
@@ -4317,7 +4327,7 @@ function importData() {
     const file = inp.files[0]; if (!file) return;
     const r = new FileReader();
     r.onload = () => {
-      try { store.data = JSON.parse(r.result); store.save(); store.load(); render(); toast('インポートしました'); }
+      try { restoreBundle(JSON.parse(r.result)); render(); toast('インポートしました（列設定も復元）'); }
       catch (_) { toast('JSONの読み込みに失敗しました'); }
     };
     r.readAsText(file);
