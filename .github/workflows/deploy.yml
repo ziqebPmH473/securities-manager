@@ -23,4 +23,4 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # プロジェクト名＝推測されにくいランダム付き。本番ブランチ=作業ブランチ
-          command: pages deploy . --project-name=securities-manager-9fno6acdqirgdgb76qks --branch=claude/securities-portfolio-tool-WGIsF --commit-dirty=true
+          command: pages deploy . --project-name=securities-manager-9fno6acdqirgdgb76qks --branch=claude/securities-portfolio-tool-WGIsF --commit-message="auto deploy" --commit-dirty=true
