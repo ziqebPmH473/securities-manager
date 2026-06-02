@@ -2168,8 +2168,14 @@ function renderImport() {
       <div class="section-head"><h2>① 保有を取り込む — 取込元を選択</h2>
         <button class="btn btn-sm" style="margin-left:auto" onclick="openImportMapping()">取込フィールド設定</button></div>
       <div style="padding:18px">
-        <div class="source-grid">${IMPORT_SOURCES.map(importSourceCard).join('')}</div>
-        <p class="muted grp-note" style="margin:14px 0 0">カードを選ぶと貼付/CSVの取込画面が開きます。ティッカー・コードで銘柄に紐づけ（未登録は新規作成可）。各社形式は「洗い替え（その証券会社の保有を入れ替え）」です。</p>
+        <div class="source-grid">${IMPORT_SOURCES.map(importSourceCard).join('')}
+          <button class="source-card" onclick="openFundImport()">
+            <div class="sc-top"><div class="sc-logo" style="background:#6a4ca8">投</div>
+              <div><div class="sc-name">投資信託（各社）</div><div class="sc-meta">保有一覧を貼付</div></div></div>
+            <div class="sc-tags"><span class="tag fund">投資信託</span><span class="mini">貼付</span></div>
+          </button>
+        </div>
+        <p class="muted grp-note" style="margin:14px 0 0">カードを選ぶと貼付/CSVの取込画面が開きます。ティッカー・コードで銘柄に紐づけ（未登録は新規作成可）。各社形式は「洗い替え（その証券会社の保有を入れ替え）」です。投資信託はコードが無いため名称で内部コードを補完して保存します。</p>
       </div>
     </div>
     <div class="section">
@@ -4319,8 +4325,9 @@ function detectFundHeader(cells) {
     const t = String(c).trim();
     if (idx.name == null && /ファンド名|銘柄名称|^銘柄名$|^銘柄$|^ファンド$/.test(t)) idx.name = i;
     if (idx.acq == null && /取得金額|取得額/.test(t)) idx.acq = i;
-    if (idx.eval == null && /(時価|概算)?評価額(\[円\])?$/.test(t)) idx.eval = i;     // 概算評価額 等も
-    if (idx.pnl == null && /評価損益$/.test(t)) idx.pnl = i;                          // 取得金額が無い時 評価額−損益 で算出
+    if (idx.eval == null && /(時価|概算|当日)?評価額(\[円\])?$/.test(t)) idx.eval = i;     // 概算評価額/当日評価額[円] 等も
+    if (idx.pnl == null && /評価損益(\[円\])?$/.test(t)) idx.pnl = i;                    // 取得金額が無い時 評価額−損益 で算出
+    if (idx.qty == null && /保有数量|保有口数|^数量$|口数/.test(t)) idx.qty = i;          // 口数（投信の数量）
     if (idx.account == null && /口座|預り区分|口座区分/.test(t)) idx.account = i;
   });
   return (idx.name != null && idx.eval != null) ? idx : null;
@@ -4349,7 +4356,8 @@ function parseFundRows(text) {
     const acq = col.acq != null ? numClean(cells[col.acq])
       : (col.pnl != null ? ev - (numClean(cells[col.pnl]) || 0) : null);
     const account = (col.account != null && cells[col.account]) ? normAccount(cells[col.account]) : acct;
-    out.push({ name, evalJpy: ev, acqJpy: acq, account });
+    const qty = col.qty != null ? numClean(cells[col.qty]) : null;
+    out.push({ name, evalJpy: ev, acqJpy: acq, qty, account });
   }
   return out;
 }
@@ -4364,7 +4372,8 @@ function fundTransferControlsHtml() {
       <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="fund-header"> ヘッダ行を含める</label>
     </div>
     <textarea id="fund-text" rows="7" style="width:100%;font-family:monospace;font-size:12px" placeholder="保有証券一覧（投信部分）をヘッダごと貼り付け"></textarea>
-    <div class="btn-row"><button type="button" class="btn btn-primary" onclick="fundGenerate()">変換</button></div>
+    <div class="btn-row"><button type="button" class="btn btn-primary" onclick="fundGenerate()">貼付データを変換</button>
+      <button type="button" class="btn" onclick="fundTransferSavedGenerate()">保存済み投信を転記（取込済みデータから）</button></div>
     <div id="fund-out"></div>`;
 }
 function fundGenerate() {
@@ -4380,6 +4389,90 @@ function fundGenerate() {
   const total = rows.reduce((s, r) => s + (Number(r[7]) || 0), 0);
   document.getElementById('fund-out').innerHTML = `<div class="field">
     <label>投資信託（${rows.length}件・評価額合計 ${total.toLocaleString('ja-JP')}円）
+      <button type="button" class="btn" style="padding:2px 10px" onclick="excelExportCopy('fund-ta')" ${rows.length ? '' : 'disabled'}>コピー</button></label>
+    <textarea id="fund-ta" rows="${Math.min(14, Math.max(3, rows.length + (includeHeader ? 1 : 0)))}"
+      style="width:100%;font-family:monospace;white-space:pre" readonly>${esc(text)}</textarea></div>`;
+}
+
+// ---------- 投信の取込（内部保持: 市場FUND） ----------
+// 投信はコードが無いため、名称↔内部コードのマスタで補完（自動採番・銘柄マスタで編集可）
+function fundCodeFor(name) {
+  const map = store.data.fundCodes || (store.data.fundCodes = {});
+  const key = (name || '').trim();
+  if (!key) return null;
+  if (map[key]) return map[key];
+  let max = 0; Object.values(map).forEach(c => { const m = /^FND(\d+)$/.exec(c); if (m) max = Math.max(max, +m[1]); });
+  const code = 'FND' + String(max + 1).padStart(3, '0');
+  map[key] = code; store.save();
+  return code;
+}
+function openFundImport() {
+  showModal('投資信託の取込', `
+    <p class="muted" style="margin:0 0 12px">各社の保有一覧（投信部分）をヘッダごと貼り付け→取込。名称で内部コードを補完（マスタ管理）し、保有として内部保存します。<strong>価格更新なし・総資産には含めません</strong>。保有銘柄の「投資信託」で確認できます。</p>
+    <form onsubmit="return false">
+      <div class="row">
+        <div class="field"><label>証券会社（必須）</label><select id="fi-broker"><option value="">―</option>${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+        <div class="field"><label>口座（明細に無い時の既定）</label><select id="fi-account">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+        <div class="field"><label>取込モード</label><select id="fi-mode"><option value="replace">この証券会社の投信を入れ替え</option><option value="append">追加・上書き</option></select></div>
+      </div>
+      <div class="field"><label>貼り付け（投信部分・ヘッダ含む）</label>
+        <textarea id="fi-text" rows="8" style="width:100%;font-family:monospace;font-size:12px" placeholder="保有一覧の投信部分をヘッダごと貼り付け"></textarea></div>
+      <div class="form-actions">
+        <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+        <button type="button" class="btn btn-primary" onclick="runFundImport()">取込を実行</button>
+      </div>
+    </form>`, { wide: true });
+}
+function runFundImport() {
+  const broker = (document.getElementById('fi-broker') || {}).value;
+  if (!broker) { toast('証券会社を選択してください'); return; }
+  const defAcct = (document.getElementById('fi-account') || {}).value || '特定';
+  const mode = (document.getElementById('fi-mode') || {}).value || 'replace';
+  const items = parseFundRows((document.getElementById('fi-text') || {}).value || '');
+  if (!items.length) { toast('投信データを認識できませんでした（投信部分をヘッダごと貼り付けてください）'); return; }
+  if (mode === 'replace') {
+    store.data.holdings = store.data.holdings.filter(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !(s && s.market === 'FUND' && h.broker === broker); });
+  }
+  let n = 0;
+  for (const it of items) {
+    const code = fundCodeFor(it.name); if (!code) continue;
+    let sec = store.findSecurity('FUND', code);
+    if (!sec) sec = store.addSecurity({ market: 'FUND', ticker: code, name: it.name, currency: 'JPY', assetClass: 'fund', enabled: false });
+    else if (it.name && sec.name !== it.name) store.updateSecurity(sec.id, { name: it.name });
+    const q = (it.qty && it.qty > 0) ? it.qty : 1;
+    const avgCost = it.acqJpy != null ? it.acqJpy / q : 0;
+    store.setHolding(sec.id, broker, it.account || defAcct, q, avgCost, 'import');
+    if (it.evalJpy != null) store.data.prices['FUND:' + code] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+    n++;
+  }
+  store.save(); closeModal(); render();
+  toast(`投信を ${n} 件取り込みました（${broker}）`, 4000);
+}
+// 保存済みの投信（FUND保有）を転記用フォーマットで出力
+function fundSavedRows() {
+  const out = [];
+  for (const h of store.data.holdings) {
+    if (!(h.quantity > 0)) continue;
+    const s = store.data.securities.find(x => x.id === h.securityId);
+    if (!s || s.market !== 'FUND') continue;
+    const p = store.data.prices['FUND:' + s.ticker] || {};
+    const evalJ = p.price != null ? Math.round(p.price * h.quantity) : null;
+    const acqJ = Math.round((h.avgCost || 0) * h.quantity);
+    out.push({ name: s.name, broker: h.broker, account: h.accountType, evalJpy: evalJ, acqJpy: acqJ });
+  }
+  return out;
+}
+function fundTransferSavedGenerate() {
+  const items = fundSavedRows();
+  if (!items.length) { toast('保存済みの投信がありません（「取込」タブの投信取込で取り込んでください）'); return; }
+  const r1 = (n) => n == null ? '' : Math.round(n);
+  const rows = items.map(c => [c.name, '', '投資信託', '投資信託', c.broker || '', c.account || '', 'JPY', r1(c.evalJpy), '', r1(c.acqJpy), '', '']);
+  const includeHeader = (document.getElementById('fund-header') || {}).checked;
+  const body = rows.map(r => r.join('\t')).join('\n');
+  const text = includeHeader && rows.length ? EXCEL_EXPORT_COLS.join('\t') + '\n' + body : body;
+  const total = rows.reduce((s, r) => s + (Number(r[7]) || 0), 0);
+  document.getElementById('fund-out').innerHTML = `<div class="field">
+    <label>保存済み投信（${rows.length}件・評価額合計 ${total.toLocaleString('ja-JP')}円）
       <button type="button" class="btn" style="padding:2px 10px" onclick="excelExportCopy('fund-ta')" ${rows.length ? '' : 'disabled'}>コピー</button></label>
     <textarea id="fund-ta" rows="${Math.min(14, Math.max(3, rows.length + (includeHeader ? 1 : 0)))}"
       style="width:100%;font-family:monospace;white-space:pre" readonly>${esc(text)}</textarea></div>`;
@@ -4566,6 +4659,9 @@ window.excelExportCopy = excelExportCopy;
 window.runAcqJpyImport = runAcqJpyImport;
 window.mfTransferGenerate = mfTransferGenerate;
 window.fundGenerate = fundGenerate;
+window.openFundImport = openFundImport;
+window.runFundImport = runFundImport;
+window.fundTransferSavedGenerate = fundTransferSavedGenerate;
 window.smSelectAll = smSelectAll;
 window.setSecMasterFilter = setSecMasterFilter;
 window.setSecMasterSearch = setSecMasterSearch;
