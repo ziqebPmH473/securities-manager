@@ -2092,7 +2092,8 @@ function renderSecMaster() {
 }
 
 // 投資信託コード（名称↔内部コード）マスタ。投信はコードが無いため自動採番＝ここで協会コード等に編集可
-function fundCodeMasterSection() {
+// 投信コードマスタはモーダルで開く（マスタ・設定の画面には常時表示しない）
+function openFundCodeMaster() {
   const fundSecs = store.data.securities.filter(s => s.market === 'FUND').sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ja'));
   const rows = fundSecs.map(s => {
     const accts = store.data.holdings.filter(h => h.securityId === s.id && h.quantity > 0).length;
@@ -2106,14 +2107,19 @@ function fundCodeMasterSection() {
       <td class="l nowrap" style="width:96px"><button class="btn btn-sm" onclick="fetchFundName(${s.id})" title="協会コードから名称を取得">名称取得</button></td>
     </tr>`;
   }).join('');
-  return `<div class="section">
-    <div class="section-head"><h2>投資信託 コードマスタ（名称↔コード）</h2>
-      ${fundSecs.length ? '<button class="btn btn-sm" style="margin-left:auto" onclick="fetchFundName()">全件 名称取得</button>' : ''}</div>
-    <div class="section-body">
-      <p class="muted" style="padding:10px 16px 0">投信はコードが無いため内部コード（FND…）を自動採番しています。<strong>協会コード（8桁）</strong>を入れて「名称取得」すると、正式名称を取得して表示名に反映します（銘柄マスタ等にもこの名称で表示）。取込時は<strong>取込名</strong>でこのコードに紐づきます。</p>
-      ${fundSecs.length ? `<div class="table-wrap"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名（取得した正式名称）</th><th class="l">取込名（CSVの名称）</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
-    </div>
-  </div>`;
+  showModal('投資信託 コードマスタ（名称↔コード）', `
+    <p class="muted" style="margin:0 0 10px">投信はコードが無いため内部コード（FND…）を自動採番しています。<strong>協会コード（8桁）</strong>を入れて「名称取得」すると正式名称を取得し表示名に反映します（取込時は<strong>取込名</strong>でこのコードに紐づきます）。同じコードを付けると同一ファンドとして統合します。</p>
+    ${fundSecs.length ? `<div class="table-wrap" style="max-height:60vh"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名（取得した正式名称）</th><th class="l">取込名（CSVの名称）</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
+    <div class="form-actions">
+      ${fundSecs.length ? '<button type="button" class="btn" onclick="fetchFundName()">全件 名称取得</button>' : ''}
+      <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
+    </div>`, { wide: true });
+}
+// 編集後の再描画: コードマスタのモーダルが開いていればそれを、無ければマスタ画面を再描画
+function refreshFundCodeMaster() {
+  const body = document.getElementById('modal-body');
+  const open = body && !document.getElementById('modal-overlay').hidden && body.querySelector('input[onchange^="setFundCode"]');
+  if (open) openFundCodeMaster(); else renderMaster();
 }
 // 投信の協会コードから正式名称を取得（/api/info）。取得名は meta に入り表示名に優先反映
 function fetchFundName(secId) {
@@ -2125,7 +2131,7 @@ function fetchFundName(secId) {
   if (secId != null && bad.length) { toast('協会コード（8桁）を入力してから取得してください'); return; }
   toast('名称を取得中…');
   api.refreshMeta(targets.filter(s => /^[0-9A-Za-z]{8}$/.test(s.ticker || ''))).then(() => {
-    renderMaster();
+    refreshFundCodeMaster();
     if (secId != null) {
       const nm = (store.data.meta[priceKey(targets[0])] || {}).name;
       toast(nm ? `名称取得: ${nm}` : '名称を取得できませんでした（コード/ネット環境を確認。ローカルはwrangler起動時のみ）', 4000);
@@ -2135,12 +2141,12 @@ function fetchFundName(secId) {
 function setFundCode(secId, raw) {
   const sec = store.data.securities.find(s => s.id === secId); if (!sec) return;
   const nc = (raw || '').trim();
-  if (!nc) { toast('コードを入力してください'); renderMaster(); return; }
+  if (!nc) { toast('コードを入力してください'); refreshFundCodeMaster(); return; }
   if (nc === sec.ticker) return;
   // 同じコードが既にある＝同じファンド（証券会社で名称が違うだけ）→ 統合する
   const dup = store.data.securities.find(s => s.market === 'FUND' && s.id !== secId && s.ticker === nc);
   if (dup) {
-    if (!confirm(`コード ${nc} は既に「${dup.name}」に使われています。同じファンドとして「${sec.name}」を統合しますか？\n（保有は両方ぶん合算され、「${sec.name}」の登録は削除されます）`)) { renderMaster(); return; }
+    if (!confirm(`コード ${nc} は既に「${dup.name}」に使われています。同じファンドとして「${sec.name}」を統合しますか？\n（保有は両方ぶん合算され、「${sec.name}」の登録は削除されます）`)) { refreshFundCodeMaster(); return; }
     mergeFundInto(sec, dup);
     return;
   }
@@ -2149,7 +2155,7 @@ function setFundCode(secId, raw) {
   // meta も付け替え（名称キャッシュ等）
   if (store.data.meta['FUND:' + old]) { store.data.meta['FUND:' + nc] = store.data.meta['FUND:' + old]; delete store.data.meta['FUND:' + old]; }
   sec.ticker = nc; sec.updatedAt = store._now();
-  store.save(); renderMaster();
+  store.save(); refreshFundCodeMaster();
   toast(`コードを ${nc} に変更しました`, 3000);
 }
 // 投信銘柄 from を to へ統合（保有を移管。同一証券会社・口座は数量合算＝加重平均取得単価）。from は削除
@@ -2169,7 +2175,7 @@ function mergeFundInto(from, to) {
   delete store.data.prices['FUND:' + from.ticker];
   delete store.data.meta['FUND:' + from.ticker];
   store.data.securities = store.data.securities.filter(s => s.id !== from.id);
-  store.save(); renderMaster();
+  store.save(); refreshFundCodeMaster();
   toast(`「${from.name}」を ${to.ticker}（${to.name}）に統合しました`, 4000);
 }
 
@@ -2210,7 +2216,13 @@ function renderMaster() {
       <p class="muted" style="padding:0 16px 14px">銘柄ごとの割当は各銘柄の「編集」から。未割当の銘柄は既定ルールを使用します。</p>
       </div>
     </div>
-    ${fundCodeMasterSection()}
+    <div class="section">
+      <div class="section-head"><h2>投資信託 コードマスタ</h2>
+        <button class="btn btn-sm btn-primary" style="margin-left:auto" onclick="openFundCodeMaster()">開く（名称↔コード）</button></div>
+      <div class="section-body" style="padding:16px">
+        <p class="muted grp-note" style="margin:0">取り込んだ投信のコード（協会コード）編集・名称取得・統合を行います。ボタンから開きます。</p>
+      </div>
+    </div>
     <div class="section">
       <div class="section-head"><h2>バックアップ・出力</h2></div>
       <div class="section-body" style="padding:16px">
@@ -4804,6 +4816,7 @@ window.setSecMasterFilter = setSecMasterFilter;
 window.setSecMasterMarket = setSecMasterMarket;
 window.setFundCode = setFundCode;
 window.fetchFundName = fetchFundName;
+window.openFundCodeMaster = openFundCodeMaster;
 window.setSecMasterSearch = setSecMasterSearch;
 window.smBulkFieldChange = smBulkFieldChange;
 window.smBulkApply = smBulkApply;
