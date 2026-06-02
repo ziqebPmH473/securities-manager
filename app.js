@@ -2602,8 +2602,8 @@ function openSecurityDetail(secId) {
         <button data-r="3y" class="${detailChartRange === '3y' ? 'active' : ''}" onclick="setDetailChartRange('3y')">3年</button>
         <button data-r="5y" class="${detailChartRange === '5y' ? 'active' : ''}" onclick="setDetailChartRange('5y')">5年</button>
       </div>
-      <div id="detail-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
-      <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice === 'number' || lb.price != null ? ' / 橙破線=前回購入' : ''} / ◆高値・安値</p>
+      <div id="detail-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center;cursor:zoom-in" title="クリックで拡大" onclick="enlargeDetailChart()">読み込み中…</div>
+      <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice === 'number' || lb.price != null ? ' / 橙破線=前回購入' : ''} / ◆高値・安値（クリックで拡大）</p>
     </fieldset>
     ${sectionBox('ファンダ', fund)}
     ${sectionBox('評価', evalBox)}
@@ -2615,6 +2615,12 @@ function openSecurityDetail(secId) {
     <button type="button" class="btn" onclick="closeDrawer();openSecurityForm(${sec.id})">${svgIcon('edit', '')} 編集</button>`, subHtml);
   _detailChartCtx = { sec, ev, price, lb };
   loadDetailChart(sec, ev, price, lb, detailChartRange);
+}
+// 詳細チャートをクリックで拡大表示（同じSVGを広いモーダルに。viewBoxで自動スケール）
+function enlargeDetailChart() {
+  const el = document.getElementById('detail-chart'); if (!el) return;
+  if (!el.querySelector('svg')) return; // 読み込み中・取得失敗時は無視
+  showModal('価格チャート', `<div style="width:100%">${el.innerHTML}</div>`, { wide: true });
 }
 // 詳細チャートの期間（1y/3y/5y）。デフォルト5年
 let detailChartRange = '5y';
@@ -4409,6 +4415,7 @@ window.sellAll = sellAll;
 window.openTxnForm = openTxnForm;
 window.setDetailChartRange = setDetailChartRange;
 window.closeDrawer = closeDrawer;
+window.enlargeDetailChart = enlargeDetailChart;
 window.openPriceInput = openPriceInput;
 window.openCategoryEdit = openCategoryEdit;
 window.openAmountHistory = openAmountHistory;
