@@ -1540,6 +1540,8 @@ function copyDisplayedTable() {
 
 function openColPicker(market) {
   _colPickerMarket = market;
+  // 設定変更で再描画しても一覧のスクロール位置を維持する
+  const _prevScroll = (document.querySelector('.cp-wrapper') || {}).scrollTop || 0;
   const order = getColOrder(market);
   const itemsHtml = order.map((c, i) => {
     const mc = MASTER_COLS.find(m => m.key === c.key);
@@ -1572,6 +1574,11 @@ function openColPicker(market) {
       ${copyBtn}
       <button type="button" class="btn btn-primary" onclick="closeModal();render()">適用</button>
     </div>`, { wide: true });
+  // 再描画後にスクロール位置を復元（先頭に戻らないように）
+  if (_prevScroll) {
+    const w = document.querySelector('.cp-wrapper');
+    if (w) { w.scrollTop = _prevScroll; requestAnimationFrame(() => { w.scrollTop = _prevScroll; }); }
+  }
 }
 // 列レイアウト（表示/非表示・並び順）を他の市場へコピー。米国株↔日本株。
 function copyColLayout(fromMarket, toMarket) {
