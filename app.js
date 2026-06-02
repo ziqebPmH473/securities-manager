@@ -2096,19 +2096,41 @@ function fundCodeMasterSection() {
   const fundSecs = store.data.securities.filter(s => s.market === 'FUND').sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ja'));
   const rows = fundSecs.map(s => {
     const accts = store.data.holdings.filter(h => h.securityId === s.id && h.quantity > 0).length;
+    const disp = calc.displayName(s);
+    const fetched = (store.data.meta[priceKey(s)] || {}).name;
     return `<tr>
-      <td class="l">${esc(s.name)}</td>
-      <td class="l col-code"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:130px;font-family:monospace" title="協会コード等に変更可"></td>
+      <td class="l col-code"><input type="text" value="${esc(s.ticker)}" onchange="setFundCode(${s.id}, this.value)" style="width:120px;font-family:monospace" title="協会コード等に変更可"></td>
+      <td class="l"><strong>${esc(disp)}</strong>${fetched ? ' <span class="tag" title="コードから取得した名称">取得</span>' : ' <span class="muted" style="font-size:11px">取込名</span>'}</td>
+      <td class="l muted" style="font-size:11px">${esc(s.name)}</td>
       <td>${accts}口座</td>
+      <td class="l nowrap"><button class="btn btn-sm" onclick="fetchFundName(${s.id})" title="協会コードから名称を取得">名称取得</button></td>
     </tr>`;
   }).join('');
   return `<div class="section">
-    <div class="section-head"><h2>投資信託 コードマスタ（名称↔コード）</h2></div>
+    <div class="section-head"><h2>投資信託 コードマスタ（名称↔コード）</h2>
+      ${fundSecs.length ? '<button class="btn btn-sm" style="margin-left:auto" onclick="fetchFundName()">全件 名称取得</button>' : ''}</div>
     <div class="section-body">
-      <p class="muted" style="padding:10px 16px 0">投信はコードが無いため内部コード（FND…）を自動採番しています。協会コード等へ変更したい場合はここで編集してください（取込時は<strong>名称</strong>でこのコードに紐づきます）。</p>
-      ${fundSecs.length ? `<div class="table-wrap"><table class="holdings dense no-rowclick"><thead><tr><th class="l">ファンド名</th><th class="l">コード</th><th>保有</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
+      <p class="muted" style="padding:10px 16px 0">投信はコードが無いため内部コード（FND…）を自動採番しています。<strong>協会コード（8桁）</strong>を入れて「名称取得」すると、正式名称を取得して表示名に反映します（銘柄マスタ等にもこの名称で表示）。取込時は<strong>取込名</strong>でこのコードに紐づきます。</p>
+      ${fundSecs.length ? `<div class="table-wrap"><table class="holdings dense no-rowclick"><thead><tr><th class="l">コード</th><th class="l">表示名</th><th class="l">取込名</th><th>保有</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">取り込んだ投資信託はありません。「取込」タブから取り込めます。</div>'}
     </div>
   </div>`;
+}
+// 投信の協会コードから正式名称を取得（/api/info）。取得名は meta に入り表示名に優先反映
+function fetchFundName(secId) {
+  const targets = secId != null
+    ? store.data.securities.filter(s => s.id === secId && s.market === 'FUND')
+    : store.data.securities.filter(s => s.market === 'FUND');
+  if (!targets.length) { toast('対象の投資信託がありません'); return; }
+  const bad = targets.filter(s => !/^[0-9A-Za-z]{8}$/.test(s.ticker || ''));
+  if (secId != null && bad.length) { toast('協会コード（8桁）を入力してから取得してください'); return; }
+  toast('名称を取得中…');
+  api.refreshMeta(targets.filter(s => /^[0-9A-Za-z]{8}$/.test(s.ticker || ''))).then(() => {
+    renderMaster();
+    if (secId != null) {
+      const nm = (store.data.meta[priceKey(targets[0])] || {}).name;
+      toast(nm ? `名称取得: ${nm}` : '名称を取得できませんでした（コード/ネット環境を確認。ローカルはwrangler起動時のみ）', 4000);
+    } else toast('名称取得を実行しました', 3000);
+  });
 }
 function setFundCode(secId, raw) {
   const sec = store.data.securities.find(s => s.id === secId); if (!sec) return;
@@ -4753,6 +4775,7 @@ window.smSelectAll = smSelectAll;
 window.setSecMasterFilter = setSecMasterFilter;
 window.setSecMasterMarket = setSecMasterMarket;
 window.setFundCode = setFundCode;
+window.fetchFundName = fetchFundName;
 window.setSecMasterSearch = setSecMasterSearch;
 window.smBulkFieldChange = smBulkFieldChange;
 window.smBulkApply = smBulkApply;
