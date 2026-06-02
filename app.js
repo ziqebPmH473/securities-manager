@@ -2140,12 +2140,13 @@ function renderMaster() {
 // ---------- 取込タブ（銘柄・保有データの取込を集約） ----------
 // ソースカード定義（各社のロゴ色・入力方式）。key は IMPORT_PROFILES に対応
 const IMPORT_SOURCES = [
-  { key: 'sbi-us',   name: 'SBI証券 米国株', logo: 'SBI', color: '#0a8f3c' },
-  { key: 'sbi-jp',   name: 'SBI証券 日本株', logo: 'SBI', color: '#0a8f3c' },
-  { key: 'rakuten',  name: '楽天証券',       logo: '楽',  color: '#bf0000' },
-  { key: 'moomoo',   name: 'moomoo証券',     logo: 'mo',  color: '#ff7a00' },
-  { key: 'monex-jp', name: 'マネックス 日本株', logo: 'MO', color: '#005bac' },
-  { key: 'smbc',     name: 'SMBC日興証券',   logo: '日',  color: '#00529b' },
+  { key: 'sbi-jp',     name: 'SBI証券（日本株・投信）', logo: 'SBI', color: '#0a8f3c' },
+  { key: 'sbi-us',     name: 'SBI証券 米国株',   logo: 'SBI', color: '#0a8f3c' },
+  { key: 'rakuten',    name: '楽天証券',         logo: '楽',  color: '#bf0000' },
+  { key: 'moomoo',     name: 'moomoo証券',       logo: 'mo',  color: '#ff7a00' },
+  { key: 'monex-fund', name: 'マネックス 投資信託', logo: 'MO', color: '#005bac' },
+  { key: 'monex-jp',   name: 'マネックス 日本株', logo: 'MO', color: '#005bac' },
+  { key: 'smbc',       name: 'SMBC日興証券',     logo: '日',  color: '#00529b' },
 ];
 function importSourceCard(s) {
   const p = IMPORT_PROFILES[s.key]; if (!p) return '';
@@ -3385,6 +3386,7 @@ const IMPORT_PROFILES = {
   'moomoo':  { label: 'moomoo（CSVファイル）', input: 'file', parse: parseMoomooCsv, fixed: true, scope: { broker: 'moomoo', markets: ['JP', 'US'] } },
   'rakuten': { label: '楽天証券（保有商品一覧CSV）', input: 'file', parse: parseRakutenCsv, fixed: true, scope: { broker: '楽天', markets: ['JP', 'US'] } },
   'monex-jp': { label: 'マネックス 日本株（CSVファイル）', input: 'file', parse: parseMonexJpCsv, fixed: true, scope: { broker: 'マネックス', markets: ['JP'] } },
+  'monex-fund': { label: 'マネックス 投資信託（CSVファイル・別ファイル）', input: 'file', parse: () => [], fixed: true, scope: { broker: 'マネックス', markets: ['FUND'] } },
   // 汎用取込は「汎用データ（取込⇄出力）」セクションの専用UI(openGenericImport)へ分離（証券会社取込とは別枠）
 };
 
@@ -3545,7 +3547,7 @@ function runBrokerImport() {
   const baseDate = extractBaseDate(_importText);
   store.data.importHistory.unshift({
     id: store.nextId(), profile: _importProfile, label: prof.label,
-    broker: scope.broker, markets: scope.markets, mode, count: _importRows.length,
+    broker: scope.broker, markets: scope.markets, mode, count: _importRows.length + fundCount,
     importedAt: new Date().toISOString(), baseDate: baseDate || null,
   });
   store.save();
@@ -4257,6 +4259,19 @@ function excelExportGenerate() {
   }
   // 安定ソート: 証券会社→コード
   for (const m of ['JP', 'US']) sheets[m].sort((a, b) => (a[4] + a[1]).localeCompare(b[4] + b[1], 'ja'));
+  // 投資信託（保存済みFUND保有から。価格更新なし＝取込時の評価額/取得金額）
+  const fundRows = [];
+  for (const h of store.data.holdings) {
+    if (!(h.quantity > 0)) continue;
+    const sec = store.data.securities.find(s => s.id === h.securityId);
+    if (!sec || sec.market !== 'FUND') continue;
+    if (!includeManual && h.source !== 'import') continue;
+    const p = store.data.prices['FUND:' + sec.ticker] || {};
+    const evalJ = p.price != null ? Math.round(p.price * h.quantity) : '';
+    const acqJ = Math.round((h.avgCost || 0) * h.quantity);
+    fundRows.push([sec.name, '', '投資信託', '投資信託', h.broker || '', h.accountType || '', 'JPY', evalJ, '', acqJ, '', '']);
+  }
+  fundRows.sort((a, b) => (a[4] + a[0]).localeCompare(b[4] + b[0], 'ja'));
   const block = (label, rows) => {
     const body = rows.map(r => r.join('\t')).join('\n');
     const text = includeHeader && rows.length ? EXCEL_EXPORT_COLS.join('\t') + '\n' + body : body;
@@ -4267,7 +4282,7 @@ function excelExportGenerate() {
         style="width:100%;font-family:monospace;white-space:pre" readonly>${esc(text)}</textarea></div>`;
   };
   document.getElementById('xe-out').innerHTML =
-    block('日本株', sheets.JP) + block('米国株', sheets.US);
+    block('日本株', sheets.JP) + block('米国株', sheets.US) + (fundRows.length ? block('投資信託', fundRows) : '');
 }
 
 function excelExportCopy(id) {
@@ -4548,16 +4563,12 @@ function renderTransfer() {
       </div>
     </div>
     <div class="section">
-      <div class="section-head"><h2>資産貼付用エクスポート（日本株・米国株）</h2></div>
+      <div class="section-head"><h2>資産貼付用エクスポート（日本株・米国株・投資信託）</h2></div>
       <div class="section-body" style="padding:16px">${excelExportControlsHtml()}</div>
     </div>
     <div class="section">
       <div class="section-head"><h2>米国株 取得額(円) 一括取込</h2></div>
       <div class="section-body" style="padding:16px">${acqJpyControlsHtml()}</div>
-    </div>
-    <div class="section">
-      <div class="section-head"><h2>投資信託 転記（投信CSV→Excel貼付）</h2></div>
-      <div class="section-body" style="padding:16px">${fundTransferControlsHtml()}</div>
     </div>
     <div class="section">
       <div class="section-head"><h2>現金・銀行 転記（マネーフォワード）</h2></div>
