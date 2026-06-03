@@ -377,6 +377,18 @@ distance = price / trigger_price - 1                          # 参考値
 
 ---
 
+## 3.5 取込時のマスタ値変換（importAliases）
+マスタ管理項目を取り込む時、取込値がマスタの正規値と一致しないと金額参照などが静かに失敗する。これを防ぐ仕組み。
+
+- **対象ドメイン**（`IMPORT_DOMAINS`）: `category`（カテゴリ別金額マスタ。fields=category, recoCategory）/ `grade`（S〜D固定。fields=overallGrade, rating, buyGrade）/ `detailType`（個別株/ETF固定）/ `rule`（ルールマスタ。fields=ruleName）。基準高値モードは別途 `normBaseHighMode` で正規化済みのため対象外。
+- **照合**: `normKey`（NFKC＋trim）で表記ゆれを吸収して比較。一致すればマスタ正規値に置換。
+- **未登録値**: 取込実行時に収集し、**変換モーダル**（`openImportConvertModal`）で「①既存マスタ値に変換／②新規マスタ追加（category のみ）／③スキップ」を選択。`[取り込まない（中止）]` で取込全体を中止（1件も書き込まない＝確認後にまとめて反映する設計）。
+- **記憶**: 選んだ対応は `store.data.importAliases[domain][normKey(raw)] = 正規値 | '__skip__'` に保存し、次回以降は確認なしで自動変換。「マスタ・設定 > 取込変換マスタ」（`openImportAliasMaster`）で閲覧・削除可。
+- **適用経路**: 汎用取込（`runGenericImport` / `runBrokerImport` の `row._sec`）と 分析結果取込（`importAnalysis`）。固定形式・保有取込は保有データのみのため対象外。
+- 実装核: `resolveMaster(domain,raw)` / `convMaster(field,raw)` / `ensureMasterConversions(pairs)`。
+
+---
+
 ## 4. 金額マスタの版管理（重要）
 
 買い増し金額は **カテゴリ別金額マスタ1本**（王道80k/主力60k/準主力50k/防御40k/投機25k/

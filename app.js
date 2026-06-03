@@ -138,6 +138,7 @@ const store = {
     this.data.lastPriceUpdate ||= null; // 価格更新日時
     this.data.importMappings ||= {};  // 取込フィールド設定（列名・位置）のマスタ
     this.data.importFormats ||= [];   // 汎用取込のフォーマット（列名→フィールド対応）保存
+    this.data.importAliases ||= {};   // 取込変換マスタ: ドメイン→{正規化した取込値→マスタ正規値 or '__skip__'}
     this.data.lastInfoDate ||= null;  // 銘柄情報の日次更新を実行した日（YYYY-MM-DD）
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
@@ -288,6 +289,10 @@ const store = {
   addCategory(c) {
     c.sortOrder = c.sortOrder || (Math.max(0, ...this.data.categories.map(x => x.sortOrder)) + 1);
     this.data.categories.push(c); this.save();
+  },
+  // 取込変換マスタ: 正規化した取込値→マスタ正規値（または '__skip__'）を記憶
+  setAlias(domain, normRaw, value) {
+    (this.data.importAliases[domain] ||= {})[normRaw] = value; this.save();
   },
   updateCategory(oldName, patch) {
     const c = this.data.categories.find(x => x.category === oldName);
@@ -2408,6 +2413,13 @@ function renderMaster() {
       </div>
     </div>
     <div class="section">
+      <div class="section-head"><h2>取込変換マスタ</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="btn-row"><button class="btn btn-primary" onclick="openImportAliasMaster()">開く（取込値→マスタ値の変換）</button></div>
+        <p class="muted grp-note" style="margin:8px 0 0">取込時に「マスタに無い値」を変換した対応を記憶しています（カテゴリ/格付/詳細種別/ルール）。次回以降は自動変換されます。不要な対応はここから削除できます。</p>
+      </div>
+    </div>
+    <div class="section">
       <div class="section-head"><h2>バックアップ・出力</h2></div>
       <div class="section-body" style="padding:16px">
         <div class="grp-label">全データのバックアップ（JSONファイル）</div>
@@ -3334,13 +3346,14 @@ function openPasteImport(kind) {
   };
   form.data.addEventListener('input', renderPv);
   form.market.addEventListener('change', renderPv);
-  form.onsubmit = (e) => {
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const market = form.market.value;
     const create = form.create.checked;
     const result = isAnalysis
-      ? importAnalysis(form.data.value, market, create)
+      ? await importAnalysis(form.data.value, market, create)
       : importHoldings(form.data.value, market, create);
+    if (result.cancelled) { toast('取込を中止しました'); return; }
     closeModal();
     reportImport(result.touched, `取込完了: 更新 ${result.updated}件 / 新規 ${result.created}件${result.skipped ? ` / スキップ ${result.skipped}件` : ''}${result.badFmt ? ` / 形式NG ${result.badFmt}件は取込まず` : ''}${result.stale ? ` / 古い分析 ${result.stale}件は取込まず` : ''}`);
   };
@@ -3372,10 +3385,19 @@ function validTicker(ticker, market) {
   return /^[A-Z][A-Z.]{0,5}$/.test(t.toUpperCase());
 }
 
-function importAnalysis(text, market, create) {
+async function importAnalysis(text, market, create) {
   const rows = parsePasted(text);
   if (rows.length < 2) return { updated: 0, created: 0, skipped: 0 };
   const idx = mapHeader(rows[0], ANALYSIS_COLMAP);
+  // マスタ管理項目（格付3種・推奨カテゴリ）の未登録値を確認・変換（中止で全取込キャンセル）
+  const aPairs = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = {}; rows[i].forEach((cell, j) => { if (idx[j]) r[idx[j]] = (cell || '').trim(); });
+    ['overallGrade', 'rating', 'buyGrade', 'recoCategory'].forEach(fld => { if (r[fld]) aPairs.push({ field: fld, raw: r[fld] }); });
+  }
+  if (!(await ensureMasterConversions(aPairs))) return { cancelled: true };
+  // マスタ項目の変換ヘルパ: 取込値があれば変換、スキップ/空は既存値を維持
+  const cg = (rec, field, fb) => { const raw = (rec[field] || '').trim(); if (!raw) return fb || null; const cv = convMaster(field, raw); return cv === SKIP ? (fb || null) : cv; };
   let updated = 0, created = 0, skipped = 0, stale = 0, badFmt = 0; const touched = [];
   for (let i = 1; i < rows.length; i++) {
     const rec = {};
@@ -3400,20 +3422,20 @@ function importAnalysis(text, market, create) {
     const sf = (v, fb) => (v && v.trim()) || fb || null;
     // 分析の「判断」項目はレコードへ
     const patch = {
-      overallGrade: sf(rec.overallGrade, sec.overallGrade),
-      rating: sf(rec.rating, sec.rating),
-      buyGrade: sf(rec.buyGrade, sec.buyGrade),
+      overallGrade: cg(rec, 'overallGrade', sec.overallGrade),
+      rating: cg(rec, 'rating', sec.rating),
+      buyGrade: cg(rec, 'buyGrade', sec.buyGrade),
       starValuation: parseStars(rec.starValuation) ?? sec.starValuation ?? null,
       starStrength: parseStars(rec.starStrength) ?? sec.starStrength ?? null,
       starRisk: parseStars(rec.starRisk) ?? sec.starRisk ?? null,
       analysisNote: sf(rec.analysisNote, sec.analysisNote),
       analysisDate: normDate(rec.analysisDate) || sec.analysisDate || null,
-      recoCategory: sf(rec.recoCategory, sec.recoCategory),
+      recoCategory: cg(rec, 'recoCategory', sec.recoCategory),
       recoAmount: rec.recoAmount ? parseFloat(rec.recoAmount) : (sec.recoAmount ?? null),
     };
     if (rec.priority) { const p = parseInt(rec.priority, 10); if (!isNaN(p)) patch.priority = p; }
-    // カテゴリ未設定なら推奨カテゴリを採用
-    if (!sec.category && rec.recoCategory) patch.category = rec.recoCategory;
+    // カテゴリ未設定なら推奨カテゴリ（変換後）を採用。スキップ選択時は採用しない
+    if (!sec.category && (rec.recoCategory || '').trim()) { const cc = convMaster('recoCategory', rec.recoCategory.trim()); if (cc !== SKIP) patch.category = cc; }
     // セクター/業種/時価総額/PER/EPS/配当はマスタ(meta)へ（自動取得項目と同じ置き場所）
     const metaPatch = clean({
       sector: sf(rec.sector), industry: sf(rec.industry),
@@ -3428,6 +3450,7 @@ function importAnalysis(text, market, create) {
     store.updateSecurity(sec.id, patch);
     touched.push(sec);
   }
+  _convSession = {};
   return { updated, created, skipped, stale, badFmt, touched };
 }
 
@@ -3656,6 +3679,122 @@ function parseSmbcScreen(text, map) {
   return out;
 }
 // 汎用入出力の列（日本語ラベル↔内部キー）。分析結果（評価/格付/★/備考/優先順位/評価日）は対象外
+// ===== 取込：マスタ管理項目の変換（未登録値はモーダルで確認・変換マスタで次回自動）=====
+// ドメイン定義。fields=このドメインに属する銘柄フィールド。values=マスタの正規値一覧。canAdd=新規追加可。
+const IMPORT_DOMAINS = {
+  category:   { label: 'カテゴリ',     fields: ['category', 'recoCategory'], canAdd: true,  values: () => store.data.categories.map(c => c.category) },
+  grade:      { label: '格付(S〜D)',   fields: ['overallGrade', 'rating', 'buyGrade'], canAdd: false, values: () => ['S', 'A', 'B', 'C', 'D'] },
+  detailType: { label: '詳細種別',     fields: ['detailType'], canAdd: false, values: () => ['個別株', 'ETF'] },
+  rule:       { label: '買い増しルール', fields: ['ruleName'], canAdd: false, values: () => store.data.rules.map(r => r.name) },
+};
+const FIELD_DOMAIN = {};
+Object.entries(IMPORT_DOMAINS).forEach(([d, def]) => def.fields.forEach(f => { FIELD_DOMAIN[f] = d; }));
+const SKIP = '__skip__';
+function normKey(s) { return String(s == null ? '' : s).normalize('NFKC').trim(); }
+let _convSession = {}; // 今回の取込限定の変換（覚えない選択）。{domain: {normRaw: value}}
+// 取込値を解決: {status:'ok',value} / {status:'skip'} / {status:'unmatched'}
+function resolveMaster(domain, raw) {
+  const r = normKey(raw);
+  if (!r) return { status: 'ok', value: raw };
+  const def = IMPORT_DOMAINS[domain]; if (!def) return { status: 'ok', value: raw };
+  const hit = def.values().find(v => normKey(v) === r); // 表記ゆれ吸収（NFKC・trim）
+  if (hit) return { status: 'ok', value: hit };
+  const sess = (_convSession[domain] || {})[r];
+  if (sess === SKIP) return { status: 'skip' };
+  if (sess != null) return { status: 'ok', value: sess };
+  const al = (store.data.importAliases[domain] || {})[r];
+  if (al === SKIP) return { status: 'skip' };
+  if (al != null) return { status: 'ok', value: al };
+  return { status: 'unmatched' };
+}
+// フィールド値を変換。マスタ対象外/空はそのまま。skip は SKIP を返す。
+function convMaster(field, raw) {
+  const domain = FIELD_DOMAIN[field]; if (!domain) return raw;
+  const res = resolveMaster(domain, raw);
+  return res.status === 'skip' ? SKIP : res.value;
+}
+// pairs=[{field, raw}]。未登録値を集めモーダルで確認 → _convSession/aliases に反映。中止で false。
+function ensureMasterConversions(pairs) {
+  const unmatched = new Map(); // domain normRaw -> {domain, raw, count}
+  for (const { field, raw } of pairs) {
+    if (raw == null || raw === '') continue;
+    const domain = FIELD_DOMAIN[field]; if (!domain) continue;
+    if (resolveMaster(domain, raw).status !== 'unmatched') continue;
+    const k = domain + ' ' + normKey(raw);
+    if (!unmatched.has(k)) unmatched.set(k, { domain, raw, count: 0 });
+    unmatched.get(k).count++;
+  }
+  if (!unmatched.size) return Promise.resolve(true);
+  return new Promise(resolve => openImportConvertModal([...unmatched.values()], (decisions) => {
+    if (!decisions) { resolve(false); return; }
+    for (const it of [...unmatched.values()]) {
+      const d = decisions[it.domain + ' ' + normKey(it.raw)];
+      if (!d) continue;
+      (_convSession[it.domain] ||= {})[normKey(it.raw)] = d.value;
+      if (d.remember) store.setAlias(it.domain, normKey(it.raw), d.value);
+    }
+    resolve(true);
+  }));
+}
+function openImportConvertModal(list, cb) {
+  const rows = list.map((it, i) => {
+    const def = IMPORT_DOMAINS[it.domain];
+    const opts = def.values().map(v => `<option value="m:${esc(v)}">${esc(v)} に変換</option>`).join('')
+      + (def.canAdd ? `<option value="__add__">＋「${esc(it.raw)}」を新規マスタに追加</option>` : '')
+      + `<option value="__skip__">取り込まない（スキップ）</option>`;
+    return `<div class="ai-row" style="gap:10px"><span class="muted">${esc(def.label)}「<strong>${esc(it.raw)}</strong>」<span style="font-size:11px">(${it.count}件)</span></span>
+      <select id="icv-${i}" style="min-width:180px">${opts}</select></div>`;
+  }).join('');
+  showModal('取込：未登録の値の変換', `
+    <p class="muted" style="margin:0 0 10px">マスタに無い値が見つかりました。各値の変換先を選んでください。「中止」を押すと1件も取り込まず、修正して取り込み直せます。</p>
+    ${rows}
+    <label style="display:flex;align-items:center;gap:6px;margin-top:12px"><input type="checkbox" id="icv-remember" checked> この対応を覚えて次回から自動変換する（取込変換マスタに保存）</label>
+    <div class="form-actions">
+      <button type="button" class="btn btn-danger" onclick="__icvResolve(false)">取り込まない（中止）</button>
+      <button type="button" class="btn btn-primary" onclick="__icvResolve(true)">この内容で取り込む</button>
+    </div>`);
+  window.__icvResolve = (ok) => {
+    if (!ok) { closeModal(); cb(null); return; }
+    const remember = document.getElementById('icv-remember').checked;
+    const decisions = {};
+    list.forEach((it, i) => {
+      const sel = document.getElementById('icv-' + i).value;
+      let value;
+      if (sel === '__skip__') value = SKIP;
+      else if (sel === '__add__') { addMasterValue(it.domain, it.raw); value = it.raw; }
+      else value = sel.slice(2); // strip 'm:'
+      decisions[it.domain + ' ' + normKey(it.raw)] = { value, remember };
+    });
+    closeModal(); cb(decisions);
+  };
+}
+function addMasterValue(domain, raw) {
+  if (domain === 'category' && !store.data.categories.find(c => c.category === raw)) {
+    store.addCategory({ category: raw, label: '', amountJpy: 0, amountUsd: 0 });
+  }
+}
+// 取込変換マスタの閲覧・削除
+function openImportAliasMaster() {
+  const al = store.data.importAliases || {};
+  const sections = Object.entries(IMPORT_DOMAINS).map(([domain, def]) => {
+    const entries = Object.entries(al[domain] || {});
+    const rows = entries.length ? entries.map(([raw, val]) =>
+      `<div class="ai-row"><span>「${esc(raw)}」 → ${val === SKIP ? '<span class="muted">取り込まない（スキップ）</span>' : '<strong>' + esc(val) + '</strong>'}</span>
+        <button class="btn btn-sm btn-danger" onclick="deleteImportAlias('${esc(domain)}', '${esc(raw)}')">削除</button></div>`).join('')
+      : '<div class="muted">対応なし</div>';
+    return `<div style="margin-bottom:14px"><div class="grp-label">${esc(def.label)}</div>${rows}</div>`;
+  }).join('');
+  showModal('取込変換マスタ', `
+    <p class="muted" style="margin:0 0 10px">取込時にマスタへ変換した対応の一覧です。削除すると次回取込時に再度確認されます。</p>
+    ${sections}
+    <div class="form-actions"><button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button></div>`);
+}
+function deleteImportAlias(domain, raw) {
+  const m = store.data.importAliases[domain]; if (!m) return;
+  delete m[raw]; store.save();
+  openImportAliasMaster();
+}
+
 const GENERIC_MAP = {
   'ティッカー': 'ticker', 'コード': 'ticker', '市場': 'market', '証券会社': 'broker', '口座': 'account', '口座種別': 'account',
   '数量': 'quantity', '取得単価': 'avgCost', '平均取得単価': 'avgCost',
@@ -3799,7 +3938,7 @@ function setImportPreview() {
   const sample = _importRows.slice(0, 4).map(r => `${MARKET_LABEL[r.market]} ${r.ticker} ×${r.quantity} @${r.avgCost}（${r.broker || '—'}/${r.account}）`).join('<br>');
   el.innerHTML = `<strong>${_importRows.length} 件</strong>を検出${bd ? `（基準日: ${bd}）` : ''}:<br>${sample}${_importRows.length > 4 ? '<br>…' : ''}`;
 }
-function runBrokerImport() {
+async function runBrokerImport() {
   if (!_importRows.length && !parseFundRows(_importText).length) { toast('取込データがありません'); return; }
   const f = document.getElementById('bimport-form');
   const create = f.create.checked;
@@ -3807,6 +3946,10 @@ function runBrokerImport() {
   const defBroker = f.broker ? f.broker.value : 'SBI';
   // モード決定: 固定プロファイルは replace（洗い替え）、汎用は選択
   const mode = prof.fixed ? 'replace' : (f.mode ? f.mode.value : 'append');
+  // 汎用形式の銘柄属性（row._sec）にマスタ管理項目があれば未登録値を確認・変換（中止で全取込キャンセル）
+  const bPairs = [];
+  for (const row of _importRows) if (row._sec) for (const k in row._sec) if (FIELD_DOMAIN[k]) bPairs.push({ field: k, raw: row._sec[k] });
+  if (!(await ensureMasterConversions(bPairs))) { toast('取込を中止しました'); return; }
   // 洗い替えスコープ
   let scope = prof.fixed ? prof.scope : { broker: defBroker, markets: ['JP', 'US'] };
 
@@ -3836,7 +3979,9 @@ function runBrokerImport() {
     // 汎用: 銘柄属性（前回購入価格・基準高値・ルール・カテゴリ 等）を反映（分析結果は対象外）
     if (row._sec) {
       const p = { ...row._sec };
-      if ('ruleName' in p) { const r = store.data.rules.find(x => x.name === p.ruleName); if (r) p.ruleId = r.id; delete p.ruleName; }
+      // マスタ管理項目は変換マスタで正規化／スキップ
+      for (const k of Object.keys(p)) { if (k !== 'ruleName' && FIELD_DOMAIN[k]) { const cv = convMaster(k, p[k]); if (cv === SKIP) delete p[k]; else p[k] = cv; } }
+      if ('ruleName' in p) { const rn = convMaster('ruleName', p.ruleName); delete p.ruleName; if (rn !== SKIP) { const r = store.data.rules.find(x => x.name === rn); if (r) p.ruleId = r.id; } }
       store.updateSecurity(sec.id, p);
     }
     // 数量がある行のみ保有を作成/更新
@@ -3887,6 +4032,7 @@ function runBrokerImport() {
     broker: scope.broker, markets: scope.markets, mode, count: _importRows.length + fundCount + pendingTotal,
     importedAt: new Date().toISOString(), baseDate: baseDate || null,
   });
+  _convSession = {};
   store.save();
   closeModal();
   reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${pendingTotal ? ` / 新規投信 ${Object.keys(pending).length}件はコード入力待ち` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
@@ -4170,13 +4316,18 @@ function giParseValue(field, raw) {
     default: return v || null;
   }
 }
-function runGenericImport() {
+async function runGenericImport() {
   if (!_giRows.length) { toast('データがありません'); return; }
   const fixed = giFixedValues();
   if (!_giMapping.includes('ticker')) { toast('コードの割当が必要です'); return; }
   if (!_giMapping.includes('market') && !fixed.market) { toast('市場の割当（または固定値）が必要です'); return; }
   const create = document.getElementById('gi-create').checked;
   const mode = (document.getElementById('gi-mode') || {}).value || 'upsert';
+  // マスタ管理項目（カテゴリ/格付/詳細種別/ルール）の未登録値を確認・変換（中止で全取込キャンセル）
+  const giPairs = [];
+  for (const row of _giRows) _giMapping.forEach((f, i) => { if (f && FIELD_DOMAIN[f]) giPairs.push({ field: f, raw: giParseValue(f, row[i]) }); });
+  GI_FIXED_KEYS.forEach(k => { if (FIELD_DOMAIN[k] && fixed[k] != null && fixed[k] !== '') giPairs.push({ field: k, raw: fixed[k] }); });
+  if (!(await ensureMasterConversions(giPairs))) { toast('取込を中止しました'); return; }
   // 洗い替え: 固定の証券会社×市場が必須。そのスコープの保有を先に削除
   let removed = 0;
   if (mode === 'replace') {
@@ -4208,11 +4359,11 @@ function runGenericImport() {
       sec = store.addSecurity({ market, ticker: tk, currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, ruleId: store.defaultRule().id });
       created++;
     } else updated++;
-    // 銘柄属性（割り当てた列だけ上書き）
+    // 銘柄属性（割り当てた列だけ上書き）。マスタ管理項目は変換マスタで正規化／スキップ
     const patch = {};
     for (const k of Object.keys(rec)) {
-      if (k === 'ruleName') { const r = store.data.rules.find(x => x.name === rec.ruleName); if (r) patch.ruleId = r.id; continue; }
-      if (GI_SEC_FIELDS.has(k)) patch[k] = rec[k];
+      if (k === 'ruleName') { const rn = convMaster('ruleName', rec.ruleName); if (rn === SKIP) continue; const r = store.data.rules.find(x => x.name === rn); if (r) patch.ruleId = r.id; continue; }
+      if (GI_SEC_FIELDS.has(k)) { const cv = convMaster(k, rec[k]); if (cv !== SKIP) patch[k] = cv; }
     }
     if (Object.keys(patch).length) store.updateSecurity(sec.id, patch);
     // 保有・取得円
@@ -4245,6 +4396,7 @@ function runGenericImport() {
       importedAt: new Date().toISOString(), baseDate: null,
     });
   }
+  _convSession = {};
   store.save(); closeModal();
   reportImport(touched, `汎用取込: 更新 ${updated} / 新規 ${created}${holdingSet ? ` / 保有 ${holdingSet}` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
 }
@@ -5105,6 +5257,8 @@ window.setSecMasterMarket = setSecMasterMarket;
 window.setFundCode = setFundCode;
 window.fetchFundName = fetchFundName;
 window.openFundCodeMaster = openFundCodeMaster;
+window.openImportAliasMaster = openImportAliasMaster;
+window.deleteImportAlias = deleteImportAlias;
 window.registerPendingFunds = registerPendingFunds;
 window.setSecMasterSearch = setSecMasterSearch;
 window.smBulkFieldChange = smBulkFieldChange;
