@@ -72,7 +72,7 @@ const MASTER_COLS = [
   { key: 'buyCount',    label: '購入回数',         left: false, markets: ALLM, noSort: false },
   { key: 'buyAmount',   label: '買い増し予定額',    left: false, markets: ALLM, noSort: false },
   { key: 'reco',        label: '推奨購入額',       left: false, markets: ALLM, noSort: false },
-  { key: 'category',    label: 'AI判断',           left: true,  markets: ALLM, noSort: false },
+  { key: 'category',    label: 'カテゴリ',         left: true,  markets: ALLM, noSort: false },
   { key: 'ruleName',    label: '買い増しルール',    left: true,  markets: ALLM, noSort: false },
   { key: 'fixedBuyPrice', label: '買増固定値',       left: false, markets: STKM, noSort: false },
   { key: 'rating',      label: '銘柄格付',         left: true,  markets: STKM, noSort: false },
@@ -84,7 +84,6 @@ const MASTER_COLS = [
   { key: 'overallGrade', label: '総合評価',        left: true,  markets: STKM, noSort: false },
   { key: 'buyGrade',     label: '買い時評価',      left: true,  markets: STKM, noSort: false },
   { key: 'priority',     label: '購入優先順位',    left: false, markets: STKM, noSort: false },
-  { key: 'recoCategory', label: 'AI推奨カテゴリ',  left: true,  markets: STKM, noSort: false },
   { key: 'stars',        label: '★(ﾊﾞﾘｭ/強/ﾘｽｸ)', left: true,  markets: STKM, noSort: true },
   { key: 'analysisDate', label: '評価日',          left: true,  markets: STKM, noSort: false },
   { key: 'analysisNote', label: '分析メモ',        left: true,  markets: STKM, noSort: true },
@@ -102,7 +101,7 @@ const COL_PREFS_KEY = 'sm_colprefs_v2';
 const ANALYSIS_COLMAP = {
   '評価日': 'analysisDate', '銘柄名': 'ticker', 'ティッカー': 'ticker',
   '総合評価': 'overallGrade', '銘柄格付': 'rating', '買い時評価': 'buyGrade',
-  '推奨投資額': 'recoAmount', '推奨カテゴリ': 'recoCategory',
+  '推奨投資額': 'recoAmount', 'カテゴリ': 'category', '推奨カテゴリ': 'category',
   'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
   '備考': 'analysisNote', '評価時点_購入優先順位': 'priority', '購入優先順位': 'priority',
   'セクター': 'sector', '業種': 'industry', '時価総額(百万)': 'marketCap',
@@ -609,10 +608,10 @@ const calc = {
     return { type, base, baseSource, trigger, price, remainingDropPct, reached: price <= trigger, recoAmount, recoCcy };
   },
 
-  // 1回の購入額（原通貨）。銘柄に手入力があればそれを優先、無ければカテゴリ（無ければ推奨カテゴリ）金額から転記
+  // 1回の購入額（原通貨）。銘柄に手入力があればそれを優先、無ければカテゴリ金額から転記
   buyAmount(sec) {
     if (sec.buyAmount != null && sec.buyAmount !== '') return Number(sec.buyAmount);
-    const amt = store.categoryAmountFor(sec.category || sec.recoCategory, sec.market);
+    const amt = store.categoryAmountFor(sec.category, sec.market);
     return amt || null;
   },
   // 購入回数（手入力 or 買い取引数）
@@ -1109,7 +1108,6 @@ const COL_RENDERERS = {
   overallGrade: (s,c) => `<td class="l">${s.overallGrade ? `<span class="grade grade-${esc(String(s.overallGrade).toLowerCase())}">${esc(s.overallGrade)}</span>` : muted}</td>`,
   buyGrade:  (s,c) => `<td class="l">${s.buyGrade ? `<span class="grade grade-${esc(String(s.buyGrade).toLowerCase())}">${esc(s.buyGrade)}</span>` : muted}</td>`,
   priority:  (s,c) => `<td>${s.priority != null ? num(s.priority) : muted}</td>`,
-  recoCategory: (s,c) => `<td class="l">${s.recoCategory ? esc(s.recoCategory) : muted}</td>`,
   stars:     (s,c) => { const a = [s.starValuation, s.starStrength, s.starRisk]; return `<td class="l">${a.some(x => x != null) ? a.map(x => x ?? '—').join('/') : muted}</td>`; },
   analysisDate: (s,c) => `<td class="l">${s.analysisDate ? esc(s.analysisDate) : muted}</td>`,
   analysisNote: (s,c) => `<td class="l" title="${esc(s.analysisNote || '')}">${s.analysisNote ? esc(String(s.analysisNote).slice(0, 24)) + (s.analysisNote.length > 24 ? '…' : '') : muted}</td>`,
@@ -1411,11 +1409,10 @@ function sortValue(sec, key) {
     case 'eps': return calc.field(sec, 'eps') ?? -Infinity;
     case 'overallGrade': return GRADE_RANK[sec.overallGrade] ?? 99;
     case 'buyGrade': return GRADE_RANK[sec.buyGrade] ?? 99;
-    case 'recoCategory': return sec.recoCategory || 'zzz';
     case 'analysisDate': return sec.analysisDate || '';
     case 'buyCount': return calc.buyCount(sec) || 0;
     case 'buyAmount': return calc.buyAmount(sec) ?? -Infinity;
-    case 'reco': return store.categoryAmountFor(sec.recoCategory || sec.category, sec.market) || -Infinity;
+    case 'reco': return store.categoryAmountFor(sec.category, sec.market) || -Infinity;
     case 'price': return calc.price(sec) ?? -Infinity;
     case 'high5y': return calc.high5y(sec) ?? -Infinity;
     case 'high52w': return calc.high52w(sec) ?? -Infinity;
@@ -1626,7 +1623,7 @@ function marketRow(sec, visibleCols, opts = {}) {
     dayChg: (price != null && p.prevClose) ? (price - p.prevClose) / p.prevClose * 100 : null,
     buyAmt: calc.buyAmount(sec),
     buyCnt: calc.buyCount(sec),
-    recoAmt: store.categoryAmountFor(sec.recoCategory || sec.category, market),
+    recoAmt: store.categoryAmountFor(sec.category, market),
     high5y: calc.high5y(sec),
     high52w: calc.high52w(sec),
     prevBuy: calc.lastBuyPrice(sec),
@@ -2125,12 +2122,11 @@ const SM_BULK_FIELDS = [
   { key: 'detailType', label: '詳細種別' },
   { key: 'enabled', label: '判定対象' },
   { key: 'watch', label: '注意銘柄' },
-  { key: 'category', label: 'カテゴリ(AI判断)' },
+  { key: 'category', label: 'カテゴリ' },
   { key: 'ruleId', label: '買い増しルール' },
   { key: 'rating', label: '銘柄格付' },
   { key: 'overallGrade', label: '総合評価' },
   { key: 'buyGrade', label: '買い時評価' },
-  { key: 'recoCategory', label: 'AI推奨カテゴリ' },
 ];
 let smBulkField = 'detailType';
 // 一括変更の値コントロール（id指定で銘柄マスタ/保有の両方から使う）
@@ -2141,7 +2137,7 @@ function bulkValueHtml(field, id) {
     case 'detailType': return `<select id="${id}"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
     case 'enabled': return `<select id="${id}"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
     case 'watch': return `<select id="${id}"><option value="true">付ける</option><option value="false">外す</option></select>`;
-    case 'category': case 'recoCategory': return `<select id="${id}">${catOpts}</select>`;
+    case 'category': return `<select id="${id}">${catOpts}</select>`;
     case 'ruleId': return `<select id="${id}">${store.data.rules.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
     case 'rating': case 'overallGrade': case 'buyGrade': return `<select id="${id}">${gradeOpts}</select>`;
     default: return `<input id="${id}" type="text">`;
@@ -2204,8 +2200,8 @@ function renderSecMaster() {
     { k: 'ticker', l: 'コード', c: 'l col-code' }, { k: 'name', l: '銘柄名', c: 'l' }, { k: 'market', l: '市場', c: 'l' },
     { k: 'detailType', l: '詳細種別', c: 'l' },
     { k: 'sector', l: 'セクター', c: 'l' }, { k: 'industry', l: '業種', c: 'l' }, { k: 'rating', l: '格付', c: 'l' },
-    { k: 'overallGrade', l: '総合評価', c: 'l' }, { k: 'buyGrade', l: '買い時評価', c: 'l' }, { k: 'recoCategory', l: 'AI推奨カテゴリ', c: 'l' },
-    { k: 'priority', l: '優先順位', c: '' }, { k: 'ruleName', l: '買い増しルール', c: 'l' }, { k: 'category', l: 'AI判断', c: 'l' },
+    { k: 'overallGrade', l: '総合評価', c: 'l' }, { k: 'buyGrade', l: '買い時評価', c: 'l' },
+    { k: 'priority', l: '優先順位', c: '' }, { k: 'ruleName', l: '買い増しルール', c: 'l' }, { k: 'category', l: 'カテゴリ', c: 'l' },
     { k: 'createdAt', l: '追加日', c: 'l' }, { k: 'updatedAt', l: '更新日', c: 'l' },
   ];
   const smHead = '<th class="l"><input type="checkbox" onclick="smSelectAll(this.checked)" title="全選択"></th>'
@@ -2226,7 +2222,6 @@ function renderSecMaster() {
       <td class="l">${gradeBadge(s)}</td>
       ${cell(s.overallGrade, true)}
       ${cell(s.buyGrade, true)}
-      ${cell(s.recoCategory, true)}
       <td>${s.priority != null ? num(s.priority) : muted}</td>
       <td class="l">${rule ? esc(rule.name) : muted}</td>
       <td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>
@@ -2970,7 +2965,7 @@ function openSecurityDetail(secId) {
   const meta = [
     kv('銘柄格付 / 総合 / 買い時', `${esc(sec.rating || '—')} / ${esc(sec.overallGrade || '—')} / ${esc(sec.buyGrade || '—')}`),
     kv('★(ﾊﾞﾘｭ/強/ﾘｽｸ)', [sec.starValuation, sec.starStrength, sec.starRisk].some(x => x != null) ? [sec.starValuation, sec.starStrength, sec.starRisk].map(x => x ?? '—').join('/') : '—'),
-    kv('AI判断 / 推奨カテゴリ', `${esc(sec.category || '—')} / ${esc(sec.recoCategory || '—')}`),
+    kv('カテゴリ', `${esc(sec.category || '—')}`),
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
     sec.analysisNote ? kv('分析メモ', esc(sec.analysisNote)) : '',
   ].join('');
@@ -3003,7 +2998,7 @@ function openSecurityDetail(secId) {
     sec.analysisNote ? kv('分析メモ' + (sec.analysisDate ? `（${esc(sec.analysisDate)}）` : ''), esc(sec.analysisNote)) : '',
   ].join('');
   const metaBox = [
-    kv('カテゴリ / 推奨', `${esc(sec.category || '—')} / ${esc(sec.recoCategory || '—')}`),
+    kv('カテゴリ', `${esc(sec.category || '—')}`),
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
   ].join('');
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
@@ -3307,7 +3302,7 @@ function openPasteImport(kind) {
   const isAnalysis = kind === 'analysis';
   const title = isAnalysis ? '銘柄分析結果を取込' : '保有株を取込';
   const sample = isAnalysis
-    ? '評価日 / 銘柄名 / 総合評価 / 銘柄格付 / 買い時評価 / 推奨投資額 / 推奨カテゴリ / バリュエーション / 独自の強み / リスク / 備考 / 評価時点_購入優先順位'
+    ? '評価日 / 銘柄名 / 総合評価 / 銘柄格付 / 買い時評価 / 推奨投資額 / カテゴリ / バリュエーション / 独自の強み / リスク / 備考 / 評価時点_購入優先順位'
     : 'ティッカー / 証券会社 / 口座種別 / 取得単価 / 数量 / 取得価額';
   showModal(title, `
     <form id="import-form">
@@ -3389,11 +3384,11 @@ async function importAnalysis(text, market, create) {
   const rows = parsePasted(text);
   if (rows.length < 2) return { updated: 0, created: 0, skipped: 0 };
   const idx = mapHeader(rows[0], ANALYSIS_COLMAP);
-  // マスタ管理項目（格付3種・推奨カテゴリ）の未登録値を確認・変換（中止で全取込キャンセル）
+  // マスタ管理項目（格付3種・カテゴリ）の未登録値を確認・変換（中止で全取込キャンセル）
   const aPairs = [];
   for (let i = 1; i < rows.length; i++) {
     const r = {}; rows[i].forEach((cell, j) => { if (idx[j]) r[idx[j]] = (cell || '').trim(); });
-    ['overallGrade', 'rating', 'buyGrade', 'recoCategory'].forEach(fld => { if (r[fld]) aPairs.push({ field: fld, raw: r[fld] }); });
+    ['overallGrade', 'rating', 'buyGrade', 'category'].forEach(fld => { if (r[fld]) aPairs.push({ field: fld, raw: r[fld] }); });
   }
   if (!(await ensureMasterConversions(aPairs))) return { cancelled: true };
   // マスタ項目の変換ヘルパ: 取込値があれば変換、スキップ/空は既存値を維持
@@ -3430,12 +3425,10 @@ async function importAnalysis(text, market, create) {
       starRisk: parseStars(rec.starRisk) ?? sec.starRisk ?? null,
       analysisNote: sf(rec.analysisNote, sec.analysisNote),
       analysisDate: normDate(rec.analysisDate) || sec.analysisDate || null,
-      recoCategory: cg(rec, 'recoCategory', sec.recoCategory),
+      category: cg(rec, 'category', sec.category), // シートの「カテゴリ」列→割り当てカテゴリ（取込値があれば更新・変換マスタ適用）
       recoAmount: rec.recoAmount ? parseFloat(rec.recoAmount) : (sec.recoAmount ?? null),
     };
     if (rec.priority) { const p = parseInt(rec.priority, 10); if (!isNaN(p)) patch.priority = p; }
-    // カテゴリ未設定なら推奨カテゴリ（変換後）を採用。スキップ選択時は採用しない
-    if (!sec.category && (rec.recoCategory || '').trim()) { const cc = convMaster('recoCategory', rec.recoCategory.trim()); if (cc !== SKIP) patch.category = cc; }
     // セクター/業種/時価総額/PER/EPS/配当はマスタ(meta)へ（自動取得項目と同じ置き場所）
     const metaPatch = clean({
       sector: sf(rec.sector), industry: sf(rec.industry),
@@ -3679,7 +3672,7 @@ function parseSmbcScreen(text, map) {
 // ===== 取込：マスタ管理項目の変換（未登録値はモーダルで確認・変換マスタで次回自動）=====
 // ドメイン定義。fields=このドメインに属する銘柄フィールド。values=マスタの正規値一覧。canAdd=新規追加可。
 const IMPORT_DOMAINS = {
-  category:   { label: 'カテゴリ',     fields: ['category', 'recoCategory'], canAdd: true,  values: () => store.data.categories.map(c => c.category) },
+  category:   { label: 'カテゴリ',     fields: ['category'], canAdd: true,  values: () => store.data.categories.map(c => c.category) },
   grade:      { label: '格付(S〜D)',   fields: ['overallGrade', 'rating', 'buyGrade'], canAdd: false, values: () => ['S', 'A', 'B', 'C', 'D'] },
   detailType: { label: '詳細種別',     fields: ['detailType'], canAdd: false, values: () => ['個別株', 'ETF'] },
   rule:       { label: '買い増しルール', fields: ['ruleName'], canAdd: false, values: () => store.data.rules.map(r => r.name) },
@@ -4171,7 +4164,7 @@ const GI_FIELDS = [
   { key: 'baseHighMode',  label: '基準高値モード' },
   { key: 'baseHighManual', label: '手動基準高値' },
   { key: 'ruleName',      label: '買い増しルール' },
-  { key: 'category',      label: 'カテゴリ(AI判断)' },
+  { key: 'category',      label: 'カテゴリ' },
   { key: 'detailType',    label: '詳細種別' },
   { key: 'buyAmount',     label: '買い増し予定額' },
   { key: 'buyCount',      label: '購入回数' },
@@ -4183,7 +4176,6 @@ const GI_FIELDS = [
   { key: 'overallGrade',  label: '総合評価' },
   { key: 'rating',        label: '銘柄格付' },
   { key: 'buyGrade',      label: '買い時評価' },
-  { key: 'recoCategory',  label: 'AI推奨カテゴリ' },
   { key: 'priority',      label: '購入優先順位' },
   { key: 'analysisDate',  label: '評価日' },
   { key: 'analysisNote',  label: '分析メモ' },
@@ -4191,14 +4183,14 @@ const GI_FIELDS = [
   { key: 'starStrength',  label: '★独自の強み' },
   { key: 'starRisk',      label: '★リスク' },
 ];
-const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'recoCategory', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk']);
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk']);
 // 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
   { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy'] },
   { g: '判定・属性', keys: ['category', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch'] },
   { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride'] },
-  { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'recoCategory', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
+  { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
 ];
 const GI_FIXED_KEYS = ['market', 'broker', 'account', 'detailType', 'category', 'ruleName'];
 // ヘッダ名→フィールドの自動対応（汎用出力の列もそのまま読める）
@@ -4207,7 +4199,7 @@ const GI_AUTOMAP = { ...GENERIC_MAP,
   '約定価額': 'acqValue', '取得価額': 'acqValue', '約定代金': 'acqValue',
   '前回購入日': 'prevBuyDate',
   '詳細種別': 'detailType', '総合評価': 'overallGrade', '銘柄格付': 'rating', '格付': 'rating', '買い時評価': 'buyGrade',
-  '推奨カテゴリ': 'recoCategory', 'AI推奨カテゴリ': 'recoCategory', '購入優先順位': 'priority', '優先順位': 'priority',
+  '推奨カテゴリ': 'category', 'カテゴリ': 'category', '購入優先順位': 'priority', '優先順位': 'priority',
   '評価日': 'analysisDate', '備考': 'analysisNote', '分析メモ': 'analysisNote',
   'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
   'セクター': 'sectorOverride', '業種': 'industryOverride', '銘柄名': 'nameOverride',
