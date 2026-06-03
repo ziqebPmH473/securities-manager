@@ -857,11 +857,16 @@ let dashMoverMarket = 'ALL';
 function setDashMoverMarket(m) { dashMoverMarket = m; renderDashboard(); }
 // 一覧のコード/銘柄名フリーワード検索
 let holdingsSearch = '';
+// IME変換中フラグ。変換確定前は再描画しない（変換が中断され文字が末尾にしか入らない問題の対策・SEC-112）
+window._imeComposing = false;
 function setHoldingsSearch(v) {
+  const el0 = document.getElementById('hold-search');
+  const caret = el0 ? el0.selectionStart : v.length; // 実カーソル位置を保持（末尾固定にしない）
   holdingsSearch = v;
+  if (window._imeComposing) return; // 変換中は再描画せず、compositionend で反映
   renderMarket(holdingsMarket);
   const el = document.getElementById('hold-search');
-  if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); }
+  if (el) { el.focus(); const p = Math.min(caret, el.value.length); el.setSelectionRange(p, p); }
 }
 function clearHoldFilters(m) { holdingsSearch = ''; clearFilter(m); }
 
@@ -1506,7 +1511,7 @@ function renderMarket(market) {
         <div class="seg" role="tablist" style="margin-left:10px">
           <button class="${market === 'FUND' ? 'active' : ''}" onclick="setHoldingsMarket('FUND')">投資信託</button>
         </div>
-        <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
+        <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" oncompositionstart="window._imeComposing=true" oncompositionend="window._imeComposing=false;setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
         <label class="chip">種別
           <select onchange="setFilter('${colMkt}','detailType',this.value)">
             <option value="">全て</option>
@@ -2113,9 +2118,13 @@ let secMasterMarket = 'ALL'; // ALL(=全株式 US+JP) | US | JP | FUND
 function setSecMasterMarket(m) { secMasterMarket = m; renderSecMaster(); }
 let secMasterSearch = '';
 function setSecMasterSearch(v) {
-  secMasterSearch = v; renderSecMaster();
+  const el0 = document.getElementById('sm-search');
+  const caret = el0 ? el0.selectionStart : v.length;
+  secMasterSearch = v;
+  if (window._imeComposing) return; // IME変換中は再描画しない（SEC-112）
+  renderSecMaster();
   const el = document.getElementById('sm-search');
-  if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); }
+  if (el) { el.focus(); const p = Math.min(caret, el.value.length); el.setSelectionRange(p, p); }
 }
 // 銘柄マスタ 一括変更: 項目＋値の汎用UI。コード/銘柄名など銘柄固有の項目は対象外
 const SM_BULK_FIELDS = [
@@ -2243,7 +2252,7 @@ function renderSecMaster() {
             <button class="${secMasterMarket === 'JP' ? 'active' : ''}" onclick="setSecMasterMarket('JP')">日本株</button>
           </div>
           <div class="seg" style="margin-left:6px"><button class="${secMasterMarket === 'FUND' ? 'active' : ''}" onclick="setSecMasterMarket('FUND')">投資信託</button></div>
-          <div class="search" style="max-width:260px">${svgIcon('search', '')}<input id="sm-search" placeholder="コード・銘柄名・セクターで検索" value="${esc(secMasterSearch)}" oninput="setSecMasterSearch(this.value)" autocomplete="off">${secMasterSearch ? `<button class="clr" onclick="setSecMasterSearch('')">×</button>` : ''}</div>
+          <div class="search" style="max-width:260px">${svgIcon('search', '')}<input id="sm-search" placeholder="コード・銘柄名・セクターで検索" value="${esc(secMasterSearch)}" oninput="setSecMasterSearch(this.value)" oncompositionstart="window._imeComposing=true" oncompositionend="window._imeComposing=false;setSecMasterSearch(this.value)" autocomplete="off">${secMasterSearch ? `<button class="clr" onclick="setSecMasterSearch('')">×</button>` : ''}</div>
           <span class="muted">抽出</span>
           <div class="seg">${['all', '全て', 'noprice', '価格未取得', 'noholding', '保有なし', 'holding', '保有あり'].reduce((acc, _, i, arr) => { if (i % 2) acc.push(`<button class="${secMasterFilter === arr[i - 1] ? 'active' : ''}" onclick="setSecMasterFilter('${arr[i - 1]}')">${arr[i]}</button>`); return acc; }, []).join('')}</div>
           <span class="muted">${secs.length}/${allSecs.length}件</span>
@@ -3490,13 +3499,21 @@ function importedUnpriced(touched) {
 async function reportImport(touched, baseMsg) {
   touched = touched || [];
   if (touched.length) {
+    toast('取込・価格取得中…しばらくお待ちください', 60000); // 処理中表示（完了時に上書き）
     const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
     try { await (needPrice ? api.refreshAll() : api.refreshMeta(touched)); } catch (_) { /* 取得失敗は無視 */ }
   }
   render();
   const bad = importedUnpriced(touched);
-  const msg = bad.length ? `${baseMsg} ／ ⚠ 価格取得できず ${bad.length}件: ${bad.join(', ')}（ティッカー要確認）` : baseMsg;
-  toast(msg, bad.length ? 9000 : 5000);
+  // 完了をはっきり画面に出す（件数つきの結果モーダル）。トーストは見逃しやすいため。
+  const warnHtml = bad.length
+    ? `<div class="notice" style="margin-top:10px">⚠ 価格を取得できなかった銘柄が ${bad.length}件あります: <strong>${esc(bad.join(', '))}</strong><br>ティッカー/コードが正しいかご確認ください（米株は大文字英字・日本株は4桁）。</div>`
+    : '';
+  showModal('✓ 取込が完了しました', `
+    <div class="ai-row" style="font-size:15px"><span class="muted">結果</span><span><strong>${esc(baseMsg)}</strong></span></div>
+    ${warnHtml}
+    <div class="form-actions"><button type="button" class="btn btn-primary" onclick="closeModal()">OK</button></div>`);
+  toast(bad.length ? `取込完了（価格取得できず ${bad.length}件）` : '取込が完了しました', bad.length ? 9000 : 4000);
 }
 
 function normDate(v) {

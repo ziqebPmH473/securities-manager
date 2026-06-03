@@ -478,7 +478,9 @@ button { font-family: inherit; }
 .summary-strip .ss-v small { font-size: 12px; font-weight: 600; margin-left: 4px; }
 
 /* ============================ テーブル（保有一覧） ============================ */
-.table-wrap { overflow-x: auto; }
+/* 枠内スクロールを徹底：枠は親幅を超えず（横スクロールはページでなく枠側に出す）、
+   端到達時のスクロール連鎖（ページが動く）を抑止。縦は JS(fitListTables) が max-height を付与。 */
+.table-wrap { overflow: auto; max-width: 100%; overscroll-behavior: contain; }
 table.holdings { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
 table.holdings thead th {
   position: sticky; top: 0; z-index: 4; background: var(--panel);
