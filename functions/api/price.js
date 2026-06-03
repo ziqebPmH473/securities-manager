@@ -61,29 +61,38 @@ async function fetchFinnhub(symbol, token) {
       headers: { 'User-Agent': 'securities-manager/1.0' },
     }),
   ]);
-  if (!quoteRes.ok) throw new Error(`Finnhub quote ${quoteRes.status}`);
-  const q = await quoteRes.json();
-  const metric = metricRes.ok ? (await metricRes.json()).metric || {} : {};
+  const q = quoteRes.ok ? await quoteRes.json().catch(() => ({})) : {};
+  const metric = metricRes.ok ? (await metricRes.json().catch(() => ({}))).metric || {} : {};
 
   // 5年高値: Finnhub の metric には 52w high があるが 5y は無いため、直近 52w high を採用
   // より正確な5年高値は Yahoo で補完取得（失敗してもフォールバック）。高値の日付も取得（高値更新判定用）
   let high5y = num(metric['52WeekHigh']);
-  let high5yDate = null, high52wDate = null;
+  let high5yDate = null, high52wDate = null, yq = null;
   try {
-    const yq = await fetchYahooChart(symbol, '5y', '1mo');
+    yq = await fetchYahooChart(symbol, '5y', '1mo');
     if (yq.high5y > 0) { high5y = yq.high5y; high5yDate = yq.high5yDate; }
     high52wDate = yq.high52wDate;
   } catch (_) { /* Yahoo5y失敗→Finnhubの52w highで代用（日付は不明） */ }
 
+  // 価格: Finnhub が値を返さない銘柄（例: LDOS で c=0/null）は Yahoo にフォールバック
+  let price = num(q.c), prevClose = num(q.pc), source = 'finnhub';
+  if ((price == null || price === 0) && yq && yq.price != null) {
+    price = yq.price; prevClose = yq.prevClose ?? prevClose; source = 'yahoo(fallback)';
+  }
+  // それでも取れなければ日足で再取得（5y/1mo で価格が空のケースの保険）
+  if (price == null) {
+    try { const y2 = await fetchYahooChart(symbol, '1mo', '1d'); if (y2.price != null) { price = y2.price; prevClose = y2.prevClose ?? prevClose; source = 'yahoo(fallback)'; } } catch (_) {}
+  }
+
   return {
-    price:    num(q.c),
-    prevClose: num(q.pc),
-    high5y,
-    high52w:  num(metric['52WeekHigh']),
+    price,
+    prevClose,
+    high5y: high5y || (yq && yq.high5y) || null,
+    high52w:  num(metric['52WeekHigh']) || (yq && yq.high52w) || null,
     high5yDate,
     high52wDate,
     currency: 'USD',
-    source:   'finnhub',
+    source,
     fetchedAt: new Date().toISOString(),
   };
 }
@@ -143,8 +152,10 @@ async function fetchYahooChart(symbol, range, interval) {
   });
   const toDate = (t) => (typeof t === 'number') ? new Date(t * 1000).toISOString().slice(0, 10) : null;
 
+  // 現在値: regularMarketPrice が空なら終値配列の最後（当日 or 直近）で補完（取得漏れ防止）
+  const price = num(meta.regularMarketPrice) ?? (closes.length ? closes[closes.length - 1] : null);
   return {
-    price:    num(meta.regularMarketPrice),
+    price,
     prevClose: num(prevClose),
     high5y:   high5y || num(meta.fiftyTwoWeekHigh),
     high52w:  high52w || num(meta.fiftyTwoWeekHigh),
