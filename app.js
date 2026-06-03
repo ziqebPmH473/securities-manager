@@ -807,17 +807,27 @@ const api = {
     toast('価格を更新しました');
   },
 
-  // 米株のプレ/アフター価格を取得し prices[key].extPrice/extType に保存。時間外でない時は null にクリア。
+  // 米株のプレ/アフター価格を「時間外」列(prices.extPrice/extType)に保存。
+  // レギュラー時間中はクリア（当日レギュラーを取得＝時間外は無効）。アフター終了後〜翌プレ前は当日アフター終値を保持・表示。
+  // 取得は: プレ/アフター中はライブ更新、ギャップ(アフター後)は当日アフター終値が未取得の銘柄だけ（次プレまで再取得しない）。
   async refreshExtended(allSecs) {
     const usSecs = (allSecs || store.data.securities).filter(s => s.market === 'US' && s.ticker);
     if (!usSecs.length) return;
-    const phase = usExtPhase();
-    if (!phase) { // 時間外取引なし → クリア
-      for (const s of usSecs) { const p = store.data.prices[priceKey(s)]; if (p && (p.extPrice != null || p.extType)) { p.extPrice = null; p.extType = null; } }
-      store.save(); return;
+    if (usRegularOpen()) { // レギュラー中 → 時間外クリア
+      let changed = false;
+      for (const s of usSecs) { const p = store.data.prices[priceKey(s)]; if (p && (p.extPrice != null || p.extType)) { p.extPrice = null; p.extType = null; p.extDate = null; changed = true; } }
+      if (changed) store.save();
+      return;
     }
-    const syms = usSecs.map(yahooSymbol);
-    const BATCH = 20; // ext=1は1呼出/銘柄
+    const phase = usExtPhase(); // 'pre' | 'post' | null（=アフター後ギャップ）
+    const need = usSecs.filter(s => {
+      if (phase) return true; // プレ/アフター中はライブ更新
+      const p = store.data.prices[priceKey(s)] || {}; // ギャップ: 当日アフター終値を未取得なら取りに行く
+      return !(p.extDate === today() && p.extType === 'post');
+    });
+    if (!need.length) return; // 既に当日アフター終値あり → 次のプレまで取得しない
+    const syms = need.map(yahooSymbol);
+    const BATCH = 20;
     const batches = [];
     for (let i = 0; i < syms.length; i += BATCH) batches.push(syms.slice(i, i + BATCH));
     let quotes = {};
@@ -825,11 +835,12 @@ const api = {
       const results = await Promise.all(batches.map(b => fetch(`/api/price?ext=1&symbols=${encodeURIComponent(b.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({}))));
       quotes = Object.assign({}, ...results);
     } catch (_) { return; }
-    for (const s of usSecs) {
+    for (const s of need) {
       const q = quotes[yahooSymbol(s)]; const p = store.data.prices[priceKey(s)];
-      if (!p) continue;
-      p.extPrice = (q && !q.error && q.extPrice != null) ? q.extPrice : null;
-      p.extType = (q && q.extType) || null;
+      if (!p || !q || q.error) continue;
+      p.extPrice = q.extPrice != null ? q.extPrice : null;
+      p.extType = q.extType || null;
+      p.extDate = q.extPrice != null ? today() : null; // 当日の時間外値を保持した印
     }
     store.save();
   },
@@ -1145,8 +1156,8 @@ const COL_RENDERERS = {
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   // 現在値: 価格があれば株探チャートへの外部リンク。未取得時は手入力ボタンのまま。
   price:     (s,c) => `<td>${c.price != null ? `<a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${fmtAmt(c.price, c.market)}</a>` : c.priceCell}</td>`,
-  // 時間外: 米株プレ/アフター価格（取引時間内のみ）。種別タグ付き。
-  extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const d = (p.prevClose && p.extPrice) ? (p.extPrice - p.prevClose) / p.prevClose * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
+  // 時間外: 米株プレ/アフター価格＋前日比（対前日終値）＋種別タグ。
+  extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const d = (p.prevClose && p.extPrice) ? (p.extPrice - p.prevClose) / p.prevClose * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)}${d != null ? ` <span style="font-size:11px">${signed(d)}%</span>` : ''} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
   // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
   day:       (s,c) => { const v = c.dayChg, st = condStyle('day', v); return `<td class="${st ? '' : cls(v)}"${st}><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a></td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,

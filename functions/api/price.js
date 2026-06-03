@@ -103,19 +103,17 @@ async function fetchUsExtended(symbol) {
   const quote = r.indicators && r.indicators.quote && r.indicators.quote[0];
   const ts = r.timestamp || [];
   const closes = (quote && quote.close) || [];
-  const ctp = meta.currentTradingPeriod || {};
-  const nowS = Math.floor(Date.now() / 1000);
-  // 現在の取引フェーズを判定（pre / post / それ以外）
-  let extType = null;
-  if (ctp.pre && nowS >= ctp.pre.start && nowS < ctp.pre.end) extType = 'pre';
-  else if (ctp.post && nowS >= ctp.post.start && nowS < ctp.post.end) extType = 'post';
-  // プレ/アフターの直近値＝該当時間帯の最後の有効終値
-  let extPrice = null;
-  if (extType) {
-    const win = ctp[extType];
-    for (let i = closes.length - 1; i >= 0; i--) {
-      if (typeof closes[i] === 'number' && ts[i] >= win.start && ts[i] < win.end) { extPrice = closes[i]; break; }
-    }
+  // 直近の有効終値の「米国東部時刻(ET)」でセッションを判定（pre 4:00-9:30 / regular 9:30-16:00 / post 16:00-20:00）。
+  // これにより、アフター終了後〜翌プレ前でも当日のアフター終値を時間外として返せる（レギュラー時間中だけ null）。
+  let li = -1;
+  for (let i = closes.length - 1; i >= 0; i--) { if (typeof closes[i] === 'number') { li = i; break; } }
+  let extType = null, extPrice = null;
+  if (li >= 0 && ts[li]) {
+    const off = usEtDST(ts[li] * 1000) ? -4 : -5;             // ET = UTC + off
+    const et = new Date((ts[li] + off * 3600) * 1000);
+    const etMin = et.getUTCHours() * 60 + et.getUTCMinutes();
+    if (etMin >= 240 && etMin < 570) { extType = 'pre'; extPrice = closes[li]; }       // 4:00-9:30
+    else if (etMin >= 960 && etMin < 1200) { extType = 'post'; extPrice = closes[li]; } // 16:00-20:00
   }
   return {
     price: num(meta.regularMarketPrice),       // レギュラー現在値（プレ/アフター中は当日の引け or 前日終値）
@@ -200,6 +198,13 @@ async function fetchYahooChart(symbol, range, interval) {
 }
 
 function num(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }
+// 米国サマータイム（3月第2日曜〜11月第1日曜）判定（時間外セッション判定用）
+function usEtDST(ms) {
+  const d = new Date(ms), y = d.getUTCFullYear();
+  const mar = new Date(Date.UTC(y, 2, 1)), start = Date.UTC(y, 2, 1 + ((7 - mar.getUTCDay()) % 7) + 7);
+  const nov = new Date(Date.UTC(y, 10, 1)), end = Date.UTC(y, 10, 1 + ((7 - nov.getUTCDay()) % 7));
+  return ms >= start && ms < end;
+}
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
