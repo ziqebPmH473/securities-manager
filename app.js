@@ -701,22 +701,27 @@ const INDICES = [
 
 // ---------- 価格取得 ----------
 const api = {
-  async refreshAll() {
+  // withHighs=true で5年/52週高値も取得（日次=dailyStartupのみ）。通常の価格更新は価格のみ＝軽く・既存高値を保持。
+  async refreshAll(withHighs = false) {
     const secs = store.data.securities.filter(s => s.ticker);
-    // 保有銘柄は5年高値が必要なので通常取得。指数・為替は現在値/前日比だけなので mode=light（短期間・高速）で別取得し並列実行。
     const holdSymbols = secs.map(yahooSymbol);
     const lightSymbols = ['USDJPY=X', ...INDICES.map(ix => ix.sym)];
     if (holdSymbols.length === 0 && lightSymbols.length === 0) return;
+    // Cloudflareの「1リクエストあたりサブリクエスト上限(約50)」を超えると多数銘柄が失敗するため、小バッチに分割。
+    // withHighs時は1銘柄2呼び出し(quote+Yahoo)なので小さめ、通常は1呼び出しなので大きめ。
+    const BATCH = withHighs ? 16 : 40;
+    const batches = [];
+    for (let i = 0; i < holdSymbols.length; i += BATCH) batches.push(holdSymbols.slice(i, i + BATCH));
     let quotes = {}, lightQuotes = {};
     try {
-      const reqs = [];
-      // 保有銘柄（5年高値あり）
-      reqs.push(holdSymbols.length
-        ? fetch(`/api/price?symbols=${encodeURIComponent(holdSymbols.join(','))}`).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        : Promise.resolve({}));
-      // 指数・為替（軽量・短期間）
+      const reqs = batches.map(b =>
+        fetch(`/api/price?symbols=${encodeURIComponent(b.join(','))}${withHighs ? '&highs=1' : ''}`)
+          .then(r => r.ok ? r.json() : {}).catch(() => ({})));
+      const lightIdx = reqs.length;
       reqs.push(fetch(`/api/price?mode=light&symbols=${encodeURIComponent(lightSymbols.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({})));
-      [quotes, lightQuotes] = await Promise.all(reqs);
+      const results = await Promise.all(reqs);
+      lightQuotes = results[lightIdx] || {};
+      quotes = Object.assign({}, ...results.slice(0, lightIdx)); // 全バッチをマージ
     } catch (e) {
       toast('価格取得に失敗（手入力で更新できます）');
       return;
@@ -725,10 +730,13 @@ const api = {
     for (const sec of secs) {
       const q = quotes[yahooSymbol(sec)];
       if (q && !q.error && q.price != null) {
+        const prev = store.data.prices[priceKey(sec)] || {}; // 高値は通常更新では返らない→既存値を保持
         store.data.prices[priceKey(sec)] = {
           price: q.price, prevClose: q.prevClose,
-          high5y: q.high5y, high52w: q.high52w,
-          high5yDate: q.high5yDate ?? null, high52wDate: q.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
+          high5y: q.high5y != null ? q.high5y : (prev.high5y ?? null),
+          high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),
+          high5yDate: q.high5yDate != null ? q.high5yDate : (prev.high5yDate ?? null),
+          high52wDate: q.high52wDate != null ? q.high52wDate : (prev.high52wDate ?? null),
           fetchedAt: q.fetchedAt,
         };
         if (sec.market === 'US' && q.source && !usSource) usSource = q.source;
@@ -759,7 +767,8 @@ const api = {
     const symbols = [...new Set(secs.map(yahooSymbol))];
     let res;
     try {
-      res = await fetch(`/api/price?symbols=${encodeURIComponent(symbols.join(','))}`);
+      // 新規追加銘柄は高値も必要なので highs=1（少数なのでサブリクエスト上限は問題なし）
+      res = await fetch(`/api/price?highs=1&symbols=${encodeURIComponent(symbols.join(','))}`);
       if (!res.ok) throw new Error('HTTP ' + res.status);
     } catch (e) { return; }
     const quotes = await res.json();
@@ -806,7 +815,7 @@ const api = {
     if (store.data.securities.every(s => !s.ticker)) return;
     if (store.data.lastInfoDate === today()) return; // 本日実行済み
     store.data.lastInfoDate = today(); store.save();
-    await this.refreshAll();              // 価格＋高値（52週/5年）＋名前未取得分
+    await this.refreshAll(true);          // 日次は高値（52週/5年）も取得。価格＋名前未取得分
     await this.refreshMeta();             // 全銘柄の名前/セクター/業種/ファンダを日次更新（日本語名は維持）
     await this.checkSplits();             // 分割検知（承認待ちは「分割」タブのバッジで通知）
     render();

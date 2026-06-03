@@ -18,12 +18,15 @@ export async function onRequestGet(context) {
   //   5年分の日足を取らず短期間(range既定5d)だけ取得し、Finnhub経由も避けて高速化する。
   const mode = url.searchParams.get('mode');
   const range = url.searchParams.get('range') || (mode === 'light' ? '5d' : null);
+  // highs=1 の時だけ5年/52週高値を取得（Yahoo追加呼び出し）。通常の価格更新は price のみ＝1銘柄1呼び出しに抑え、
+  // Cloudflareの「1リクエストあたりサブリクエスト上限(約50)」超過で多数銘柄が失敗する問題を防ぐ。
+  const withHighs = url.searchParams.get('highs') === '1';
 
   const finnhubKey = context.env && context.env.FINNHUB_API_KEY;
   const out = {};
   await Promise.all(symbols.map(async (sym) => {
     try {
-      out[sym] = await fetchOne(sym, finnhubKey, { mode, range });
+      out[sym] = await fetchOne(sym, finnhubKey, { mode, range, withHighs });
     } catch (e) {
       out[sym] = { error: String(e && e.message || e) };
     }
@@ -46,71 +49,59 @@ function symbolType(sym) {
 async function fetchOne(symbol, finnhubKey, opts = {}) {
   const type = symbolType(symbol);
   // 軽量モード: 高値不要・短期間のみ。Finnhub経由(米株3往復)を避けYahooの短期間取得に統一して高速化
-  if (opts.mode === 'light') return fetchYahoo(symbol, type, opts.range || '5d');
-  if (type === 'us' && finnhubKey) return fetchFinnhub(symbol, finnhubKey);
-  return fetchYahoo(symbol, type, opts.range);
+  if (opts.mode === 'light') return fetchYahoo(symbol, type, opts.range || '5d', false);
+  if (type === 'us' && finnhubKey) return fetchFinnhub(symbol, finnhubKey, opts.withHighs);
+  return fetchYahoo(symbol, type, opts.range, opts.withHighs);
 }
 
 // ---------- Finnhub（米株ほぼリアルタイム） ----------
-async function fetchFinnhub(symbol, token) {
-  const [quoteRes, metricRes] = await Promise.all([
-    fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${token}`, {
-      headers: { 'User-Agent': 'securities-manager/1.0' },
-    }),
-    fetch(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${token}`, {
-      headers: { 'User-Agent': 'securities-manager/1.0' },
-    }),
-  ]);
+// 通常(withHighs=false): Finnhub quote の1呼び出しのみ（サブリクエスト節約）。
+// withHighs=true: 5年/52週高値のため Yahoo を1回だけ追加（計2呼び出し）。metric呼び出しは廃止。
+async function fetchFinnhub(symbol, token, withHighs) {
+  const quoteRes = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${token}`, {
+    headers: { 'User-Agent': 'securities-manager/1.0' },
+  });
   const q = quoteRes.ok ? await quoteRes.json().catch(() => ({})) : {};
-  const metric = metricRes.ok ? (await metricRes.json().catch(() => ({}))).metric || {} : {};
 
-  // 5年高値: Finnhub の metric には 52w high があるが 5y は無いため、直近 52w high を採用
-  // より正確な5年高値は Yahoo で補完取得（失敗してもフォールバック）。高値の日付も取得（高値更新判定用）
-  let high5y = num(metric['52WeekHigh']);
-  let high5yDate = null, high52wDate = null, yq = null;
-  try {
-    yq = await fetchYahooChart(symbol, '5y', '1mo');
-    if (yq.high5y > 0) { high5y = yq.high5y; high5yDate = yq.high5yDate; }
-    high52wDate = yq.high52wDate;
-  } catch (_) { /* Yahoo5y失敗→Finnhubの52w highで代用（日付は不明） */ }
+  let high5y = null, high52w = null, high5yDate = null, high52wDate = null, yq = null;
+  // 高値が必要な時のみ Yahoo を追加（高値は日中ほぼ不変なので毎回は取らない）
+  if (withHighs) {
+    try {
+      yq = await fetchYahooChart(symbol, '5y', '1mo');
+      high5y = yq.high5y || null; high52w = yq.high52w || null;
+      high5yDate = yq.high5yDate; high52wDate = yq.high52wDate;
+    } catch (_) { /* 失敗時は高値なし（クライアントが既存値を保持） */ }
+  }
 
-  // 価格: Finnhub が値を返さない銘柄（例: LDOS で c=0/null）は Yahoo にフォールバック
+  // 価格: Finnhub が値を返さない銘柄（例: LDOS で c=0/null）は Yahoo にフォールバック（1呼び出し）
   let price = num(q.c), prevClose = num(q.pc), source = 'finnhub';
-  if ((price == null || price === 0) && yq && yq.price != null) {
-    price = yq.price; prevClose = yq.prevClose ?? prevClose; source = 'yahoo(fallback)';
-  }
-  // それでも取れなければ日足で再取得（5y/1mo で価格が空のケースの保険）
-  if (price == null) {
-    try { const y2 = await fetchYahooChart(symbol, '1mo', '1d'); if (y2.price != null) { price = y2.price; prevClose = y2.prevClose ?? prevClose; source = 'yahoo(fallback)'; } } catch (_) {}
+  if (price == null || price === 0) {
+    if (yq && yq.price != null) { price = yq.price; prevClose = yq.prevClose ?? prevClose; source = 'yahoo(fallback)'; }
+    else {
+      try { const y2 = await fetchYahooChart(symbol, '1mo', '1d'); if (y2.price != null) { price = y2.price; prevClose = y2.prevClose ?? prevClose; source = 'yahoo(fallback)'; if (high5y == null && y2.high5y) high5y = y2.high5y; } } catch (_) {}
+    }
   }
 
-  return {
-    price,
-    prevClose,
-    high5y: high5y || (yq && yq.high5y) || null,
-    high52w:  num(metric['52WeekHigh']) || (yq && yq.high52w) || null,
-    high5yDate,
-    high52wDate,
-    currency: 'USD',
-    source,
-    fetchedAt: new Date().toISOString(),
-  };
+  return { price, prevClose, high5y, high52w, high5yDate, high52wDate, currency: 'USD', source, fetchedAt: new Date().toISOString() };
 }
 
 // ---------- Yahoo Finance ----------
-async function fetchYahoo(symbol, type, rangeOverride) {
-  const range = rangeOverride || (type === 'fund' ? '1y' : '5y');
+// Finnhubキー無しの米株・日本株はこちら（1呼び出し）。withHighs=false の通常更新は短期間取得で軽く（高値はnull→クライアントが既存値保持）。
+async function fetchYahoo(symbol, type, rangeOverride, withHighs) {
+  // 高値が必要な時だけ長期間(5y/1y)。通常は短期間(1mo)で価格・前日比のみ。
+  const range = rangeOverride || (type === 'fund' ? '1y' : (withHighs ? '5y' : '1mo'));
   // 日足で取得する。週足だと chartPreviousClose が「前週終値」になり前日比が壊れるため。
   // 前日終値は日足の終値配列の最後から2番目を使う（下記 fetchYahooChart）。
   const interval = '1d';
   const q = await fetchYahooChart(symbol, range, interval);
+  const wantHighs = withHighs && type !== 'fund';
   return {
     price:    q.price,
     prevClose: q.prevClose,
-    high5y:   type === 'fund' ? null : q.high5y,   // 投信は高値不要（判定対象外）
-    high52w:  q.high52w,
-    high5yDate:  type === 'fund' ? null : q.high5yDate,   // 高値が付いた日（高値更新判定用）
-    high52wDate: type === 'fund' ? null : q.high52wDate,
+    high5y:   wantHighs ? q.high5y : null,   // 通常更新では高値を返さない（クライアントが既存値を保持）
+    high52w:  wantHighs ? q.high52w : null,
+    high5yDate:  wantHighs ? q.high5yDate : null,   // 高値が付いた日（高値更新判定用）
+    high52wDate: wantHighs ? q.high52wDate : null,
     currency: q.currency,
     source:   'yahoo',
     fundNav:  type === 'fund' ? q.price : null,     // 投信の場合は基準価額として扱う
