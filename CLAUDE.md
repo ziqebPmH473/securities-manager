@@ -85,6 +85,21 @@
 - コミットメッセージ末尾に `Co-Authored-By: Claude ...` を付ける
 - すみぽんから指示があった時にコミット／プッシュする（毎回自動では行わない）
 
+### ルール5: 項目（フィールド）を追加したら全配線先を必ず確認する
+銘柄(security)・保有(holding)・銘柄情報(meta) に新しい項目を足す時は、**以下の配線先を1つずつチェックし、必要なものは漏れなく実装する**。「フォームに足して終わり」にしない（過去に prevBuyDate を列・取込に通し忘れた）。
+
+**チェックリスト（app.js）**:
+1. **銘柄編集フォーム** … 入力欄（`openSecurityForm`）＋保存patch（送信ハンドラの `patch = {...}`）
+2. **表の列** … `MASTER_COLS`（列定義）＋ `COL_RENDERERS`（描画）＋ `DEFAULT_VISIBLE`（US/JP/SIGNAL の既定表示）＋ ソート `getSortVal` の `case`＋ `colDefaultWidth`（必要なら専用幅）
+3. **取込** … 列選択式取込 `GI_FIELDS`／`GI_SEC_FIELDS`／`GI_GROUPS`／`GI_AUTOMAP`（＋必要なら `giParseValue` の型変換）／ 汎用往復 `GENERIC_MAP`・`GENERIC_HEADER`・`parseGeneric`・`exportGeneric`（HEADERと出力配列の**位置を一致**させる）／ 分析・保有取込 `ANALYSIS_COLMAP`・`HOLDING_COLMAP`
+4. **一括変更** … `SM_BULK_FIELDS`／`holdBulk` 系＋ `bulkValueHtml`／`bulkConvert`
+5. **銘柄詳細ドロワー** … 判定/保有/メタ/ファンダの表示（`renderDetail` 周辺）
+6. **転記用/エクスポート** … 転記ビュー・貼付出力の列
+7. **分割調整** … 金額系（価格・単価・前回購入価格・手動基準高値 等）は `applySplit` の調整対象に含めるか判断
+8. **Google同期** … `dataBundle`/`restoreBundle`（store.data 全体を保存するので通常は自動。列設定 colPrefs に関わる項目だけ注意）
+
+**判断基準**: 「自動取得・派生値・内部判定専用」なら列や取込は不要なこともある。だが**フォームで手入力できる項目は原則『表の列』『取込（GI＋汎用往復）』にも通す**（手入力↔取込↔表示の三者で一貫させる）。不要と判断した配線先は、その理由を実装記録かコメントに残す。
+
 ---
 
 ## コミュニケーションルール

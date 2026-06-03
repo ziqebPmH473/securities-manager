@@ -58,6 +58,7 @@ const MASTER_COLS = [
   { key: 'dropFrom5y',  label: '5年高値からの下落率', left: false, markets: STKM, noSort: false },
   { key: 'dropFrom52w', label: '52週高値からの下落率', left: false, markets: STKM, noSort: false },
   { key: 'prevBuyPrice', label: '前回購入単価',     left: false, markets: STKM, noSort: false },
+  { key: 'prevBuyDate',  label: '前回購入日',       left: true,  markets: STKM, noSort: false },
   { key: 'dropFromPrev', label: '前回からの下落率', left: false, markets: STKM, noSort: false },
   { key: 'sector',      label: 'セクター',         left: true,  markets: STKM, noSort: false },
   { key: 'industry',    label: '業種',             left: true,  markets: STKM, noSort: false },
@@ -90,10 +91,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -959,6 +960,7 @@ function colDefaultWidth(key) {
   if (key === 'name') return 200;
   if (key === 'market' || key === 'detailType') return 72;
   if (key === 'trigBasis') return 64; // 1文字バッジ（初/増/高/固）
+  if (key === 'prevBuyDate') return 100; // YYYY-MM-DD
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
   if (key === 'analysisNote') return 160;
@@ -1070,6 +1072,8 @@ const COL_RENDERERS = {
   dropFrom5y:  (s,c) => pctTdBg(calc.dropFrom5y(s), 'dropFrom5y'),
   dropFrom52w: (s,c) => pctTd(calc.dropFrom52w(s)),
   prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
+  // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
+  prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
   dropFromPrev: (s,c) => pctTdBg(calc.dropFromPrev(s), 'dropFromPrev'),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
@@ -1411,6 +1415,7 @@ function sortValue(sec, key) {
     case 'high5y': return calc.high5y(sec) ?? -Infinity;
     case 'high52w': return calc.high52w(sec) ?? -Infinity;
     case 'prevBuyPrice': return calc.lastBuyPrice(sec) ?? -Infinity;
+    case 'prevBuyDate': return calc.lastBuyInfo(sec).date || '';
     case 'dropFromPrev': return calc.dropFromPrev(sec) ?? Infinity;
     case 'dropFrom5y': return calc.dropFrom5y(sec) ?? Infinity;
     case 'dropFrom52w': return calc.dropFrom52w(sec) ?? Infinity;
@@ -3654,12 +3659,12 @@ function parseSmbcScreen(text, map) {
 const GENERIC_MAP = {
   'ティッカー': 'ticker', 'コード': 'ticker', '市場': 'market', '証券会社': 'broker', '口座': 'account', '口座種別': 'account',
   '数量': 'quantity', '取得単価': 'avgCost', '平均取得単価': 'avgCost',
-  '前回購入価格': 'prevBuyPrice', '基準高値モード': 'baseHighMode', '手動基準高値': 'baseHighManual',
+  '前回購入価格': 'prevBuyPrice', '前回購入日': 'prevBuyDate', '基準高値モード': 'baseHighMode', '手動基準高値': 'baseHighManual',
   '買増固定値': 'fixedBuyPrice', '次回購入固定値': 'fixedBuyPrice',
-  'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category',
+  'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category', '詳細種別': 'detailType',
   '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
 };
-const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ'];
+const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -3686,6 +3691,8 @@ function parseGeneric(text) {
     // 銘柄属性（ヘッダにある列のみ）。分析結果は含めない
     const sec = {};
     if ('prevBuyPrice' in rec) sec.prevBuyPrice = numClean(rec.prevBuyPrice);
+    if ('prevBuyDate' in rec) sec.prevBuyDate = rec.prevBuyDate || null;
+    if ('detailType' in rec) sec.detailType = /ETF|ＥＴＦ/i.test(rec.detailType) ? 'ETF' : (rec.detailType || null);
     if ('fixedBuyPrice' in rec) sec.fixedBuyPrice = numClean(rec.fixedBuyPrice);
     if ('baseHighMode' in rec) sec.baseHighMode = normBaseHighMode(rec.baseHighMode);
     if ('baseHighManual' in rec) sec.baseHighManual = numClean(rec.baseHighManual);
@@ -3988,8 +3995,8 @@ function exportGeneric() {
   for (const s of store.data.securities) {
     const ruleName = (store.rule(s.ruleId) || {}).name || '';
     const base = [s.ticker, s.market, '', '', '', '',
-      s.prevBuyPrice ?? '', s.baseHighMode || '', s.baseHighManual ?? '', s.fixedBuyPrice ?? '', ruleName, s.category || '',
-      s.buyAmount ?? '', s.buyCount ?? '', s.enabled === false ? '無効' : '有効', s.watch ? '注意' : '通常'];
+      s.prevBuyPrice ?? '', s.prevBuyDate || '', s.baseHighMode || '', s.baseHighManual ?? '', s.fixedBuyPrice ?? '', ruleName, s.category || '',
+      s.buyAmount ?? '', s.buyCount ?? '', s.enabled === false ? '無効' : '有効', s.watch ? '注意' : '通常', detailTypeOf(s)];
     const hs = store.data.holdings.filter(h => h.securityId === s.id);
     if (hs.length) {
       for (const h of hs) { const r = base.slice(); r[2] = h.broker; r[3] = h.accountType; r[4] = h.quantity; r[5] = h.avgCost; lines.push(r.map(csvCell).join(',')); }
@@ -4016,6 +4023,7 @@ const GI_FIELDS = [
   { key: 'acqValue',      label: '約定価額（※単価と択一・株数から単価を算出）' },
   { key: 'acqJpy',        label: '取得円(米株)' },
   { key: 'prevBuyPrice',  label: '前回購入価格' },
+  { key: 'prevBuyDate',   label: '前回購入日' },
   { key: 'fixedBuyPrice', label: '買増固定値' },
   { key: 'baseHighMode',  label: '基準高値モード' },
   { key: 'baseHighManual', label: '手動基準高値' },
@@ -4040,12 +4048,12 @@ const GI_FIELDS = [
   { key: 'starStrength',  label: '★独自の強み' },
   { key: 'starRisk',      label: '★リスク' },
 ];
-const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'recoCategory', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk']);
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'recoCategory', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk']);
 // 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
   { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy'] },
-  { g: '判定・属性', keys: ['category', 'ruleName', 'detailType', 'prevBuyPrice', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch'] },
+  { g: '判定・属性', keys: ['category', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch'] },
   { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride'] },
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'recoCategory', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
 ];
@@ -4054,6 +4062,7 @@ const GI_FIXED_KEYS = ['market', 'broker', 'account', 'detailType', 'category', 
 const GI_AUTOMAP = { ...GENERIC_MAP,
   '取得円': 'acqJpy', '取得額(円)': 'acqJpy', '取得額（円）': 'acqJpy', '受渡金額(円)': 'acqJpy',
   '約定価額': 'acqValue', '取得価額': 'acqValue', '約定代金': 'acqValue',
+  '前回購入日': 'prevBuyDate',
   '詳細種別': 'detailType', '総合評価': 'overallGrade', '銘柄格付': 'rating', '格付': 'rating', '買い時評価': 'buyGrade',
   '推奨カテゴリ': 'recoCategory', 'AI推奨カテゴリ': 'recoCategory', '購入優先順位': 'priority', '優先順位': 'priority',
   '評価日': 'analysisDate', '備考': 'analysisNote', '分析メモ': 'analysisNote',
