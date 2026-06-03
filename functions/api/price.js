@@ -21,12 +21,14 @@ export async function onRequestGet(context) {
   // highs=1 の時だけ5年/52週高値を取得（Yahoo追加呼び出し）。通常の価格更新は price のみ＝1銘柄1呼び出しに抑え、
   // Cloudflareの「1リクエストあたりサブリクエスト上限(約50)」超過で多数銘柄が失敗する問題を防ぐ。
   const withHighs = url.searchParams.get('highs') === '1';
+  // ext=1: 米株のプレ/アフター価格を取得（Yahoo includePrePost）。現在値とは別に extPrice/extType を返す。
+  const ext = url.searchParams.get('ext') === '1';
 
   const finnhubKey = context.env && context.env.FINNHUB_API_KEY;
   const out = {};
   await Promise.all(symbols.map(async (sym) => {
     try {
-      out[sym] = await fetchOne(sym, finnhubKey, { mode, range, withHighs });
+      out[sym] = await fetchOne(sym, finnhubKey, { mode, range, withHighs, ext });
     } catch (e) {
       out[sym] = { error: String(e && e.message || e) };
     }
@@ -48,6 +50,8 @@ function symbolType(sym) {
 
 async function fetchOne(symbol, finnhubKey, opts = {}) {
   const type = symbolType(symbol);
+  // 米株のプレ/アフター取得（時間外列用）。Yahoo includePrePost で現在値＋時間外価格を返す
+  if (opts.ext && type === 'us') return fetchUsExtended(symbol);
   // 軽量モード: 高値不要・短期間のみ。Finnhub経由(米株3往復)を避けYahooの短期間取得に統一して高速化
   if (opts.mode === 'light') return fetchYahoo(symbol, type, opts.range || '5d', false);
   if (type === 'us' && finnhubKey) return fetchFinnhub(symbol, finnhubKey, opts.withHighs);
@@ -83,6 +87,44 @@ async function fetchFinnhub(symbol, token, withHighs) {
   }
 
   return { price, prevClose, high5y, high52w, high5yDate, high52wDate, currency: 'USD', source, fetchedAt: new Date().toISOString() };
+}
+
+// ---------- 米株 プレ/アフター（時間外）----------
+// Yahoo の includePrePost で当日分(1分足)を取得。現在値=レギュラー、extPrice=プレ/アフターの直近値。
+// 現在がプレ/アフターの取引時間内のときだけ extPrice を返す（それ以外は null＝時間外取引なし）。
+async function fetchUsExtended(symbol) {
+  const u = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m&includePrePost=true`;
+  const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' }, cf: { cacheTtl: 60, cacheEverything: true } });
+  if (!res.ok) throw new Error(`Yahoo ext ${res.status} (${symbol})`);
+  const data = await res.json();
+  const r = data && data.chart && data.chart.result && data.chart.result[0];
+  if (!r) throw new Error('データなし');
+  const meta = r.meta || {};
+  const quote = r.indicators && r.indicators.quote && r.indicators.quote[0];
+  const ts = r.timestamp || [];
+  const closes = (quote && quote.close) || [];
+  const ctp = meta.currentTradingPeriod || {};
+  const nowS = Math.floor(Date.now() / 1000);
+  // 現在の取引フェーズを判定（pre / post / それ以外）
+  let extType = null;
+  if (ctp.pre && nowS >= ctp.pre.start && nowS < ctp.pre.end) extType = 'pre';
+  else if (ctp.post && nowS >= ctp.post.start && nowS < ctp.post.end) extType = 'post';
+  // プレ/アフターの直近値＝該当時間帯の最後の有効終値
+  let extPrice = null;
+  if (extType) {
+    const win = ctp[extType];
+    for (let i = closes.length - 1; i >= 0; i--) {
+      if (typeof closes[i] === 'number' && ts[i] >= win.start && ts[i] < win.end) { extPrice = closes[i]; break; }
+    }
+  }
+  return {
+    price: num(meta.regularMarketPrice),       // レギュラー現在値（プレ/アフター中は当日の引け or 前日終値）
+    prevClose: num(meta.chartPreviousClose ?? meta.previousClose),
+    extPrice, extType,                          // 時間外価格と種別（pre/post）。時間外取引中以外は null
+    currency: meta.currency || 'USD',
+    source: 'yahoo-ext',
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
 // ---------- Yahoo Finance ----------

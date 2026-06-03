@@ -48,6 +48,7 @@ const MASTER_COLS = [
   { key: 'sigType',     label: '種別',             left: true,  markets: ['SIGNAL'], noSort: false },
   { key: 'price',       label: '現在値',           left: false, markets: ALLM, noSort: false },
   { key: 'day',         label: '前日比',           left: false, markets: ALLM, noSort: false },
+  { key: 'extPrice',    label: '時間外',           left: false, markets: ['US', 'SIGNAL'], noSort: false },
   { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: false },
   { key: 'trigBasis',   label: '適用区分',         left: true,  markets: STKM, noSort: true, narrow: true },
   { key: 'base',        label: '基準値',           left: false, markets: ['SIGNAL'], noSort: false },
@@ -90,7 +91,7 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
@@ -139,6 +140,7 @@ const store = {
     this.data.importFormats ||= [];   // 汎用取込のフォーマット（列名→フィールド対応）保存
     this.data.importAliases ||= {};   // 取込変換マスタ: ドメイン→{正規化した取込値→マスタ正規値 or '__skip__'}
     this.data.lastInfoDate ||= null;  // 銘柄情報の日次更新を実行した日（YYYY-MM-DD）
+    this.data.lastHighsDate ||= null; // 5年/52週高値を取得した日（YYYY-MM-DD）。その日初回の価格更新で高値も取得
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
@@ -699,16 +701,59 @@ const INDICES = [
   { key: 'soxx', sym: 'SOXX', label: 'SOX(半導体)', market: 'US' },
 ];
 
+// ---------- 市場時間（JST基準・DST自動。土日は休場。祝日は考慮せず開場扱い） ----------
+function jstNow() { const j = new Date(Date.now() + 9 * 3600000); return { day: j.getUTCDay(), min: j.getUTCHours() * 60 + j.getUTCMinutes() }; }
+// 米国サマータイム（3月第2日曜〜11月第1日曜）判定
+function usDST(ms) {
+  const d = new Date(ms), y = d.getUTCFullYear();
+  const mar = new Date(Date.UTC(y, 2, 1)), start = Date.UTC(y, 2, 1 + ((7 - mar.getUTCDay()) % 7) + 7);
+  const nov = new Date(Date.UTC(y, 10, 1)), end = Date.UTC(y, 10, 1 + ((7 - nov.getUTCDay()) % 7));
+  return ms >= start && ms < end;
+}
+// 日本株 ザラ場(9:00-15:30)＋遅延考慮で16:00まで。月〜金。
+function jpRegularOpen() { const { day, min } = jstNow(); return day >= 1 && day <= 5 && min >= 540 && min < 960; }
+// 米国株 レギュラー時間（JST換算・DST自動）。夏22:30〜翌5:00 / 冬23:30〜翌6:00。窓は深夜をまたぐ。
+function usRegularOpen() {
+  const { day, min } = jstNow(), dst = usDST(Date.now());
+  const regStart = dst ? 1350 : 1410, regEndNext = dst ? 300 : 360;
+  if (day >= 1 && day <= 5 && min >= regStart) return true;     // 夜側（Mon-Fri）
+  if (day >= 2 && day <= 6 && min < regEndNext) return true;    // 翌朝側（Tue-Sat）
+  return false;
+}
+// 米国株 時間外フェーズ 'pre'|'post'|null（JST換算・DST自動）。夏 pre17:00-22:30 / post 翌5:00-9:00。
+function usExtPhase() {
+  const { day, min } = jstNow(), dst = usDST(Date.now());
+  const preStart = dst ? 1020 : 1080, regStart = dst ? 1350 : 1410, regEndNext = dst ? 300 : 360, postEndNext = dst ? 540 : 600;
+  if (day >= 1 && day <= 5 && min >= preStart && min < regStart) return 'pre';
+  if (day >= 2 && day <= 6 && min >= regEndNext && min < postEndNext) return 'post';
+  return null;
+}
+// 直近のレギュラー引け(ms)。終値を既に持っているかの判定に使う。土日は前営業日まで遡る（祝日は無視）。
+function lastCloseJpMs() { const n = new Date(); for (let b = 0; b < 7; b++) { const d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() - b, 6, 30, 0)); const w = d.getUTCDay(); if (w >= 1 && w <= 5 && d.getTime() <= Date.now()) return d.getTime(); } return Date.now() - 864e5; } // 15:30JST=6:30UTC
+function lastCloseUsMs() { const h = usDST(Date.now()) ? 20 : 21; const n = new Date(); for (let b = 0; b < 7; b++) { const d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() - b, h, 0, 0)); const w = d.getUTCDay(); if (w >= 1 && w <= 5 && d.getTime() <= Date.now()) return d.getTime(); } return Date.now() - 864e5; } // 16:00ET
+
 // ---------- 価格取得 ----------
 const api = {
-  // withHighs=true で5年/52週高値も取得（日次=dailyStartupのみ）。通常の価格更新は価格のみ＝軽く・既存高値を保持。
-  async refreshAll(withHighs = false) {
-    const secs = store.data.securities.filter(s => s.ticker);
-    const holdSymbols = secs.map(yahooSymbol);
+  // opts.withHighs=true で5年/52週高値も取得（日次/その日初回）。通常は価格のみ＝軽く・既存高値を保持。
+  // 市場が閉場中で当日の終値を既に持っている銘柄はスキップ（再取得しない）。米株の時間外(プレ/アフター)は別取得。
+  async refreshAll(opts = {}) {
+    const withHighs = opts.withHighs === true;
+    const allSecs = store.data.securities.filter(s => s.ticker);
     const lightSymbols = ['USDJPY=X', ...INDICES.map(ix => ix.sym)];
-    if (holdSymbols.length === 0 && lightSymbols.length === 0) return;
-    // Cloudflareの「1リクエストあたりサブリクエスト上限(約50)」を超えると多数銘柄が失敗するため、小バッチに分割。
-    // withHighs時は1銘柄2呼び出し(quote+Yahoo)なので小さめ、通常は1呼び出しなので大きめ。
+    if (allSecs.length === 0 && lightSymbols.length === 0) return;
+    // 取得対象を選別: withHighs(日次)は全件。通常は「開場中 or 価格未取得 or 当日終値を未取得」のみ取得（閉場中で終値済みはスキップ）。
+    const lastJp = lastCloseJpMs(), lastUs = lastCloseUsMs();
+    const needsFetch = (s) => {
+      if (withHighs) return true;
+      const p = store.data.prices[priceKey(s)];
+      const fetched = p && p.fetchedAt ? Date.parse(p.fetchedAt) : 0;
+      if (s.market === 'JP') return jpRegularOpen() || !(p && p.price != null) || fetched < lastJp;
+      if (s.market === 'US') return usRegularOpen() || !(p && p.price != null) || fetched < lastUs;
+      return true;
+    };
+    const secs = allSecs.filter(needsFetch);
+    const holdSymbols = secs.map(yahooSymbol);
+    // Cloudflareのサブリクエスト上限(約50)対策で小バッチに分割（withHighsは2呼出/銘柄→16、通常は1→40）。
     const BATCH = withHighs ? 16 : 40;
     const batches = [];
     for (let i = 0; i < holdSymbols.length; i += BATCH) batches.push(holdSymbols.slice(i, i + BATCH));
@@ -721,17 +766,18 @@ const api = {
       reqs.push(fetch(`/api/price?mode=light&symbols=${encodeURIComponent(lightSymbols.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({})));
       const results = await Promise.all(reqs);
       lightQuotes = results[lightIdx] || {};
-      quotes = Object.assign({}, ...results.slice(0, lightIdx)); // 全バッチをマージ
+      quotes = Object.assign({}, ...results.slice(0, lightIdx));
     } catch (e) {
       toast('価格取得に失敗（手入力で更新できます）');
       return;
     }
-    let usSource = null; // 米株の価格ソース（finnhub=リアルタイム / yahoo=遅延）を記録し画面に表示
+    let usSource = null;
     for (const sec of secs) {
       const q = quotes[yahooSymbol(sec)];
       if (q && !q.error && q.price != null) {
         const prev = store.data.prices[priceKey(sec)] || {}; // 高値は通常更新では返らない→既存値を保持
         store.data.prices[priceKey(sec)] = {
+          ...prev,
           price: q.price, prevClose: q.prevClose,
           high5y: q.high5y != null ? q.high5y : (prev.high5y ?? null),
           high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),
@@ -742,10 +788,10 @@ const api = {
         if (sec.market === 'US' && q.source && !usSource) usSource = q.source;
       }
     }
-    store.data.lastPriceSource = usSource; // 'finnhub'(ﾘｱﾙﾀｲﾑ) / 'yahoo'(遅延) など
+    if (usSource) store.data.lastPriceSource = usSource;
+    if (withHighs) store.data.lastHighsDate = today(); // 高値はこの取得で最新化
     const fx = lightQuotes['USDJPY=X'];
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
-    // 参考指数の前日比用に price/prevClose を保存（軽量取得）
     store.data.indices = store.data.indices || {};
     for (const ix of INDICES) {
       const q = lightQuotes[ix.sym];
@@ -753,10 +799,39 @@ const api = {
     }
     store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
-    // 銘柄情報は名前未取得の銘柄だけ取得（名前はほぼ不変＝毎回取らない。APIリクエスト削減＋名称ブレ防止）
+    // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
+    await this.refreshExtended(allSecs);
+    // 名前未取得の銘柄だけ銘柄情報を取得
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
     if (need.length) await this.refreshMeta(need);
     toast('価格を更新しました');
+  },
+
+  // 米株のプレ/アフター価格を取得し prices[key].extPrice/extType に保存。時間外でない時は null にクリア。
+  async refreshExtended(allSecs) {
+    const usSecs = (allSecs || store.data.securities).filter(s => s.market === 'US' && s.ticker);
+    if (!usSecs.length) return;
+    const phase = usExtPhase();
+    if (!phase) { // 時間外取引なし → クリア
+      for (const s of usSecs) { const p = store.data.prices[priceKey(s)]; if (p && (p.extPrice != null || p.extType)) { p.extPrice = null; p.extType = null; } }
+      store.save(); return;
+    }
+    const syms = usSecs.map(yahooSymbol);
+    const BATCH = 20; // ext=1は1呼出/銘柄
+    const batches = [];
+    for (let i = 0; i < syms.length; i += BATCH) batches.push(syms.slice(i, i + BATCH));
+    let quotes = {};
+    try {
+      const results = await Promise.all(batches.map(b => fetch(`/api/price?ext=1&symbols=${encodeURIComponent(b.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({}))));
+      quotes = Object.assign({}, ...results);
+    } catch (_) { return; }
+    for (const s of usSecs) {
+      const q = quotes[yahooSymbol(s)]; const p = store.data.prices[priceKey(s)];
+      if (!p) continue;
+      p.extPrice = (q && !q.error && q.extPrice != null) ? q.extPrice : null;
+      p.extType = (q && q.extType) || null;
+    }
+    store.save();
   },
 
   // 指定銘柄だけ価格（＋5年/52週高値）を取得して保存。新規追加銘柄（保有/ウォッチ問わず）の即時反映用。
@@ -815,7 +890,7 @@ const api = {
     if (store.data.securities.every(s => !s.ticker)) return;
     if (store.data.lastInfoDate === today()) return; // 本日実行済み
     store.data.lastInfoDate = today(); store.save();
-    await this.refreshAll(true);          // 日次は高値（52週/5年）も取得。価格＋名前未取得分
+    await this.refreshAll({ withHighs: true }); // 日次は高値（52週/5年）も取得。価格＋名前未取得分
     await this.refreshMeta();             // 全銘柄の名前/セクター/業種/ファンダを日次更新（日本語名は維持）
     await this.checkSplits();             // 分割検知（承認待ちは「分割」タブのバッジで通知）
     render();
@@ -981,6 +1056,7 @@ function colDefaultWidth(key) {
   if (key === 'name') return 200;
   if (key === 'market' || key === 'detailType') return 72;
   if (key === 'trigBasis') return 64; // 1文字バッジ（初/増/高/固）
+  if (key === 'extPrice') return 92;  // 時間外価格＋種別タグ
   if (key === 'prevBuyDate') return 100; // YYYY-MM-DD
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
@@ -1069,6 +1145,8 @@ const COL_RENDERERS = {
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   // 現在値: 価格があれば株探チャートへの外部リンク。未取得時は手入力ボタンのまま。
   price:     (s,c) => `<td>${c.price != null ? `<a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${fmtAmt(c.price, c.market)}</a>` : c.priceCell}</td>`,
+  // 時間外: 米株プレ/アフター価格（取引時間内のみ）。種別タグ付き。
+  extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const d = (p.prevClose && p.extPrice) ? (p.extPrice - p.prevClose) / p.prevClose * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
   // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
   day:       (s,c) => { const v = c.dayChg, st = condStyle('day', v); return `<td class="${st ? '' : cls(v)}"${st}><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a></td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
@@ -1437,6 +1515,7 @@ function sortValue(sec, key) {
     case 'high5y': return calc.high5y(sec) ?? -Infinity;
     case 'high52w': return calc.high52w(sec) ?? -Infinity;
     case 'prevBuyPrice': return calc.lastBuyPrice(sec) ?? -Infinity;
+    case 'extPrice': { const p = store.data.prices[priceKey(sec)]; return (p && p.extPrice != null) ? p.extPrice : -Infinity; }
     case 'prevBuyDate': return calc.lastBuyInfo(sec).date || '';
     case 'dropFromPrev': return calc.dropFromPrev(sec) ?? Infinity;
     case 'dropFrom5y': return calc.dropFrom5y(sec) ?? Infinity;
@@ -3516,7 +3595,7 @@ async function reportImport(touched, baseMsg) {
   if (touched.length) {
     toast('取込・価格取得中…しばらくお待ちください', 60000); // 処理中表示（完了時に上書き）
     const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
-    try { await (needPrice ? api.refreshAll() : api.refreshMeta(touched)); } catch (_) { /* 取得失敗は無視 */ }
+    try { await (needPrice ? api.refreshAll({ withHighs: store.data.lastHighsDate !== today() }) : api.refreshMeta(touched)); } catch (_) { /* 取得失敗は無視 */ }
   }
   render();
   const bad = importedUnpriced(touched);
@@ -5313,7 +5392,8 @@ document.getElementById('modal-close').onclick = closeModal;
 document.getElementById('drawer-close').onclick = closeDrawer;
 document.getElementById('drawer-overlay').addEventListener('click', (e) => { if (e.target.id === 'drawer-overlay') closeDrawer(); });
 // モーダル外クリックでは閉じない（意図しない消失を防止）。× か各フォームのボタンのみで閉じる
-document.getElementById('btn-refresh').onclick = () => api.refreshAll().then(render);
+// 「価格更新」: その日まだ高値を取得していなければ高値も取得（LDOS等の古い5年高値を修正）、以降は価格のみで軽量
+document.getElementById('btn-refresh').onclick = () => api.refreshAll({ withHighs: store.data.lastHighsDate !== today() }).then(render);
 
 // IME変換中は検索の再描画を抑止（innerHTML生成の oncomposition* 属性はハンドラ登録されないため、
 // document に委譲リスナーを張る。これで全ての入力欄の変換中フラグを確実に拾える・SEC-112）
