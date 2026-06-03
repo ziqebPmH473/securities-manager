@@ -1,0 +1,9 @@
+# Cloudflare Pages のキャッシュ制御。
+# app.js / styles.css / index.html は毎回サーバへ再検証させ、デプロイ更新が即反映されるようにする
+# （以前、修正をpushしてもブラウザが古い app.js を使い「直っていない」状態になったため）。
+/index.html
+  Cache-Control: no-cache, must-revalidate
+/app.js
+  Cache-Control: no-cache, must-revalidate
+/styles.css
+  Cache-Control: no-cache, must-revalidate

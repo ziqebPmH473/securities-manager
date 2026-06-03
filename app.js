@@ -721,6 +721,7 @@ const api = {
       toast('価格取得に失敗（手入力で更新できます）');
       return;
     }
+    let usSource = null; // 米株の価格ソース（finnhub=リアルタイム / yahoo=遅延）を記録し画面に表示
     for (const sec of secs) {
       const q = quotes[yahooSymbol(sec)];
       if (q && !q.error && q.price != null) {
@@ -730,8 +731,10 @@ const api = {
           high5yDate: q.high5yDate ?? null, high52wDate: q.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
           fetchedAt: q.fetchedAt,
         };
+        if (sec.market === 'US' && q.source && !usSource) usSource = q.source;
       }
     }
+    store.data.lastPriceSource = usSource; // 'finnhub'(ﾘｱﾙﾀｲﾑ) / 'yahoo'(遅延) など
     const fx = lightQuotes['USDJPY=X'];
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
     // 参考指数の前日比用に price/prevClose を保存（軽量取得）
@@ -1220,7 +1223,10 @@ function updateHeader() {
   const um = document.getElementById('update-meta');
   if (um) {
     const t = store.data.lastPriceUpdate ? fmtDateTime(store.data.lastPriceUpdate).replace(/^\S+\s/, '') : '—';
-    um.innerHTML = `更新<br><b>${t}</b>`;
+    // 米株の価格ソースを併記（finnhub=ほぼリアルタイム / yahoo=15〜20分遅延）。判別・遅延の診断用
+    const src = store.data.lastPriceSource;
+    const srcLabel = src ? (/finnhub/.test(src) ? '<span style="color:var(--green,#16a34a)">Finnhub</span>' : `<span class="muted" title="米株は15〜20分遅延。リアルタイムにはFinnhubキー設定が必要">Yahoo(遅延)</span>`) : '';
+    um.innerHTML = `更新<br><b>${t}</b>${srcLabel ? ` <span style="font-size:10px">${srcLabel}</span>` : ''}`;
   }
 }
 
@@ -1511,7 +1517,7 @@ function renderMarket(market) {
         <div class="seg" role="tablist" style="margin-left:10px">
           <button class="${market === 'FUND' ? 'active' : ''}" onclick="setHoldingsMarket('FUND')">投資信託</button>
         </div>
-        <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" oncompositionstart="window._imeComposing=true" oncompositionend="window._imeComposing=false;setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
+        <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
         <label class="chip">種別
           <select onchange="setFilter('${colMkt}','detailType',this.value)">
             <option value="">全て</option>
@@ -2252,7 +2258,7 @@ function renderSecMaster() {
             <button class="${secMasterMarket === 'JP' ? 'active' : ''}" onclick="setSecMasterMarket('JP')">日本株</button>
           </div>
           <div class="seg" style="margin-left:6px"><button class="${secMasterMarket === 'FUND' ? 'active' : ''}" onclick="setSecMasterMarket('FUND')">投資信託</button></div>
-          <div class="search" style="max-width:260px">${svgIcon('search', '')}<input id="sm-search" placeholder="コード・銘柄名・セクターで検索" value="${esc(secMasterSearch)}" oninput="setSecMasterSearch(this.value)" oncompositionstart="window._imeComposing=true" oncompositionend="window._imeComposing=false;setSecMasterSearch(this.value)" autocomplete="off">${secMasterSearch ? `<button class="clr" onclick="setSecMasterSearch('')">×</button>` : ''}</div>
+          <div class="search" style="max-width:260px">${svgIcon('search', '')}<input id="sm-search" placeholder="コード・銘柄名・セクターで検索" value="${esc(secMasterSearch)}" oninput="setSecMasterSearch(this.value)" autocomplete="off">${secMasterSearch ? `<button class="clr" onclick="setSecMasterSearch('')">×</button>` : ''}</div>
           <span class="muted">抽出</span>
           <div class="seg">${['all', '全て', 'noprice', '価格未取得', 'noholding', '保有なし', 'holding', '保有あり'].reduce((acc, _, i, arr) => { if (i % 2) acc.push(`<button class="${secMasterFilter === arr[i - 1] ? 'active' : ''}" onclick="setSecMasterFilter('${arr[i - 1]}')">${arr[i]}</button>`); return acc; }, []).join('')}</div>
           <span class="muted">${secs.length}/${allSecs.length}件</span>
@@ -5299,6 +5305,19 @@ document.getElementById('drawer-close').onclick = closeDrawer;
 document.getElementById('drawer-overlay').addEventListener('click', (e) => { if (e.target.id === 'drawer-overlay') closeDrawer(); });
 // モーダル外クリックでは閉じない（意図しない消失を防止）。× か各フォームのボタンのみで閉じる
 document.getElementById('btn-refresh').onclick = () => api.refreshAll().then(render);
+
+// IME変換中は検索の再描画を抑止（innerHTML生成の oncomposition* 属性はハンドラ登録されないため、
+// document に委譲リスナーを張る。これで全ての入力欄の変換中フラグを確実に拾える・SEC-112）
+document.addEventListener('compositionstart', (e) => {
+  if (e.target && e.target.matches && e.target.matches('input, textarea')) window._imeComposing = true;
+}, true);
+document.addEventListener('compositionend', (e) => {
+  if (!(e.target && e.target.matches && e.target.matches('input, textarea'))) return;
+  window._imeComposing = false;
+  // 検索欄は確定後に反映（変換中はスキップしていたため）
+  if (e.target.id === 'hold-search') setHoldingsSearch(e.target.value);
+  else if (e.target.id === 'sm-search') setSecMasterSearch(e.target.value);
+}, true);
 
 store.load();
 loadColPrefs();
