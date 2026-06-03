@@ -149,14 +149,6 @@ const store = {
     if (!this.data.rules.some(r => r.isDefault)) this.data.rules[0].isDefault = true;
     // 後方互換: カテゴリに米国株金額が無ければ日本株の÷100で補完
     for (const c of this.data.categories) if (c.amountUsd == null) c.amountUsd = (c.amountJpy || 0) / 100;
-    // 後方互換(一度だけ): 旧・分析取込が米株の買い増し予定額を「推奨投資額÷100」で自動設定していた誤り(例:0.6)を是正。
-    // buyAmount が recoAmount/100 と一致する米株は、その自動設定値とみなしクリア→カテゴリ基準に戻す（手入力値は残す）。
-    if (!this.data._fixedUsBuyAmt) {
-      for (const s of this.data.securities) {
-        if (s.market === 'US' && s.buyAmount != null && s.recoAmount != null && Math.abs(Number(s.buyAmount) - Number(s.recoAmount) / 100) < 1e-9) s.buyAmount = null;
-      }
-      this.data._fixedUsBuyAmt = true;
-    }
     return this.data;
   },
   save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data)); },
