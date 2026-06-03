@@ -149,6 +149,14 @@ const store = {
     if (!this.data.rules.some(r => r.isDefault)) this.data.rules[0].isDefault = true;
     // 後方互換: カテゴリに米国株金額が無ければ日本株の÷100で補完
     for (const c of this.data.categories) if (c.amountUsd == null) c.amountUsd = (c.amountJpy || 0) / 100;
+    // 後方互換(一度だけ): 旧・分析取込が米株の買い増し予定額を「推奨投資額÷100」で自動設定していた誤り(例:0.6)を是正。
+    // buyAmount が recoAmount/100 と一致する米株は、その自動設定値とみなしクリア→カテゴリ基準に戻す（手入力値は残す）。
+    if (!this.data._fixedUsBuyAmt) {
+      for (const s of this.data.securities) {
+        if (s.market === 'US' && s.buyAmount != null && s.recoAmount != null && Math.abs(Number(s.buyAmount) - Number(s.recoAmount) / 100) < 1e-9) s.buyAmount = null;
+      }
+      this.data._fixedUsBuyAmt = true;
+    }
     return this.data;
   },
   save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data)); },
@@ -609,10 +617,10 @@ const calc = {
     return { type, base, baseSource, trigger, price, remainingDropPct, reached: price <= trigger, recoAmount, recoCcy };
   },
 
-  // 1回の購入額（原通貨）。銘柄に手入力があればそれを優先、無ければカテゴリ金額から転記
+  // 1回の購入額（原通貨）。銘柄に手入力があればそれを優先、無ければカテゴリ（無ければ推奨カテゴリ）金額から転記
   buyAmount(sec) {
     if (sec.buyAmount != null && sec.buyAmount !== '') return Number(sec.buyAmount);
-    const amt = store.categoryAmountFor(sec.category, sec.market);
+    const amt = store.categoryAmountFor(sec.category || sec.recoCategory, sec.market);
     return amt || null;
   },
   // 購入回数（手入力 or 買い取引数）
@@ -1096,8 +1104,8 @@ const COL_RENDERERS = {
   avgCost:   (s,c) => `<td>${c.th.qty ? fmtAmt(c.th.avgCost, c.market) : muted}</td>`,
   qty:       (s,c) => `<td>${c.th.qty ? fmtQty(c.th.qty, c.market) : '<span class="muted">0</span>'}</td>`,
   buyCount:  (s,c) => `<td>${c.buyCnt ? num(c.buyCnt) : muted}</td>`,
-  buyAmount: (s,c) => `<td>${c.m(c.buyAmt)}</td>`,
-  reco:      (s,c) => `<td>${c.recoAmt ? fmtAmt(c.recoAmt, c.market) : muted}</td>`,
+  buyAmount: (s,c) => `<td>${c.buyAmt != null ? fmtAmtInt(c.buyAmt) : muted}</td>`,
+  reco:      (s,c) => `<td>${c.recoAmt ? fmtAmtInt(c.recoAmt) : muted}</td>`,
   category:  (s,c) => `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`,
   ruleName:  (s,c) => { const r = store.rule(s.ruleId); return `<td class="l">${r ? esc(r.name) : muted}</td>`; },
   fixedBuyPrice: (s,c) => `<td>${typeof s.fixedBuyPrice === 'number' ? fmtAmt(s.fixedBuyPrice, c.market) : muted}</td>`,
@@ -1415,7 +1423,7 @@ function sortValue(sec, key) {
     case 'analysisDate': return sec.analysisDate || '';
     case 'buyCount': return calc.buyCount(sec) || 0;
     case 'buyAmount': return calc.buyAmount(sec) ?? -Infinity;
-    case 'reco': return store.categoryAmountFor(sec.category, sec.market) || -Infinity;
+    case 'reco': return store.categoryAmountFor(sec.recoCategory || sec.category, sec.market) || -Infinity;
     case 'price': return calc.price(sec) ?? -Infinity;
     case 'high5y': return calc.high5y(sec) ?? -Infinity;
     case 'high52w': return calc.high52w(sec) ?? -Infinity;
@@ -1626,7 +1634,7 @@ function marketRow(sec, visibleCols, opts = {}) {
     dayChg: (price != null && p.prevClose) ? (price - p.prevClose) / p.prevClose * 100 : null,
     buyAmt: calc.buyAmount(sec),
     buyCnt: calc.buyCount(sec),
-    recoAmt: store.categoryAmountFor(sec.category, market),
+    recoAmt: store.categoryAmountFor(sec.recoCategory || sec.category, market),
     high5y: calc.high5y(sec),
     high52w: calc.high52w(sec),
     prevBuy: calc.lastBuyPrice(sec),
@@ -3442,11 +3450,8 @@ async function importAnalysis(text, market, create) {
       marketCap: nf(rec.marketCap), per: nf(rec.per), eps: nf(rec.eps), dividend: nf(rec.dividend),
     });
     if (Object.keys(metaPatch).length) store.setMeta(priceKey(sec), metaPatch);
-    // 1回購入額が未設定なら推奨投資額を転記（米株は÷100ドル）。手入力済みは保持
-    if (sec.buyAmount == null && rec.recoAmount) {
-      const a = parseFloat(rec.recoAmount);
-      if (!isNaN(a)) patch.buyAmount = market === 'US' ? a / 100 : a;
-    }
+    // 買い増し予定額・推奨購入額はカテゴリ別金額マスタから算出するため、推奨投資額(recoAmount)からの自動設定は行わない
+    // （旧実装は米株を recoAmount÷100 して 0.6 等の誤値を生んでいた。SEC: 金額はマスタ基準に統一）
     store.updateSecurity(sec.id, patch);
     touched.push(sec);
   }
@@ -5151,6 +5156,8 @@ function yen(n) { return n == null ? '—' : '¥' + Math.round(n).toLocaleString
 function money(n, ccy) { return n == null ? '—' : ccy + Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 2 }); }
 // 一覧表示用フォーマッタ（通貨記号なし=SEC-44 / 表示桁=SEC-45）。内部値は変えず表示だけ丸める。
 // 株価・金額: 米国株=小数2桁固定 / 日本株=整数。
+// 整数表示の金額（買い増し予定額・推奨購入額用。小数不要）
+function fmtAmtInt(n) { return n == null ? null : Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 0 }); }
 function fmtAmt(n, market) {
   if (n == null) return null;
   if (market === 'US') return Number(n).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
