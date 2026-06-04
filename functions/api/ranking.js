@@ -68,23 +68,30 @@ async function rankJp(kind, sub, count) {
   });
   if (!res.ok) throw new Error(`yahoo-jp ${res.status}`);
   const html = await res.text();
-  return parseJpRanking(html, count);
+  return parseJpRanking(html, count, kind);
 }
 // Yahoo Japan ランキングのHTMLを解析。各行: <a .../quote/CODE.T>NAME</a> + <li>CODE</li><li>東証PRM</li>。
-// コード・名称・市場区分(プライム/スタンダード/グロース)を抽出。価格・前日比はクライアントが /api/price で補完。
-function parseJpRanking(html, count) {
+// コード・名称・市場区分＋強調セルのランキング指標(時価総額/売買代金。単位=百万円等→円換算)を抽出。価格・前日比はクライアントが/api/priceで補完。
+function parseJpRanking(html, count, kind) {
   const items = []; const seen = new Set();
   const re = /\/quote\/([0-9A-Z]{4})\.T"[^>]*>([^<]{1,50})<\/a>/g;
   let m;
   while ((m = re.exec(html)) !== null && items.length < count) {
     const code = m[1]; if (seen.has(code)) continue; seen.add(code);
     const name = cleanName(decodeEntities(m[2].trim()));
-    const after = html.slice(m.index, m.index + 500);
-    const sm = after.match(/東証([A-Z]+)/);
-    items.push({ code, name, market: 'JP', section: sm ? jpSection(sm[1]) : null, price: null, changePct: null, turnover: null, marketCap: null });
+    const row = html.slice(m.index, m.index + 2600);
+    const sm = row.slice(0, 500).match(/東証([A-Z]+)/);
+    // 強調セル＝ランキング指標（時価総額 or 売買代金）。値＋単位(百万円/億円/兆円)
+    let metric = null;
+    const hm = row.match(/detail--highlight[\s\S]{0,200}?StyledNumber__value__[^"]*">([\d,.]+)<\/span>(?:<span class="StyledNumber__suffix__[^"]*">([^<]+)<\/span>)?/);
+    if (hm) metric = scaleJpUnit(parseFloat(hm[1].replace(/,/g, '')), hm[2] || '');
+    const it = { code, name, market: 'JP', section: sm ? jpSection(sm[1]) : null, price: null, changePct: null, turnover: null, marketCap: null };
+    if (kind === 'marketcap') it.marketCap = metric; else if (kind === 'turnover') it.turnover = metric;
+    items.push(it);
   }
   return items;
 }
+function scaleJpUnit(n, unit) { if (!isFinite(n)) return null; if (/兆/.test(unit)) return n * 1e12; if (/億/.test(unit)) return n * 1e8; if (/百万/.test(unit)) return n * 1e6; if (/千/.test(unit)) return n * 1e3; return n; }
 function jpSection(c) { return c === 'PRM' ? 'プライム' : c === 'STD' ? 'スタンダード' : c === 'GRT' ? 'グロース' : '東証' + c; }
 function decodeEntities(s) { return String(s).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"); }
 // 法人格表記を除去（保有銘柄と同ルール）。日本語(株式会社/(株)/㈱)＋英語(Inc/Corp/Ltd等)。
