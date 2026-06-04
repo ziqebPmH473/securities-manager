@@ -2142,6 +2142,9 @@ function renderMarketTab() {
   if (!items) body = '<div class="empty">読み込み中…</div>';
   else if (!items.length) body = '<div class="empty">データを取得できませんでした（休場/時間外、または取得元の仕様変更の可能性）。「更新」で再取得できます。</div>';
   else {
+    // データのある列だけ表示（全行nullの列は隠す）。日本株はランキング種別ごとに片方しか取得元に無いため。
+    const showTurnover = items.some(it => it.turnover != null);
+    const showMktCap = items.some(it => it.marketCap != null);
     const rows = items.map((it, i) => {
       const owned = !!mktFindSec(it.code, market);
       const dc = it.changePct;
@@ -2153,12 +2156,12 @@ function renderMarketTab() {
         <td class="l"><strong class="lnk-ext nm-strong" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.name || it.code)}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
         <td><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
         <td class="${cls(dc)}"><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
-        <td>${mktAmt(it.turnover, market)}</td>
-        <td>${mktAmt(it.marketCap, market)}</td>
+        ${showTurnover ? `<td>${mktAmt(it.turnover, market)}</td>` : ''}
+        ${showMktCap ? `<td>${mktAmt(it.marketCap, market)}</td>` : ''}
         <td class="l nowrap"><button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button></td>
       </tr>`;
     }).join('');
-    body = `<div class="table-wrap"><table class="holdings dense"><thead><tr><th>順位</th><th class="l">市場</th><th class="l">コード</th><th class="l">名称</th><th>現在値</th><th>前日比</th><th>売買代金</th><th>時価総額</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    body = `<div class="table-wrap"><table class="holdings dense"><thead><tr><th>順位</th><th class="l">市場</th><th class="l">コード</th><th class="l">名称</th><th>現在値</th><th>前日比</th>${showTurnover ? '<th>売買代金</th>' : ''}${showMktCap ? '<th>時価総額</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   app.innerHTML = `
     <div class="section">
