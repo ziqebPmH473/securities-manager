@@ -973,6 +973,7 @@ function clearHoldFilters(m) { holdingsSearch = ''; clearFilter(m); }
 const NAV_GROUPS = [
   { group: 'メイン', items: [
     { id: 'dashboard', label: 'ダッシュボード', icon: 'dashboard' },
+    { id: 'market',    label: 'マーケット',     icon: 'report' },
     { id: 'holdings',  label: '保有銘柄',       icon: 'holdings' },
     { id: 'signals',   label: '買い増しサイン', icon: 'signal', badge: 'sig' },
     { id: 'report',    label: 'レポート',       icon: 'report' },
@@ -988,7 +989,7 @@ const NAV_GROUPS = [
   ] },
 ];
 const PAGE_TITLE = {
-  dashboard: 'ダッシュボード', holdings: '保有銘柄', signals: '買い増しサイン',
+  dashboard: 'ダッシュボード', market: 'マーケット', holdings: '保有銘柄', signals: '買い増しサイン',
   report: 'レポート', import: '取込', secmaster: '銘柄マスタ', splits: '株式分割',
   transfer: '転記用', master: 'マスタ・設定', us: '米国株', jp: '日本株',
 };
@@ -1226,6 +1227,7 @@ function render() {
   updateSplitBadge();
   switch (currentView) {
     case 'dashboard': renderDashboard(); break;
+    case 'market': renderMarketTab(); break;
     case 'holdings': renderMarket(holdingsMarket); break;
     case 'us': renderMarket('US'); break;
     case 'jp': renderMarket('JP'); break;
@@ -2069,6 +2071,97 @@ function importStatusHtml() {
 // ---------- レポート（SEC-17） ----------
 let reportPeriod = 'all'; // 'all' | 'ytd'
 function setReportPeriod(p) { reportPeriod = p; renderReport(); }
+// ============ マーケット（ランキング）タブ ============
+let mktState = { market: 'US', sub: 'all', kind: 'turnover' };
+let mktCache = {};   // key -> { items, at }
+let mktBusy = false;
+const MKT_KINDS = [['turnover', '売買代金'], ['marketcap', '時価総額'], ['gainers', '値上がり'], ['losers', '値下がり']];
+const MKT_JP_SUBS = [['all', '全市場'], ['prime', 'プライム'], ['standard', 'スタンダード'], ['growth', 'グロース'], ['nikkei', '日経採用']];
+function mktKey() { return `${mktState.market}:${mktState.market === 'JP' ? mktState.sub : '-'}:${mktState.kind}`; }
+function setMktMarket(m) { mktState.market = m; if (m === 'US') mktState.sub = 'all'; renderMarketTab(); }
+function setMktSub(s) { mktState.sub = s; renderMarketTab(); }
+function setMktKind(k) { mktState.kind = k; renderMarketTab(); }
+function mktRefresh() { loadRanking(true); }
+function mktAbbr(n) { if (n == null) return '—'; const a = Math.abs(n); if (a >= 1e12) return (n / 1e12).toFixed(2) + '兆'; if (a >= 1e8) return (n / 1e8).toFixed(1) + '億'; if (a >= 1e6) return (n / 1e6).toFixed(0) + 'M'; return Number(n).toLocaleString('ja-JP'); }
+function mktKabutan(code, market) { return market === 'US' ? `https://us.kabutan.jp/stocks/${encodeURIComponent(code)}/chart` : `https://kabutan.jp/stock/chart?code=${encodeURIComponent(code)}`; }
+function mktFindSec(code, market) { return store.data.securities.find(s => s.market === market && (s.ticker || '').toUpperCase() === String(code).toUpperCase()); }
+function mktClickName(code, market) { const s = mktFindSec(code, market); if (s) openSecurityDetail(s.id); else window.open(mktKabutan(code, market), '_blank'); }
+function addRankingWatch(code, market) {
+  let s = mktFindSec(code, market);
+  if (s) { store.updateSecurity(s.id, { watch: true }); toast(`${code} を注意銘柄にしました`); }
+  else {
+    s = store.addSecurity({ market, ticker: String(code).toUpperCase(), currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, watch: true, ruleId: store.defaultRule().id });
+    toast(`${code} を注意銘柄として追加しました（保有銘柄で監視）`);
+    api.refreshPrice([s]).then(() => { if (currentView === 'market') renderMarketTab(); });
+  }
+  renderMarketTab();
+}
+async function loadRanking(force) {
+  const key = mktKey();
+  if (mktBusy) return;
+  if (!force && mktCache[key]) { renderMarketTab(); return; }
+  mktBusy = true; renderMarketTab();
+  try {
+    const { market, sub, kind } = mktState;
+    const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=${sub}&count=20`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
+    let items = (r && r.items) || [];
+    // 日本株は価格・前日比が取得元HTMLに無いため /api/price で補完（提供元の確実な値）
+    if (market === 'JP' && items.length) {
+      const syms = items.map(it => it.code + '.T');
+      const pr = await fetch(`/api/price?symbols=${encodeURIComponent(syms.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
+      items = items.map(it => { const q = pr[it.code + '.T']; const price = q && !q.error ? q.price : null; const changePct = (price != null && q && q.prevClose) ? (price - q.prevClose) / q.prevClose * 100 : null; return { ...it, price, changePct }; });
+    }
+    mktCache[key] = { items, at: Date.now() };
+  } catch (_) { mktCache[key] = { items: [], at: Date.now() }; }
+  mktBusy = false; renderMarketTab();
+}
+function mktMetricFmt(it, kind) {
+  const cur = it.market === 'US' ? '$' : '';
+  if (kind === 'marketcap') return it.marketCap != null ? cur + mktAbbr(it.marketCap) : '—';
+  if (kind === 'turnover') return it.value != null ? cur + mktAbbr(it.value) : '—';
+  return '—';
+}
+function renderMarketTab() {
+  const key = mktKey(); const cache = mktCache[key]; const items = cache ? cache.items : null;
+  const { market, sub, kind } = mktState;
+  const mseg = `<div class="seg"><button class="${market === 'US' ? 'active' : ''}" onclick="setMktMarket('US')">米国株</button><button class="${market === 'JP' ? 'active' : ''}" onclick="setMktMarket('JP')">日本株</button></div>`;
+  const subseg = market === 'JP' ? `<div class="seg" style="margin-left:6px;flex-wrap:wrap">${MKT_JP_SUBS.map(([v, l]) => `<button class="${sub === v ? 'active' : ''}" onclick="setMktSub('${v}')">${l}</button>`).join('')}</div>` : '';
+  const kseg = `<div class="seg">${MKT_KINDS.map(([v, l]) => `<button class="${kind === v ? 'active' : ''}" onclick="setMktKind('${v}')">${l}</button>`).join('')}</div>`;
+  const showMetric = (kind === 'turnover' || kind === 'marketcap');
+  const metricLabel = kind === 'turnover' ? '売買代金' : kind === 'marketcap' ? '時価総額' : '';
+  let body;
+  if (mktBusy && !items) body = '<div class="empty">読み込み中…</div>';
+  else if (!items) body = '<div class="empty">読み込み中…</div>';
+  else if (!items.length) body = '<div class="empty">データを取得できませんでした（休場/時間外、または取得元の仕様変更の可能性）。「更新」で再取得できます。</div>';
+  else {
+    const rows = items.map((it, i) => {
+      const owned = !!mktFindSec(it.code, market);
+      const dc = it.changePct;
+      const priceTxt = it.price != null ? fmtAmt(it.price, market) : '—';
+      return `<tr>
+        <td>${i + 1}</td>
+        <td class="l col-code"><span class="tk ${market.toLowerCase()}" style="cursor:pointer" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.code)}</span></td>
+        <td class="l"><strong class="lnk-ext nm-strong" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.name || it.code)}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
+        <td><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
+        <td class="${cls(dc)}"><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
+        ${showMetric ? `<td>${mktMetricFmt(it, kind)}</td>` : ''}
+        <td class="l nowrap"><button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button></td>
+      </tr>`;
+    }).join('');
+    body = `<div class="table-wrap"><table class="holdings dense"><thead><tr><th>順位</th><th class="l">コード</th><th class="l">名称</th><th>現在値</th><th>前日比</th>${showMetric ? `<th>${metricLabel}</th>` : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  app.innerHTML = `
+    <div class="section">
+      <div class="section-head"><h2>マーケット ランキング（上位20）</h2>
+        <button class="btn btn-sm btn-primary" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''}>${mktBusy ? '取得中…' : '更新'}</button></div>
+      <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${mseg}${subseg}</div>
+      <div class="toolbar" style="border:none;padding:8px 16px 0;gap:8px;flex-wrap:wrap"><span class="muted">ランキング</span>${kseg}
+        ${market === 'JP' ? '<span class="muted" style="font-size:11px">※日本株の現在値・前日比は価格APIから取得</span>' : ''}</div>
+      <div class="section-body" style="padding:12px 16px 16px">${body}</div>
+    </div>`;
+  if (!items && !mktBusy) loadRanking(false); // タブを開いた時（起動時相当）に自動取得
+}
+
 function renderReport() {
   const byMarket = {}, byBroker = {}, matrix = {}, byTypeMarket = {}, byBrokerSeg = {};
   let fxMissing = false;
@@ -5375,6 +5468,12 @@ window.fetchFundName = fetchFundName;
 window.openFundCodeMaster = openFundCodeMaster;
 window.openImportAliasMaster = openImportAliasMaster;
 window.deleteImportAlias = deleteImportAlias;
+window.setMktMarket = setMktMarket;
+window.setMktSub = setMktSub;
+window.setMktKind = setMktKind;
+window.mktRefresh = mktRefresh;
+window.mktClickName = mktClickName;
+window.addRankingWatch = addRankingWatch;
 window.registerPendingFunds = registerPendingFunds;
 window.setSecMasterSearch = setSecMasterSearch;
 window.smBulkFieldChange = smBulkFieldChange;
@@ -5407,7 +5506,8 @@ document.getElementById('drawer-close').onclick = closeDrawer;
 document.getElementById('drawer-overlay').addEventListener('click', (e) => { if (e.target.id === 'drawer-overlay') closeDrawer(); });
 // モーダル外クリックでは閉じない（意図しない消失を防止）。× か各フォームのボタンのみで閉じる
 // 「価格更新」: その日まだ高値を取得していなければ高値も取得（LDOS等の古い5年高値を修正）、以降は価格のみで軽量
-document.getElementById('btn-refresh').onclick = () => api.refreshAll({ withHighs: store.data.lastHighsDate !== today() }).then(render);
+// マーケットタブ表示中はランキングも更新（保有銘柄と同じ手動更新ルール）
+document.getElementById('btn-refresh').onclick = () => api.refreshAll({ withHighs: store.data.lastHighsDate !== today() }).then(() => { if (currentView === 'market') mktRefresh(); render(); });
 
 // IME変換中は検索の再描画を抑止（innerHTML生成の oncomposition* 属性はハンドラ登録されないため、
 // document に委譲リスナーを張る。これで全ての入力欄の変換中フラグを確実に拾える・SEC-112）
