@@ -67,46 +67,25 @@ async function rankJp(kind, sub, count) {
   });
   if (!res.ok) throw new Error(`yahoo-jp ${res.status}`);
   const html = await res.text();
-  // __NEXT_DATA__ のJSONを抽出
-  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!m) throw new Error('NEXT_DATA なし');
-  let nd; try { nd = JSON.parse(m[1]); } catch (_) { throw new Error('NEXT_DATA parse失敗'); }
-  // ランキング配列を深さ優先で探索（code/price 等を持つ配列を見つける）
-  const list = findRankingArray(nd);
-  if (!list) throw new Error('ランキング配列なし');
-  const items = list.slice(0, count).map(r => normalizeJpRow(r)).filter(Boolean);
+  return parseJpRanking(html, count);
+}
+// Yahoo Japan ランキングのHTMLを解析。各行は /quote/CODE.T へのリンク＋数値群。
+// コード・名称はリンクから確実。数値（価格・前日比%・代金/時価総額）は行内の数値を拾う（_raw で並びを確認しマッピング）。
+function parseJpRanking(html, count) {
+  const items = []; const seen = new Set();
+  const re = /\/quote\/([0-9A-Z]{4})\.T[^>]*>([^<]{1,40})<\/a>/g;
+  let m;
+  while ((m = re.exec(html)) !== null && items.length < count) {
+    const code = m[1]; if (seen.has(code)) continue; seen.add(code);
+    const name = decodeEntities(m[2].trim());
+    // この行〜次行手前のHTMLから数値を抽出（カンマ・小数・マイナス・%対応）
+    const tail = html.slice(m.index, m.index + 1400);
+    const raw = (tail.match(/-?[\d,]+(?:\.\d+)?/g) || []).map(x => parseFloat(x.replace(/,/g, ''))).filter(n => isFinite(n));
+    items.push({ code, name, market: 'JP', _raw: raw.slice(0, 12) });
+  }
   return items;
 }
-// JSONを再帰探索し、銘柄ランキングらしき配列を返す
-function findRankingArray(obj, depth = 0) {
-  if (!obj || depth > 8) return null;
-  if (Array.isArray(obj)) {
-    if (obj.length >= 3 && obj.every(x => x && typeof x === 'object') &&
-        obj.some(x => (x.code || x.symbol || x.stockCode) && (x.price != null || x.regularMarketPrice != null || x.tradingValue != null || x.marketCap != null))) {
-      return obj;
-    }
-    for (const v of obj) { const r = findRankingArray(v, depth + 1); if (r) return r; }
-    return null;
-  }
-  if (typeof obj === 'object') {
-    for (const k in obj) { const r = findRankingArray(obj[k], depth + 1); if (r) return r; }
-  }
-  return null;
-}
-function normalizeJpRow(r) {
-  const code = String(r.code || r.symbol || r.stockCode || '').replace(/\.T$/, '').trim();
-  if (!/^[0-9A-Za-z]{4}$/.test(code)) return null;
-  const price = num(r.price ?? r.regularMarketPrice ?? r.lastPrice);
-  return {
-    code, name: r.name || r.shortName || r.stockName || code,
-    price, changePct: num(r.changeRate ?? r.regularMarketChangePercent ?? r.priceChangeRate),
-    prevClose: num(r.previousPrice ?? r.regularMarketPreviousClose),
-    volume: num(r.volume ?? r.regularMarketVolume),
-    marketCap: num(r.marketCap ?? r.totalPrice),
-    value: num(r.tradingValue ?? r.marketCap ?? r.totalPrice) ?? (price != null && r.volume ? price * num(r.volume) : null),
-    market: 'JP',
-  };
-}
+function decodeEntities(s) { return String(s).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"); }
 
 // デバッグ: ページHTTP状況と __NEXT_DATA__ の構造サンプルを返す（ランキング配列のキー/パス特定用）
 async function debugJp(type, mk) {
