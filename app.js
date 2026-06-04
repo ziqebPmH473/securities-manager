@@ -2122,11 +2122,10 @@ function mktAmt(n, market) {
   if (market === 'US') { if (a >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T'; if (a >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B'; if (a >= 1e6) return '$' + (n / 1e6).toFixed(0) + 'M'; return '$' + Math.round(n).toLocaleString('ja-JP'); }
   if (a >= 1e12) return (n / 1e12).toFixed(2) + '兆'; if (a >= 1e8) return (n / 1e8).toFixed(0) + '億'; return Math.round(n).toLocaleString('ja-JP');
 }
-// 市場ラベル（米株=取引所、日本株=選択中のサブ市場）
-function mktMarketLabel(it, market, sub) {
+// 市場ラベル（米株=取引所、日本株=各銘柄の実際の市場区分プライム/スタンダード/グロース）
+function mktMarketLabel(it, market) {
   if (market === 'US') return it.exchange || '米国株';
-  if (sub === 'all') return '東証';
-  const f = MKT_JP_SUBS.find(x => x[0] === sub); return f ? f[1] : '日本株';
+  return it.section || '東証'; // 日本株は銘柄ごとの区分
 }
 function renderMarketTab() {
   const key = mktKey(); const cache = mktCache[key]; const items = cache ? cache.items : null;
@@ -2144,7 +2143,7 @@ function renderMarketTab() {
       const priceTxt = it.price != null ? fmtAmt(it.price, market) : '—';
       return `<tr>
         <td>${i + 1}</td>
-        <td class="l"><span class="tag ${market.toLowerCase()}">${esc(mktMarketLabel(it, market, sub))}</span></td>
+        <td class="l"><span class="tag ${market.toLowerCase()}">${esc(mktMarketLabel(it, market))}</span></td>
         <td class="l col-code"><span class="tk ${market.toLowerCase()}" style="cursor:pointer" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.code)}</span></td>
         <td class="l"><strong class="lnk-ext nm-strong" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.name || it.code)}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
         <td><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>

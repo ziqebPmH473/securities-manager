@@ -70,20 +70,22 @@ async function rankJp(kind, sub, count) {
   const html = await res.text();
   return parseJpRanking(html, count);
 }
-// Yahoo Japan ランキングのHTMLを解析。各行は /quote/CODE.T へのリンク。
-// 価格等の数値はJS描画でHTMLに無いため、ここでは「ランキング順のコード・名称」を返す。
-// 価格・前日比はクライアントが /api/price から取得して埋める（提供元の確実な値を使う）。
+// Yahoo Japan ランキングのHTMLを解析。各行: <a .../quote/CODE.T>NAME</a> + <li>CODE</li><li>東証PRM</li>。
+// コード・名称・市場区分(プライム/スタンダード/グロース)を抽出。価格・前日比はクライアントが /api/price で補完。
 function parseJpRanking(html, count) {
   const items = []; const seen = new Set();
-  const re = /\/quote\/([0-9A-Z]{4})\.T[^>]*>([^<]{1,40})<\/a>/g;
+  const re = /\/quote\/([0-9A-Z]{4})\.T"[^>]*>([^<]{1,50})<\/a>/g;
   let m;
   while ((m = re.exec(html)) !== null && items.length < count) {
     const code = m[1]; if (seen.has(code)) continue; seen.add(code);
     const name = decodeEntities(m[2].trim());
-    items.push({ code, name, market: 'JP', price: null, changePct: null, turnover: null, marketCap: null });
+    const after = html.slice(m.index, m.index + 500);
+    const sm = after.match(/東証([A-Z]+)/);
+    items.push({ code, name, market: 'JP', section: sm ? jpSection(sm[1]) : null, price: null, changePct: null, turnover: null, marketCap: null });
   }
   return items;
 }
+function jpSection(c) { return c === 'PRM' ? 'プライム' : c === 'STD' ? 'スタンダード' : c === 'GRT' ? 'グロース' : '東証' + c; }
 function decodeEntities(s) { return String(s).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"); }
 
 // デバッグ: ページHTTP状況と __NEXT_DATA__ の構造サンプルを返す（ランキング配列のキー/パス特定用）
