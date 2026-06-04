@@ -114,7 +114,10 @@ async function debugJp(type, mk) {
   out.growthCount = (html.match(/グロース/g) || []).length;
   // 最初の銘柄リンク周辺のHTMLを返す（行構造を見て解析を書くため）
   const idx = html.search(/\/quote\/\d{4}\.T/);
-  out.snippetAroundFirstQuote = idx >= 0 ? html.slice(Math.max(0, idx - 250), idx + 2200) : null;
+  out.snippetAroundFirstQuote = idx >= 0 ? html.slice(Math.max(0, idx - 250), idx + 2600) : null;
+  // 強調セル（ランキング指標=売買代金/時価総額）の中身を確認
+  const hi = idx >= 0 ? html.indexOf('detail--highlight', idx) : -1;
+  out.highlightSnippet = hi >= 0 ? html.slice(hi, hi + 350) : null;
   return out;
 }
 
