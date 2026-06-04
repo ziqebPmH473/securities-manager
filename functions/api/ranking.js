@@ -9,6 +9,11 @@ export async function onRequestGet(context) {
   const kind = url.searchParams.get('kind') || 'turnover';
   const sub = url.searchParams.get('sub') || 'all';
   const count = Math.min(50, Math.max(1, parseInt(url.searchParams.get('count') || '20', 10)));
+  // デバッグ: 日本株の __NEXT_DATA__ 構造を確認（ランキング配列のパス特定用）
+  if (url.searchParams.get('debug') === '1' && market === 'JP') {
+    try { return json(await debugJp(JP_TYPE[kind] || 'marketCapitalHigh', JP_MARKET[sub] || 'tokyoAll')); }
+    catch (e) { return json({ error: String(e && e.message || e) }); }
+  }
   try {
     const items = market === 'JP' ? await rankJp(kind, sub, count) : await rankUs(kind, count);
     return json({ market, kind, sub, items, source: market === 'JP' ? 'yahoo-jp' : 'yahoo-screener' });
@@ -48,11 +53,13 @@ async function rankUs(kind, count) {
 
 // ---------- 日本株（Yahoo!ファイナンス日本版ランキングを解析） ----------
 // term=daily, type に応じたランキング。__NEXT_DATA__(JSON) からリストを抽出する。
-const JP_TYPE = { turnover: 'tradingValue', marketcap: 'marketCapHigh', gainers: 'up', losers: 'down' };
-const JP_MARKET = { all: 'all', prime: 'tokyoPrime', standard: 'tokyoStandard', growth: 'tokyoGrowth', nikkei: 'nikkei225' };
+// 種別→Yahoo Japanランキングのパス。marketCapitalHigh/up/down は確認済。tradingValueHigh(売買代金)は推定→本番検証。
+const JP_TYPE = { turnover: 'tradingValueHigh', marketcap: 'marketCapitalHigh', gainers: 'up', losers: 'down' };
+// 市場フィルタ。tokyoAll(全市場)/tokyo1(プライム)は確認済。standard/growth/nikkeiは推定→本番検証。
+const JP_MARKET = { all: 'tokyoAll', prime: 'tokyo1', standard: 'tokyoStandard', growth: 'tokyoGrowth', nikkei: 'nikkei225' };
 async function rankJp(kind, sub, count) {
-  const type = JP_TYPE[kind] || 'tradingValue';
-  const mk = JP_MARKET[sub] || 'all';
+  const type = JP_TYPE[kind] || 'marketCapitalHigh';
+  const mk = JP_MARKET[sub] || 'tokyoAll';
   const u = `https://finance.yahoo.co.jp/stocks/ranking/${type}?market=${mk}&term=daily`;
   const res = await fetch(u, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36', 'Accept-Language': 'ja' },
@@ -99,6 +106,32 @@ function normalizeJpRow(r) {
     value: num(r.tradingValue ?? r.marketCap ?? r.totalPrice) ?? (price != null && r.volume ? price * num(r.volume) : null),
     market: 'JP',
   };
+}
+
+// デバッグ: ページHTTP状況と __NEXT_DATA__ の構造サンプルを返す（ランキング配列のキー/パス特定用）
+async function debugJp(type, mk) {
+  const u = `https://finance.yahoo.co.jp/stocks/ranking/${type}?market=${mk || 'tokyoAll'}&term=daily`;
+  const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36', 'Accept-Language': 'ja' } });
+  const out = { url: u, status: res.status };
+  if (!res.ok) return out;
+  const html = await res.text();
+  out.htmlLen = html.length;
+  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  out.hasNextData = !!m;
+  if (m) {
+    try {
+      const nd = JSON.parse(m[1]);
+      const arr = findRankingArray(nd);
+      out.foundArray = !!arr;
+      out.firstRowKeys = arr && arr[0] ? Object.keys(arr[0]) : null;
+      out.firstRow = arr && arr[0] ? arr[0] : null;
+      // pageProps配下のキーも参考に
+      out.pagePropsKeys = nd?.props?.pageProps ? Object.keys(nd.props.pageProps) : null;
+    } catch (e) { out.parseError = String(e && e.message || e); }
+  } else {
+    out.htmlSnippet = html.slice(0, 300);
+  }
+  return out;
 }
 
 function num(v) { if (typeof v === 'number' && isFinite(v)) return v; if (typeof v === 'string') { const n = parseFloat(v.replace(/[,，円%\s]/g, '')); return isFinite(n) ? n : null; } return null; }
