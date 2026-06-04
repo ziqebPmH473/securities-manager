@@ -2076,7 +2076,7 @@ let mktState = { market: 'US', sub: 'all', kind: 'turnover' };
 let mktCache = {};   // key -> { items, at }
 let mktBusy = false;
 const MKT_KINDS = [['turnover', '売買代金'], ['marketcap', '時価総額'], ['gainers', '値上がり'], ['losers', '値下がり']];
-const MKT_JP_SUBS = [['all', '全市場'], ['prime', 'プライム'], ['standard', 'スタンダード'], ['growth', 'グロース'], ['nikkei', '日経採用']];
+const MKT_JP_SUBS = [['all', '全市場'], ['prime', 'プライム'], ['standard', 'スタンダード'], ['growth', 'グロース']];
 function mktKey() { return `${mktState.market}:${mktState.market === 'JP' ? mktState.sub : '-'}:${mktState.kind}`; }
 function setMktMarket(m) { mktState.market = m; if (m === 'US') mktState.sub = 'all'; renderMarketTab(); }
 function setMktSub(s) { mktState.sub = s; renderMarketTab(); }

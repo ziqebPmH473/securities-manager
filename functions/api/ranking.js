@@ -56,8 +56,8 @@ async function rankUs(kind, count) {
 // term=daily, type に応じたランキング。__NEXT_DATA__(JSON) からリストを抽出する。
 // 種別→Yahoo Japanランキングのパス。marketCapitalHigh/up/down は確認済。tradingValueHigh(売買代金)は推定→本番検証。
 const JP_TYPE = { turnover: 'tradingValueHigh', marketcap: 'marketCapitalHigh', gainers: 'up', losers: 'down' };
-// 市場フィルタ。tokyoAll(全市場)/tokyo1(プライム)は確認済。standard/growth/nikkeiは推定→本番検証。
-const JP_MARKET = { all: 'tokyoAll', prime: 'tokyo1', standard: 'tokyoStandard', growth: 'tokyoGrowth', nikkei: 'nikkei225' };
+// 市場フィルタ。全=tokyoAll / プライム=tokyo1 / スタンダード=tokyo2 / グロース=tokyoM（すみぽん提供URLで確認）。日経採用はYahoo側に無し。
+const JP_MARKET = { all: 'tokyoAll', prime: 'tokyo1', standard: 'tokyo2', growth: 'tokyoM' };
 async function rankJp(kind, sub, count) {
   const type = JP_TYPE[kind] || 'marketCapitalHigh';
   const mk = JP_MARKET[sub] || 'tokyoAll';
