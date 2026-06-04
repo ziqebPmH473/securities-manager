@@ -97,10 +97,13 @@ async function debugJp(type, mk) {
   out.hasNextData = html.includes('__NEXT_DATA__');
   out.hasPreloaded = html.includes('__PRELOADED_STATE__');
   out.quoteLinkCount = (html.match(/\/quote\/\d{4}\.T/g) || []).length;
-  out.appJsonScripts = (html.match(/<script[^>]*type="application\/json"/g) || []).length;
+  // 市場区分テキストが行ごとにあるか（市場列を各銘柄の区分にできるか判定）
+  out.primeCount = (html.match(/プライム/g) || []).length;
+  out.standardCount = (html.match(/スタンダード/g) || []).length;
+  out.growthCount = (html.match(/グロース/g) || []).length;
   // 最初の銘柄リンク周辺のHTMLを返す（行構造を見て解析を書くため）
   const idx = html.search(/\/quote\/\d{4}\.T/);
-  out.snippetAroundFirstQuote = idx >= 0 ? html.slice(Math.max(0, idx - 250), idx + 1400) : null;
+  out.snippetAroundFirstQuote = idx >= 0 ? html.slice(Math.max(0, idx - 250), idx + 2200) : null;
   return out;
 }
 
