@@ -753,8 +753,8 @@ const api = {
     };
     const secs = allSecs.filter(needsFetch);
     const holdSymbols = secs.map(yahooSymbol);
-    // Cloudflareのサブリクエスト上限(約50)対策で小バッチに分割（withHighsは2呼出/銘柄→16、通常は1→40）。
-    const BATCH = withHighs ? 16 : 40;
+    // Cloudflareのサブリクエスト上限(約50)対策で小バッチに分割。withHighsは5年日足取得で応答が大きいため小さめ(10)、通常は1呼出/銘柄(40)。
+    const BATCH = withHighs ? 10 : 40;
     const batches = [];
     for (let i = 0; i < holdSymbols.length; i += BATCH) batches.push(holdSymbols.slice(i, i + BATCH));
     let quotes = {}, lightQuotes = {};
@@ -779,6 +779,7 @@ const api = {
         store.data.prices[priceKey(sec)] = {
           ...prev,
           price: q.price, prevClose: q.prevClose,
+          prevDayPct: q.prevDayPct != null ? q.prevDayPct : (prev.prevDayPct ?? null), // 前営業日の値動き%（寄り付き前表示用）
           high5y: q.high5y != null ? q.high5y : (prev.high5y ?? null),
           high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),
           high5yDate: q.high5yDate != null ? q.high5yDate : (prev.high5yDate ?? null),
@@ -1159,7 +1160,7 @@ const COL_RENDERERS = {
   // 時間外: 米株プレ/アフター価格＋前日比（対前日終値）＋種別タグ。
   extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const d = (p.prevClose && p.extPrice) ? (p.extPrice - p.prevClose) / p.prevClose * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)}${d != null ? ` <span style="font-size:11px">${signed(d)}%</span>` : ''} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
   // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
-  day:       (s,c) => { const v = c.dayChg, st = condStyle('day', v); return `<td class="${st ? '' : cls(v)}"${st}><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a></td>`; },
+  day:       (s,c) => { const v = c.dayChg, st = condStyle('day', v); const pm = c.dayIsPrev ? '<span class="muted" style="font-size:9px" title="寄り付き前のため前営業日の値動きを表示">前</span>' : ''; return `<td class="${st ? '' : cls(v)}"${st}><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a>${pm}</td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
   // 適用区分: 次回購入・残り下落率がどのルール分岐で算出されたか（初=初回 / 増=買い増し / 高=高値更新 / 固=買増固定値 / —=判定外）
   trigBasis: (s,c) => {
@@ -1730,7 +1731,9 @@ function marketRow(sec, visibleCols, opts = {}) {
     noPriceMark: (price == null && th.qty > 0) ? ' <span class="muted" title="価格未取得・取得原価で表示">*</span>' : '',
     valN: calc.valueOrCostNative(sec),
     pnlPct: calc.pnlPctNative(sec),
-    dayChg: (price != null && p.prevClose) ? (price - p.prevClose) / p.prevClose * 100 : null,
+    // 前日比: 通常は現在値−前日終値。寄り付き前(現在値==前日終値で0%)は「前営業日の値動き」を表示（dayIsPrev）。
+    dayChg: (() => { if (price == null || !p.prevClose) return null; const live = (price - p.prevClose) / p.prevClose * 100; return (live === 0 && p.prevDayPct != null) ? p.prevDayPct : live; })(),
+    dayIsPrev: (price != null && p.prevClose && (price - p.prevClose) === 0 && p.prevDayPct != null),
     buyAmt: calc.buyAmount(sec),
     buyCnt: calc.buyCount(sec),
     recoAmt: store.categoryAmountFor(sec.category, market),

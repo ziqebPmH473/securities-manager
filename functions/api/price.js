@@ -67,13 +67,13 @@ async function fetchFinnhub(symbol, token, withHighs) {
   });
   const q = quoteRes.ok ? await quoteRes.json().catch(() => ({})) : {};
 
-  let high5y = null, high52w = null, high5yDate = null, high52wDate = null, yq = null;
-  // 高値が必要な時のみ Yahoo を追加（高値は日中ほぼ不変なので毎回は取らない）
+  let high5y = null, high52w = null, high5yDate = null, high52wDate = null, prevDayPct = null, yq = null;
+  // 高値が必要な時のみ Yahoo を追加（高値は日中ほぼ不変なので毎回は取らない）。日足取得で5年高値＋前営業日比も得る。
   if (withHighs) {
     try {
-      yq = await fetchYahooChart(symbol, '5y', '1mo');
+      yq = await fetchYahooChart(symbol, '5y', '1d');
       high5y = yq.high5y || null; high52w = yq.high52w || null;
-      high5yDate = yq.high5yDate; high52wDate = yq.high52wDate;
+      high5yDate = yq.high5yDate; high52wDate = yq.high52wDate; prevDayPct = yq.prevDayPct;
     } catch (_) { /* 失敗時は高値なし（クライアントが既存値を保持） */ }
   }
 
@@ -82,11 +82,11 @@ async function fetchFinnhub(symbol, token, withHighs) {
   if (price == null || price === 0) {
     if (yq && yq.price != null) { price = yq.price; prevClose = yq.prevClose ?? prevClose; source = 'yahoo(fallback)'; }
     else {
-      try { const y2 = await fetchYahooChart(symbol, '1mo', '1d'); if (y2.price != null) { price = y2.price; prevClose = y2.prevClose ?? prevClose; source = 'yahoo(fallback)'; if (high5y == null && y2.high5y) high5y = y2.high5y; } } catch (_) {}
+      try { const y2 = await fetchYahooChart(symbol, '1mo', '1d'); if (y2.price != null) { price = y2.price; prevClose = y2.prevClose ?? prevClose; source = 'yahoo(fallback)'; if (high5y == null && y2.high5y) high5y = y2.high5y; if (prevDayPct == null) prevDayPct = y2.prevDayPct; } } catch (_) {}
     }
   }
 
-  return { price, prevClose, high5y, high52w, high5yDate, high52wDate, currency: 'USD', source, fetchedAt: new Date().toISOString() };
+  return { price, prevClose, prevDayPct, high5y, high52w, high5yDate, high52wDate, currency: 'USD', source, fetchedAt: new Date().toISOString() };
 }
 
 // ---------- 米株 プレ/アフター（時間外）----------
@@ -138,6 +138,7 @@ async function fetchYahoo(symbol, type, rangeOverride, withHighs) {
   return {
     price:    q.price,
     prevClose: q.prevClose,
+    prevDayPct: q.prevDayPct,   // 前営業日の値動き%（寄り付き前の前日比表示用）
     high5y:   wantHighs ? q.high5y : null,   // 通常更新では高値を返さない（クライアントが既存値を保持）
     high52w:  wantHighs ? q.high52w : null,
     high5yDate:  wantHighs ? q.high5yDate : null,   // 高値が付いた日（高値更新判定用）
@@ -185,9 +186,13 @@ async function fetchYahooChart(symbol, range, interval) {
 
   // 現在値: regularMarketPrice が空なら終値配列の最後（当日 or 直近）で補完（取得漏れ防止）
   const price = num(meta.regularMarketPrice) ?? (closes.length ? closes[closes.length - 1] : null);
+  // 前営業日の値動き%（＝前日終値の日の前日比）。寄り付き前(現在値==前日終値で0%)に「前営業日どうだったか」を表示するため。
+  // = (前日終値 − その前の終値) / その前の終値。日足が3本以上ある時のみ。
+  const prevDayPct = closes.length >= 3 ? (closes[closes.length - 2] - closes[closes.length - 3]) / closes[closes.length - 3] * 100 : null;
   return {
     price,
     prevClose: num(prevClose),
+    prevDayPct,
     high5y:   high5y || num(meta.fiftyTwoWeekHigh),
     high52w:  high52w || num(meta.fiftyTwoWeekHigh),
     high5yDate:  toDate(high5yTs),   // 5年高値が付いた日（YYYY-MM-DD）
