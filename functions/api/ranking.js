@@ -41,11 +41,12 @@ async function rankUs(kind, count) {
       price, changePct: num(q.regularMarketChangePercent),
       prevClose: num(q.regularMarketPreviousClose),
       volume: vol, marketCap: mc,
-      value: kind === 'marketcap' ? mc : (price != null && vol != null ? price * vol : null), // 売買代金=価格×出来高
+      turnover: (price != null && vol != null) ? price * vol : null, // 売買代金=価格×出来高
+      exchange: q.fullExchangeName || q.exchange || null,
       market: 'US',
     };
   });
-  if (kind === 'turnover') items.sort((a, b) => (b.value || 0) - (a.value || 0));
+  if (kind === 'turnover') items.sort((a, b) => (b.turnover || 0) - (a.turnover || 0));
   else if (kind === 'marketcap') items.sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
   // gainers/losers は screener が並べ替え済み
   return items.slice(0, count);
@@ -79,7 +80,7 @@ function parseJpRanking(html, count) {
   while ((m = re.exec(html)) !== null && items.length < count) {
     const code = m[1]; if (seen.has(code)) continue; seen.add(code);
     const name = decodeEntities(m[2].trim());
-    items.push({ code, name, market: 'JP', price: null, changePct: null, value: null });
+    items.push({ code, name, market: 'JP', price: null, changePct: null, turnover: null, marketCap: null });
   }
   return items;
 }
