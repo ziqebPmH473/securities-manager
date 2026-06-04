@@ -69,8 +69,9 @@ async function rankJp(kind, sub, count) {
   const html = await res.text();
   return parseJpRanking(html, count);
 }
-// Yahoo Japan ランキングのHTMLを解析。各行は /quote/CODE.T へのリンク＋数値群。
-// コード・名称はリンクから確実。数値（価格・前日比%・代金/時価総額）は行内の数値を拾う（_raw で並びを確認しマッピング）。
+// Yahoo Japan ランキングのHTMLを解析。各行は /quote/CODE.T へのリンク。
+// 価格等の数値はJS描画でHTMLに無いため、ここでは「ランキング順のコード・名称」を返す。
+// 価格・前日比はクライアントが /api/price から取得して埋める（提供元の確実な値を使う）。
 function parseJpRanking(html, count) {
   const items = []; const seen = new Set();
   const re = /\/quote\/([0-9A-Z]{4})\.T[^>]*>([^<]{1,40})<\/a>/g;
@@ -78,10 +79,7 @@ function parseJpRanking(html, count) {
   while ((m = re.exec(html)) !== null && items.length < count) {
     const code = m[1]; if (seen.has(code)) continue; seen.add(code);
     const name = decodeEntities(m[2].trim());
-    // この行〜次行手前のHTMLから数値を抽出（カンマ・小数・マイナス・%対応）
-    const tail = html.slice(m.index, m.index + 1400);
-    const raw = (tail.match(/-?[\d,]+(?:\.\d+)?/g) || []).map(x => parseFloat(x.replace(/,/g, ''))).filter(n => isFinite(n));
-    items.push({ code, name, market: 'JP', _raw: raw.slice(0, 12) });
+    items.push({ code, name, market: 'JP', price: null, changePct: null, value: null });
   }
   return items;
 }
