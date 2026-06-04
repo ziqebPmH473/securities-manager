@@ -1308,9 +1308,9 @@ function updateHeader() {
       const ix = (store.data.indices || {})[ixDef.key] || {};
       const pct = calc.indexChangePct(ixDef.key);
       const val = ix.price != null ? idxNum(ix.price) : '—';
-      // 日経平均のみ「変動幅（変動率）」を表示: 例 +404.74（+0.61%）。他指数は変動率のみ
+      // 日経平均・日経先物は「変動幅（変動率）」を表示: 例 +404.74（+0.61%）。他指数は変動率のみ
       let metric;
-      if (ixDef.key === 'n225' && ix.price != null && ix.prevClose != null && pct != null) {
+      if ((ixDef.key === 'n225' || ixDef.key === 'nikkeifut') && ix.price != null && ix.prevClose != null && pct != null) {
         const d = ix.price - ix.prevClose;
         metric = `<span class="t-pct ${cls(d)}">${d >= 0 ? '+' : '−'}${idxNum(Math.abs(d))}（${signed(pct)}%）</span>`;
       } else {
