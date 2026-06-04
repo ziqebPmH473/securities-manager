@@ -13,15 +13,17 @@ export async function onRequestGet(context) {
   const single = (url.searchParams.get('symbol') || '').trim();
   const multi = (url.searchParams.get('symbols') || '').split(',').map(s => s.trim()).filter(Boolean);
   const finnhubKey = context.env?.FINNHUB_API_KEY;
+  // names=1: 日本語名のみ軽量取得（1銘柄1リクエスト）。マーケットランキングの米株名を日本語化する用途。
+  const namesOnly = url.searchParams.get('names') === '1';
 
   if (single) {
-    try { return json(await fetchInfo(single, finnhubKey)); }
+    try { return json(namesOnly ? await fetchNameOnly(single) : await fetchInfo(single, finnhubKey)); }
     catch (e) { return json({ error: String(e?.message || e) }, 500); }
   }
   if (multi.length) {
     const out = {};
     await Promise.all(multi.map(async (sym) => {
-      try { out[sym] = await fetchInfo(sym, finnhubKey); }
+      try { out[sym] = namesOnly ? await fetchNameOnly(sym) : await fetchInfo(sym, finnhubKey); }
       catch (e) { out[sym] = { error: String(e?.message || e) }; }
     }));
     return json(out);
@@ -77,6 +79,14 @@ function cleanName(name) {
   s = s.replace(EN, '').replace(EN, '');
   s = s.replace(/[\s,，・]+$/, '').trim();
   return s || orig;
+}
+
+// 日本語名のみ取得（1リクエスト）。Yahoo!ファイナンス日本版→無ければchart英語名。
+async function fetchNameOnly(symbol) {
+  const jp = await fetchYahooJpName(symbol).catch(() => null);
+  let name = cleanName(jp);
+  if (!name) { const c = await fetchChartMeta(symbol).catch(() => null); name = cleanName(c?.name) || null; }
+  return { name };
 }
 
 // ---------- 米国株 ----------

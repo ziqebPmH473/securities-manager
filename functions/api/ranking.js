@@ -37,7 +37,7 @@ async function rankUs(kind, count) {
     const price = num(q.regularMarketPrice), vol = num(q.regularMarketVolume), mc = num(q.marketCap);
     return {
       code: q.symbol,
-      name: q.shortName || q.longName || q.symbol,
+      name: cleanName(q.shortName || q.longName || q.symbol),
       price, changePct: num(q.regularMarketChangePercent),
       prevClose: num(q.regularMarketPreviousClose),
       volume: vol, marketCap: mc,
@@ -78,7 +78,7 @@ function parseJpRanking(html, count) {
   let m;
   while ((m = re.exec(html)) !== null && items.length < count) {
     const code = m[1]; if (seen.has(code)) continue; seen.add(code);
-    const name = decodeEntities(m[2].trim());
+    const name = cleanName(decodeEntities(m[2].trim()));
     const after = html.slice(m.index, m.index + 500);
     const sm = after.match(/東証([A-Z]+)/);
     items.push({ code, name, market: 'JP', section: sm ? jpSection(sm[1]) : null, price: null, changePct: null, turnover: null, marketCap: null });
@@ -87,6 +87,15 @@ function parseJpRanking(html, count) {
 }
 function jpSection(c) { return c === 'PRM' ? 'プライム' : c === 'STD' ? 'スタンダード' : c === 'GRT' ? 'グロース' : '東証' + c; }
 function decodeEntities(s) { return String(s).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"); }
+// 法人格表記を除去（保有銘柄と同ルール）。日本語(株式会社/(株)/㈱)＋英語(Inc/Corp/Ltd等)。
+function cleanName(name) {
+  if (!name) return name;
+  const orig = String(name).trim();
+  let s = orig.replace(/(株式会社|\(株\)|（株）|㈱)/g, '');
+  const EN = /[,，]?\s*(Incorporated|Inc|Corporation|Corp|Company|Co|Limited|Ltd|P\.?L\.?C|LLC|N\.?V|S\.?A|A\.?G)\.?$/i;
+  s = s.replace(EN, '').replace(EN, '').replace(/[\s,，・]+$/, '').trim();
+  return s || orig;
+}
 
 // デバッグ: ページHTTP状況と __NEXT_DATA__ の構造サンプルを返す（ランキング配列のキー/パス特定用）
 async function debugJp(type, mk) {

@@ -2103,13 +2103,18 @@ async function loadRanking(force) {
   mktBusy = true; renderMarketTab();
   try {
     const { market, sub, kind } = mktState;
-    const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=${sub}&count=20`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
+    const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=${sub}&count=30`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
     let items = (r && r.items) || [];
     // 日本株は価格・前日比が取得元HTMLに無いため /api/price で補完（提供元の確実な値）
     if (market === 'JP' && items.length) {
       const syms = items.map(it => it.code + '.T');
       const pr = await fetch(`/api/price?symbols=${encodeURIComponent(syms.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
       items = items.map(it => { const q = pr[it.code + '.T']; const price = q && !q.error ? q.price : null; const changePct = (price != null && q && q.prevClose) ? (price - q.prevClose) / q.prevClose * 100 : null; return { ...it, price, changePct }; });
+    }
+    // 米株は名称を日本語化（保有銘柄と同ルール。例 AAPL→アップル）。names=1 は1銘柄1リクエストで軽量
+    if (market === 'US' && items.length) {
+      const nm = await fetch(`/api/info?names=1&symbols=${encodeURIComponent(items.map(it => it.code).join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
+      items = items.map(it => { const n = nm[it.code]; return (n && n.name) ? { ...it, name: n.name } : it; });
     }
     mktCache[key] = { items, at: Date.now() };
   } catch (_) { mktCache[key] = { items: [], at: Date.now() }; }
@@ -2157,13 +2162,14 @@ function renderMarketTab() {
   }
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>マーケット ランキング（上位20）</h2>
+      <div class="section-head"><h2>マーケット ランキング（上位30）</h2>
         <button class="btn btn-sm btn-primary" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''}>${mktBusy ? '取得中…' : '更新'}</button></div>
       <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${mseg}${subseg}</div>
       <div class="toolbar" style="border:none;padding:8px 16px 0;gap:8px;flex-wrap:wrap"><span class="muted">ランキング</span>${kseg}
         ${market === 'JP' ? '<span class="muted" style="font-size:11px">※日本株の現在値・前日比は価格APIから取得</span>' : ''}</div>
       <div class="section-body" style="padding:12px 16px 16px">${body}</div>
     </div>`;
+  fitListTables(); // 表を枠内スクロールに（ページ全体でなく表内でスクロール・画面に収める）
   if (!items && !mktBusy) loadRanking(false); // タブを開いた時（起動時相当）に自動取得
 }
 
