@@ -116,21 +116,13 @@ async function debugJp(type, mk) {
   if (!res.ok) return out;
   const html = await res.text();
   out.htmlLen = html.length;
-  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-  out.hasNextData = !!m;
-  if (m) {
-    try {
-      const nd = JSON.parse(m[1]);
-      const arr = findRankingArray(nd);
-      out.foundArray = !!arr;
-      out.firstRowKeys = arr && arr[0] ? Object.keys(arr[0]) : null;
-      out.firstRow = arr && arr[0] ? arr[0] : null;
-      // pageProps配下のキーも参考に
-      out.pagePropsKeys = nd?.props?.pageProps ? Object.keys(nd.props.pageProps) : null;
-    } catch (e) { out.parseError = String(e && e.message || e); }
-  } else {
-    out.htmlSnippet = html.slice(0, 300);
-  }
+  out.hasNextData = html.includes('__NEXT_DATA__');
+  out.hasPreloaded = html.includes('__PRELOADED_STATE__');
+  out.quoteLinkCount = (html.match(/\/quote\/\d{4}\.T/g) || []).length;
+  out.appJsonScripts = (html.match(/<script[^>]*type="application\/json"/g) || []).length;
+  // 最初の銘柄リンク周辺のHTMLを返す（行構造を見て解析を書くため）
+  const idx = html.search(/\/quote\/\d{4}\.T/);
+  out.snippetAroundFirstQuote = idx >= 0 ? html.slice(Math.max(0, idx - 250), idx + 1400) : null;
   return out;
 }
 
