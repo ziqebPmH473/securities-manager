@@ -332,6 +332,7 @@ button { font-family: inherit; }
   padding: 9px 12px; margin: 1px 0; border: none; background: transparent;
   color: #c3cddd; font-size: 13.5px; border-radius: 9px; cursor: pointer;
   text-align: left; position: relative; transition: background .12s, color .12s;
+  touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 .nav-item .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav-item:hover { background: rgba(255,255,255,.06); color: #fff; }
@@ -384,6 +385,8 @@ button { font-family: inherit; }
   background: var(--panel); color: var(--ink); border: 1px solid var(--border-strong);
   padding: 8px 14px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 500;
   transition: background .12s, border-color .12s, box-shadow .12s; white-space: nowrap;
+  /* モバイルでタップが「テキスト選択」「ダブルタップズーム」に化けてクリック不発になるのを防ぐ */
+  touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 .btn:hover { background: var(--panel-2); border-color: #b9c2d0; }
 .btn:active { transform: translateY(.5px); }

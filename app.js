@@ -2665,6 +2665,9 @@ function renderMaster() {
       </div>
     </div>
     ${googleSyncSection()}`;
+  // GIS を先に読み込んでおく（タップ→認証ポップアップの間に await を挟まないため。
+  // モバイルは「タップ直後の同期的処理」でないとポップアップを塞ぐ）。clientId 未設定なら何もしない。
+  if (gsync.cfg().clientId) gsync.ensureGis().catch(() => {});
 }
 
 // ---------- 取込タブ（銘柄・保有データの取込を集約） ----------
