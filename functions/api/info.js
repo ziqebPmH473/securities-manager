@@ -15,6 +15,9 @@ export async function onRequestGet(context) {
   const finnhubKey = context.env?.FINNHUB_API_KEY;
   // names=1: 日本語名のみ軽量取得（1銘柄1リクエスト）。マーケットランキングの米株名を日本語化する用途。
   const namesOnly = url.searchParams.get('names') === '1';
+  // debug=<symbol>: 時価総額/売買代金が取れない原因を切り分けるため、各取得元の生の状況を返す
+  const dbg = (url.searchParams.get('debug') || '').trim();
+  if (dbg) { try { return json(await fetchInfoDebug(dbg, finnhubKey)); } catch (e) { return json({ error: String(e?.message || e) }, 500); } }
 
   if (single) {
     try { return json(namesOnly ? await fetchNameOnly(single) : await fetchInfo(single, finnhubKey)); }
@@ -42,6 +45,54 @@ async function fetchInfo(symbol, finnhubKey) {
   if (type === 'fund') return fetchFundInfo(symbol);
   if (type === 'jp')   return fetchJpInfo(symbol);
   return fetchUsInfo(symbol, finnhubKey);
+}
+
+// 診断: 時価総額/売買代金(出来高)が取れない原因を各取得元ごとに可視化する。
+// 本番で /api/info?debug=7203.T や ?debug=AAPL を開いて結果を確認する用途。
+async function fetchInfoDebug(symbol, finnhubKey) {
+  const type = symbolType(symbol);
+  const out = { symbol, type, finnhubKeyPresent: !!finnhubKey, result: null, diag: {} };
+  out.result = await fetchInfo(symbol, finnhubKey).catch(e => ({ error: String(e?.message || e) }));
+  // chart（出来高の元）
+  try {
+    const u = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+    const res = await fetchWithTimeout(u, { headers: { 'User-Agent': 'securities-manager/1.0' } });
+    out.diag.chart = { status: res.status };
+    if (res.ok) {
+      const r = (await res.json())?.chart?.result?.[0];
+      const volArr = r?.indicators?.quote?.[0]?.volume || [];
+      let lastVol = null; for (let i = volArr.length - 1; i >= 0; i--) if (typeof volArr[i] === 'number') { lastVol = volArr[i]; break; }
+      out.diag.chart.regularMarketVolume = r?.meta?.regularMarketVolume ?? null;
+      out.diag.chart.volumeArrayLast = lastVol;
+      out.diag.chart.metaKeys = Object.keys(r?.meta || {});
+    }
+  } catch (e) { out.diag.chart = { error: String(e?.message || e) }; }
+  // quoteSummary（時価総額の本来の元・ブロックされている想定）
+  try {
+    const u = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=summaryDetail,defaultKeyStatistics`;
+    const res = await fetchWithTimeout(u, { headers: { 'User-Agent': 'securities-manager/1.0' } });
+    out.diag.quoteSummary = { status: res.status, ok: res.ok };
+    if (res.ok) { const d = await res.json().catch(() => null); out.diag.quoteSummary.hasResult = !!d?.quoteSummary?.result; out.diag.quoteSummary.error = d?.quoteSummary?.error || null; }
+  } catch (e) { out.diag.quoteSummary = { error: String(e?.message || e) }; }
+  if (type === 'jp') {
+    // 日本版ページ（時価総額のスクレイプ元）
+    try {
+      const res = await fetchWithTimeout(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}`, { headers: { 'User-Agent': UA, 'Accept-Language': 'ja' } });
+      out.diag.jpPage = { status: res.status };
+      if (res.ok) {
+        const html = await res.text();
+        out.diag.jpPage.htmlLen = html.length;
+        out.diag.jpPage.marketCapExtracted = extractJpMarketCap(html);
+        const i = html.indexOf('時価総額');
+        out.diag.jpPage.foundLabel = i >= 0;
+        out.diag.jpPage.snippet = i >= 0 ? html.slice(i, i + 400).replace(/\s+/g, ' ') : null;
+      }
+    } catch (e) { out.diag.jpPage = { error: String(e?.message || e) }; }
+  } else if (type === 'us' && finnhubKey) {
+    // Finnhub metric（米株 時価総額）
+    out.diag.finnhub = await fetchFinnhubMetric(symbol, finnhubKey).then(m => ({ ok: true, marketCap: m?.marketCap ?? null })).catch(e => ({ error: String(e?.message || e) }));
+  }
+  return out;
 }
 
 // ---------- 日本株 ----------
@@ -208,9 +259,13 @@ async function fetchChartMeta(symbol) {
   const res = await fetchWithTimeout(u, { headers: { 'User-Agent': 'securities-manager/1.0' }, cf: { cacheTtl: 3600, cacheEverything: true } });
   if (!res.ok) throw new Error(`chart ${res.status}`);
   const data = await res.json();
-  const meta = data?.chart?.result?.[0]?.meta;
+  const r = data?.chart?.result?.[0];
+  const meta = r?.meta;
   if (!meta) throw new Error('chart データなし');
-  return { name: meta.longName || meta.shortName || null, currency: meta.currency || null, instrumentType: meta.instrumentType || null, volume: num(meta.regularMarketVolume) };
+  // 出来高: meta.regularMarketVolume が無い場合があるので出来高配列の最後の有効値で補完
+  const volArr = r?.indicators?.quote?.[0]?.volume || [];
+  let lastVol = null; for (let i = volArr.length - 1; i >= 0; i--) { if (typeof volArr[i] === 'number') { lastVol = volArr[i]; break; } }
+  return { name: meta.longName || meta.shortName || null, currency: meta.currency || null, instrumentType: meta.instrumentType || null, volume: num(meta.regularMarketVolume) ?? lastVol };
 }
 
 async function fetchQuoteSummary(symbol) {

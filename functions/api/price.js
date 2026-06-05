@@ -201,7 +201,8 @@ async function fetchYahooChart(symbol, range, interval) {
     high5yDate:  toDate(high5yTs),   // 5年高値が付いた日（YYYY-MM-DD）
     high52wDate: toDate(high52wTs),  // 52週高値が付いた日
     currency: meta.currency || null,
-    volume: num(meta.regularMarketVolume),  // 当日出来高（売買代金=現在値×出来高 の算出用）
+    // 当日出来高（売買代金=現在値×出来高）。meta.regularMarketVolume が無い場合は出来高配列の最後の有効値で補完
+    volume: num(meta.regularMarketVolume) ?? (() => { const vs = (quotes && quotes.volume) || []; for (let i = vs.length - 1; i >= 0; i--) if (typeof vs[i] === 'number') return vs[i]; return null; })(),
     highs,
   };
 }
