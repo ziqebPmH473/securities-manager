@@ -46,21 +46,22 @@ async function fetchInfo(symbol, finnhubKey) {
 
 // ---------- 日本株 ----------
 async function fetchJpInfo(symbol) {
-  // 日本語名は Yahoo!ファイナンス日本版から、ファンダは quoteSummary から
-  const [jpName, chart, summary] = await Promise.all([
-    fetchYahooJpName(symbol).catch(() => null),
+  // 日本語名＋時価総額は Yahoo!ファイナンス日本版（同一ページ）から、その他ファンダは quoteSummary（取れれば）
+  const [jpq, chart, summary] = await Promise.all([
+    fetchYahooJpQuote(symbol).catch(() => null),
     fetchChartMeta(symbol).catch(() => null),
     fetchQuoteSummary(symbol).catch(() => null),
   ]);
   return {
-    name:      cleanName(jpName) || cleanName(chart?.name) || null,
+    name:      cleanName(jpq?.name) || cleanName(chart?.name) || null,
     sector:    summary?.sector || null,
     industry:  summary?.industry || null,
-    marketCap: summary?.marketCap ?? null,
+    marketCap: summary?.marketCap ?? jpq?.marketCap ?? null, // quoteSummaryがブロックされる日本株は日本版ページの時価総額を使用
     per:       summary?.per ?? null,
     eps:       summary?.eps ?? null,
     dividend:  summary?.dividend ?? null,
     sharesOut: summary?.sharesOut ?? null,
+    volume:    chart?.volume ?? null,   // 当日出来高（売買代金=現在値×出来高 の算出用）
     currency:  chart?.currency || 'JPY',
     quoteType: chart?.instrumentType || null, // EQUITY/ETF/MUTUALFUND（詳細種別の判定に使用）
   };
@@ -110,6 +111,7 @@ async function fetchUsInfo(symbol, finnhubKey) {
     eps:       summary?.eps ?? fh?.eps ?? null,
     dividend:  summary?.dividend ?? fh?.dividend ?? null,
     sharesOut: summary?.sharesOut ?? null,
+    volume:    chart?.volume ?? null,   // 当日出来高（売買代金算出用・Finnhub利用時もYahoo chartから取得）
     currency:  chart?.currency || 'USD',
     quoteType: chart?.instrumentType || null, // EQUITY/ETF/MUTUALFUND（詳細種別の判定に使用）
   };
@@ -139,16 +141,36 @@ async function fetchWithTimeout(url, opts = {}, ms = 6000) {
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 
-// Yahoo!ファイナンス日本版（株式）から日本語の銘柄名を取得
-async function fetchYahooJpName(symbol) {
+// Yahoo!ファイナンス日本版（株式）から日本語名＋時価総額を1回の取得で得る。
+// 時価総額は quoteSummary がブロックされる日本株の代替取得元（同ページに「参考指標」として記載）。
+async function fetchYahooJpQuote(symbol) {
   const res = await fetchWithTimeout(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}`, {
     headers: { 'User-Agent': UA, 'Accept-Language': 'ja' },
-    cf: { cacheTtl: 86400, cacheEverything: true },
+    cf: { cacheTtl: 3600, cacheEverything: true },
   });
   if (!res.ok) return null;
   const html = await res.text();
-  return extractJpName(html);
+  return { name: extractJpName(html), marketCap: extractJpMarketCap(html) };
 }
+// 後方互換: 名前のみ必要な呼び出し用
+async function fetchYahooJpName(symbol) { const q = await fetchYahooJpQuote(symbol); return q ? q.name : null; }
+
+// 日本版ページから「時価総額」を抽出し百万円単位で返す（列の単位＝百万に合わせる）。取れなければ null。
+function extractJpMarketCap(html) {
+  const i = html.indexOf('時価総額');
+  if (i < 0) return null;
+  const seg = html.slice(i, i + 600);
+  let yen = null;
+  // Yahoo JP の数値コンポーネント（値＋単位サフィックス。ランキング解析と同形）
+  let m = seg.match(/StyledNumber__value__[^"]*">([\d,.]+)<\/span>(?:<span[^>]*StyledNumber__suffix__[^"]*">([^<]+)<\/span>)?/);
+  if (m) yen = scaleJpUnit(parseFloat(m[1].replace(/,/g, '')), m[2] || '');
+  else { // フォールバック: 「12,345百万円」「4.25兆円」等の素テキスト
+    m = seg.match(/([\d,]+(?:\.\d+)?)\s*(兆|億|百万|千)?\s*円/);
+    if (m) yen = scaleJpUnit(parseFloat(m[1].replace(/,/g, '')), m[2] || '');
+  }
+  return (yen != null && isFinite(yen)) ? Math.round(yen / 1e6) : null; // 円 → 百万円
+}
+function scaleJpUnit(n, unit) { if (!isFinite(n)) return null; if (/兆/.test(unit)) return n * 1e12; if (/億/.test(unit)) return n * 1e8; if (/百万/.test(unit)) return n * 1e6; if (/千/.test(unit)) return n * 1e3; return n; }
 
 // Yahoo!ファイナンス日本版（投信）から名称・基準価額を取得
 async function fetchYahooJpFund(code) {
@@ -188,7 +210,7 @@ async function fetchChartMeta(symbol) {
   const data = await res.json();
   const meta = data?.chart?.result?.[0]?.meta;
   if (!meta) throw new Error('chart データなし');
-  return { name: meta.longName || meta.shortName || null, currency: meta.currency || null, instrumentType: meta.instrumentType || null };
+  return { name: meta.longName || meta.shortName || null, currency: meta.currency || null, instrumentType: meta.instrumentType || null, volume: num(meta.regularMarketVolume) };
 }
 
 async function fetchQuoteSummary(symbol) {
