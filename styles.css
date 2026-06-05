@@ -796,6 +796,34 @@ table.ie-on tbody td.ie-link:hover { background: #e6edff; }
 /* 編集モード中は行ホバーの背景反転を抑え、入力欄を見やすく */
 table.ie-on tbody tr:hover { background: transparent; }
 
+/* ===== 処理中／完了オーバーレイ（ボタン操作のフィードバック） ===== */
+.busy-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: grid; place-items: center;
+  background: rgba(20, 28, 42, .30);
+}
+.busy-card {
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  min-width: 220px; max-width: 80vw; padding: 24px 30px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .26);
+}
+.busy-spinner {
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 4px solid var(--panel-2); border-top-color: var(--accent);
+  animation: busy-spin .8s linear infinite;
+}
+@keyframes busy-spin { to { transform: rotate(360deg); } }
+.busy-msg { font-size: 14px; font-weight: 600; color: var(--text); text-align: center; line-height: 1.5; }
+/* 完了（チェック）/失敗（！）状態 */
+.busy-overlay.done .busy-spinner, .busy-overlay.error .busy-spinner { animation: none; border: none; }
+.busy-overlay.done .busy-spinner::after, .busy-overlay.error .busy-spinner::after {
+  content: '✓'; display: grid; place-items: center; width: 40px; height: 40px;
+  border-radius: 50%; color: #fff; font-size: 24px; font-weight: 800;
+}
+.busy-overlay.done .busy-spinner::after { background: var(--green); }
+.busy-overlay.error .busy-spinner::after { content: '!'; background: var(--red); }
+
 /* ===== SEC-94: コード・銘柄名の列を横スクロール時に左端固定 ===== */
 table.holdings td.stick, table.holdings th.stick { position: sticky; z-index: 2; background: var(--panel); }
 table.holdings thead th.stick { z-index: 3; background: var(--panel-2); }

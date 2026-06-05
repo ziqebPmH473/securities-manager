@@ -459,12 +459,12 @@ async function gsyncSignIn() {
 }
 async function gsyncSave() {
   gsyncStatus('<span class="muted">シートへ保存中…</span>');
-  try { await gsync.save(); gsyncStatus(`<span class="pos">✓ 保存しました ${new Date().toLocaleString('ja-JP')}${gsync._email ? '（' + esc(gsync._email) + '）' : ''}</span>`); }
+  try { await withBusy('Googleシートへ保存中…', () => gsync.save(), 'シートへ保存しました'); gsyncStatus(`<span class="pos">✓ 保存しました ${new Date().toLocaleString('ja-JP')}${gsync._email ? '（' + esc(gsync._email) + '）' : ''}</span>`); }
   catch (e) { gsyncStatus('<span class="neg">保存失敗：' + esc(e.message || String(e)) + '</span>'); }
 }
 async function gsyncLoad() {
   gsyncStatus('<span class="muted">シートから読込中…</span>');
-  try { const ok = await gsync.load(); gsyncStatus(ok ? `<span class="pos">✓ シートから読み込みました ${new Date().toLocaleString('ja-JP')}</span>` : '<span class="muted">読込をキャンセルしました</span>'); }
+  try { const ok = await withBusy('Googleシートから読込中…', () => gsync.load(), 'シートから読み込みました'); gsyncStatus(ok ? `<span class="pos">✓ シートから読み込みました ${new Date().toLocaleString('ja-JP')}</span>` : '<span class="muted">読込をキャンセルしました</span>'); }
   catch (e) { gsyncStatus('<span class="neg">読込失敗：' + esc(e.message || String(e)) + '</span>'); }
 }
 
@@ -2750,14 +2750,10 @@ function fetchFundName(secId) {
   if (!targets.length) { toast('対象の投資信託がありません'); return; }
   const bad = targets.filter(s => !/^[0-9A-Za-z]{8}$/.test(s.ticker || ''));
   if (secId != null && bad.length) { toast('協会コード（8桁）を入力してから取得してください'); return; }
-  toast('名称を取得中…');
-  api.refreshMeta(targets.filter(s => /^[0-9A-Za-z]{8}$/.test(s.ticker || ''))).then(() => {
+  withBusy('名称を取得中…', async () => {
+    await api.refreshMeta(targets.filter(s => /^[0-9A-Za-z]{8}$/.test(s.ticker || '')));
     refreshFundCodeMaster();
-    if (secId != null) {
-      const nm = (store.data.meta[priceKey(targets[0])] || {}).name;
-      toast(nm ? `名称取得: ${nm}` : '名称を取得できませんでした（コード/ネット環境を確認。ローカルはwrangler起動時のみ）', 4000);
-    } else toast('名称取得を実行しました', 3000);
-  });
+  }, secId != null ? ((store.data.meta[priceKey(targets[0])] || {}).name ? `名称取得: ${(store.data.meta[priceKey(targets[0])] || {}).name}` : '名称を取得できませんでした') : '名称取得を実行しました').catch(() => {});
 }
 function setFundCode(secId, raw) {
   const sec = store.data.securities.find(s => s.id === secId); if (!sec) return;
@@ -3936,9 +3932,10 @@ function importedUnpriced(touched) {
 async function reportImport(touched, baseMsg) {
   touched = touched || [];
   if (touched.length) {
-    toast('取込・価格取得中…しばらくお待ちください', 60000); // 処理中表示（完了時に上書き）
+    busyShow('取込・価格取得中…しばらくお待ちください'); // 全画面の処理中表示（完了モーダルで上書き）
     const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
     try { await (needPrice ? api.refreshAll({ withHighs: store.data.lastHighsDate !== today() }) : api.refreshMeta(touched)); } catch (_) { /* 取得失敗は無視 */ }
+    busyHide();
   }
   render();
   const bad = importedUnpriced(touched);
@@ -4877,8 +4874,9 @@ function giDeleteFormat() {
 function refreshAllMeta() {
   const secs = store.data.securities.filter(s => s.ticker);
   if (!secs.length) { toast('銘柄がありません'); return; }
-  toast('銘柄情報を取得中…');
-  api.refreshMeta(secs).then(() => api.checkSplits()).then(() => { render(); toast('銘柄情報を更新しました'); });
+  withBusy('銘柄情報を更新中…（名前・セクター・時価総額・売買代金）', async () => {
+    await api.refreshMeta(secs); await api.checkSplits(); render();
+  }, '銘柄情報を更新しました').catch(() => {});
 }
 
 // ---------- 株式分割・併合タブ ----------
@@ -5626,6 +5624,32 @@ function toast(msg, ms = 2500) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, ms);
 }
 
+// 処理中／完了オーバーレイ。ボタン押下→即「○○中…」を全画面で表示し、完了で「✓ ○○しました」を一瞬出して消す。
+// 「押せたのか・何が起きているのか分からない」を防ぐ（操作もブロックして二重押し防止）。
+let _busyTimer = null;
+function busyShow(msg) {
+  const ov = document.getElementById('busy-overlay'); if (!ov) return;
+  ov.classList.remove('done', 'error');
+  document.getElementById('busy-msg').textContent = msg || '処理中…';
+  ov.hidden = false; clearTimeout(_busyTimer);
+}
+function busyDone(msg, state = 'done') {
+  const ov = document.getElementById('busy-overlay'); if (!ov || ov.hidden) return;
+  ov.classList.remove('done', 'error'); ov.classList.add(state);
+  document.getElementById('busy-msg').textContent = msg || (state === 'error' ? '失敗しました' : '完了しました');
+  clearTimeout(_busyTimer);
+  _busyTimer = setTimeout(() => { ov.hidden = true; ov.classList.remove('done', 'error'); }, state === 'error' ? 3000 : 1100);
+}
+function busyHide() { const ov = document.getElementById('busy-overlay'); if (!ov) return; ov.hidden = true; ov.classList.remove('done', 'error'); clearTimeout(_busyTimer); }
+// 非同期処理をオーバーレイで包む: 押下→「msg（…中）」即時表示→成功「doneMsg」/失敗「エラー」。
+async function withBusy(msg, fn, doneMsg) {
+  busyShow(msg);
+  // 押下表示を一度描画させてから本処理へ（rAFはバックグラウンドタブで止まり得るため setTimeout を使用）
+  await new Promise(r => setTimeout(r, 0));
+  try { const r = await fn(); busyDone(doneMsg, 'done'); return r; }
+  catch (e) { busyDone('失敗しました：' + (e && e.message ? e.message : String(e)), 'error'); throw e; }
+}
+
 // 公開（onclick用）
 window.go = go;
 window.setHoldingsMarket = setHoldingsMarket;
@@ -5665,6 +5689,9 @@ window.onImportPaste = onImportPaste;
 window.runBrokerImport = runBrokerImport;
 window.setSort = setSort;
 window.setFilter = setFilter;
+window.busyShow = busyShow;
+window.busyDone = busyDone;
+window.withBusy = withBusy;
 window.toggleInlineEdit = toggleInlineEdit;
 window.ieMark = ieMark;
 window.ieKey = ieKey;
@@ -5748,7 +5775,11 @@ document.getElementById('drawer-overlay').addEventListener('click', (e) => { if 
 // モーダル外クリックでは閉じない（意図しない消失を防止）。× か各フォームのボタンのみで閉じる
 // 「価格更新」: その日まだ高値を取得していなければ高値も取得（LDOS等の古い5年高値を修正）、以降は価格のみで軽量
 // マーケットタブ表示中はランキングも更新（保有銘柄と同じ手動更新ルール）
-document.getElementById('btn-refresh').onclick = () => api.refreshAll({ withHighs: store.data.lastHighsDate !== today() }).then(() => { if (currentView === 'market') mktRefresh(); render(); });
+document.getElementById('btn-refresh').onclick = () => withBusy('価格を更新中…', async () => {
+  await api.refreshAll({ withHighs: store.data.lastHighsDate !== today() });
+  if (currentView === 'market') mktRefresh();
+  render();
+}, '価格を更新しました').catch(() => {});
 
 // IME変換中は検索の再描画を抑止（innerHTML生成の oncomposition* 属性はハンドラ登録されないため、
 // document に委譲リスナーを張る。これで全ての入力欄の変換中フラグを確実に拾える・SEC-112）
