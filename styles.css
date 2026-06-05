@@ -767,3 +767,23 @@ table.fixed-cols .sig-group td { background: var(--panel-2); font-weight: 700; }
 /* 一覧でない holdings テーブル（行クリック不可）はカーソルを通常に */
 table.holdings.no-rowclick tbody tr { cursor: default; }
 table.holdings.no-rowclick tbody tr:hover { background: var(--panel-2); }
+
+/* ===== SEC-94: 一覧のExcel風インライン編集モード ===== */
+.ie-hint {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 2px; padding: 7px 14px; font-size: 12px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel)); border: 1px solid var(--accent); border-radius: 8px;
+}
+.ie-hint strong { font-weight: 700; }
+table.ie-on tbody td.ie-cell { padding: 1px 4px !important; background: #fffbe9; vertical-align: middle; }
+table.ie-on tbody td.ie-link { cursor: pointer; background: #f3f6ff; }
+table.ie-on tbody td.ie-link:hover { background: #e6edff; }
+.ie-link .ie-formmark { opacity: .45; font-size: 11px; }
+.ie-input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 12px;
+  padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel);
+  color: var(--ink); vertical-align: middle;
+}
+.ie-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+/* 編集モード中は行ホバーの背景反転を抑え、入力欄を見やすく */
+table.ie-on tbody tr:hover { background: transparent; }

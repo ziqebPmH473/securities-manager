@@ -1232,6 +1232,109 @@ const COL_RENDERERS = {
   analysisNote: (s,c) => `<td class="l" title="${esc(s.analysisNote || '')}">${s.analysisNote ? esc(String(s.analysisNote).slice(0, 24)) + (s.analysisNote.length > 24 ? '…' : '') : muted}</td>`,
 };
 
+// ---------- SEC-94: 一覧のExcel風インライン編集モード ----------
+// 編集モード（誤操作防止のトグル）。ONの間だけ対象セルが入力欄になる。米国株/日本株/銘柄マスタ共通。
+let inlineEditOn = false;
+// ナビゲーション用: 現在テーブルの編集可能列キー順(_ieCols) / 行(銘柄ID)順(_ieRowIds)
+let _ieCols = [], _ieRowIds = [];
+
+// 数値文字列 → number|null（空欄や非数値は null）
+function ieNum(v) { const t = String(v ?? '').trim(); if (t === '') return null; const n = parseFloat(t); return isNaN(n) ? null : n; }
+// 当該銘柄の保有が「ちょうど1件」の時だけインライン編集可（0件/複数は保有フォームへ誘導）
+function ieSingleHolding(secId) { const hs = store.data.holdings.filter(h => h.securityId === secId); return hs.length === 1 ? hs[0] : null; }
+
+// 編集対象フィールド定義。kind:'sec'=銘柄属性（store.updateSecurity） / 'hold'=単一保有（数量・取得単価）
+// split:true は分割調整に関わる項目（変更時のみ manualUpdatedAt を更新＝フォームと同じ。SEC-34）
+const INLINE_FIELDS = {
+  category:      { kind: 'sec', type: 'select', get: s => s.category || '', patch: v => ({ category: v || null }),
+                   options: () => [{ v: '', l: '未設定' }, ...[...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder).map(c => ({ v: c.category, l: c.category }))] },
+  ruleName:      { kind: 'sec', type: 'select', get: s => String(s.ruleId || store.defaultRule().id), patch: v => ({ ruleId: parseInt(v, 10) }),
+                   options: () => store.data.rules.map(r => ({ v: String(r.id), l: r.name + (r.isDefault ? '（既定）' : '') })) },
+  detailType:    { kind: 'sec', type: 'select', get: s => s.detailType || '', patch: v => ({ detailType: v || null }),
+                   options: (s) => [{ v: '', l: '自動（' + autoDetailType(s) + '）' }, { v: '個別株', l: '個別株' }, { v: 'ETF', l: 'ETF' }] },
+  prevBuyPrice:  { kind: 'sec', type: 'number', split: true, get: s => s.prevBuyPrice ?? '', patch: v => ({ prevBuyPrice: ieNum(v) }) },
+  prevBuyDate:   { kind: 'sec', type: 'date',   get: s => s.prevBuyDate || '', patch: v => ({ prevBuyDate: v || null }) },
+  fixedBuyPrice: { kind: 'sec', type: 'number', split: true, get: s => s.fixedBuyPrice ?? '', patch: v => ({ fixedBuyPrice: ieNum(v) }) },
+  qty:           { kind: 'hold', type: 'number', field: 'quantity', get: h => h.quantity ?? '' },
+  avgCost:       { kind: 'hold', type: 'number', field: 'avgCost', get: h => h.avgCost ?? '' },
+};
+
+// 1セル分の編集用 <td> を返す（編集不可・非該当は null を返し呼び出し側で通常レンダラーへフォールバック）
+function ieCellHtml(sec, key, ctx) {
+  const f = INLINE_FIELDS[key];
+  if (!f) return null;
+  const market = sec.market;
+  const baseAttrs = `data-id="${sec.id}" data-k="${key}" onkeydown="ieKey(event)" onchange="ieCommit(this)"`;
+  if (f.kind === 'hold') {
+    const h = ieSingleHolding(sec.id);
+    if (!h) { // 0件 or 複数保有 → クリックで保有フォームを開く（数量/単価は口座別のため一意に決められない）
+      const th = ctx ? ctx.th : calc.totalHolding(sec.id);
+      const disp = key === 'qty' ? (th.qty ? fmtQty(th.qty, market) : '0') : (th.qty ? fmtAmt(th.avgCost, market) : '—');
+      const n = store.data.holdings.filter(x => x.securityId === sec.id).length;
+      const tip = n > 1 ? '複数保有のため保有フォームで編集' : '保有フォームで追加';
+      return `<td class="ie-link" onclick="openHoldingsForm(${sec.id})" title="${tip}">${disp} <span class="ie-formmark">⧉</span></td>`;
+    }
+    const dv = esc(String(f.get(h) ?? ''));
+    return `<td class="ie-cell"><input class="ie-input" type="number" step="any" inputmode="decimal" value="${dv}" onfocus="this.select()" ${baseAttrs}></td>`;
+  }
+  const val = f.get(sec);
+  if (f.type === 'select') {
+    const opts = f.options(sec).map(o => `<option value="${esc(o.v)}" ${o.v === val ? 'selected' : ''}>${esc(o.l)}</option>`).join('');
+    return `<td class="ie-cell"><select class="ie-input" ${baseAttrs}>${opts}</select></td>`;
+  }
+  const dv = esc(String(val ?? ''));
+  const extra = f.type === 'number' ? 'step="any" inputmode="decimal" onfocus="this.select()"' : '';
+  return `<td class="ie-cell"><input class="ie-input" type="${f.type}" ${extra} value="${dv}" ${baseAttrs}></td>`;
+}
+
+// セルの値を store へ確定（変化が無ければ何もしない＝updatedAtを無駄に動かさない）
+function ieCommit(el) {
+  const id = parseInt(el.dataset.id, 10), key = el.dataset.k;
+  const f = INLINE_FIELDS[key]; if (!f) return;
+  const sec = store.data.securities.find(s => s.id === id); if (!sec) return;
+  if (f.kind === 'hold') {
+    const h = ieSingleHolding(id); if (!h) return;
+    const nv = ieNum(el.value) ?? 0;
+    if (h[f.field] !== nv) { h[f.field] = nv; h.source = 'manual'; h.updatedAt = store._now(); store.save(); }
+    return;
+  }
+  if (String(f.get(sec)) === String(el.value).trim()) return; // 変化なし
+  const patch = f.patch(el.value);
+  if (f.split) { const k = Object.keys(patch)[0]; if ((sec[k] ?? null) !== (patch[k] ?? null)) patch.manualUpdatedAt = store._now(); }
+  store.updateSecurity(id, patch);
+}
+
+// Excel風キー操作: Enter=下 / Shift+Enter=上 / Tab=右 / Shift+Tab=左 / Esc=取消
+function ieKey(e) {
+  const el = e.target, k = e.key;
+  if (k === 'Enter') { e.preventDefault(); ieCommit(el); ieNav(el, e.shiftKey ? 'up' : 'down'); }
+  else if (k === 'Tab') { e.preventDefault(); ieCommit(el); ieNav(el, e.shiftKey ? 'left' : 'right'); }
+  else if (k === 'Escape') { e.preventDefault(); ieRevert(el); }
+}
+function ieRevert(el) {
+  const id = parseInt(el.dataset.id, 10), key = el.dataset.k, f = INLINE_FIELDS[key];
+  const sec = store.data.securities.find(s => s.id === id);
+  if (f && sec) { if (f.kind === 'hold') { const h = ieSingleHolding(id); el.value = h ? (f.get(h) ?? '') : ''; } else el.value = f.get(sec); }
+  el.blur();
+}
+// 次の入力欄へフォーカス移動。入力欄でない行（保有複数等）は飛ばして探索。端で停止。
+function ieNav(el, dir) {
+  let ci = _ieCols.indexOf(el.dataset.k), ri = _ieRowIds.indexOf(parseInt(el.dataset.id, 10));
+  if (ci < 0 || ri < 0 || !_ieCols.length) return;
+  const find = (r, c) => document.querySelector(`.ie-input[data-id="${_ieRowIds[r]}"][data-k="${_ieCols[c]}"]`);
+  let guard = _ieCols.length * _ieRowIds.length + 1;
+  while (guard-- > 0) {
+    if (dir === 'right') { ci++; if (ci >= _ieCols.length) { ci = 0; ri++; } }
+    else if (dir === 'left') { ci--; if (ci < 0) { ci = _ieCols.length - 1; ri--; } }
+    else if (dir === 'down') ri++;
+    else if (dir === 'up') ri--;
+    if (ri < 0 || ri >= _ieRowIds.length) return;
+    const t = find(ri, ci);
+    if (t) { t.focus(); if (t.tagName === 'INPUT' && t.select) { try { t.select(); } catch (_) {} } return; }
+  }
+}
+function toggleInlineEdit() { inlineEditOn = !inlineEditOn; preserveTableScroll(render); }
+
 function render() {
   updateHeader();
   updateSignalBadge();
@@ -1595,6 +1698,9 @@ function renderMarket(market) {
   // 表示するカラム（ユーザー設定済みの順・表示フラグ反映）
   const visOrder = getColOrder(colMkt).filter(c => c.visible);
   const visibleCols = visOrder.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
+  // 編集モード(SEC-94): ナビゲーション用に編集可能列キー順・行順を記録
+  _ieCols = inlineEditOn ? visibleCols.filter(c => INLINE_FIELDS[c.key]).map(c => c.key) : [];
+  _ieRowIds = inlineEditOn ? secs.map(s => s.id) : [];
 
   const headHtml = colHeadHtml(visibleCols, st, colMkt, ccy);
   // 列幅（table-layout:fixed）。先頭=チェック / 末尾=操作 の固定列＋各列の幅
@@ -1653,7 +1759,9 @@ function renderMarket(market) {
         <div class="tb-spacer"></div>
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${colMkt}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
+        <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
       </div>
+      ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価）を直接編集できます。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=取消。数量・取得単価は単一保有のみ、複数（⧉）は保有フォーム。派生列は編集モード終了時に再計算。<button class="btn btn-sm" onclick="toggleInlineEdit()">編集モード終了</button></div>` : ''}
       <div class="summary-strip">
         <div class="ss"><span class="ss-k">評価額（円換算）</span><span class="ss-v num">${yen(sumV)}</span></div>
         <div class="ss"><span class="ss-k">評価損益</span><span class="ss-v num ${cls(sumPnl)}">${yen(sumPnl)}${sumPnlPct != null ? `<small>${signed(sumPnlPct)}%</small>` : ''}</span></div>
@@ -1675,7 +1783,7 @@ function renderMarket(market) {
       </div>
       <div class="section-body">
         ${secs.length === 0 ? `<div class="empty">該当する銘柄がありません。</div>` : `
-        <div class="table-wrap"><table class="fixed-cols holdings dense" style="width:${tableW}px">${colgroupHtml}
+        <div class="table-wrap"><table class="fixed-cols holdings dense ${inlineEditOn ? 'ie-on' : ''}" style="width:${tableW}px">${colgroupHtml}
           <thead><tr><th class="l"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>${headHtml}<th class="l"></th></tr></thead>
           <tbody>
             ${secs.map(sec => marketRow(sec, visibleCols, { select: true })).join('')}
@@ -1756,7 +1864,10 @@ function marketRow(sec, visibleCols, opts = {}) {
     m: (v) => v != null ? fmtAmt(v, market) : '<span class="muted">—</span>',
   };
   const selectTd = opts.select ? `<td class="l"><input type="checkbox" class="row-select" data-id="${sec.id}"></td>` : '';
+  // 編集モード(SEC-94): 一覧(取引/保有/編集アクションを持つ表)でのみ対象列をインライン入力化。サイン/アクション無しの表は対象外
+  const editable = inlineEditOn && opts.actions !== 'signal' && opts.actions !== 'none';
   const dataCells = visibleCols.map(col => {
+    if (editable && INLINE_FIELDS[col.key]) { const h = ieCellHtml(sec, col.key, ctx); if (h) return h; }
     const renderer = COL_RENDERERS[col.key];
     return renderer ? renderer(sec, ctx) : `<td></td>`;
   }).join('');
@@ -2429,6 +2540,9 @@ function renderSecMaster() {
     const k = secMasterSearch.trim().toLowerCase();
     secs = secs.filter(s => (s.ticker || '').toLowerCase().includes(k) || calc.displayName(s).toLowerCase().includes(k) || (calc.field(s, 'sector') || '').toLowerCase().includes(k));
   }
+  // 編集モード(SEC-94): ナビゲーション用に編集可能列キー順（画面の列順）・行順を記録
+  _ieCols = inlineEditOn ? ['detailType', 'ruleName', 'category'] : [];
+  _ieRowIds = inlineEditOn ? secs.map(s => s.id) : [];
   const cell = (v, l) => `<td class="${l ? 'l ' : ''}">${v != null && v !== '' ? esc(String(v)) : muted}</td>`;
   // ソート可能なヘッダ（sortValue が各キーに対応）
   const SM_COLS = [
@@ -2451,15 +2565,15 @@ function renderSecMaster() {
       <td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>
       <td class="l"><strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
       <td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>
-      <td class="l">${dtTag}</td>
+      ${inlineEditOn ? ieCellHtml(s, 'detailType', null) : `<td class="l">${dtTag}</td>`}
       <td class="l">${calc.field(s, 'sector') ? esc(calc.field(s, 'sector')) + ov('sector') : muted}</td>
       <td class="l">${calc.field(s, 'industry') ? esc(calc.field(s, 'industry')) + ov('industry') : muted}</td>
       <td class="l">${gradeBadge(s)}</td>
       ${cell(s.overallGrade, true)}
       ${cell(s.buyGrade, true)}
       <td>${s.priority != null ? num(s.priority) : muted}</td>
-      <td class="l">${rule ? esc(rule.name) : muted}</td>
-      <td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>
+      ${inlineEditOn ? ieCellHtml(s, 'ruleName', null) : `<td class="l">${rule ? esc(rule.name) : muted}</td>`}
+      ${inlineEditOn ? ieCellHtml(s, 'category', null) : `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`}
       <td class="l">${s.createdAt ? fmtDate(s.createdAt) : muted}</td>
       <td class="l">${s.updatedAt ? fmtDate(s.updatedAt) : muted}</td>
       <td class="l nowrap"><button class="btn btn-sm" onclick="openSecurityForm(${s.id})">編集</button></td>
@@ -2492,8 +2606,10 @@ function renderSecMaster() {
           <button class="btn btn-sm btn-primary" onclick="smBulkApply()">一括変更</button>
           <span style="flex:1"></span>
           <button class="btn btn-sm btn-danger" onclick="bulkDeleteSecurities()">選択した銘柄を削除</button>
+          <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
         </div>
-        <div class="table-wrap"><table class="holdings dense no-rowclick">
+        ${inlineEditOn ? `<div class="ie-hint" style="margin:8px 16px 0">✏️ 編集モード：詳細種別・買い増しルール・カテゴリを直接編集できます。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=取消。<button class="btn btn-sm" onclick="toggleInlineEdit()">編集モード終了</button></div>` : ''}
+        <div class="table-wrap"><table class="holdings dense no-rowclick ${inlineEditOn ? 'ie-on' : ''}">
           <thead><tr>${smHead}</tr></thead>
           <tbody>${rows || `<tr><td colspan="15" class="empty">銘柄がありません。</td></tr>`}</tbody>
         </table></div>
@@ -5457,6 +5573,9 @@ window.onImportPaste = onImportPaste;
 window.runBrokerImport = runBrokerImport;
 window.setSort = setSort;
 window.setFilter = setFilter;
+window.toggleInlineEdit = toggleInlineEdit;
+window.ieCommit = ieCommit;
+window.ieKey = ieKey;
 window.clearFilter = clearFilter;
 window.toggleSelectAll = toggleSelectAll;
 window.bulkSellAll = bulkSellAll;
