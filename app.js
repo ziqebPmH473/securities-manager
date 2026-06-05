@@ -375,25 +375,36 @@ const gsync = {
       document.head.appendChild(s);
     });
   },
-  async signIn() {
+  // 許可メール照合＋トークン確定（callbackから呼ぶ）
+  async _onToken(token, resolve, reject) {
+    try {
+      const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } }).then(r => r.json());
+      const email = ((info && info.email) || '').toLowerCase();
+      const allow = (this.cfg().allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      if (allow.length && !allow.includes(email)) { this._token = null; toast(`許可されていないアカウントです: ${email}`); return resolve(false); }
+      this._token = token; this._email = email; toast(`ログイン: ${email || 'OK'}`); resolve(true);
+    } catch (e) { reject(e); }
+  },
+  // ★モバイル対応: タップ→ポップアップの間に await を挟まない。GIS が読込済みなら同期で
+  //   requestAccessToken を呼ぶ（スマホはタップ直後の同期呼び出しでないとポップアップを塞ぐ）。
+  signIn() {
     const cfg = this.cfg();
-    if (!cfg.clientId) { toast('クライアントIDを設定してください'); return false; }
-    await this.ensureGis();
-    const token = await new Promise((res, rej) => {
-      const tc = google.accounts.oauth2.initTokenClient({
-        client_id: cfg.clientId,
-        scope: 'https://www.googleapis.com/auth/spreadsheets openid email',
-        callback: (r) => (r && r.access_token) ? res(r.access_token) : rej(new Error('トークン取得失敗')),
-        error_callback: (e) => rej(new Error((e && e.type) || 'OAuthエラー')),
-      });
-      tc.requestAccessToken({ prompt: '' });
+    return new Promise((resolve, reject) => {
+      if (!cfg.clientId) { toast('クライアントIDを設定してください'); return resolve(false); }
+      const launch = () => {
+        try {
+          const tc = google.accounts.oauth2.initTokenClient({
+            client_id: cfg.clientId,
+            scope: 'https://www.googleapis.com/auth/spreadsheets openid email',
+            callback: (r) => (r && r.access_token) ? this._onToken(r.access_token, resolve, reject) : reject(new Error('トークン取得失敗')),
+            error_callback: (e) => reject(new Error((e && e.type) || 'OAuthエラー')),
+          });
+          tc.requestAccessToken({ prompt: '' });   // 同期で呼ぶ＝タップのユーザー操作を維持
+        } catch (e) { reject(e); }
+      };
+      if (window.google && google.accounts && google.accounts.oauth2) launch();   // 既読込→同期で即ポップアップ
+      else this.ensureGis().then(launch).catch(reject);                            // 未読込時のみフォールバック
     });
-    // 許可メール照合
-    const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } }).then(r => r.json());
-    const email = ((info && info.email) || '').toLowerCase();
-    const allow = (cfg.allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
-    if (allow.length && !allow.includes(email)) { this._token = null; toast(`許可されていないアカウントです: ${email}`); return false; }
-    this._token = token; this._email = email; toast(`ログイン: ${email || 'OK'}`); return true;
   },
   async _call(method, range, body) {
     const cfg = this.cfg();
