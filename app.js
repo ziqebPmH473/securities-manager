@@ -64,6 +64,7 @@ const MASTER_COLS = [
   { key: 'sector',      label: 'セクター',         left: true,  markets: STKM, noSort: false },
   { key: 'industry',    label: '業種',             left: true,  markets: STKM, noSort: false },
   { key: 'marketCap',   label: '時価総額(百万)',    left: false, markets: STKM, noSort: false },
+  { key: 'turnover',    label: '売買代金',          left: false, markets: STKM, noSort: false },
   { key: 'value',       label: '評価額',           left: false, markets: ALLM, noSort: false },
   { key: 'cost',        label: '取得価額',         left: false, markets: ALLM, noSort: false },
   { key: 'acqJpy',      label: '取得円(円)',       left: false, markets: STKM, noSort: false },
@@ -91,8 +92,8 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
@@ -550,6 +551,8 @@ const calc = {
   per(sec) { const eps = this.field(sec, 'eps'); const p = this.price(sec); if (eps && eps > 0 && p != null) return p / eps; return this.field(sec, 'per'); },
   // 時価総額(百万) = 株価×発行済株式数/1e6（随時算出）。無ければ取得済み時価総額
   marketCap(sec) { const sh = this.field(sec, 'sharesOut'); const p = this.price(sec); if (sh && p != null) return p * sh / 1e6; return this.field(sec, 'marketCap'); },
+  // 売買代金（原通貨・実額）= 現在値×当日出来高。出来高が無ければ null（Finnhub通常更新時など）
+  turnover(sec) { const p = store.data.prices[priceKey(sec)] || {}; const pr = this.price(sec); return (pr != null && p.volume != null) ? pr * p.volume : null; },
   // 配当利回り(%) = 1株配当/株価
   divYield(sec) { const d = this.field(sec, 'dividend'); const p = this.price(sec); return (d != null && p) ? d / p * 100 : null; },
 
@@ -795,6 +798,7 @@ const api = {
           high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),
           high5yDate: q.high5yDate != null ? q.high5yDate : (prev.high5yDate ?? null),
           high52wDate: q.high52wDate != null ? q.high52wDate : (prev.high52wDate ?? null),
+          volume: q.volume != null ? q.volume : (prev.volume ?? null), // 当日出来高（売買代金算出用・未取得時は前回値を保持）
           fetchedAt: q.fetchedAt,
         };
         if (sec.market === 'US' && q.source && !usSource) usSource = q.source;
@@ -873,10 +877,12 @@ const api = {
     for (const sec of secs) {
       const q = quotes[yahooSymbol(sec)];
       if (q && !q.error && q.price != null) {
+        const prev = store.data.prices[priceKey(sec)] || {};
         store.data.prices[priceKey(sec)] = {
           price: q.price, prevClose: q.prevClose,
           high5y: q.high5y, high52w: q.high52w,
           high5yDate: q.high5yDate ?? null, high52wDate: q.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
+          volume: q.volume != null ? q.volume : (prev.volume ?? null), // 当日出来高（売買代金算出用）
           fetchedAt: q.fetchedAt,
         };
       }
@@ -1201,6 +1207,7 @@ const COL_RENDERERS = {
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   marketCap: (s,c) => { const v = calc.marketCap(s); return `<td>${v != null ? Number(Math.round(v)).toLocaleString('ja-JP') : muted}</td>`; },
+  turnover:  (s,c) => { const v = calc.turnover(s); return `<td title="現在値×当日出来高">${v != null ? fmtTurnover(v, c.market) : muted}</td>`; },
   value:     (s,c) => `<td>${c.th.qty ? fmtAmt(c.valN, c.market) + c.noPriceMark : muted}</td>`,
   cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : muted}</td>`,
   // 取得円(円): 米株=保有のacqJpy(取得円)合計（取込/手入力したもの）、日本株=取得単価×数量
@@ -1264,7 +1271,8 @@ function ieCellHtml(sec, key, ctx) {
   const f = INLINE_FIELDS[key];
   if (!f) return null;
   const market = sec.market;
-  const baseAttrs = `data-id="${sec.id}" data-k="${key}" onkeydown="ieKey(event)" onchange="ieCommit(this)"`;
+  // 数値欄は type="text" + inputmode（上下キーで増減しない＝直接入力のみ）。保存は明示ボタン式なので onchange では store へ書かない
+  const attrs = `data-id="${sec.id}" data-k="${key}" onkeydown="ieKey(event)"`;
   if (f.kind === 'hold') {
     const h = ieSingleHolding(sec.id);
     if (!h) { // 0件 or 複数保有 → クリックで保有フォームを開く（数量/単価は口座別のため一意に決められない）
@@ -1275,47 +1283,70 @@ function ieCellHtml(sec, key, ctx) {
       return `<td class="ie-link" onclick="openHoldingsForm(${sec.id})" title="${tip}">${disp} <span class="ie-formmark">⧉</span></td>`;
     }
     const dv = esc(String(f.get(h) ?? ''));
-    return `<td class="ie-cell"><input class="ie-input" type="number" step="any" inputmode="decimal" value="${dv}" onfocus="this.select()" ${baseAttrs}></td>`;
+    return `<td class="ie-cell"><input class="ie-input ie-num" type="text" inputmode="decimal" autocomplete="off" value="${dv}" onfocus="this.select()" oninput="ieMark(this)" ${attrs}></td>`;
   }
   const val = f.get(sec);
   if (f.type === 'select') {
     const opts = f.options(sec).map(o => `<option value="${esc(o.v)}" ${o.v === val ? 'selected' : ''}>${esc(o.l)}</option>`).join('');
-    return `<td class="ie-cell"><select class="ie-input" ${baseAttrs}>${opts}</select></td>`;
+    return `<td class="ie-cell"><select class="ie-input" oninput="ieMark(this)" ${attrs}>${opts}</select></td>`;
   }
   const dv = esc(String(val ?? ''));
-  const extra = f.type === 'number' ? 'step="any" inputmode="decimal" onfocus="this.select()"' : '';
-  return `<td class="ie-cell"><input class="ie-input" type="${f.type}" ${extra} value="${dv}" ${baseAttrs}></td>`;
+  if (f.type === 'date') return `<td class="ie-cell"><input class="ie-input ie-date" type="date" value="${dv}" oninput="ieMark(this)" ${attrs}></td>`;
+  return `<td class="ie-cell"><input class="ie-input ie-num" type="text" inputmode="decimal" autocomplete="off" value="${dv}" onfocus="this.select()" oninput="ieMark(this)" ${attrs}></td>`;
 }
 
-// セルの値を store へ確定（変化が無ければ何もしない＝updatedAtを無駄に動かさない）
-function ieCommit(el) {
-  const id = parseInt(el.dataset.id, 10), key = el.dataset.k;
-  const f = INLINE_FIELDS[key]; if (!f) return;
-  const sec = store.data.securities.find(s => s.id === id); if (!sec) return;
-  if (f.kind === 'hold') {
-    const h = ieSingleHolding(id); if (!h) return;
-    const nv = ieNum(el.value) ?? 0;
-    if (h[f.field] !== nv) { h[f.field] = nv; h.source = 'manual'; h.updatedAt = store._now(); store.save(); }
-    return;
-  }
-  if (String(f.get(sec)) === String(el.value).trim()) return; // 変化なし
+// セルが store の値から変化しているか
+function ieCellChanged(el) {
+  const id = parseInt(el.dataset.id, 10), key = el.dataset.k, f = INLINE_FIELDS[key];
+  const sec = store.data.securities.find(s => s.id === id); if (!f || !sec) return false;
+  if (f.kind === 'hold') { const h = ieSingleHolding(id); if (!h) return false; return (h[f.field] ?? 0) !== (ieNum(el.value) ?? 0); }
+  return String(f.get(sec)) !== String(el.value).trim();
+}
+// 入力のたびに変更（未保存）ハイライトと件数表示を更新
+function ieMark(el) { el.classList.toggle('ie-dirty', ieCellChanged(el)); ieUpdatePending(); }
+function ieDirty() { return [...document.querySelectorAll('.ie-input')].some(ieCellChanged); }
+function ieUpdatePending() {
+  const el = document.getElementById('ie-pending'); if (!el) return;
+  const n = [...document.querySelectorAll('.ie-input')].filter(ieCellChanged).length;
+  el.textContent = n ? `未保存 ${n} 件` : '変更なし';
+  el.classList.toggle('has-pending', n > 0);
+}
+// 1セルを store へ確定（変化が無ければ false）。保存ボタンから一括で呼ぶ
+function ieCommitEl(el) {
+  if (!ieCellChanged(el)) return false;
+  const id = parseInt(el.dataset.id, 10), key = el.dataset.k, f = INLINE_FIELDS[key];
+  const sec = store.data.securities.find(s => s.id === id); if (!f || !sec) return false;
+  if (f.kind === 'hold') { const h = ieSingleHolding(id); if (!h) return false; h[f.field] = ieNum(el.value) ?? 0; h.source = 'manual'; h.updatedAt = store._now(); store.save(); return true; }
   const patch = f.patch(el.value);
   if (f.split) { const k = Object.keys(patch)[0]; if ((sec[k] ?? null) !== (patch[k] ?? null)) patch.manualUpdatedAt = store._now(); }
-  store.updateSecurity(id, patch);
+  store.updateSecurity(id, patch); return true;
+}
+// 「保存」: 入力欄の値をまとめて store へ確定し、派生列も含めて再描画
+function ieSaveAll() {
+  let n = 0; document.querySelectorAll('.ie-input').forEach(el => { if (ieCommitEl(el)) n++; });
+  preserveTableScroll(render);
+  toast(n ? `${n} 件を保存しました` : '変更はありませんでした');
+}
+// 「取消（破棄）」: 入力中の変更を捨てて store の値に戻す
+function ieDiscardAll() {
+  if (ieDirty() && !confirm('入力した変更を破棄して元に戻しますか？')) return;
+  preserveTableScroll(render);
 }
 
-// Excel風キー操作: Enter=下 / Shift+Enter=上 / Tab=右 / Shift+Tab=左 / Esc=取消
+// Excel風キー移動: Enter=下 / Shift+Enter=上 / Tab=右 / Shift+Tab=左 / Esc=このセルを取消。
+// 保存は明示ボタン式なので移動では store へ書かない（間違えても保存前なら戻せる）。
 function ieKey(e) {
   const el = e.target, k = e.key;
-  if (k === 'Enter') { e.preventDefault(); ieCommit(el); ieNav(el, e.shiftKey ? 'up' : 'down'); }
-  else if (k === 'Tab') { e.preventDefault(); ieCommit(el); ieNav(el, e.shiftKey ? 'left' : 'right'); }
+  if (k === 'Enter') { e.preventDefault(); ieNav(el, e.shiftKey ? 'up' : 'down'); }
+  else if (k === 'Tab') { e.preventDefault(); ieNav(el, e.shiftKey ? 'left' : 'right'); }
   else if (k === 'Escape') { e.preventDefault(); ieRevert(el); }
 }
+// このセルだけ store の値に戻す
 function ieRevert(el) {
   const id = parseInt(el.dataset.id, 10), key = el.dataset.k, f = INLINE_FIELDS[key];
   const sec = store.data.securities.find(s => s.id === id);
   if (f && sec) { if (f.kind === 'hold') { const h = ieSingleHolding(id); el.value = h ? (f.get(h) ?? '') : ''; } else el.value = f.get(sec); }
-  el.blur();
+  el.classList.remove('ie-dirty'); ieUpdatePending(); el.blur();
 }
 // 次の入力欄へフォーカス移動。入力欄でない行（保有複数等）は飛ばして探索。端で停止。
 function ieNav(el, dir) {
@@ -1333,7 +1364,37 @@ function ieNav(el, dir) {
     if (t) { t.focus(); if (t.tagName === 'INPUT' && t.select) { try { t.select(); } catch (_) {} } return; }
   }
 }
-function toggleInlineEdit() { inlineEditOn = !inlineEditOn; preserveTableScroll(render); }
+function toggleInlineEdit() {
+  // 未保存の変更があるまま終了しようとしたら確認（誤って閉じてのロスを防ぐ）
+  if (inlineEditOn && ieDirty() && !confirm('保存していない変更があります。破棄して編集モードを終了しますか？')) return;
+  inlineEditOn = !inlineEditOn; preserveTableScroll(render);
+}
+// コード・銘柄名（と先頭の選択列）を横スクロール時に左端固定。table-layout/auto 両対応。
+// 先頭から連続する「選択列→コード→銘柄名」のみ固定（途中に他列が挟まる並べ替え時は固定しない＝レイアウト破綻防止）。
+function applyStickyCols(table) {
+  if (!table || !table.tHead || !table.tBodies[0]) return;
+  const headRow = table.tHead.rows[0], bodyRow = table.tBodies[0].rows[0];
+  if (!headRow || !bodyRow) return;
+  [...table.rows].forEach(r => [...r.cells].forEach(c => { c.classList.remove('stick', 'stick-edge'); c.style.left = ''; }));
+  const want = new Set([0]); // 先頭=選択(チェックボックス)列
+  [...bodyRow.cells].forEach((td, i) => {
+    if (i === 0) return;
+    if (td.classList.contains('col-code')) want.add(i);                 // コード
+    else if (td.querySelector && td.querySelector('.nm-strong')) want.add(i); // 銘柄名
+  });
+  const contiguous = [];
+  for (let i = 0; want.has(i); i++) contiguous.push(i); // 0から連続するものだけ
+  let left = 0;
+  contiguous.forEach((ci, n) => {
+    const w = headRow.cells[ci] ? headRow.cells[ci].getBoundingClientRect().width : 0;
+    [...table.rows].forEach(r => {
+      const c = r.cells[ci]; if (!c) return;
+      c.classList.add('stick'); if (n === contiguous.length - 1) c.classList.add('stick-edge');
+      c.style.left = left + 'px';
+    });
+    left += w;
+  });
+}
 
 function render() {
   updateHeader();
@@ -1630,6 +1691,7 @@ function sortValue(sec, key) {
     case 'sector': return calc.field(sec, 'sector') || 'zzz';
     case 'industry': return calc.field(sec, 'industry') || 'zzz';
     case 'marketCap': return calc.marketCap(sec) ?? -Infinity;
+    case 'turnover': return calc.turnover(sec) ?? -Infinity;
     case 'per': return calc.per(sec) ?? Infinity;
     case 'divYield': return calc.divYield(sec) ?? -Infinity;
     case 'eps': return calc.field(sec, 'eps') ?? -Infinity;
@@ -1761,7 +1823,12 @@ function renderMarket(market) {
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
         <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
       </div>
-      ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価）を直接編集できます。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=取消。数量・取得単価は単一保有のみ、複数（⧉）は保有フォーム。派生列は編集モード終了時に再計算。<button class="btn btn-sm" onclick="toggleInlineEdit()">編集モード終了</button></div>` : ''}
+      ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価）を直接編集 → <strong>「保存」</strong>で確定。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=このセルを取消。数量・取得単価は単一保有のみ（複数=⧉で保有フォーム）。
+        <span class="tb-spacer"></span>
+        <span id="ie-pending" class="ie-pending">変更なし</span>
+        <button class="btn btn-sm btn-primary" onclick="ieSaveAll()">保存</button>
+        <button class="btn btn-sm" onclick="ieDiscardAll()">取消（破棄）</button>
+        <button class="btn btn-sm" onclick="toggleInlineEdit()">編集モード終了</button></div>` : ''}
       <div class="summary-strip">
         <div class="ss"><span class="ss-k">評価額（円換算）</span><span class="ss-v num">${yen(sumV)}</span></div>
         <div class="ss"><span class="ss-k">評価損益</span><span class="ss-v num ${cls(sumPnl)}">${yen(sumPnl)}${sumPnlPct != null ? `<small>${signed(sumPnlPct)}%</small>` : ''}</span></div>
@@ -1793,6 +1860,7 @@ function renderMarket(market) {
     </div>`;
   bindRowSelect();
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
+  applyStickyCols(document.querySelector('#app table.fixed-cols'));
 }
 
 // ヘッダHTML生成（一覧・サイン共通）
@@ -2249,6 +2317,22 @@ function mktAmt(n, market) {
   if (market === 'US') { if (a >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T'; if (a >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B'; if (a >= 1e6) return '$' + (n / 1e6).toFixed(0) + 'M'; return '$' + Math.round(n).toLocaleString('ja-JP'); }
   if (a >= 1e12) return (n / 1e12).toFixed(2) + '兆'; if (a >= 1e8) return (n / 1e8).toFixed(0) + '億'; return Math.round(n).toLocaleString('ja-JP');
 }
+// 売買代金の表示（兆/億/万。10億以上は億まで、1〜10億は億+万、1億未満は万）。米株は$ T/B/M。
+function fmtTurnover(n, market) {
+  if (n == null) return null;
+  const sign = n < 0 ? '-' : '', a = Math.abs(n);
+  if (market === 'US') {
+    if (a >= 1e12) return sign + '$' + (a / 1e12).toFixed(2) + 'T';
+    if (a >= 1e9)  return sign + '$' + (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6)  return sign + '$' + (a / 1e6).toFixed(1) + 'M';
+    return sign + '$' + Math.round(a).toLocaleString('ja-JP');
+  }
+  if (a >= 1e12) { const cho = Math.floor(a / 1e12), oku = Math.round((a % 1e12) / 1e8); return sign + cho + '兆' + (oku ? oku + '億' : ''); }
+  if (a >= 1e9)  return sign + Math.round(a / 1e8) + '億';                                   // 10億以上=億まで
+  if (a >= 1e8)  { const oku = Math.floor(a / 1e8), man = Math.round((a % 1e8) / 1e4); return sign + oku + '億' + (man ? man + '万' : ''); } // 1〜10億=億+万
+  if (a >= 1e4)  return sign + Math.round(a / 1e4) + '万';                                    // 1億未満=万
+  return sign + Math.round(a).toLocaleString('ja-JP');
+}
 // 市場ラベル（米株=取引所、日本株=各銘柄の実際の市場区分プライム/スタンダード/グロース）
 function mktMarketLabel(it, market) {
   if (market === 'US') return it.exchange || '米国株';
@@ -2608,13 +2692,19 @@ function renderSecMaster() {
           <button class="btn btn-sm btn-danger" onclick="bulkDeleteSecurities()">選択した銘柄を削除</button>
           <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
         </div>
-        ${inlineEditOn ? `<div class="ie-hint" style="margin:8px 16px 0">✏️ 編集モード：詳細種別・買い増しルール・カテゴリを直接編集できます。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=取消。<button class="btn btn-sm" onclick="toggleInlineEdit()">編集モード終了</button></div>` : ''}
+        ${inlineEditOn ? `<div class="ie-hint" style="margin:8px 16px 0">✏️ 編集モード：詳細種別・買い増しルール・カテゴリを直接編集 → <strong>「保存」</strong>で確定。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=このセルを取消。
+          <span class="tb-spacer"></span>
+          <span id="ie-pending" class="ie-pending">変更なし</span>
+          <button class="btn btn-sm btn-primary" onclick="ieSaveAll()">保存</button>
+          <button class="btn btn-sm" onclick="ieDiscardAll()">取消（破棄）</button>
+          <button class="btn btn-sm" onclick="toggleInlineEdit()">編集モード終了</button></div>` : ''}
         <div class="table-wrap"><table class="holdings dense no-rowclick ${inlineEditOn ? 'ie-on' : ''}">
           <thead><tr>${smHead}</tr></thead>
           <tbody>${rows || `<tr><td colspan="15" class="empty">銘柄がありません。</td></tr>`}</tbody>
         </table></div>
       </div>
     </div>`;
+  applyStickyCols(document.querySelector('#app table.no-rowclick'));
 }
 
 // 投資信託コード（名称↔内部コード）マスタ。投信はコードが無いため自動採番＝ここで協会コード等に編集可
@@ -3329,6 +3419,7 @@ function openSecurityDetail(secId) {
     kv('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
     kv('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     kv('時価総額(百万) / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? num(Math.round(calc.marketCap(sec))) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
+    kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
   ].join('');
   // 基本情報の派生値
   const held = th.qty > 0;
@@ -5574,8 +5665,10 @@ window.runBrokerImport = runBrokerImport;
 window.setSort = setSort;
 window.setFilter = setFilter;
 window.toggleInlineEdit = toggleInlineEdit;
-window.ieCommit = ieCommit;
+window.ieMark = ieMark;
 window.ieKey = ieKey;
+window.ieSaveAll = ieSaveAll;
+window.ieDiscardAll = ieDiscardAll;
 window.clearFilter = clearFilter;
 window.toggleSelectAll = toggleSelectAll;
 window.bulkSellAll = bulkSellAll;

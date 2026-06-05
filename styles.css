@@ -770,11 +770,13 @@ table.holdings.no-rowclick tbody tr:hover { background: var(--panel-2); }
 
 /* ===== SEC-94: 一覧のExcel風インライン編集モード ===== */
 .ie-hint {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin: 0 0 2px; padding: 7px 14px; font-size: 12px;
   background: color-mix(in srgb, var(--accent) 9%, var(--panel)); border: 1px solid var(--accent); border-radius: 8px;
 }
 .ie-hint strong { font-weight: 700; }
+.ie-pending { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ie-pending.has-pending { color: #b26a00; font-weight: 700; }
 table.ie-on tbody td.ie-cell { padding: 1px 4px !important; background: #fffbe9; vertical-align: middle; }
 table.ie-on tbody td.ie-link { cursor: pointer; background: #f3f6ff; }
 table.ie-on tbody td.ie-link:hover { background: #e6edff; }
@@ -785,5 +787,18 @@ table.ie-on tbody td.ie-link:hover { background: #e6edff; }
   color: var(--ink); vertical-align: middle;
 }
 .ie-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+/* 数値欄は幅を詰めて右寄せ（入力枠が広すぎないように） */
+.ie-input.ie-num { width: auto; max-width: 84px; text-align: right; }
+.ie-input.ie-date { width: auto; max-width: 138px; }
+/* 未保存（変更あり）セルのハイライト */
+.ie-input.ie-dirty { background: #fff3cd; border-color: #e0a800; }
+.ie-input.ie-dirty:focus { outline-color: #e0a800; }
 /* 編集モード中は行ホバーの背景反転を抑え、入力欄を見やすく */
 table.ie-on tbody tr:hover { background: transparent; }
+
+/* ===== SEC-94: コード・銘柄名の列を横スクロール時に左端固定 ===== */
+table.holdings td.stick, table.holdings th.stick { position: sticky; z-index: 2; background: var(--panel); }
+table.holdings thead th.stick { z-index: 3; background: var(--panel-2); }
+table.holdings td.stick-edge, table.holdings th.stick-edge { box-shadow: 6px 0 6px -6px rgba(0,0,0,.28); }
+/* sig到達/ホバー行でも固定セルの背景を不透明に保つ（下の行が透けないように） */
+table.holdings tbody tr:hover td.stick { background: #f6f8fb; }

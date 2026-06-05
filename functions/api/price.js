@@ -86,7 +86,9 @@ async function fetchFinnhub(symbol, token, withHighs) {
     }
   }
 
-  return { price, prevClose, prevDayPct, high5y, high52w, high5yDate, high52wDate, currency: 'USD', source, fetchedAt: new Date().toISOString() };
+  // 出来高: Finnhub quote には無いため、高値取得で Yahoo を引いた時(withHighs)だけ得られる。
+  // 通常更新では null だが、クライアント側で前回値を保持するため日次の高値更新で更新される。
+  return { price, prevClose, prevDayPct, high5y, high52w, high5yDate, high52wDate, currency: 'USD', source, volume: yq ? yq.volume : null, fetchedAt: new Date().toISOString() };
 }
 
 // ---------- 米株 プレ/アフター（時間外）----------
@@ -145,6 +147,7 @@ async function fetchYahoo(symbol, type, rangeOverride, withHighs) {
     high52wDate: wantHighs ? q.high52wDate : null,
     currency: q.currency,
     source:   'yahoo',
+    volume:   q.volume,     // 当日出来高（売買代金算出用）
     fundNav:  type === 'fund' ? q.price : null,     // 投信の場合は基準価額として扱う
     fetchedAt: new Date().toISOString(),
   };
@@ -198,6 +201,7 @@ async function fetchYahooChart(symbol, range, interval) {
     high5yDate:  toDate(high5yTs),   // 5年高値が付いた日（YYYY-MM-DD）
     high52wDate: toDate(high52wTs),  // 52週高値が付いた日
     currency: meta.currency || null,
+    volume: num(meta.regularMarketVolume),  // 当日出来高（売買代金=現在値×出来高 の算出用）
     highs,
   };
 }
