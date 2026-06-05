@@ -83,9 +83,9 @@ async function fetchInfoDebug(symbol, finnhubKey) {
         const html = await res.text();
         out.diag.jpPage.htmlLen = html.length;
         out.diag.jpPage.marketCapExtracted = extractJpMarketCap(html);
-        const i = html.indexOf('時価総額');
-        out.diag.jpPage.foundLabel = i >= 0;
-        out.diag.jpPage.snippet = i >= 0 ? html.slice(i, i + 400).replace(/\s+/g, ' ') : null;
+        out.diag.jpPage.foundLabel = html.indexOf('時価総額') >= 0;
+        // タグ除去したラベル直後テキスト（値の位置・形式を確認する用）
+        out.diag.jpPage.cleanText = jpLabelText(html, '時価総額', 600);
       }
     } catch (e) { out.diag.jpPage = { error: String(e?.message || e) }; }
   } else if (type === 'us' && finnhubKey) {
@@ -207,19 +207,21 @@ async function fetchYahooJpQuote(symbol) {
 async function fetchYahooJpName(symbol) { const q = await fetchYahooJpQuote(symbol); return q ? q.name : null; }
 
 // 日本版ページから「時価総額」を抽出し百万円単位で返す（列の単位＝百万に合わせる）。取れなければ null。
+// 新デザイン（_DataListItem_ 等）で値が複数要素に分かれ、ラベルからやや離れているため、
+// ラベル以降を広めに取り→HTMLタグを除去→最初の「数値(＋単位)円」を拾う方式にする。
 function extractJpMarketCap(html) {
-  const i = html.indexOf('時価総額');
-  if (i < 0) return null;
-  const seg = html.slice(i, i + 600);
-  let yen = null;
-  // Yahoo JP の数値コンポーネント（値＋単位サフィックス。ランキング解析と同形）
-  let m = seg.match(/StyledNumber__value__[^"]*">([\d,.]+)<\/span>(?:<span[^>]*StyledNumber__suffix__[^"]*">([^<]+)<\/span>)?/);
-  if (m) yen = scaleJpUnit(parseFloat(m[1].replace(/,/g, '')), m[2] || '');
-  else { // フォールバック: 「12,345百万円」「4.25兆円」等の素テキスト
-    m = seg.match(/([\d,]+(?:\.\d+)?)\s*(兆|億|百万|千)?\s*円/);
-    if (m) yen = scaleJpUnit(parseFloat(m[1].replace(/,/g, '')), m[2] || '');
-  }
+  const text = jpLabelText(html, '時価総額', 3000);
+  if (text == null) return null;
+  const m = text.match(/([\d][\d,]*(?:\.\d+)?)\s*(兆|億|百万|千)?\s*円/);
+  if (!m) return null;
+  const yen = scaleJpUnit(parseFloat(m[1].replace(/,/g, '')), m[2] || '');
   return (yen != null && isFinite(yen)) ? Math.round(yen / 1e6) : null; // 円 → 百万円
+}
+// ラベル直後のHTMLをタグ除去したテキストにして返す（値抽出・診断用）
+function jpLabelText(html, label, span) {
+  const i = html.indexOf(label);
+  if (i < 0) return null;
+  return html.slice(i, i + (span || 2000)).replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 function scaleJpUnit(n, unit) { if (!isFinite(n)) return null; if (/兆/.test(unit)) return n * 1e12; if (/億/.test(unit)) return n * 1e8; if (/百万/.test(unit)) return n * 1e6; if (/千/.test(unit)) return n * 1e3; return n; }
 
