@@ -92,5 +92,9 @@ export function evaluateSignal(input) {
   }
   const remainingDropPct = (price - trigger) / price * 100; // >0: あとこれだけ下落で到達
   const recoCcy = market === 'US' ? 'USD' : 'JPY';
-  return { type, base, baseSource, trigger, price, remainingDropPct, reached: price <= trigger, recoAmount: recoAmount == null ? null : recoAmount, recoCcy };
+  return {
+    type, base, baseSource, trigger, price, remainingDropPct, reached: price <= trigger,
+    recoAmount: recoAmount == null ? null : recoAmount, recoCcy,
+    lastBuyPrice: lb.price, lastBuyDate: lb.date, // 前回購入（前回からの下落率の算出用）
+  };
 }

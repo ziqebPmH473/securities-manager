@@ -44,6 +44,14 @@ export function evalSecurity(bundle, sec) {
   });
 }
 
+function displayName(bundle, sec) {
+  if (sec.nameOverride) return sec.nameOverride;
+  const meta = (bundle.meta || {})[priceKey(sec)] || {};
+  return meta.name || sec.name || sec.ticker;
+}
+const round1 = (v) => v == null ? null : Math.round(v * 10) / 10;
+const round2 = (v) => v == null ? null : Math.round(v * 100) / 100;
+
 // 買い増しサイン（到達 or 残り下落率 <= nearPct）の銘柄一覧。到達→残り少ない順。
 export function computeSignals(bundle, opts = {}) {
   const nearPct = opts.nearPct != null ? opts.nearPct : 5;
@@ -53,13 +61,16 @@ export function computeSignals(bundle, opts = {}) {
     if (!ev || ev.remainingDropPct == null) continue;
     const hit = ev.reached || ev.remainingDropPct <= nearPct;
     if (!hit) continue;
+    const p = (bundle.prices || {})[priceKey(sec)] || {};
+    const dayChangePct = (ev.price != null && p.prevClose) ? (ev.price - p.prevClose) / p.prevClose * 100 : null;
+    const dropFromPrev = (ev.price != null && ev.lastBuyPrice) ? (ev.price - ev.lastBuyPrice) / ev.lastBuyPrice * 100 : null;
     out.push({
-      ticker: sec.ticker, market: sec.market,
+      ticker: sec.ticker, market: sec.market, name: displayName(bundle, sec),
       type: ev.type, baseSource: ev.baseSource,
-      price: ev.price, trigger: ev.trigger,
-      remainingDropPct: Math.round(ev.remainingDropPct * 10) / 10,
+      price: ev.price, dayChangePct: round2(dayChangePct), dropFromPrev: round1(dropFromPrev),
+      trigger: ev.trigger, remainingDropPct: round1(ev.remainingDropPct),
       reached: ev.reached,
-      recoAmount: ev.recoAmount, recoCcy: ev.recoCcy,
+      buyAmount: ev.recoAmount, ccy: ev.recoCcy,
     });
   }
   out.sort((a, b) => (a.reached === b.reached ? a.remainingDropPct - b.remainingDropPct : (a.reached ? -1 : 1)));

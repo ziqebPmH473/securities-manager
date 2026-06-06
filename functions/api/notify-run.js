@@ -33,8 +33,10 @@ export async function onRequestGet(context) {
     let signals = computeSignals(bundle, { nearPct: isFinite(near) ? near : 5 });
     if (market === 'JP' || market === 'US') signals = signals.filter(s => s.market === market);
 
-    const asOf = new Date().toISOString() + '（サーバー取得の最新値）';
-    const email = buildSignalEmail(signals, asOf, MARKET_LABEL[market] || '');
+    // 件名の日付は JST（UTC+9）の M/D
+    const jst = new Date(Date.now() + 9 * 3600 * 1000);
+    const dateLabel = `${jst.getUTCMonth() + 1}/${jst.getUTCDate()}`;
+    const email = buildSignalEmail(signals, dateLabel, MARKET_LABEL[market] || '');
 
     let sent = null, skipped = null;
     if (doSend) {

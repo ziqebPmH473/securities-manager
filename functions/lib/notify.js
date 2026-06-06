@@ -5,28 +5,32 @@ const RESEND_URL = 'https://api.resend.com/emails';
 
 function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
-// サイン一覧 → { subject, text, html }。marketLabel は件名・見出しに付ける任意ラベル（例「日本株」）
-export function buildSignalEmail(signals, asOf, marketLabel) {
-  const ml = marketLabel ? ` ${marketLabel}` : '';
+// サイン一覧 → { subject, text, html }。
+// dateLabel 例「6/7」、marketLabel 例「米国株」。形式はすみぽん指定（2026-06-07）。
+export function buildSignalEmail(signals, dateLabel, marketLabel) {
   const reached = signals.filter(s => s.reached);
   const near = signals.filter(s => !s.reached);
-  const cur = (s, v) => v == null ? '—' : (s.market === 'US' ? '$' : '¥') + v;
-  const line = (s) => {
-    const kind = s.type === 'initial' ? '初回' : '買増';
-    const reco = s.recoAmount != null ? `／推奨 ${(s.recoCcy === 'USD' ? '$' : '¥')}${s.recoAmount}` : '';
-    return `・[${kind}] ${s.ticker}（${s.market}）  現在 ${cur(s, s.price)} → 次回 ${cur(s, s.trigger)}  残り ${s.remainingDropPct}%${reco}`;
-  };
+  const sym = (m) => m === 'US' ? '$' : '¥';
+  const n = (v) => v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const cur = (s, v) => v == null ? '—' : sym(s.market) + n(v);
+  const spct = (v) => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%'; // 前日比（符号つき）
+  const dpct = (v) => v == null ? '—' : v.toFixed(1) + '%';                       // 前回から/残り
+  const kind = (s) => s.type === 'initial' ? '初回' : '買増';
+  const amt = (s) => s.buyAmount == null ? '—' : sym(s.market) + n(s.buyAmount);
+  const head = (s) => `[${kind(s)}] ${s.ticker} ${s.name}  現在値 ${cur(s, s.price)}(${spct(s.dayChangePct)}) 前回から${dpct(s.dropFromPrev)} → 買増ライン ${cur(s, s.trigger)}`;
+  const lineReached = (s) => `${head(s)} ／購入額 ${amt(s)}`;
+  const lineNear = (s) => `${head(s)} 残り ${dpct(s.remainingDropPct)} ／購入額 ${amt(s)}`;
+
   const L = [];
-  L.push(`買い増しサイン通知${ml}`);
-  L.push(`基準価格: ${asOf || '—'}`);
+  L.push('〇到達');
+  L.push(reached.length ? reached.map(lineReached).join('\n') : '（なし）');
   L.push('');
-  L.push(`■ 到達（今が買い時）: ${reached.length}件`);
-  L.push(reached.length ? reached.map(line).join('\n') : '（なし）');
-  L.push('');
-  L.push(`■ もうすぐ（残りわずか）: ${near.length}件`);
-  L.push(near.length ? near.map(line).join('\n') : '（なし）');
+  L.push('〇接近');
+  L.push(near.length ? near.map(lineNear).join('\n') : '（なし）');
   const text = L.join('\n');
-  const subject = `【買い増しサイン${ml}】到達 ${reached.length}件 / もうすぐ ${near.length}件`;
+
+  const ml = marketLabel || '全市場';
+  const subject = `【${ml}】${dateLabel || ''} 購入基準価格通知`;
   const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif"><pre style="font:13px/1.7 ui-monospace,monospace;white-space:pre-wrap;margin:0">${escapeHtml(text)}</pre></div>`;
   return { subject, text, html };
 }
