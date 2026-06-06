@@ -3,9 +3,12 @@
 // キャッシュ価格（最後の「価格更新」時点）で判定するため、アプリの「サイン」タブと一致するはず。
 import { readAppData } from '../lib/sheets.js';
 import { computeSignals } from '../lib/portfolio.js';
+import { checkToken } from '../lib/auth.js';
 
 export async function onRequestGet(context) {
   try {
+    const auth = checkToken(context);
+    if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
     const url = new URL(context.request.url);
     const near = parseFloat(url.searchParams.get('near'));
     const bundle = await readAppData(context.env);

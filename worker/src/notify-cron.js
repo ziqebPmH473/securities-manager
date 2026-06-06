@@ -27,8 +27,14 @@ export default {
   },
 
   // 手動テスト用: このWorkerのURLを開くと即送信。?market=JP / ?market=US / 省略で両方。
+  // 外部からの悪用を防ぐため token 必須（NOTIFY_TRIGGER_TOKEN を設定し ?token=… で一致）。
   async fetch(request, env, ctx) {
-    const m = (new URL(request.url).searchParams.get('market') || '').toUpperCase();
+    const url = new URL(request.url);
+    const token = env.NOTIFY_TRIGGER_TOKEN;
+    if (!token || url.searchParams.get('token') !== token) {
+      return new Response('Not found', { status: 404 });
+    }
+    const m = (url.searchParams.get('market') || '').toUpperCase();
     const markets = (m === 'JP' || m === 'US') ? [m] : ['JP', 'US'];
     const results = [];
     for (const mk of markets) {

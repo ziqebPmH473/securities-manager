@@ -2,9 +2,12 @@
 // GET /api/sheet-check
 // 機密（保有額・銘柄名等）は返さず、件数などの安全なサマリーのみ返す。
 import { readAppData } from '../lib/sheets.js';
+import { checkToken } from '../lib/auth.js';
 
 export async function onRequestGet(context) {
   try {
+    const auth = checkToken(context);
+    if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
     const b = await readAppData(context.env);
     const arr = (k) => Array.isArray(b[k]) ? b[k].length : 0;
     const summary = {

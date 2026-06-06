@@ -8,23 +8,20 @@ import { readAppData } from '../lib/sheets.js';
 import { computeSignals } from '../lib/portfolio.js';
 import { fetchFreshPrices, mergeFreshPrices } from '../lib/prices.js';
 import { buildSignalEmail, sendResend } from '../lib/notify.js';
+import { checkToken } from '../lib/auth.js';
 
 const MARKET_LABEL = { JP: '日本株', US: '米国株' };
 
 export async function onRequestGet(context) {
   try {
+    // 保有サインを返す/メールを送るため、トークン必須（外部からの閲覧・送信を防止）
+    const auth = checkToken(context);
+    if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
+
     const url = new URL(context.request.url);
     const doSend = url.searchParams.get('send') === '1';
     const near = parseFloat(url.searchParams.get('near'));
     const market = (url.searchParams.get('market') || '').toUpperCase(); // ''|'JP'|'US'
-
-    // 送信は任意のトークンで保護（NOTIFY_TRIGGER_TOKEN を設定した場合のみ必須。未設定なら従来どおり）
-    if (doSend) {
-      const required = context.env.NOTIFY_TRIGGER_TOKEN;
-      if (required && url.searchParams.get('token') !== required) {
-        return json({ ok: false, error: 'トークンが必要です（?token=）' }, 401);
-      }
-    }
 
     const bundle = await readAppData(context.env);
     const fresh = await fetchFreshPrices(url.origin, bundle.securities || []);
