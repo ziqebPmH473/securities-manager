@@ -891,15 +891,27 @@ const api = {
     store.save();
   },
 
-  // 銘柄情報マスタを一括取得して store.data.meta にキャッシュ
+  // 銘柄情報マスタを取得して store.data.meta にキャッシュ。
+  // 1銘柄=最大4サブリクエスト(日本語名/chart/quoteSummary/Finnhub)のため、全銘柄を1リクエストに
+  // まとめると Cloudflareのサブリクエスト上限(約50)やFinnhubレート制限を超え、後半（特に時価総額）が
+  // 取りこぼされる。→ 小分けバッチ(8銘柄)で順次取得する。
   async refreshMeta(secs) {
     secs = secs || store.data.securities.filter(s => s.ticker);
     if (secs.length === 0) return;
     const symbols = [...new Set(secs.map(yahooSymbol))];
+    const CHUNK = 8;
+    const infos = {};
+    const bm = document.getElementById('busy-msg');
+    const ov = document.getElementById('busy-overlay');
+    for (let i = 0; i < symbols.length; i += CHUNK) {
+      const part = symbols.slice(i, i + CHUNK);
+      if (bm && ov && !ov.hidden) bm.textContent = `銘柄情報を更新中… ${Math.min(i + CHUNK, symbols.length)}/${symbols.length}`;
+      try {
+        const res = await fetch(`/api/info?symbols=${encodeURIComponent(part.join(','))}`);
+        if (res.ok) Object.assign(infos, await res.json());
+      } catch (_) { /* この塊は失敗→次の塊へ（部分取得を許容） */ }
+    }
     try {
-      const res = await fetch(`/api/info?symbols=${encodeURIComponent(symbols.join(','))}`);
-      if (!res.ok) return;
-      const infos = await res.json();
       for (const sec of secs) {
         const d = infos[yahooSymbol(sec)];
         if (d && !d.error) {
@@ -912,7 +924,7 @@ const api = {
         }
       }
       store.save();
-    } catch (_) { /* 取得失敗は無視（手入力可） */ }
+    } catch (_) { /* 保存失敗は無視（手入力可） */ }
   },
 
   // 起動時の日次更新: 1日1回だけ 銘柄名/セクター/業種/高値 をまとめて更新（名称変更や高値の日次反映用）

@@ -294,7 +294,8 @@ async function fetchQuoteSummary(symbol) {
 
 async function fetchFinnhubMetric(symbol, token) {
   let res;
-  try { res = await fetchWithTimeout(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${token}`, { headers: { 'User-Agent': 'securities-manager/1.0' } }); }
+  // エッジキャッシュ1h: 再取得時のFinnhub呼び出しを減らしレート制限を回避（時価総額・PER等は日中ほぼ不変）
+  try { res = await fetchWithTimeout(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${token}`, { headers: { 'User-Agent': 'securities-manager/1.0' }, cf: { cacheTtl: 3600, cacheEverything: true } }); }
   catch { return null; }
   if (!res.ok) return null;
   const data = await res.json().catch(() => null);
