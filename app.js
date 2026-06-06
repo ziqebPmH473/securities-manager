@@ -63,7 +63,7 @@ const MASTER_COLS = [
   { key: 'dropFromPrev', label: '前回からの下落率', left: false, markets: STKM, noSort: false },
   { key: 'sector',      label: 'セクター',         left: true,  markets: STKM, noSort: false },
   { key: 'industry',    label: '業種',             left: true,  markets: STKM, noSort: false },
-  { key: 'marketCap',   label: '時価総額(百万)',    left: false, markets: STKM, noSort: false },
+  { key: 'marketCap',   label: '時価総額',          left: false, markets: STKM, noSort: false },
   { key: 'turnover',    label: '売買代金',          left: false, markets: STKM, noSort: false },
   { key: 'value',       label: '評価額',           left: false, markets: ALLM, noSort: false },
   { key: 'cost',        label: '取得価額',         left: false, markets: ALLM, noSort: false },
@@ -1207,7 +1207,8 @@ const COL_RENDERERS = {
   dropFromPrev: (s,c) => pctTdBg(calc.dropFromPrev(s), 'dropFromPrev'),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
-  marketCap: (s,c) => { const v = calc.marketCap(s); return `<td>${v != null ? Number(Math.round(v)).toLocaleString('ja-JP') : muted}</td>`; },
+  // 時価総額: 兆/億/万（米株は$T/B）表記に統一（売買代金と同形式）。marketCapは百万単位なので×1e6で実額化
+  marketCap: (s,c) => { const v = calc.marketCap(s); return `<td title="時価総額">${v != null ? fmtTurnover(v * 1e6, c.market) : muted}</td>`; },
   turnover:  (s,c) => { const v = calc.turnover(s); return `<td title="現在値×当日出来高">${v != null ? fmtTurnover(v, c.market) : muted}</td>`; },
   value:     (s,c) => `<td>${c.th.qty ? fmtAmt(c.valN, c.market) + c.noPriceMark : muted}</td>`,
   cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : muted}</td>`,
@@ -3415,7 +3416,7 @@ function openSecurityDetail(secId) {
     kv('セクター / 業種', `${esc(calc.field(sec, 'sector') || '—')} / ${esc(calc.field(sec, 'industry') || '—')}`),
     kv('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
     kv('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
-    kv('時価総額(百万) / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? num(Math.round(calc.marketCap(sec))) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
+    kv('時価総額 / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
   ].join('');
   // 基本情報の派生値
