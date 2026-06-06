@@ -384,6 +384,7 @@ const gsync = {
       const allow = (this.cfg().allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
       if (allow.length && !allow.includes(email)) { this._token = null; toast(`許可されていないアカウントです: ${email}`); return resolve(false); }
       this._token = token; this._email = email; toast(`ログイン: ${email || 'OK'}`); resolve(true);
+      try { if (typeof dsync !== 'undefined') dsync.afterSignIn(); } catch (_) {}   // 自動同期ONなら初回マージ
     } catch (e) { reject(e); }
   },
   // ★モバイル対応: タップ→ポップアップの間に await を挟まない。GIS が読込済みなら同期で
@@ -396,7 +397,7 @@ const gsync = {
         try {
           const tc = google.accounts.oauth2.initTokenClient({
             client_id: cfg.clientId,
-            scope: 'https://www.googleapis.com/auth/spreadsheets openid email',
+            scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file openid email',
             callback: (r) => (r && r.access_token) ? this._onToken(r.access_token, resolve, reject) : reject(new Error('トークン取得失敗')),
             error_callback: (e) => reject(new Error((e && e.type) || 'OAuthエラー')),
           });
@@ -446,6 +447,109 @@ const gsync = {
     restoreBundle(JSON.parse(json)); render(); toast('スプレッドシートから読み込みました（列設定も復元）'); return true;
   },
 };
+
+// ---------- Drive 自動マージ同期（aoiro方式・SyncMerge を利用） ----------
+// Drive上の securities-manager/data.json を base/local/remote で3-wayマージし、両端末が収束。
+// トークンは gsync と共用（スコープに drive.file を追加済み）。clientId 未設定なら休眠。
+const DSYNC_FOLDER = 'securities-manager';
+const DSYNC_FILE = 'data.json';
+const dsync = {
+  _busy: false, _timer: null, _lastSnap: '', _started: false,
+  enabled() { try { return localStorage.getItem('sm_drive_autosync') === '1'; } catch (_) { return false; } },
+  setEnabled(on) { try { localStorage.setItem('sm_drive_autosync', on ? '1' : '0'); } catch (_) {} },
+  syncedAt() { try { return localStorage.getItem('sm_sync_at'); } catch (_) { return null; } },
+  _loadBaseRaw() { try { return localStorage.getItem('sm_sync_base') || '{}'; } catch (_) { return '{}'; } },
+  _saveBaseRaw(json) { try { localStorage.setItem('sm_sync_base', json); } catch (_) {} },
+  _snapshot() { return JSON.stringify(dataBundle()); },
+
+  async _driveFetch(url, opts = {}) {
+    if (!gsync._token) throw new Error('Googleログインが必要です');
+    const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + gsync._token } });
+    if (res.status === 401) { gsync._token = null; throw new Error('Google認証の期限切れ。再ログインしてください'); }
+    return res;
+  },
+  async _ensureFolder() {
+    const q = encodeURIComponent(`name='${DSYNC_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+    const r = await this._driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)&spaces=drive`);
+    const d = await r.json();
+    if (d.files && d.files.length) return d.files[0].id;
+    const cr = await this._driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: DSYNC_FOLDER, mimeType: 'application/vnd.google-apps.folder' }),
+    });
+    return (await cr.json()).id;
+  },
+  async _findFile(folderId) {
+    const q = encodeURIComponent(`name='${DSYNC_FILE}' and '${folderId}' in parents and trashed=false`);
+    const r = await this._driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)&spaces=drive`);
+    const d = await r.json();
+    return (d.files && d.files[0]) || null;
+  },
+  async _readFile(id) {
+    const r = await this._driveFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`);
+    if (!r.ok) throw new Error('Drive読込失敗 ' + r.status);
+    return r.text();
+  },
+  async _writeFile(folderId, fileId, content) {
+    if (fileId) {
+      const r = await this._driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: content,
+      });
+      if (!r.ok) throw new Error('Drive更新失敗 ' + r.status);
+      return r.json();
+    }
+    const boundary = 'sm' + Math.random().toString(36).slice(2);
+    const meta = { name: DSYNC_FILE, parents: [folderId] };
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+    const r = await this._driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime', {
+      method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
+    });
+    if (!r.ok) throw new Error('Drive作成失敗 ' + r.status);
+    return r.json();
+  },
+
+  // 1回の同期: Drive読込→3-wayマージ→ローカル反映→Drive書込→base更新
+  async syncNow() {
+    if (this._busy) return null;
+    if (!gsync._token) { const ok = await gsync.signIn(); if (!ok) return null; }
+    this._busy = true;
+    try {
+      const folderId = await this._ensureFolder();
+      const file = await this._findFile(folderId);
+      let remote = {};
+      if (file) { try { remote = JSON.parse(await this._readFile(file.id)); } catch (_) { remote = {}; } }
+      const local = dataBundle();
+      const base = JSON.parse(this._loadBaseRaw());
+      const merged = SyncMerge.mergeBundle(base, local, remote);
+      const json = JSON.stringify(merged);                 // 変更前にシリアライズ
+      await this._writeFile(folderId, file ? file.id : null, json);
+      this._saveBaseRaw(json);
+      restoreBundle(merged);                               // ローカル反映（mergedは以後変更されてよい）
+      try { localStorage.setItem('sm_sync_at', new Date().toISOString()); } catch (_) {}
+      this._lastSnap = this._snapshot();
+      return merged;
+    } finally { this._busy = false; }
+  },
+  // 変更があれば同期（自動・ポップアップは出さない＝未ログイン時はスキップ）
+  async _maybeSync() {
+    if (!this.enabled() || this._busy || !gsync._token || !gsync.cfg().clientId) return;
+    if (this._snapshot() === this._lastSnap) return;
+    try { await this.syncNow(); } catch (_) {}
+  },
+  // サインイン直後に呼ぶ: 自動同期ONなら初回マージ
+  afterSignIn() {
+    if (!this.enabled()) return;
+    this.syncNow().then(() => { render(); }).catch(() => {});
+  },
+  // 自動同期ループ開始（インターバル＋タブ非表示/離脱）。未ログイン時は何もしない（ポップアップ無し）
+  startAuto() {
+    if (this._started) return; this._started = true;
+    this._lastSnap = this._snapshot();
+    this._timer = setInterval(() => this._maybeSync(), 25000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') this._maybeSync(); });
+    window.addEventListener('beforeunload', () => { this._maybeSync(); });
+  },
+};
 function gsaveSettings(f) {
   store.data.settings = store.data.settings || {};
   store.data.settings.google = { clientId: f.gClientId.value.trim(), allowedEmails: f.gAllowed.value.trim(), spreadsheetId: f.gSheetId.value.trim() };
@@ -466,6 +570,21 @@ async function gsyncLoad() {
   gsyncStatus('<span class="muted">シートから読込中…</span>');
   try { const ok = await withBusy('Googleシートから読込中…', () => gsync.load(), 'シートから読み込みました'); gsyncStatus(ok ? `<span class="pos">✓ シートから読み込みました ${new Date().toLocaleString('ja-JP')}</span>` : '<span class="muted">読込をキャンセルしました</span>'); }
   catch (e) { gsyncStatus('<span class="neg">読込失敗：' + esc(e.message || String(e)) + '</span>'); }
+}
+// Drive自動同期 トグル/手動
+function dsyncToggle(on) {
+  dsync.setEnabled(on);
+  if (on) {
+    dsync.startAuto();
+    dsync.syncNow().then(() => { toast('Drive自動同期: ON（同期しました）'); renderMaster(); }).catch(e => toast('同期失敗: ' + (e && e.message || e), 5000));
+  } else { toast('Drive自動同期: OFF'); }
+}
+async function dsyncNow() {
+  try {
+    if (!gsync._token) { const ok = await gsync.signIn(); if (!ok) return; }   // タップ同期でポップアップ起動
+    await withBusy('Driveと同期中…', () => dsync.syncNow(), '同期しました');
+    renderMaster();
+  } catch (e) { toast('同期失敗: ' + (e && e.message || e), 5000); }
 }
 
 // ---------- 計算 ----------
@@ -3030,6 +3149,17 @@ function googleSyncSection() {
         </div>
       </form>
       <p class="muted" style="margin:10px 0 0">事前にスプレッドシートへ <code>_appdata</code> という名前のシート(タブ)を1つ作成してください（A1セルにJSONを保存）。</p>
+
+      <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0 0 4px">
+        <input type="checkbox" style="width:auto" ${dsync.enabled() ? 'checked' : ''} onchange="dsyncToggle(this.checked)">
+        <strong>Drive自動同期（実験的）</strong>
+      </label>
+      <p class="muted" style="margin:0 0 8px">ONにすると、ログイン中は約25秒ごと＋タブ離脱時に Drive の <code>${DSYNC_FOLDER}/${DSYNC_FILE}</code> と<strong>自動マージ同期</strong>（複数端末で両方の変更が残る）。手動保存/読込は不要に。初回はログイン直後に同期します。</p>
+      <div class="form-actions" style="justify-content:flex-start">
+        <button type="button" class="btn" onclick="dsyncNow()" ${configured ? '' : 'disabled'}>今すぐDrive同期</button>
+        <span id="dsync-status" class="muted" style="font-size:12px;align-self:center">${dsync.syncedAt() ? '最終同期: ' + new Date(dsync.syncedAt()).toLocaleString('ja-JP') : '未同期'}</span>
+      </div>
     </div>
   </div>`;
 }
@@ -5853,3 +5983,5 @@ loadColPrefs();
 render();
 // 1日1回（起動時）だけ銘柄名・セクター・業種・高値を更新
 api.dailyStartup();
+// Drive自動同期ループを準備（未ログイン時は何もしない＝ポップアップ無し。ログイン後に同期開始）
+if (typeof dsync !== 'undefined' && dsync.enabled()) dsync.startAuto();
