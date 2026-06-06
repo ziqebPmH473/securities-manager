@@ -364,7 +364,8 @@ const store = {
 // ---------- Google連携（GIS＋Sheets。方式A=ブラウザ完結。clientId 未設定なら休眠） ----------
 // 設計は DESIGN.md §14。実機での動作確認はクライアントID入手後に行う（現状はスキャフォールド）。
 const gsync = {
-  _token: null, _email: null,
+  _token: null, _email: null, _scope: '',
+  hasDrive() { return !!(this._scope && this._scope.indexOf('drive.file') >= 0); },
   cfg() { return (store.data.settings && store.data.settings.google) || {}; },
   // GISスクリプトを必要時のみ読み込む（未設定なら一切読み込まない）
   async ensureGis() {
@@ -377,9 +378,10 @@ const gsync = {
     });
   },
   // 許可メール照合＋トークン確定（callbackから呼ぶ）
-  async _onToken(token, resolve, reject) {
+  async _onToken(r, resolve, reject) {
     try {
-      const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } }).then(r => r.json());
+      const token = r.access_token; this._scope = r.scope || '';
+      const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } }).then(x => x.json());
       const email = ((info && info.email) || '').toLowerCase();
       const allow = (this.cfg().allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
       if (allow.length && !allow.includes(email)) { this._token = null; toast(`許可されていないアカウントです: ${email}`); return resolve(false); }
@@ -389,7 +391,7 @@ const gsync = {
   },
   // ★モバイル対応: タップ→ポップアップの間に await を挟まない。GIS が読込済みなら同期で
   //   requestAccessToken を呼ぶ（スマホはタップ直後の同期呼び出しでないとポップアップを塞ぐ）。
-  signIn() {
+  signIn(force) {
     const cfg = this.cfg();
     return new Promise((resolve, reject) => {
       if (!cfg.clientId) { toast('クライアントIDを設定してください'); return resolve(false); }
@@ -398,10 +400,11 @@ const gsync = {
           const tc = google.accounts.oauth2.initTokenClient({
             client_id: cfg.clientId,
             scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file openid email',
-            callback: (r) => (r && r.access_token) ? this._onToken(r.access_token, resolve, reject) : reject(new Error('トークン取得失敗')),
+            callback: (r) => (r && r.access_token) ? this._onToken(r, resolve, reject) : reject(new Error('トークン取得失敗')),
             error_callback: (e) => reject(new Error((e && e.type) || 'OAuthエラー')),
           });
-          tc.requestAccessToken({ prompt: '' });   // 同期で呼ぶ＝タップのユーザー操作を維持
+          // force=true で同意画面を必ず出す（新スコープ drive.file を確実に付与するため）
+          tc.requestAccessToken({ prompt: force ? 'consent' : '' });   // 同期で呼ぶ＝タップのユーザー操作を維持
         } catch (e) { reject(e); }
       };
       if (window.google && google.accounts && google.accounts.oauth2) launch();   // 既読込→同期で即ポップアップ
@@ -468,26 +471,33 @@ const dsync = {
     if (res.status === 401) { gsync._token = null; throw new Error('Google認証の期限切れ。再ログインしてください'); }
     return res;
   },
+  // 非ok時にDrive APIのエラーメッセージ本文を取り出す（403の原因＝スコープ不足/API未有効 を見分けるため）
+  async _bodyMsg(res) {
+    try { const t = await res.text(); try { const j = JSON.parse(t); return (j.error && (j.error.message || j.error.status)) || t.slice(0, 300); } catch (_) { return t.slice(0, 300); } } catch (_) { return ''; }
+  },
+  async _driveJson(url, opts) {
+    const res = await this._driveFetch(url, opts);
+    if (!res.ok) throw new Error(`Drive API ${res.status}：${await this._bodyMsg(res)}`);
+    return res.json();
+  },
   async _ensureFolder() {
     const q = encodeURIComponent(`name='${DSYNC_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
-    const r = await this._driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)&spaces=drive`);
-    const d = await r.json();
+    const d = await this._driveJson(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)&spaces=drive`);
     if (d.files && d.files.length) return d.files[0].id;
-    const cr = await this._driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    const cd = await this._driveJson('https://www.googleapis.com/drive/v3/files?fields=id', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: DSYNC_FOLDER, mimeType: 'application/vnd.google-apps.folder' }),
     });
-    return (await cr.json()).id;
+    return cd.id;
   },
   async _findFile(folderId) {
     const q = encodeURIComponent(`name='${DSYNC_FILE}' and '${folderId}' in parents and trashed=false`);
-    const r = await this._driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)&spaces=drive`);
-    const d = await r.json();
+    const d = await this._driveJson(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)&spaces=drive`);
     return (d.files && d.files[0]) || null;
   },
   async _readFile(id) {
     const r = await this._driveFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`);
-    if (!r.ok) throw new Error('Drive読込失敗 ' + r.status);
+    if (!r.ok) throw new Error(`Drive読込失敗 ${r.status}：${await this._bodyMsg(r)}`);
     return r.text();
   },
   async _writeFile(folderId, fileId, content) {
@@ -495,7 +505,7 @@ const dsync = {
       const r = await this._driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: content,
       });
-      if (!r.ok) throw new Error('Drive更新失敗 ' + r.status);
+      if (!r.ok) throw new Error(`Drive更新失敗 ${r.status}：${await this._bodyMsg(r)}`);
       return r.json();
     }
     const boundary = 'sm' + Math.random().toString(36).slice(2);
@@ -504,14 +514,15 @@ const dsync = {
     const r = await this._driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime', {
       method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
     });
-    if (!r.ok) throw new Error('Drive作成失敗 ' + r.status);
+    if (!r.ok) throw new Error(`Drive作成失敗 ${r.status}：${await this._bodyMsg(r)}`);
     return r.json();
   },
 
   // 1回の同期: Drive読込→3-wayマージ→ローカル反映→Drive書込→base更新
   async syncNow() {
     if (this._busy) return null;
-    if (!gsync._token) { const ok = await gsync.signIn(); if (!ok) return null; }
+    // トークン無し or Drive権限が無い→同意画面を出して付与（force）
+    if (!gsync._token || !gsync.hasDrive()) { const ok = await gsync.signIn(true); if (!ok) return null; }
     this._busy = true;
     try {
       const folderId = await this._ensureFolder();
@@ -532,7 +543,7 @@ const dsync = {
   },
   // 変更があれば同期（自動・ポップアップは出さない＝未ログイン時はスキップ）
   async _maybeSync() {
-    if (!this.enabled() || this._busy || !gsync._token || !gsync.cfg().clientId) return;
+    if (!this.enabled() || this._busy || !gsync._token || !gsync.hasDrive() || !gsync.cfg().clientId) return;
     if (this._snapshot() === this._lastSnap) return;
     try { await this.syncNow(); } catch (_) {}
   },
@@ -581,7 +592,8 @@ function dsyncToggle(on) {
 }
 async function dsyncNow() {
   try {
-    if (!gsync._token) { const ok = await gsync.signIn(); if (!ok) return; }   // タップ同期でポップアップ起動
+    // Drive権限が無ければ同意画面（タップ直下で呼ぶ＝ポップアップを塞がない）
+    if (!gsync._token || !gsync.hasDrive()) { const ok = await gsync.signIn(true); if (!ok) return; }
     await withBusy('Driveと同期中…', () => dsync.syncNow(), '同期しました');
     renderMaster();
   } catch (e) { toast('同期失敗: ' + (e && e.message || e), 5000); }
