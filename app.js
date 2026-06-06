@@ -363,10 +363,23 @@ const store = {
 
 // ---------- Google連携（GIS＋Sheets。方式A=ブラウザ完結。clientId 未設定なら休眠） ----------
 // 設計は DESIGN.md §14。実機での動作確認はクライアントID入手後に行う（現状はスキャフォールド）。
+// サーバー(CF env)から配る公開設定（clientId / spreadsheetId）。リポジトリに置かない。
+let _serverConfig = {};
+async function loadServerConfig() {
+  try { const r = await fetch('/api/config'); if (r.ok) _serverConfig = (await r.json()) || {}; } catch (_) {}
+}
 const gsync = {
   _token: null, _email: null, _scope: '',
   hasDrive() { return !!(this._scope && this._scope.indexOf('drive.file') >= 0); },
-  cfg() { return (store.data.settings && store.data.settings.google) || {}; },
+  // ローカル設定が空なら サーバー(CF env)の公開設定で補う（新端末は入力不要でログイン可）
+  cfg() {
+    const g = (store.data.settings && store.data.settings.google) || {};
+    return {
+      clientId: g.clientId || _serverConfig.clientId || '',
+      allowedEmails: g.allowedEmails || '',
+      spreadsheetId: g.spreadsheetId || _serverConfig.spreadsheetId || '',
+    };
+  },
   // GISスクリプトを必要時のみ読み込む（未設定なら一切読み込まない）
   async ensureGis() {
     if (window.google && google.accounts && google.accounts.oauth2) return;
@@ -3137,7 +3150,8 @@ function renderImport() {
 // Google連携（実験的・任意）。クライアントID未設定なら休眠＝現行アプリに影響しない。
 function googleSyncSection() {
   const g = (store.data.settings && store.data.settings.google) || {};
-  const configured = !!g.clientId;
+  const eff = gsync.cfg();              // サーバー(CF env)由来の clientId も反映
+  const configured = !!eff.clientId;
   return `<div class="section">
     <div class="section-head"><h2>Google連携（実験的・任意）</h2>
       <span class="tag ${configured ? 'jp' : ''}">${configured ? '設定済み' : '未設定'}</span></div>
@@ -5995,5 +6009,9 @@ loadColPrefs();
 render();
 // 1日1回（起動時）だけ銘柄名・セクター・業種・高値を更新
 api.dailyStartup();
-// Drive自動同期ループを準備（未ログイン時は何もしない＝ポップアップ無し。ログイン後に同期開始）
-if (typeof dsync !== 'undefined' && dsync.enabled()) dsync.startAuto();
+// 公開設定(clientId等)を CF env から取得→反映し、その後 Drive自動同期ループを準備
+// （未ログイン時は何もしない＝ポップアップ無し。ログイン後に同期開始）
+loadServerConfig().then(() => {
+  if (currentView === 'master') renderMaster();
+  if (typeof dsync !== 'undefined' && dsync.enabled()) dsync.startAuto();
+});
