@@ -4,6 +4,10 @@ name = "securities-notify-cron"
 main = "src/notify-cron.js"
 compatibility_date = "2026-04-27"
 
+# 公開URL(*.workers.dev)を無効化。cron(定時)はURL不要で動くため、外部からアクセスできる
+# URL自体を無くす（アカウントのサブドメイン名の露出も防ぐ）。再デプロイで復活しないよう設定で固定。
+workers_dev = false
+
 # 2トリガー（日本株 / 米国株）。UTC指定。
 #  - "0 2,8,22 * * *" → JST 11:00 / 17:00 / 7:00 → 日本株
 #  - "0 15,22 * * *"  → JST 0:00 / 7:00          → 米国株
