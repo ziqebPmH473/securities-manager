@@ -824,6 +824,19 @@ table.ie-on tbody tr:hover { background: transparent; }
 .busy-overlay.done .busy-spinner::after { background: var(--green); }
 .busy-overlay.error .busy-spinner::after { content: '!'; background: var(--red); }
 
+/* ===== 市場ランキング順位バッジ（銘柄名の先頭） ===== */
+.rank-badge {
+  display: inline-block; margin-right: 5px; padding: 1px 6px;
+  font-size: 10.5px; font-weight: 700; line-height: 1.5; border-radius: 999px;
+  color: #fff; white-space: nowrap; vertical-align: middle;
+}
+.rank-badge.rb-mcap { background: #2563eb; }   /* 時価総額=青 */
+.rank-badge.rb-turn { background: #c2740a; }   /* 売買代金=橙 */
+/* 上位3位は金/銀/銅で強調（文字は読みやすい濃色） */
+.rank-badge.rb-r1 { background: #d4af37; color: #3a2e00; }
+.rank-badge.rb-r2 { background: #b9c2cc; color: #29313a; }
+.rank-badge.rb-r3 { background: #cd7f32; color: #2a1600; }
+
 /* ===== SEC-94: コード・銘柄名の列を横スクロール時に左端固定 ===== */
 table.holdings td.stick, table.holdings th.stick { position: sticky; z-index: 2; background: var(--panel); }
 table.holdings thead th.stick { z-index: 3; background: var(--panel-2); }

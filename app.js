@@ -1181,7 +1181,7 @@ const pctTdBg = (v, key) => {
 };
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
-  name:      (s,c) => `<td class="l"><strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
+  name:      (s,c) => `<td class="l">${rankBadgeHtml(s)}<strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
@@ -1429,6 +1429,10 @@ function render() {
     case 'master': renderMaster(); break;
   }
   fitListTables();
+  // ランキング順位バッジ: 一覧/サイン表示時に未取得なら1日1回だけ取得し、取得後に再描画
+  if (!_rankTop && !_rankBadgesBusy && ['holdings', 'us', 'jp', 'signals'].includes(currentView)) {
+    loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); });
+  }
 }
 
 // 一覧テーブルの枠(.table-wrap)の高さを画面に合わせて制限し、枠内スクロール＋見出し固定を成立させる。
@@ -2323,6 +2327,42 @@ async function loadRanking(force) {
     mktCache[key] = { items, at: Date.now() };
   } catch (_) { mktCache[key] = { items: [], at: Date.now() }; }
   mktBusy = false; renderMarketTab();
+}
+
+// ---------- 市場ランキング上位バッジ（銘柄名の先頭に順位を表示） ----------
+// 市場全体の売買代金/時価総額ランキングTOP10に保有銘柄が入っていれば「代金3位」等のバッジを出す。
+// 1日1回取得（重いので）。コード→順位の対応表を市場×指標で持つ。
+let _rankTop = null;      // { 'JP:turnover': {CODE:rank}, 'JP:marketcap': {...}, 'US:turnover':..., 'US:marketcap':... }
+let _rankTopDate = null;  // YYYY-MM-DD（1日1回更新）
+let _rankBadgesBusy = false;
+async function loadRankBadges(force) {
+  if (_rankBadgesBusy) return;
+  if (!force && _rankTop && _rankTopDate === today()) return;
+  _rankBadgesBusy = true;
+  const combos = [['JP', 'turnover'], ['JP', 'marketcap'], ['US', 'turnover'], ['US', 'marketcap']];
+  const out = {};
+  try {
+    await Promise.all(combos.map(async ([market, kind]) => {
+      const map = {};
+      try {
+        const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=all&count=10`).then(x => x.ok ? x.json() : null).catch(() => null);
+        ((r && r.items) || []).slice(0, 10).forEach((it, i) => { if (it.code != null) map[String(it.code).toUpperCase()] = i + 1; });
+      } catch (_) { /* この指標は取得失敗→空 */ }
+      out[`${market}:${kind}`] = map;
+    }));
+    _rankTop = out; _rankTopDate = today();
+  } finally { _rankBadgesBusy = false; }
+}
+// 保有銘柄のランキング順位バッジHTML（市場全体TOP10内のときのみ）
+function rankBadgeHtml(sec) {
+  if (!_rankTop || (sec.market !== 'JP' && sec.market !== 'US')) return '';
+  const code = String(sec.ticker || '').toUpperCase();
+  const mc = (_rankTop[sec.market + ':marketcap'] || {})[code];
+  const to = (_rankTop[sec.market + ':turnover'] || {})[code];
+  let h = '';
+  if (mc) h += `<span class="rank-badge rb-mcap rb-r${mc <= 3 ? mc : 'n'}" title="時価総額ランキング（市場全体）${mc}位">時価${mc}</span>`;
+  if (to) h += `<span class="rank-badge rb-turn rb-r${to <= 3 ? to : 'n'}" title="売買代金ランキング（市場全体）${to}位">代金${to}</span>`;
+  return h;
 }
 // 金額の概数表示（市場別。米株=$B/$T、日本株=億/兆）
 function mktAmt(n, market) {
