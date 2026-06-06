@@ -5,8 +5,9 @@ const RESEND_URL = 'https://api.resend.com/emails';
 
 function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
-// サイン一覧 → { subject, text, html }
-export function buildSignalEmail(signals, asOf) {
+// サイン一覧 → { subject, text, html }。marketLabel は件名・見出しに付ける任意ラベル（例「日本株」）
+export function buildSignalEmail(signals, asOf, marketLabel) {
+  const ml = marketLabel ? ` ${marketLabel}` : '';
   const reached = signals.filter(s => s.reached);
   const near = signals.filter(s => !s.reached);
   const cur = (s, v) => v == null ? '—' : (s.market === 'US' ? '$' : '¥') + v;
@@ -16,7 +17,7 @@ export function buildSignalEmail(signals, asOf) {
     return `・[${kind}] ${s.ticker}（${s.market}）  現在 ${cur(s, s.price)} → 次回 ${cur(s, s.trigger)}  残り ${s.remainingDropPct}%${reco}`;
   };
   const L = [];
-  L.push(`買い増しサイン通知`);
+  L.push(`買い増しサイン通知${ml}`);
   L.push(`基準価格: ${asOf || '—'}`);
   L.push('');
   L.push(`■ 到達（今が買い時）: ${reached.length}件`);
@@ -25,7 +26,7 @@ export function buildSignalEmail(signals, asOf) {
   L.push(`■ もうすぐ（残りわずか）: ${near.length}件`);
   L.push(near.length ? near.map(line).join('\n') : '（なし）');
   const text = L.join('\n');
-  const subject = `【買い増しサイン】到達 ${reached.length}件 / もうすぐ ${near.length}件`;
+  const subject = `【買い増しサイン${ml}】到達 ${reached.length}件 / もうすぐ ${near.length}件`;
   const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif"><pre style="font:13px/1.7 ui-monospace,monospace;white-space:pre-wrap;margin:0">${escapeHtml(text)}</pre></div>`;
   return { subject, text, html };
 }

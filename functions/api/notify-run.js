@@ -1,37 +1,56 @@
-// N2b+N3 検証用: _appdata読取 → サーバーで現在値を取得 → 買い増しサイン計算 → メール本文を作成。
-// GET /api/notify-run            … 送信せずプレビュー（メール本文・サイン一覧を返す）
-// GET /api/notify-run?send=1     … 実際にメール送信（Resend）
-// GET /api/notify-run?near=3     … 近接の閾値%を変更
+// 定時通知の実体（N2b+N3+N4）: _appdata読取 → サーバーで現在値取得 → 判定 → メール送信。
+// GET /api/notify-run                       … 送信せずプレビュー（本文・サイン一覧）
+// GET /api/notify-run?send=1                … 実際にメール送信（Resend）
+// GET /api/notify-run?send=1&market=JP      … 日本株のみ（US も可）。定時バッチが市場別に叩く
+// GET /api/notify-run?send=1&token=XXX      … NOTIFY_TRIGGER_TOKEN を設定している場合は必須
+// GET /api/notify-run?near=3                … 近接の閾値%
 import { readAppData } from '../lib/sheets.js';
 import { computeSignals } from '../lib/portfolio.js';
 import { fetchFreshPrices, mergeFreshPrices } from '../lib/prices.js';
 import { buildSignalEmail, sendResend } from '../lib/notify.js';
+
+const MARKET_LABEL = { JP: '日本株', US: '米国株' };
 
 export async function onRequestGet(context) {
   try {
     const url = new URL(context.request.url);
     const doSend = url.searchParams.get('send') === '1';
     const near = parseFloat(url.searchParams.get('near'));
+    const market = (url.searchParams.get('market') || '').toUpperCase(); // ''|'JP'|'US'
+
+    // 送信は任意のトークンで保護（NOTIFY_TRIGGER_TOKEN を設定した場合のみ必須。未設定なら従来どおり）
+    if (doSend) {
+      const required = context.env.NOTIFY_TRIGGER_TOKEN;
+      if (required && url.searchParams.get('token') !== required) {
+        return json({ ok: false, error: 'トークンが必要です（?token=）' }, 401);
+      }
+    }
 
     const bundle = await readAppData(context.env);
     const fresh = await fetchFreshPrices(url.origin, bundle.securities || []);
     mergeFreshPrices(bundle, fresh);
 
-    const signals = computeSignals(bundle, { nearPct: isFinite(near) ? near : 5 });
-    const asOf = new Date().toISOString() + '（サーバー取得の最新値）';
-    const email = buildSignalEmail(signals, asOf);
+    let signals = computeSignals(bundle, { nearPct: isFinite(near) ? near : 5 });
+    if (market === 'JP' || market === 'US') signals = signals.filter(s => s.market === market);
 
-    let sent = null;
-    if (doSend) sent = await sendResend(context.env, email);
+    const asOf = new Date().toISOString() + '（サーバー取得の最新値）';
+    const email = buildSignalEmail(signals, asOf, MARKET_LABEL[market] || '');
+
+    let sent = null, skipped = null;
+    if (doSend) {
+      if (signals.length === 0) skipped = 'サインなしのため送信スキップ';
+      else sent = await sendResend(context.env, email);
+    }
 
     return json({
       ok: true,
+      market: market || 'ALL',
       freshPrices: Object.keys(fresh).length,
       reached: signals.filter(s => s.reached).length,
       near: signals.filter(s => !s.reached).length,
-      sent,                       // ?send=1 のとき送信結果
+      sent, skipped,
       subject: email.subject,
-      preview: email.text,        // メール本文プレビュー
+      preview: email.text,
     });
   } catch (e) {
     return json({ ok: false, error: String(e && e.message || e) }, 500);
