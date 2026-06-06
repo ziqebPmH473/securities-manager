@@ -1,0 +1,17 @@
+# Cloudflare Cron Worker（GitHub非依存の定時実行）。
+# Pages とは別デプロイ。worker/ ディレクトリで `npx wrangler deploy` する。
+name = "securities-notify-cron"
+main = "src/notify-cron.js"
+compatibility_date = "2026-04-27"
+
+# 2トリガー（日本株 / 米国株）。UTC指定。
+#  - "0 2,8,22 * * *" → JST 11:00 / 17:00 / 7:00 → 日本株
+#  - "0 15,22 * * *"  → JST 0:00 / 7:00          → 米国株
+#  JST7:00(=UTC22:00)は両方発火し、日本株メールと米国株メールが各1通届く。
+[triggers]
+crons = ["0 2,8,22 * * *", "0 15,22 * * *"]
+
+[vars]
+NOTIFY_BASE_URL = "https://securities-manager-9fno6acdqirgdgb76qks.pages.dev"
+# NOTIFY_TRIGGER_TOKEN（任意・送信保護用）は秘密なので vars には書かず、
+# `npx wrangler secret put NOTIFY_TRIGGER_TOKEN` か ダッシュボードで設定する。
