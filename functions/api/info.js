@@ -89,8 +89,12 @@ async function fetchInfoDebug(symbol, finnhubKey) {
       }
     } catch (e) { out.diag.jpPage = { error: String(e?.message || e) }; }
   } else if (type === 'us' && finnhubKey) {
-    // Finnhub metric（米株 時価総額）
-    out.diag.finnhub = await fetchFinnhubMetric(symbol, finnhubKey).then(m => ({ ok: true, marketCap: m?.marketCap ?? null })).catch(e => ({ error: String(e?.message || e) }));
+    // Finnhub metric（米株 時価総額）＋計上通貨（外国ADR判定）
+    const [m, cur] = await Promise.all([
+      fetchFinnhubMetric(symbol, finnhubKey).catch(() => null),
+      fetchFinnhubCurrency(symbol, finnhubKey).catch(() => null),
+    ]);
+    out.diag.finnhub = { marketCap: m?.marketCap ?? null, currency: cur, foreign: !!(cur && cur !== 'USD') };
   }
   return out;
 }
@@ -149,18 +153,24 @@ async function fetchUsInfo(symbol, finnhubKey) {
     fetchChartMeta(symbol).catch(() => null),
     fetchQuoteSummary(symbol).catch(() => null),
   ]);
-  let fh = null;
+  let fh = null, fhCur = null;
   if (finnhubKey && (!summary || summary.per == null)) {
-    fh = await fetchFinnhubMetric(symbol, finnhubKey).catch(() => null);
+    [fh, fhCur] = await Promise.all([
+      fetchFinnhubMetric(symbol, finnhubKey).catch(() => null),
+      fetchFinnhubCurrency(symbol, finnhubKey).catch(() => null),
+    ]);
   }
+  // 外国ADR（TSM等）はFinnhubの時価総額・配当が現地通貨建て（TWD等）でドルと食い違うため、
+  // 計上通貨がUSD以外なら時価総額・配当は出さない（誤った数値を表示しない）。為替換算は行わない。
+  const foreign = !!(fhCur && fhCur !== 'USD');
   return {
     name:      cleanName(jpName) || cleanName(chart?.name) || null,
     sector:    summary?.sector || null,
     industry:  summary?.industry || null,
-    marketCap: summary?.marketCap ?? fh?.marketCap ?? null,
+    marketCap: summary?.marketCap ?? (foreign ? null : fh?.marketCap) ?? null,
     per:       summary?.per ?? fh?.per ?? null,
     eps:       summary?.eps ?? fh?.eps ?? null,
-    dividend:  summary?.dividend ?? fh?.dividend ?? null,
+    dividend:  summary?.dividend ?? (foreign ? null : fh?.dividend) ?? null,
     sharesOut: summary?.sharesOut ?? null,
     volume:    chart?.volume ?? null,   // 当日出来高（売買代金算出用・Finnhub利用時もYahoo chartから取得）
     currency:  chart?.currency || 'USD',
@@ -306,6 +316,16 @@ async function fetchFinnhubMetric(symbol, token) {
     eps: num(m['epsBasicExclExtraItemsTTM']),
     dividend: num(m['dividendPerShareAnnual']),
   };
+}
+
+// Finnhub プロフィールから計上通貨を取得（外国ADR判定用）。通貨は不変なので7日キャッシュ＝追加負荷ほぼ無し
+async function fetchFinnhubCurrency(symbol, token) {
+  let res;
+  try { res = await fetchWithTimeout(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${token}`, { headers: { 'User-Agent': 'securities-manager/1.0' }, cf: { cacheTtl: 604800, cacheEverything: true } }); }
+  catch { return null; }
+  if (!res.ok) return null;
+  const d = await res.json().catch(() => null);
+  return d && d.currency ? d.currency : null;
 }
 
 function n(obj) { return obj && typeof obj.raw === 'number' && isFinite(obj.raw); }
