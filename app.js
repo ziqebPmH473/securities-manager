@@ -2331,19 +2331,20 @@ function mktAmt(n, market) {
   if (market === 'US') { if (a >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T'; if (a >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B'; if (a >= 1e6) return '$' + (n / 1e6).toFixed(0) + 'M'; return '$' + Math.round(n).toLocaleString('ja-JP'); }
   if (a >= 1e12) return (n / 1e12).toFixed(2) + '兆'; if (a >= 1e8) return (n / 1e8).toFixed(0) + '億'; return Math.round(n).toLocaleString('ja-JP');
 }
-// 売買代金の表示（兆/億/万。10億以上は億まで、1〜10億は億+万、1億未満は万）。米株は$ T/B/M。
+// 売買代金/時価総額の表示。日本株=兆/億/万（100億以上は億まで、100億未満は億+万、1億未満は万）。
+// 米株=T/B/M（＄記号なし）。
 function fmtTurnover(n, market) {
   if (n == null) return null;
   const sign = n < 0 ? '-' : '', a = Math.abs(n);
   if (market === 'US') {
-    if (a >= 1e12) return sign + '$' + (a / 1e12).toFixed(2) + 'T';
-    if (a >= 1e9)  return sign + '$' + (a / 1e9).toFixed(2) + 'B';
-    if (a >= 1e6)  return sign + '$' + (a / 1e6).toFixed(1) + 'M';
-    return sign + '$' + Math.round(a).toLocaleString('ja-JP');
+    if (a >= 1e12) return sign + (a / 1e12).toFixed(2) + 'T';
+    if (a >= 1e9)  return sign + (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6)  return sign + (a / 1e6).toFixed(1) + 'M';
+    return sign + Math.round(a).toLocaleString('ja-JP');
   }
   if (a >= 1e12) { const cho = Math.floor(a / 1e12), oku = Math.round((a % 1e12) / 1e8); return sign + cho + '兆' + (oku ? oku + '億' : ''); }
-  if (a >= 1e9)  return sign + Math.round(a / 1e8) + '億';                                   // 10億以上=億まで
-  if (a >= 1e8)  { const oku = Math.floor(a / 1e8), man = Math.round((a % 1e8) / 1e4); return sign + oku + '億' + (man ? man + '万' : ''); } // 1〜10億=億+万
+  if (a >= 1e10) return sign + Math.round(a / 1e8) + '億';                                   // 100億以上=億まで
+  if (a >= 1e8)  { const oku = Math.floor(a / 1e8), man = Math.round((a % 1e8) / 1e4); return sign + oku + '億' + (man ? man + '万' : ''); } // 1〜100億=億+万
   if (a >= 1e4)  return sign + Math.round(a / 1e4) + '万';                                    // 1億未満=万
   return sign + Math.round(a).toLocaleString('ja-JP');
 }
