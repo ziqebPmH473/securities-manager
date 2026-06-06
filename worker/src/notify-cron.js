@@ -14,8 +14,9 @@ async function trigger(env, market) {
 
 export default {
   // 定時実行（Cron）。event.cron で起動した式が分かる → 市場を決定。
+  // 米国株は "0 15,22 * * 1-5"、それ以外（日本株の2式）は JP。
   async scheduled(event, env, ctx) {
-    const market = event.cron === '0 15,22 * * *' ? 'US' : 'JP';
+    const market = event.cron === '0 15,22 * * 1-5' ? 'US' : 'JP';
     ctx.waitUntil((async () => {
       try {
         const r = await trigger(env, market);
