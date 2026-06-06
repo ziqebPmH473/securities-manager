@@ -22,12 +22,11 @@
 2. 「**Create API Key**」→ 名前（例 `securities-manager`）→ 権限は「**Sending access**」でOK →「Add」
 3. **`re_` で始まるキーが一度だけ表示される**のでコピー（⚠️秘密・再表示されないので無くしたら作り直し）
 
-### 3. 送信元(From)を決める ＝ 2択
-- **お手軽（今はこれでOK）**：Resend共有の `onboarding@resend.dev` を送信元にする。**ドメイン設定不要**。
-  - ⚠️ ただしこの送信元は、**送信先が「あなたがResendに登録したメールアドレス」宛てに限定**されます（＝自分宛て通知なら問題なし）。
-- **本格（将来）**：自分のドメインをResendに登録してDNS認証すると、好きなFrom/To で送れる。
-  - ドメイン設定: https://resend.com/domains
-  - 今は自分宛てなので **お手軽** で十分。後でいつでも本格に切替可。
+### 3. 送信元(From)について ＝ お手軽方式なら「設定不要」
+- 送信元(From)は**Resendダッシュボードで設定する項目ではなく、送信時にコード側で指定**します。
+- **お手軽（今はこれ）**：コード側で `onboarding@resend.dev` を使う（Claudeが実装）。**あなたは何もしなくてOK**。`NOTIFY_FROM` も未設定で可。
+  - ⚠️ この送信元は、**送信先が「あなたがResendに登録したメール」宛てに限定**されます（＝自分宛て通知なら問題なし。手順4の `NOTIFY_EMAIL` をResend登録メールと同じにする）。
+- **本格（将来だけ）**：自分のドメインから送りたい時だけ、https://resend.com/domains でドメイン登録・DNS認証 → そのドメインのFromを使う。今はやらない。
 
 ### 4. Cloudflare に登録（環境変数）
 Workers & Pages → プロジェクト → Settings → Environment variables（**Production**）に追加：
