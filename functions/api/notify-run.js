@@ -4,7 +4,7 @@
 // GET /api/notify-run?send=1&market=JP      … 日本株のみ（US も可）。定時バッチが市場別に叩く
 // GET /api/notify-run?send=1&token=XXX      … NOTIFY_TRIGGER_TOKEN を設定している場合は必須
 // GET /api/notify-run?near=3                … 近接の閾値%
-import { readAppData } from '../lib/sheets.js';
+import { readAppDataBundle } from '../lib/sheets.js';
 import { computeSignals } from '../lib/portfolio.js';
 import { fetchFreshPrices, mergeFreshPrices } from '../lib/prices.js';
 import { buildSignalEmail, sendResend } from '../lib/notify.js';
@@ -23,7 +23,7 @@ export async function onRequestGet(context) {
     const near = parseFloat(url.searchParams.get('near'));
     const market = (url.searchParams.get('market') || '').toUpperCase(); // ''|'JP'|'US'
 
-    const bundle = await readAppData(context.env);
+    const bundle = await readAppDataBundle(context.env);
     const fresh = await fetchFreshPrices(url.origin, bundle.securities || []);
     mergeFreshPrices(bundle, fresh);
 
@@ -44,6 +44,7 @@ export async function onRequestGet(context) {
     return json({
       ok: true,
       market: market || 'ALL',
+      source: bundle._source || null,
       freshPrices: Object.keys(fresh).length,
       reached: signals.filter(s => s.reached).length,
       near: signals.filter(s => !s.reached).length,

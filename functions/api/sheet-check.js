@@ -1,17 +1,19 @@
 // N1検証用エンドポイント: サーバーがサービスアカウントで _appdata を読めるか確認する。
 // GET /api/sheet-check
 // 機密（保有額・銘柄名等）は返さず、件数などの安全なサマリーのみ返す。
-import { readAppData } from '../lib/sheets.js';
+import { readAppDataBundle } from '../lib/sheets.js';
 import { checkToken } from '../lib/auth.js';
 
 export async function onRequestGet(context) {
   try {
     const auth = checkToken(context);
     if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
-    const b = await readAppData(context.env);
+    const b = await readAppDataBundle(context.env);
     const arr = (k) => Array.isArray(b[k]) ? b[k].length : 0;
     const summary = {
       ok: true,
+      source: b._source || null,          // 'drive'（自動同期の正本）or 'sheets'（フォールバック）
+      driveError: b._driveError || null,  // Driveが読めずSheetsにフォールバックした理由
       counts: {
         securities: arr('securities'),
         holdings: arr('holdings'),
