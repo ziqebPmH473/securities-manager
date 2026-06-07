@@ -2567,7 +2567,9 @@ function renderMarketTab() {
         <td class="${cls(dc)}"><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
         ${showTurnover ? `<td>${mktAmt(it.turnover, market)}</td>` : ''}
         ${showMktCap ? `<td>${mktAmt(it.marketCap, market)}</td>` : ''}
-        <td class="l nowrap"><button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button></td>
+        <td class="l nowrap">${owned
+          ? `<button class="btn btn-sm" disabled title="登録済みの銘柄です">登録済</button>`
+          : `<button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button>`}</td>
       </tr>`;
     }).join('');
     body = `<div class="table-wrap"><table class="holdings dense"><thead><tr><th>順位</th><th class="l">市場</th><th class="l">コード</th><th class="l">名称</th><th>現在値</th><th>前日比</th>${showTurnover ? '<th>売買代金</th>' : ''}${showMktCap ? '<th>時価総額</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
