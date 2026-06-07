@@ -24,3 +24,14 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # プロジェクト名＝推測されにくいランダム付き。本番ブランチ=作業ブランチ
           command: pages deploy . --project-name=securities-manager-9fno6acdqirgdgb76qks --branch=claude/securities-portfolio-tool-WGIsF --commit-message="auto deploy" --commit-dirty=true
+
+      # 通知の定時実行 Worker（securities-notify-cron）を同時デプロイ。
+      # Pages とは別物のため明示デプロイが必要（worker/wrangler.toml の cron もここで反映）。
+      # シークレット（NOTIFY_TRIGGER_TOKEN）はデプロイをまたいで保持される。
+      - name: Deploy Cron Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          command: deploy
