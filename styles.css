@@ -390,6 +390,13 @@ button { font-family: inherit; }
 }
 .btn:hover { background: var(--panel-2); border-color: #b9c2d0; }
 .btn:active { transform: translateY(.5px); }
+/* 無効ボタン（例: マーケットの登録済み「＋注意」）はグレーアウトして押せないと分かるように */
+.btn:disabled, .btn[disabled] {
+  background: var(--panel-2); color: var(--faint); border-color: var(--border);
+  cursor: not-allowed; opacity: .55; box-shadow: none;
+}
+.btn:disabled:hover, .btn[disabled]:hover { background: var(--panel-2); border-color: var(--border); }
+.btn:disabled:active, .btn[disabled]:active { transform: none; }
 .btn-primary { background: var(--navy); border-color: var(--navy); color: #fff; box-shadow: var(--shadow-sm); }
 .btn-primary:hover { background: var(--navy-2); border-color: var(--navy-2); }
 .btn-brass { background: var(--brass); border-color: var(--brass); color: #fff; }
