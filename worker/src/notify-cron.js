@@ -14,9 +14,10 @@ async function trigger(env, market) {
 
 export default {
   // 定時実行（Cron）。event.cron で起動した式が分かる → 市場を決定。
-  // 米国株は "0 15,22 * * 1-5"、それ以外（日本株の2式）は JP。
+  // 米国株の式だけ hour が "15,22"（"0 15,22 * * MON-FRI"）。日本株2式は "2,8"/"22"。
+  // 曜日表記(MON-FRI等)の正規化差に左右されないよう、先頭の分・時部分で判定する。
   async scheduled(event, env, ctx) {
-    const market = event.cron === '0 15,22 * * 1-5' ? 'US' : 'JP';
+    const market = event.cron.startsWith('0 15,22') ? 'US' : 'JP';
     ctx.waitUntil((async () => {
       try {
         const r = await trigger(env, market);
