@@ -650,9 +650,11 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
   3. **判定** `functions/lib/signal.js`（純判定コア＝app.js calc.evaluate と同一）＋ `functions/lib/portfolio.js`（バンドル→保有集計→`computeSignals`）。
   4. **送信** `functions/lib/notify.js`：Resend でメール。件名「【市場】M/D 購入基準価格通知」、本文＝種別/ティッカー/銘柄名/現在値(前日比)/前回から/買増ライン/(残り)/購入額。
   - エンドポイント `functions/api/notify-run.js`（`?send=1&market=JP|US`）。検証用 `sheet-check.js`/`signals-check.js`。
-- **定時実行＝Cloudflare Cron Worker**（`worker/`・GitHub非依存）。cron 3本（UTC）:
-  - `0 2,8 * * 1-5`（日本株 11/17時 JST 月〜金）/ `0 22 * * 0-4`（日本株 7時 JST 月〜金）/ `0 15,22 * * 1-5`（米国株 0/7時 JST 火〜土）。
-  - 米国株はJST火〜土（=米国の月〜金の取引。金曜引けはJST土曜配信、日月休場で送らない）。`workers_dev=false`で公開URL無効・cronのみ。
+- **定時実行＝Cloudflare Cron Worker**（`worker/`）。cron 3本（UTC指定）:
+  - `0 2,8 * * MON-FRI`（日本株 11/17時 JST 月〜金）/ `0 22 * * SUN-THU`（日本株 7時 JST 月〜金）/ `0 15,22 * * MON-FRI`（米国株 0/7時 JST 火〜土）。
+  - ★**Cloudflareのcron曜日は「1=日曜…7=土曜」で 0 は無効**（標準cronと異なる）。`0-4` は invalid cron(code 10100) で弾かれ、数値 `1-5` も「日〜木」と誤解釈される。**曖昧回避のため曜日は3文字略称(MON-FRI/SUN-THU)で記述**（2026-06-07 修正・SEC-132）。`event.cron.startsWith('0 15,22')` で米国株を判定。
+  - 米国株はJST火〜土（=米国の月〜金の取引。金曜引けはJST土曜配信、日月休場で送らない）。JST日曜はどのcronも発火しない。`workers_dev=false`で公開URL無効・cronのみ。
+  - **デプロイ**: Worker は Pages とは別物。`.github/workflows/deploy.yml` に Worker デプロイステップ（`workingDirectory: worker` / `command: deploy`）を追加済みで、push時に Pages＋Worker を同時デプロイ（2026-06-07）。手動は `cd worker && npx wrangler deploy`。GitHub の `CLOUDFLARE_API_TOKEN` には **Account/Workersスクリプト/Edit** 権限が必要。
 - 重複防止は「毎回その時点のサインを送る」シンプル方式（サインなしは送信スキップ）。高値は通知では再取得しない。
 
 ### 15.3 セキュリティ
