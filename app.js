@@ -143,6 +143,7 @@ const store = {
     this.data.lastInfoDate ||= null;  // 銘柄情報の日次更新を実行した日（YYYY-MM-DD）
     this.data.lastHighsDate ||= null; // 5年/52週高値を取得した日（YYYY-MM-DD）。その日初回の価格更新で高値も取得
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
+    this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
       this.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k], ...(this.data.importMappings[k] || {}) };
@@ -635,7 +636,7 @@ const calc = {
   high5y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high5y ?? null; },
   high52w(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high52w ?? null; },
   // 各種「〜からの下落率」（現在値 vs 基準。負=基準より下）
-  dropFrom(sec, base) { const price = this.price(sec); if (price == null || !base) return null; return (price - base) / base * 100; },
+  dropFrom(sec, base) { return pctFromBase(this.price(sec), base); },
   dropFromPrev(sec) { return this.dropFrom(sec, this.lastBuyPrice(sec)); },
   // 前日終値時点での「次回購入(トリガー)まで残り下落率」。(前日終値 − トリガー)/前日終値。
   // 既存の残り下落率(現在値ベース)と同じ符号（正=あとこれだけ下落で到達 / 負=超過）。
@@ -2425,7 +2426,8 @@ let reportPeriod = 'all'; // 'all' | 'ytd'
 function setReportPeriod(p) { reportPeriod = p; renderReport(); }
 // ============ マーケット（ランキング）タブ ============
 let mktState = { market: 'US', sub: 'all', kind: 'turnover' };
-let mktCache = {};   // key -> { items, at }
+// ランキングキャッシュは store.data.mktRanking に永続化（localStorage保存＋Google同期）。key -> { items(5年高値込), at }
+function mktCacheMap() { return (store.data.mktRanking ||= {}); }
 let mktBusy = false;
 const MKT_KINDS = [['turnover', '売買代金'], ['marketcap', '時価総額'], ['gainers', '値上がり'], ['losers', '値下がり']];
 const MKT_JP_SUBS = [['all', '全市場'], ['prime', 'プライム'], ['standard', 'スタンダード'], ['growth', 'グロース']];
@@ -2435,6 +2437,7 @@ function setMktSub(s) { mktState.sub = s; renderMarketTab(); }
 function setMktKind(k) { mktState.kind = k; renderMarketTab(); }
 function mktRefresh() { loadRanking(true); }
 function mktAbbr(n) { if (n == null) return '—'; const a = Math.abs(n); if (a >= 1e12) return (n / 1e12).toFixed(2) + '兆'; if (a >= 1e8) return (n / 1e8).toFixed(1) + '億'; if (a >= 1e6) return (n / 1e6).toFixed(0) + 'M'; return Number(n).toLocaleString('ja-JP'); }
+function mktFetchedAt(ts) { try { return new Date(ts).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } }
 function mktKabutan(code, market) { return market === 'US' ? `https://us.kabutan.jp/stocks/${encodeURIComponent(code)}/chart` : `https://kabutan.jp/stock/chart?code=${encodeURIComponent(code)}`; }
 function mktFindSec(code, market) { return store.data.securities.find(s => s.market === market && (s.ticker || '').toUpperCase() === String(code).toUpperCase()); }
 function mktClickName(code, market) { const s = mktFindSec(code, market); if (s) openSecurityDetail(s.id); else window.open(mktKabutan(code, market), '_blank'); }
@@ -2455,26 +2458,47 @@ async function addRankingWatch(code, market) {
 async function loadRanking(force) {
   const key = mktKey();
   if (mktBusy) return;
-  if (!force && mktCache[key]) { renderMarketTab(); return; }
+  if (!force && mktCacheMap()[key]) { renderMarketTab(); return; }
   mktBusy = true; renderMarketTab();
   try {
     const { market, sub, kind } = mktState;
     const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=${sub}&count=30`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
     let items = (r && r.items) || [];
-    // 日本株は価格・前日比が取得元HTMLに無いため /api/price で補完（提供元の確実な値）
-    if (market === 'JP' && items.length) {
-      const syms = items.map(it => it.code + '.T');
-      const pr = await fetch(`/api/price?symbols=${encodeURIComponent(syms.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
-      items = items.map(it => { const q = pr[it.code + '.T']; const price = q && !q.error ? q.price : null; const changePct = (price != null && q && q.prevClose) ? (price - q.prevClose) / q.prevClose * 100 : null; return { ...it, price, changePct }; });
+    const symOf = (code) => market === 'JP' ? code + '.T' : code;
+    if (items.length) {
+      // 5年高値を一括取得（価格APIの highs=1）。日本株はこの呼び出しで現在値・前日比も得る（取得元HTMLに無いため）。
+      // 米株の現在値はランキング値を使用。サブリクエスト上限(~50)回避のため mktFetchHighs が15件ずつ分割取得する。
+      const hi = await mktFetchHighs(items.map(it => symOf(it.code)));
+      items = items.map(it => {
+        const q = hi[symOf(it.code)]; const ok = q && !q.error;
+        const next = { ...it, high5y: ok && q.high5y != null ? q.high5y : null };
+        if (market === 'JP') {
+          const price = ok ? q.price : null;
+          next.price = price;
+          next.changePct = (price != null && ok && q.prevClose) ? (price - q.prevClose) / q.prevClose * 100 : null;
+        }
+        return next;
+      });
     }
     // 米株は名称を日本語化（保有銘柄と同ルール。例 AAPL→アップル）。names=1 は1銘柄1リクエストで軽量
     if (market === 'US' && items.length) {
       const nm = await fetch(`/api/info?names=1&symbols=${encodeURIComponent(items.map(it => it.code).join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
       items = items.map(it => { const n = nm[it.code]; return (n && n.name) ? { ...it, name: n.name } : it; });
     }
-    mktCache[key] = { items, at: Date.now() };
-  } catch (_) { mktCache[key] = { items: [], at: Date.now() }; }
+    mktCacheMap()[key] = { items, at: Date.now() };
+  } catch (_) { mktCacheMap()[key] = { items: [], at: Date.now() }; }
+  store.save(); // ランキングキャッシュ（5年高値・取得日時込）を永続化＝localStorage保存＋Google同期に載る
   mktBusy = false; renderMarketTab();
+}
+// 5年高値を15件ずつ分割取得（Cloudflareの1リクエストあたりサブリクエスト上限~50を回避）。{sym:{high5y,price,prevClose,...}} を返す
+async function mktFetchHighs(syms) {
+  const out = {};
+  for (let i = 0; i < syms.length; i += 15) {
+    const batch = syms.slice(i, i + 15);
+    const pr = await fetch(`/api/price?highs=1&symbols=${encodeURIComponent(batch.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
+    Object.assign(out, pr);
+  }
+  return out;
 }
 
 // ---------- 市場ランキング上位バッジ（銘柄名の先頭に順位を表示） ----------
@@ -2542,7 +2566,7 @@ function mktMarketLabel(it, market) {
   return it.section || '東証'; // 日本株は銘柄ごとの区分
 }
 function renderMarketTab() {
-  const key = mktKey(); const cache = mktCache[key]; const items = cache ? cache.items : null;
+  const key = mktKey(); const cache = mktCacheMap()[key]; const items = cache ? cache.items : null;
   const { market, sub, kind } = mktState;
   const mseg = `<div class="seg"><button class="${market === 'US' ? 'active' : ''}" onclick="setMktMarket('US')">米国株</button><button class="${market === 'JP' ? 'active' : ''}" onclick="setMktMarket('JP')">日本株</button></div>`;
   const subseg = market === 'JP' ? `<div class="seg" style="margin-left:6px;flex-wrap:wrap">${MKT_JP_SUBS.map(([v, l]) => `<button class="${sub === v ? 'active' : ''}" onclick="setMktSub('${v}')">${l}</button>`).join('')}</div>` : '';
@@ -2558,6 +2582,8 @@ function renderMarketTab() {
       const owned = !!mktFindSec(it.code, market);
       const dc = it.changePct;
       const priceTxt = it.price != null ? fmtAmt(it.price, market) : '—';
+      const high5y = it.high5y ?? null;
+      const dropFrom5y = pctFromBase(it.price, high5y); // 5年高値比＝(現在値−5年高値)/5年高値（保有銘柄の判定と同式）
       return `<tr>
         <td>${i + 1}</td>
         <td class="l"><span class="tag ${market.toLowerCase()}">${esc(mktMarketLabel(it, market))}</span></td>
@@ -2565,6 +2591,8 @@ function renderMarketTab() {
         <td class="l"><strong class="lnk-ext nm-strong" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.name || it.code)}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
         <td><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
         <td class="${cls(dc)}"><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
+        <td>${high5y != null ? fmtAmt(high5y, market) : '—'}</td>
+        <td class="${cls(dropFrom5y)}">${dropFrom5y != null ? signed(dropFrom5y) + '%' : '—'}</td>
         ${showTurnover ? `<td>${mktAmt(it.turnover, market)}</td>` : ''}
         ${showMktCap ? `<td>${mktAmt(it.marketCap, market)}</td>` : ''}
         <td class="l nowrap">${owned
@@ -2572,12 +2600,14 @@ function renderMarketTab() {
           : `<button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button>`}</td>
       </tr>`;
     }).join('');
-    body = `<div class="table-wrap"><table class="holdings dense"><thead><tr><th>順位</th><th class="l">市場</th><th class="l">コード</th><th class="l">名称</th><th>現在値</th><th>前日比</th>${showTurnover ? '<th>売買代金</th>' : ''}${showMktCap ? '<th>時価総額</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    body = `<div class="table-wrap"><table class="holdings dense"><thead><tr><th>順位</th><th class="l">市場</th><th class="l">コード</th><th class="l">名称</th><th>現在値</th><th>前日比</th><th>5年高値</th><th title="5年高値比＝(現在値−5年高値)÷5年高値">5年高値比</th>${showTurnover ? '<th>売買代金</th>' : ''}${showMktCap ? '<th>時価総額</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   app.innerHTML = `
     <div class="section">
       <div class="section-head"><h2>マーケット ランキング（上位30）</h2>
-        <button class="btn btn-sm btn-primary" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''}>${mktBusy ? '取得中…' : '更新'}</button></div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="muted" style="font-size:11px">${cache && cache.at ? '取得：' + mktFetchedAt(cache.at) : ''}</span>
+          <button class="btn btn-sm btn-primary" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''}>${mktBusy ? '取得中…' : '更新'}</button></div></div>
       <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${mseg}${subseg}</div>
       <div class="toolbar" style="border:none;padding:8px 16px 0;gap:8px;flex-wrap:wrap"><span class="muted">ランキング</span>${kseg}
         ${market === 'JP' ? '<span class="muted" style="font-size:11px">※日本株の現在値・前日比は価格APIから取得</span>' : ''}</div>
@@ -5825,6 +5855,8 @@ function fmtQty(n, market) {
   return Number.isInteger(n) ? Number(n).toLocaleString('ja-JP')
     : Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 5 });
 }
+// 基準値に対する変化率(%)。base割れ=負。保有銘柄の各種「〜からの下落率」と共通（calc.dropFromもこれを使用）
+function pctFromBase(price, base) { if (price == null || !base) return null; return (price - base) / base * 100; }
 function signed(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
 function cls(n) { return n == null ? '' : (n > 0 ? 'pos' : (n < 0 ? 'neg' : '')); }
 function today() { return new Date().toISOString().slice(0, 10); }
