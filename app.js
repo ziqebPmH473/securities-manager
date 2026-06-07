@@ -2438,15 +2438,19 @@ function mktAbbr(n) { if (n == null) return '—'; const a = Math.abs(n); if (a 
 function mktKabutan(code, market) { return market === 'US' ? `https://us.kabutan.jp/stocks/${encodeURIComponent(code)}/chart` : `https://kabutan.jp/stock/chart?code=${encodeURIComponent(code)}`; }
 function mktFindSec(code, market) { return store.data.securities.find(s => s.market === market && (s.ticker || '').toUpperCase() === String(code).toUpperCase()); }
 function mktClickName(code, market) { const s = mktFindSec(code, market); if (s) openSecurityDetail(s.id); else window.open(mktKabutan(code, market), '_blank'); }
-function addRankingWatch(code, market) {
+async function addRankingWatch(code, market) {
   let s = mktFindSec(code, market);
-  if (s) { store.updateSecurity(s.id, { watch: true }); toast(`${code} を注意銘柄にしました`); }
-  else {
-    s = store.addSecurity({ market, ticker: String(code).toUpperCase(), currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, watch: true, ruleId: store.defaultRule().id });
-    toast(`${code} を注意銘柄として追加しました（保有銘柄で監視）`);
-    api.refreshPrice([s]).then(() => { if (currentView === 'market') renderMarketTab(); });
-  }
+  const isNew = !s;
+  if (s) { store.updateSecurity(s.id, { watch: true }); }
+  else { s = store.addSecurity({ market, ticker: String(code).toUpperCase(), currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, watch: true, ruleId: store.defaultRule().id }); }
   renderMarketTab();
+  // 名前・セクター等(meta)と現在値・高値(price)を取得してから完了表示（SEC-129: metaが無いと名前がコードのまま）
+  await withBusy(`${code} の銘柄情報を取得中…`, async () => {
+    await api.refreshMeta([s]);
+    await api.refreshPrice([s]);
+  }, isNew ? `${code} を注意銘柄として追加しました` : `${code} を注意銘柄にしました`);
+  renderMarketTab();
+  if (currentView === 'secMaster') renderSecMaster();
 }
 async function loadRanking(force) {
   const key = mktKey();
@@ -4806,6 +4810,7 @@ function exportGeneric() {
   a.href = URL.createObjectURL(blob);
   a.download = `securities-generic-${today()}.csv`;
   a.click();
+  toast('汎用CSVをダウンロードしました');
 }
 
 // ---------- 汎用取込（列選択式・フォーマット保存）----------
@@ -5294,6 +5299,7 @@ function exportData() {
   a.href = URL.createObjectURL(blob);
   a.download = `securities-${today()}.json`;
   a.click();
+  toast('データをJSONでダウンロードしました');
 }
 function importData() {
   const inp = document.createElement('input');
