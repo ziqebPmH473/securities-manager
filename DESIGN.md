@@ -629,3 +629,44 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - **土台スキャフォールドのみ実装**（`gsync` モジュール＋マスタ・設定の「Google連携（実験的）」）。
   クライアントID未設定なら**完全に休眠**し、現行アプリ（ログイン不要・localStorage）に影響なし。
 - クライアントID入手後に動作確認（ログイン→保存→別端末で読込）して有効化する。
+
+## 15. 実装済みアーキテクチャ：通知＋Drive自動同期（2026-06-07 完成・AS-BUILT）
+
+> §8/§10/§14 の設計を実装した結果の最終構成。以後はこちらが正。
+
+### 15.1 データ保存：Drive自動マージ同期（Sheetsから移行）
+- 正本＝**Google Drive の `securities-manager/data.json`**（`dataBundle()`=store.data+_colPrefs のJSON）。手動保存/読込は不要。
+- **3-wayマージ**（`sync-merge.js` の `SyncMerge.mergeBundle(base, local, remote)`）。base=前回同期時点を localStorage `sm_sync_base` に保持。
+  - 自然キー: securities=`market:ticker` / holdings=`securityId|broker|accountType` / categories=名前 / その他はid。整数ID2端末衝突を回避。削除も伝播、編集vs削除は編集優先。
+  - prices/meta等のキャッシュはキー単位（新しいfetchedAt優先）、settings等は変更側優先、seq/日時はmax。
+- クライアント実装: `app.js` の **`dsync`**（Driveクライアント＋`syncNow`＋自動同期25秒/タブ非表示）。OAuthは `gsync` と共用（スコープに `drive.file` 追加）。サインイン直後に初回同期（`afterSignIn`）。
+- 設定配布: clientId/spreadsheetId はリポジトリに置かず **`/api/config`（CF env: GOOGLE_OAUTH_CLIENT_ID/GOOGLE_SHEET_ID）** から配る。`gsync.cfg()` がローカル空なら env で補完（新端末は入力不要）。
+- Sheets（`_appdata`）は**保険として残置**（手動保存/読込ボタンは従来どおり）。
+
+### 15.2 通知（買い増しサイン・メール）
+- パイプライン（Cloudflare Functions・サーバー側、ツール未起動でも動く）:
+  1. **データ読取** `functions/lib/sheets.js`：`readAppDataBundle(env)` = サービスアカウントで **Drive `data.json` を優先読取**（`readAppDataFromDrive`、drive.readonly）→失敗時 Sheets フォールバック（応答に `source`）。
+  2. **現在値取得** `functions/lib/prices.js`：`/api/price?mode=light` を小分けで叩き最新化（高値は保存スナップショット流用）。
+  3. **判定** `functions/lib/signal.js`（純判定コア＝app.js calc.evaluate と同一）＋ `functions/lib/portfolio.js`（バンドル→保有集計→`computeSignals`）。
+  4. **送信** `functions/lib/notify.js`：Resend でメール。件名「【市場】M/D 購入基準価格通知」、本文＝種別/ティッカー/銘柄名/現在値(前日比)/前回から/買増ライン/(残り)/購入額。
+  - エンドポイント `functions/api/notify-run.js`（`?send=1&market=JP|US`）。検証用 `sheet-check.js`/`signals-check.js`。
+- **定時実行＝Cloudflare Cron Worker**（`worker/`・GitHub非依存）。cron 3本（UTC）:
+  - `0 2,8 * * 1-5`（日本株 11/17時 JST 月〜金）/ `0 22 * * 0-4`（日本株 7時 JST 月〜金）/ `0 15,22 * * 1-5`（米国株 0/7時 JST 火〜土）。
+  - 米国株はJST火〜土（=米国の月〜金の取引。金曜引けはJST土曜配信、日月休場で送らない）。`workers_dev=false`で公開URL無効・cronのみ。
+- 重複防止は「毎回その時点のサインを送る」シンプル方式（サインなしは送信スキップ）。高値は通知では再取得しない。
+
+### 15.3 セキュリティ
+- 内部API（notify-run/signals-check/sheet-check）と Worker手動fetch は **`NOTIFY_TRIGGER_TOKEN` 必須**（`functions/lib/auth.js` checkToken・fail-closed）。
+- 価格/情報API（price/info/config）は公開市場データ/公開設定のみで非保護。
+
+### 15.4 Cloudflare 環境変数（一覧）
+- 通知（SA）: `GOOGLE_SA_EMAIL` / `GOOGLE_SA_PRIVATE_KEY` / `GOOGLE_SHEET_ID`
+- メール: `RESEND_API_KEY` / `NOTIFY_EMAIL`（=Resend登録メール宛のみ可・onboarding@resend.dev）
+- 保護: `NOTIFY_TRIGGER_TOKEN`（Pages env＋Cron Worker secret 同値）
+- 公開設定配布: `GOOGLE_OAUTH_CLIENT_ID`（＋ GOOGLE_SHEET_ID 流用）
+- 米株時価総額: `FINNHUB_API_KEY`（外国ADRはprofile2の通貨がUSD以外なら時価総額/配当を非表示）
+
+### 15.5 すみぽん側の前提設定（再構築時の参照）
+- Google Cloud: OAuthクライアント（project 381390060466。Sheets/Drive API 有効）＋ サービスアカウント（鍵JSON・Drive/Sheets API有効）。
+- Drive: `securities-manager` フォルダを**サービスアカウントのメールに閲覧者共有**（通知サーバーがdata.jsonを読むため）。
+- Resend: APIキー発行→CF env。手順書 `SERVICE_ACCOUNT_SETUP.md` / `NOTIFY_RESEND_SETUP.md`。
