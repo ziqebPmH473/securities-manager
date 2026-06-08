@@ -1333,8 +1333,10 @@ const COL_RENDERERS = {
   sigType:   (s,c) => `<td class="l">${c.ev ? (c.ev.type === 'initial' ? '初回購入' : '買い増し') : muted}</td>`,
   // 現在値: 価格があれば株探チャートへの外部リンク。未取得時は手入力ボタンのまま。
   price:     (s,c) => `<td>${c.price != null ? `<a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${fmtAmt(c.price, c.market)}</a>` : c.priceCell}</td>`,
-  // 時間外: 米株プレ/アフター価格＋前日比（対前日終値）＋種別タグ。
-  extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const d = (p.prevClose && p.extPrice) ? (p.extPrice - p.prevClose) / p.prevClose * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)}${d != null ? ` <span style="font-size:11px">${signed(d)}%</span>` : ''} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
+  // 時間外: 米株プレ/アフター価格＋変動率（対・直近レギュラー終値）＋種別タグ。
+  // 基準は p.price（regularMarketPrice＝直近レギュラー終値: プレ中=昨日終値 / アフター中=当日終値）。
+  // p.prevClose は日足の「最後から2番目」で前々日終値になりプレで1日ズレるため使わない。
+  extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const base = p.price != null ? p.price : p.prevClose; const d = (base && p.extPrice) ? (p.extPrice - base) / base * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)}${d != null ? ` <span style="font-size:11px">${signed(d)}%</span>` : ''} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
   // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
   day:       (s,c) => { const v = c.dayChg, st = condStyle('day', v); const pm = c.dayIsPrev ? '<span class="muted" style="font-size:9px" title="寄り付き前のため前営業日の値動きを表示">前</span>' : ''; return `<td class="${st ? '' : cls(v)}"${st}><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a>${pm}</td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
