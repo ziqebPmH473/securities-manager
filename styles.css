@@ -281,6 +281,8 @@ form label.check input { width: auto; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; height: 100%; }
+/* ページ縦スクロールバーの領域を常に確保し、出現/消失でレイアウト幅がガタつくのを防ぐ */
+html { scrollbar-gutter: stable; }
 body {
   font-family: var(--sans);
   background: var(--bg);
@@ -376,6 +378,9 @@ button { font-family: inherit; }
 }
 .fx-chip .t-label { font-size: 10.5px; color: var(--muted); letter-spacing: .06em; }
 .fx-chip .t-val { font-size: 13.5px; font-weight: 700; }
+.login-warn { font-size: 11.5px; color: #b4540a; background: #fff4e5; border: 1px solid #f5c98a; border-radius: 8px; padding: 5px 10px; line-height: 1.25; text-align: center; cursor: pointer; white-space: nowrap; font-weight: 700; }
+.login-warn span { font-weight: 400; font-size: 10.5px; }
+.login-warn:hover { background: #ffe9cc; }
 .update-meta { font-size: 11.5px; color: var(--muted); text-align: right; line-height: 1.35; }
 .update-meta b { color: var(--ink); font-weight: 600; }
 

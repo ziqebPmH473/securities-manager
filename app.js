@@ -1669,6 +1669,21 @@ function updateHeader() {
     const srcLabel = src ? (/finnhub/.test(src) ? '<span style="color:var(--green,#16a34a)">Finnhub</span>' : `<span class="muted" title="米株は15〜20分遅延。リアルタイムにはFinnhubキー設定が必要">Yahoo(遅延)</span>`) : '';
     um.innerHTML = `更新<br><b>${t}</b>${srcLabel ? ` <span style="font-size:10px">${srcLabel}</span>` : ''}`;
   }
+  // 未ログイン警告: 自動同期ONなのに未ログイン＝この端末にしか保存されない（他端末と共有されない）
+  const lw = document.getElementById('login-warn');
+  if (lw) {
+    const needSync = dsync.enabled() && gsync.cfg().clientId;
+    if (needSync && !gsync._token) {
+      lw.hidden = false;
+      lw.className = 'login-warn';
+      lw.title = '自動同期はONですが未ログインのため、変更はこの端末にしか保存されません。クリックして設定からログインしてください';
+      lw.innerHTML = '⚠ 未ログイン<br><span>この端末のみ保存</span>';
+      lw.onclick = () => { go('master'); };
+    } else {
+      lw.hidden = true;
+      lw.onclick = null;
+    }
+  }
 }
 
 function updateSignalBadge() { renderNav(); }
@@ -3437,7 +3452,8 @@ function openSecurityForm(id, presetMarket) {
       const qty = parseFloat(f.initQty.value), cost = parseFloat(f.initCost.value);
       if (!isNaN(qty) && qty !== 0) store.setHolding(target.id, f.broker.value, f.accountType.value, qty, isNaN(cost) ? 0 : cost);
     }
-    closeModal(); render();
+    // 編集時は一覧のスクロール位置を維持（保存後に先頭へ戻らないように）。新規追加は先頭から見せる
+    closeModal(); if (id) preserveTableScroll(render); else render();
     // 新規追加かつティッカーありなら、価格＋マスタ情報を裏で取得して再描画
     // （保有・ウォッチ問わず、日次更新済みでも即座に価格が出るように。task B）
     if (target && target.ticker) {
