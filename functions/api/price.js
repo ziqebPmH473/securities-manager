@@ -82,7 +82,8 @@ async function fetchFinnhub(symbol, token, withHighs) {
   if (price == null || price === 0) {
     if (yq && yq.price != null) { price = yq.price; prevClose = yq.prevClose ?? prevClose; source = 'yahoo(fallback)'; }
     else {
-      try { const y2 = await fetchYahooChart(symbol, '1mo', '1d'); if (y2.price != null) { price = y2.price; prevClose = y2.prevClose ?? prevClose; source = 'yahoo(fallback)'; if (high5y == null && y2.high5y) high5y = y2.high5y; if (prevDayPct == null) prevDayPct = y2.prevDayPct; } } catch (_) {}
+      // フォールバックは range=1mo のため high5y を入れてはいけない（1ヶ月高値で本物の5年高値を潰すと初回トリガーが過小になる）。価格・前日比のみ補完する。
+      try { const y2 = await fetchYahooChart(symbol, '1mo', '1d'); if (y2.price != null) { price = y2.price; prevClose = y2.prevClose ?? prevClose; source = 'yahoo(fallback)'; if (prevDayPct == null) prevDayPct = y2.prevDayPct; } } catch (_) {}
     }
   }
 
