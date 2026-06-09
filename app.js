@@ -89,6 +89,9 @@ const MASTER_COLS = [
   { key: 'stars',        label: '★(ﾊﾞﾘｭ/強/ﾘｽｸ)', left: true,  markets: STKM, noSort: true },
   { key: 'analysisDate', label: '評価日',          left: true,  markets: STKM, noSort: false },
   { key: 'analysisNote', label: '分析メモ',        left: true,  markets: STKM, noSort: true },
+  // 元本売却（情報管理のみ・既定非表示）
+  { key: 'principalSold',       label: '元本売却済み',   left: true,  markets: ALLM, noSort: false },
+  { key: 'principalSoldAmount', label: '売却済み元本額', left: false, markets: ALLM, noSort: false },
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
@@ -1398,6 +1401,9 @@ const COL_RENDERERS = {
   stars:     (s,c) => { const a = [s.starValuation, s.starStrength, s.starRisk]; return `<td class="l">${a.some(x => x != null) ? a.map(x => x ?? '—').join('/') : muted}</td>`; },
   analysisDate: (s,c) => `<td class="l">${s.analysisDate ? esc(s.analysisDate) : muted}</td>`,
   analysisNote: (s,c) => `<td class="l" title="${esc(s.analysisNote || '')}">${s.analysisNote ? esc(String(s.analysisNote).slice(0, 24)) + (s.analysisNote.length > 24 ? '…' : '') : muted}</td>`,
+  // 元本売却（情報管理のみ）。金額は銘柄の原通貨
+  principalSold:       (s,c) => `<td class="l">${s.principalSold ? '<span class="tag">売却済</span>' : muted}</td>`,
+  principalSoldAmount: (s,c) => `<td>${s.principalSoldAmount != null ? fmtAmt(s.principalSoldAmount, c.market) : muted}</td>`,
 };
 
 // ---------- SEC-94: 一覧のExcel風インライン編集モード ----------
@@ -1423,6 +1429,9 @@ const INLINE_FIELDS = {
   prevBuyPrice:  { kind: 'sec', type: 'number', split: true, get: s => s.prevBuyPrice ?? '', patch: v => ({ prevBuyPrice: ieNum(v) }) },
   prevBuyDate:   { kind: 'sec', type: 'date',   get: s => s.prevBuyDate || '', patch: v => ({ prevBuyDate: v || null }) },
   fixedBuyPrice: { kind: 'sec', type: 'number', split: true, get: s => s.fixedBuyPrice ?? '', patch: v => ({ fixedBuyPrice: ieNum(v) }) },
+  principalSold: { kind: 'sec', type: 'select', get: s => s.principalSold ? '1' : '', patch: v => ({ principalSold: v === '1' }),
+                   options: () => [{ v: '', l: '—' }, { v: '1', l: '売却済' }] },
+  principalSoldAmount: { kind: 'sec', type: 'number', get: s => s.principalSoldAmount ?? '', patch: v => ({ principalSoldAmount: ieNum(v) }) },
   qty:           { kind: 'hold', type: 'number', field: 'quantity', get: h => h.quantity ?? '' },
   avgCost:       { kind: 'hold', type: 'number', field: 'avgCost', get: h => h.avgCost ?? '' },
 };
@@ -1899,6 +1908,8 @@ function sortValue(sec, key) {
     case 'dropPrev': return calc.remainingDropPrev(sec) ?? Infinity;
     case 'rating': return GRADE_RANK[sec.rating || sec.overallGrade] ?? 99;
     case 'priority': return sec.priority ?? Infinity;
+    case 'principalSold': return sec.principalSold ? 0 : 1; // 売却済みを先頭に
+    case 'principalSoldAmount': return sec.principalSoldAmount ?? -Infinity;
     default: return '';
   }
 }
@@ -3334,6 +3345,13 @@ function openSecurityForm(id, presetMarket) {
           </select></div>
       </div>
 
+      <div class="row">
+        <div class="field"><label>元本売却済み（情報管理のみ・判定には影響しません）</label>
+          <select name="principalSold"><option value="0" ${!sec || !sec.principalSold ? 'selected' : ''}>いいえ</option><option value="1" ${sec && sec.principalSold ? 'selected' : ''}>売却済み</option></select></div>
+        <div class="field"><label>売却済みの元本額 (${ccy})</label>
+          <input name="principalSoldAmount" type="number" step="any" value="${sec && sec.principalSoldAmount != null ? sec.principalSoldAmount : ''}" placeholder="任意・原通貨"></div>
+      </div>
+
       <fieldset class="form-group"><legend>表示の手動上書き（任意・自動取得では上書きされません）</legend>
         <div class="field"><label>銘柄名（上書き）</label>
           <input name="nameOverride" value="${sec && sec.nameOverride ? esc(sec.nameOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).name || sec.ticker) : '空欄で自動取得名を使用'}"></div>
@@ -3423,6 +3441,8 @@ function openSecurityForm(id, presetMarket) {
       baseHighMode: f.baseHighMode.value || null,
       baseHighManual: f.baseHighMode.value === 'manual' ? numOrNull(f.baseHighManual.value) : null,
       detailType: (f.detailType && f.detailType.value) || null, // 詳細種別マスタ（空=自動判定）
+      principalSold: f.principalSold && f.principalSold.value === '1', // 元本売却済みフラグ（情報管理のみ）
+      principalSoldAmount: numOrNull(f.principalSoldAmount && f.principalSoldAmount.value), // 売却済み元本額（原通貨・情報管理のみ）
 
       buyAmount: numOrNull(f.buyAmount.value), buyCount: intOrNull(f.buyCount.value),
       overallGrade: f.overallGrade.value || null, rating: f.rating.value || null, buyGrade: f.buyGrade.value || null,
@@ -3555,6 +3575,15 @@ function openHoldingsForm(secId) {
   showModal(`保有を直接編集 — ${esc(sec.name || sec.ticker)}`, `
     <form id="holdings-form">
       <p class="muted">取引履歴を介さず、数量・平均取得単価を直接修正できます（単価 ${ccy}）。${us ? '「取得円(円)」は米国株の取得円（転記・取得円列に使用）。空欄＝未設定。' : ''}</p>
+
+      <fieldset class="form-group"><legend>元本売却（銘柄単位・情報管理のみ）</legend>
+        <div class="row">
+          <div class="field"><label>元本売却済み</label>
+            <select name="principalSold"><option value="0" ${!sec.principalSold ? 'selected' : ''}>いいえ</option><option value="1" ${sec.principalSold ? 'selected' : ''}>売却済み</option></select></div>
+          <div class="field"><label>売却済みの元本額 (${ccy})</label>
+            <input name="principalSoldAmount" type="number" step="any" value="${sec.principalSoldAmount != null ? sec.principalSoldAmount : ''}" placeholder="任意・原通貨"></div>
+        </div>
+      </fieldset>
       <div class="table-wrap"><table>
         <thead><tr><th class="l">証券会社</th><th class="l">口座</th><th>数量</th><th>平均取得単価(${ccy})</th>${us ? '<th>取得円(円)</th>' : ''}<th></th></tr></thead>
         <tbody id="holdings-rows">${rowsHtml || ''}</tbody>
@@ -3608,6 +3637,11 @@ function openHoldingsForm(secId) {
         if (nh) nh.acqJpy = parseFloat(f.newAcq.value) || 0;
       }
     }
+    // 銘柄単位の元本売却情報（情報管理のみ）
+    store.updateSecurity(secId, {
+      principalSold: f.principalSold && f.principalSold.value === '1',
+      principalSoldAmount: (f.principalSoldAmount && f.principalSoldAmount.value !== '') ? (parseFloat(f.principalSoldAmount.value) || 0) : null,
+    });
     store.save(); closeModal(); render();
   };
 }
@@ -3663,6 +3697,9 @@ function openSecurityDetail(secId) {
   const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}</span></div>`).join('') : '<div class="muted">保有なし</div>';
   const holdSummary = th.qty ? kv('合計 / 評価額 / 損益率',
     `${fmtQty(th.qty, sec.market)}　/　${m(calc.valueOrCostNative(sec))}　/　<span class="${cls(calc.pnlPctNative(sec))}">${calc.pnlPctNative(sec) != null ? signed(calc.pnlPctNative(sec)) + '%' : '—'}</span>`) : '';
+  // 元本売却（情報管理のみ）。フラグまたは金額があれば表示
+  const principalSoldRow = (sec.principalSold || sec.principalSoldAmount != null)
+    ? kv('元本売却', `${sec.principalSold ? '売却済み' : '—'}${sec.principalSoldAmount != null ? '　/　' + m(sec.principalSoldAmount) : ''}`) : '';
   // 購入・取引履歴
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
   const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
@@ -3736,7 +3773,7 @@ function openSecurityDetail(secId) {
     ${sectionBox('ファンダ', fund)}
     ${sectionBox('評価', evalBox)}
     ${sectionBox('判定', judge)}
-    ${sectionBox('保有', holdRows + (holdSummary || ''))}
+    ${sectionBox('保有', holdRows + (holdSummary || '') + (principalSoldRow || ''))}
     ${sectionBox('購入・取引履歴', txnRows)}
     ${sectionBox('分析メタ', metaBox)}`, `
     <button type="button" class="btn btn-brass" style="flex:1" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引を記録</button>
@@ -4507,8 +4544,9 @@ const GENERIC_MAP = {
   '買増固定値': 'fixedBuyPrice', '次回購入固定値': 'fixedBuyPrice',
   'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category', '詳細種別': 'detailType',
   '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
+  '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount',
 };
-const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別'];
+const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -4546,6 +4584,8 @@ function parseGeneric(text) {
     if ('buyCount' in rec) { const n = parseInt(rec.buyCount, 10); sec.buyCount = isNaN(n) ? null : n; }
     if ('enabled' in rec) sec.enabled = /有効|^1$|true|yes/i.test(rec.enabled);
     if ('watch' in rec) sec.watch = /注意|^1$|true|yes/i.test(rec.watch);
+    if ('principalSold' in rec) sec.principalSold = /売却|済|^1$|true|yes|○/i.test(rec.principalSold);
+    if ('principalSoldAmount' in rec) sec.principalSoldAmount = numClean(rec.principalSoldAmount);
     if (Object.keys(sec).length) row._sec = sec;
     if (qty == null && !row._sec) continue; // 数量も属性も無い行はスキップ
     out.push(row);
@@ -4847,7 +4887,8 @@ function exportGeneric() {
     const ruleName = (store.rule(s.ruleId) || {}).name || '';
     const base = [s.ticker, s.market, '', '', '', '',
       s.prevBuyPrice ?? '', s.prevBuyDate || '', s.baseHighMode || '', s.baseHighManual ?? '', s.fixedBuyPrice ?? '', ruleName, s.category || '',
-      s.buyAmount ?? '', s.buyCount ?? '', s.enabled === false ? '無効' : '有効', s.watch ? '注意' : '通常', detailTypeOf(s)];
+      s.buyAmount ?? '', s.buyCount ?? '', s.enabled === false ? '無効' : '有効', s.watch ? '注意' : '通常', detailTypeOf(s),
+      s.principalSold ? '売却済' : '', s.principalSoldAmount ?? ''];
     const hs = store.data.holdings.filter(h => h.securityId === s.id);
     if (hs.length) {
       for (const h of hs) { const r = base.slice(); r[2] = h.broker; r[3] = h.accountType; r[4] = h.quantity; r[5] = h.avgCost; lines.push(r.map(csvCell).join(',')); }
@@ -4898,13 +4939,15 @@ const GI_FIELDS = [
   { key: 'starValuation', label: '★バリュエーション' },
   { key: 'starStrength',  label: '★独自の強み' },
   { key: 'starRisk',      label: '★リスク' },
+  { key: 'principalSold',       label: '元本売却済み' },
+  { key: 'principalSoldAmount', label: '売却済み元本額' },
 ];
-const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk']);
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount']);
 // 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
   { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy'] },
-  { g: '判定・属性', keys: ['category', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch'] },
+  { g: '判定・属性', keys: ['category', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
   { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride'] },
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
 ];
@@ -4919,6 +4962,7 @@ const GI_AUTOMAP = { ...GENERIC_MAP,
   '評価日': 'analysisDate', '備考': 'analysisNote', '分析メモ': 'analysisNote',
   'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
   'セクター': 'sectorOverride', '業種': 'industryOverride', '銘柄名': 'nameOverride',
+  '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount', '売却元本': 'principalSoldAmount',
 };
 let _giHeaders = [], _giRows = [], _giMapping = []; // _giMapping[colIdx] = fieldKey | ''
 
@@ -5009,8 +5053,9 @@ function giRenderPreview() {
 function giParseValue(field, raw) {
   const v = raw == null ? '' : String(raw).trim();
   switch (field) {
-    case 'quantity': case 'avgCost': case 'acqValue': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount':
+    case 'quantity': case 'avgCost': case 'acqValue': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount': case 'principalSoldAmount':
       return numClean(v);
+    case 'principalSold': return /売却|済|^1$|true|yes|○|有/i.test(v);
     case 'buyCount': case 'priority': case 'starValuation': case 'starStrength': case 'starRisk': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
     case 'enabled': return /有効|^1$|true|yes|○|有/i.test(v);
     case 'watch': return /注意|^1$|true|yes|○/i.test(v);
