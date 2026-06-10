@@ -135,7 +135,9 @@ const store = {
     this.data.securities ||= [];
     this.data.holdings ||= [];
     this.data.transactions ||= [];
-    this.data.rules ||= [structuredClone(DEFAULT_RULE)];
+    // rules は空配列だと既定ルールを失い、後段の rules[0].isDefault で落ちる。
+    // 同期マージの削除伝播で空配列が Drive に書かれた場合も含め、空/不正なら既定を再シード（自己修復）
+    if (!Array.isArray(this.data.rules) || this.data.rules.length === 0) this.data.rules = [structuredClone(DEFAULT_RULE)];
     this.data.categories ||= structuredClone(DEFAULT_CATEGORIES);
     this.data.prices ||= {};
     this.data.fx ||= { USDJPY: null };
@@ -542,6 +544,9 @@ const dsync = {
       const local = dataBundle();
       const base = JSON.parse(this._loadBaseRaw());
       const merged = SyncMerge.mergeBundle(base, local, remote);
+      // マージの削除伝播で rules が空になると restore 時に rules[0].isDefault で落ちる。
+      // 空なら既定ルールを補い、Drive 側にも壊れた空配列を残さない（自己修復）
+      if (!Array.isArray(merged.rules) || merged.rules.length === 0) merged.rules = [structuredClone(DEFAULT_RULE)];
       const json = JSON.stringify(merged);                 // 変更前にシリアライズ
       await this._writeFile(folderId, file ? file.id : null, json);
       this._saveBaseRaw(json);
