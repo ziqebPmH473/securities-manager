@@ -1659,7 +1659,7 @@ function render() {
     case 'transfer': renderTransfer(); break;
     case 'master': renderMaster(); break;
   }
-  fitListTables();
+  scheduleFit();
   // ランキング順位バッジ: 一覧/サイン表示時に未取得なら1日1回だけ取得し、取得後に再描画
   if (!_rankTop && !_rankBadgesBusy && ['holdings', 'us', 'jp', 'signals'].includes(currentView)) {
     loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); });
@@ -1668,6 +1668,16 @@ function render() {
 
 // 一覧テーブルの枠(.table-wrap)の高さを画面に合わせて制限し、枠内スクロール＋見出し固定を成立させる。
 // （横スクロールを枠内に保ったまま thead を固定するため。ページ全体は極力スクロールさせない）
+// fitListTables を「レイアウト確定後」に実行する。初回描画/マーケットは中身が非同期で後から増えるため、
+// 同期測定だと高さが小さく max-height が付かずページ全体がスクロールしてしまう（市場切替で再描画されると直る現象の原因）。
+// 即時＋requestAnimationFrame（二重）＋タイムアウトの保険で、確定後の高さで枠内スクロール化する。
+let _fitRaf = null;
+function scheduleFit() {
+  fitListTables();
+  if (_fitRaf) cancelAnimationFrame(_fitRaf);
+  _fitRaf = requestAnimationFrame(() => requestAnimationFrame(() => { _fitRaf = null; fitListTables(); }));
+  setTimeout(fitListTables, 80);
+}
 function fitListTables() {
   document.querySelectorAll('main .section .table-wrap').forEach(wrap => {
     wrap.style.maxHeight = '';                               // 一旦解除して自然な高さを測る
@@ -1760,9 +1770,11 @@ function updateHeader() {
     if (needSync && !gsync._token) {
       lw.hidden = false;
       lw.className = 'login-warn';
-      lw.title = '自動同期はONですが未ログインのため、変更はこの端末にしか保存されません。クリックして設定からログインしてください';
-      lw.innerHTML = '⚠ 未ログイン<br><span>この端末のみ保存</span>';
-      lw.onclick = () => { go('master'); };
+      lw.title = '自動同期はONですが未ログインのため、変更はこの端末にしか保存されません。クリックでそのままログインできます';
+      lw.innerHTML = '⚠ 未ログイン<br><span>クリックでログイン</span>';
+      // クリック＝ユーザー操作のまま即ログイン（スマホはタップ同期でないとポップアップが塞がれるため signIn を直接呼ぶ）。
+      // 設定画面も開いて状態を表示する。
+      lw.onclick = () => { go('master'); gsyncSignIn(); };
     } else {
       lw.hidden = true;
       lw.onclick = null;
@@ -2720,7 +2732,7 @@ function renderMarketTab() {
         ${market === 'JP' ? '<span class="muted" style="font-size:11px">※日本株の現在値・前日比は価格APIから取得</span>' : ''}</div>
       <div class="section-body" style="padding:12px 16px 16px">${body}</div>
     </div>`;
-  fitListTables(); // 表を枠内スクロールに（ページ全体でなく表内でスクロール・画面に収める）
+  scheduleFit(); // 表を枠内スクロールに（ページ全体でなく表内でスクロール・画面に収める）。非同期データ到着後の高さで確定させる
   if (!items && !mktBusy) loadRanking(false); // タブを開いた時（起動時相当）に自動取得
 }
 
@@ -3243,6 +3255,21 @@ function cfParseBg(bg) {
 }
 function cfRgbToHex(r, g, b) { return '#' + [r, g, b].map(x => Math.max(0, Math.min(255, x)).toString(16).padStart(2, '0')).join(''); }
 function cfHexToRgb(hex) { const p = hex.replace('#', '').match(/.{2}/g).map(x => parseInt(x, 16)); return { r: p[0], g: p[1], b: p[2] }; }
+// テンプレート色パレット（よく使う色。クリックで色＋濃さに反映。細かく決めたい時は下の色/濃さで調整）
+const CF_TEMPLATE_COLORS = [
+  { l: '緑(濃)', bg: 'rgba(34,197,94,.45)' }, { l: '緑(淡)', bg: 'rgba(34,197,94,.20)' },
+  { l: '赤(濃)', bg: 'rgba(239,68,68,.45)' }, { l: '赤(淡)', bg: 'rgba(239,68,68,.20)' },
+  { l: '橙', bg: 'rgba(249,115,22,.42)' }, { l: '黄', bg: 'rgba(234,179,8,.38)' },
+  { l: 'スレート', bg: 'rgba(148,163,184,.22)' }, { l: '臙脂', bg: 'rgba(159,18,57,.48)' },
+  { l: '青', bg: 'rgba(59,130,246,.30)' }, { l: '紫', bg: 'rgba(168,85,247,.30)' },
+];
+// パレットのスウォッチをクリック→フォームの色/濃さに反映
+function cfPickTemplate(bg) {
+  const f = document.getElementById('cf-rule-form'); if (!f) return;
+  const p = cfParseBg(bg);
+  f.color.value = p.hex; f.alpha.value = Math.round(p.a * 100);
+  const av = document.getElementById('cf-a-val'); if (av) av.textContent = Math.round(p.a * 100);
+}
 
 function openCfRulesMaster() {
   const rules = store.data.cfRules || [];
@@ -3281,8 +3308,10 @@ function openCfRuleEdit(id) {
         <div style="flex:1"><label>最小値（以上・空=制限なし）</label><input name="min" type="number" step="any" value="${r && r.min != null ? r.min : ''}"></div>
         <div style="flex:1"><label>最大値（以下・空=制限なし）</label><input name="max" type="number" step="any" value="${r && r.max != null ? r.max : ''}"></div>
       </div>
+      <div class="form-row"><label>テンプレート色（クリックで選択）</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${CF_TEMPLATE_COLORS.map(t => `<button type="button" class="cf-tpl" title="${esc(t.l)}" onclick="cfPickTemplate('${t.bg}')" style="width:32px;height:24px;border-radius:4px;background:${t.bg};border:1px solid var(--border);cursor:pointer"></button>`).join('')}</div></div>
       <div class="form-row" style="display:flex;gap:14px;align-items:flex-end">
-        <div><label>色</label><input name="color" type="color" value="${parsed.hex}" style="width:56px;height:34px;padding:2px"></div>
+        <div><label>色（詳細）</label><input name="color" type="color" value="${parsed.hex}" style="width:56px;height:34px;padding:2px"></div>
         <div style="flex:1"><label>濃さ（不透明度 <span id="cf-a-val">${aPct}</span>%）</label><input name="alpha" type="range" min="0" max="100" value="${aPct}" oninput="document.getElementById('cf-a-val').textContent=this.value" style="width:100%"></div>
       </div>
       <div class="form-row"><label>適用する画面（複数可）</label><div style="display:flex;gap:10px;flex-wrap:wrap">${scChecks}</div></div>
@@ -6223,6 +6252,7 @@ window.openCfRuleEdit = openCfRuleEdit;
 window.saveCfRule = saveCfRule;
 window.deleteCfRule = deleteCfRule;
 window.resetCfRules = resetCfRules;
+window.cfPickTemplate = cfPickTemplate;
 window.setMktMarket = setMktMarket;
 window.setMktSub = setMktSub;
 window.setMktKind = setMktKind;
