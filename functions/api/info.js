@@ -183,6 +183,7 @@ async function fetchUsInfo(symbol, finnhubKey) {
     marketCap: summary?.marketCap ?? (foreign ? null : fh?.marketCap) ?? null,
     per:       summary?.per ?? fh?.per ?? null,
     pbr:       summary?.pbr ?? (foreign ? null : fh?.pbr) ?? null,
+    psr:       summary?.psr ?? (foreign ? null : fh?.psr) ?? null, // PSR（米国株のみ）
     eps:       summary?.eps ?? fh?.eps ?? null,
     dividend:  summary?.dividend ?? (foreign ? null : fh?.dividend) ?? null,
     sharesOut: summary?.sharesOut ?? null,
@@ -378,6 +379,7 @@ async function fetchQuoteSummary(symbol) {
     marketCap: n(sd.marketCap) ? Math.round(sd.marketCap.raw / 1e6) : (n(ks.marketCap) ? Math.round(ks.marketCap.raw / 1e6) : null),
     per: n(sd.trailingPE) ? sd.trailingPE.raw : (n(ks.trailingPE) ? ks.trailingPE.raw : null),
     pbr: n(ks.priceToBook) ? ks.priceToBook.raw : (n(sd.priceToBook) ? sd.priceToBook.raw : null),
+    psr: n(sd.priceToSalesTrailing12Months) ? sd.priceToSalesTrailing12Months.raw : null,
     eps: n(ks.trailingEps) ? ks.trailingEps.raw : null,
     dividend: n(sd.dividendRate) ? sd.dividendRate.raw : null,
     sharesOut: n(ks.sharesOutstanding) ? ks.sharesOutstanding.raw : null, // 発行済株式数（時価総額=株価×これ で随時算出）
@@ -396,6 +398,7 @@ async function fetchFinnhubMetric(symbol, token) {
     marketCap: num(m.marketCapitalization),
     per: num(m['peBasicExclExtraTTM']) || num(m['peTTM']),
     pbr: num(m['pbAnnual']) || num(m['pbQuarterly']) || num(m['pb']),
+    psr: num(m['psAnnual']) || num(m['psTTM']) || num(m['ps']),
     eps: num(m['epsBasicExclExtraItemsTTM']),
     dividend: num(m['dividendPerShareAnnual']),
   };

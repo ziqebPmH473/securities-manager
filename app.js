@@ -80,8 +80,10 @@ const MASTER_COLS = [
   { key: 'rating',      label: '銘柄格付',         left: true,  markets: STKM, noSort: false },
   { key: 'per',         label: 'PER',              left: false, markets: STKM, noSort: false },
   { key: 'pbr',         label: 'PBR',              left: false, markets: STKM, noSort: false },
+  { key: 'psr',         label: 'PSR',              left: false, markets: ['US'], noSort: false },
   { key: 'dividend',    label: '配当/株',          left: false, markets: STKM, noSort: false },
   { key: 'divYield',    label: '配当利回り',       left: false, markets: STKM, noSort: false },
+  { key: 'yieldOnCost', label: '取得利回り',       left: false, markets: STKM, noSort: false },
   { key: 'eps',         label: 'EPS',              left: false, markets: STKM, noSort: false },
   { key: 'marginRatio', label: '信用倍率',         left: false, markets: ['JP', 'SIGNAL'], noSort: false },
   // 取り込んだ銘柄分析結果（既定非表示・列設定で表示可）
@@ -682,6 +684,20 @@ const calc = {
   per(sec) { const eps = this.field(sec, 'eps'); const p = this.price(sec); if (eps && eps > 0 && p != null) return p / eps; return this.field(sec, 'per'); },
   // PBR（取得値）。日本版ページ参考指標 or Finnhub/quoteSummary 由来
   pbr(sec) { return this.field(sec, 'pbr'); },
+  // PSR（株価売上高倍率。米国株のみ取得）
+  psr(sec) { return this.field(sec, 'psr'); },
+  // 1株配当（取得値があればそれ、無ければ 配当利回り%×現在値 から逆算）。日本株はper-share未取得でも利回りから求める。
+  dividendPerShare(sec) {
+    const d = this.field(sec, 'dividend'); if (d != null) return d;
+    const y = this.field(sec, 'divYield'); const p = this.price(sec);
+    return (y != null && p != null) ? y / 100 * p : null;
+  },
+  // 取得利回り＝1株配当÷取得単価×100（取得単価ベースの配当利回り＝簿価利回り）
+  yieldOnCost(sec) {
+    const dps = this.dividendPerShare(sec); if (dps == null) return null;
+    const th = this.totalHolding(sec.id); const cost = th.avgCost;
+    return cost ? dps / cost * 100 : null;
+  },
   // 信用倍率（日本株のみ・週次。情報マスタの最新値）
   marginRatio(sec) { return this.field(sec, 'marginRatio'); },
   // 時価総額(百万) = 株価×発行済株式数/1e6（随時算出）。無ければ取得済み時価総額
@@ -1273,6 +1289,33 @@ function reconcileColPrefs(market) {
 }
 
 // ---------- カラムレンダラー ----------
+// 業種・セクターの英語→日本語表記。米国株は Finnhub/quoteSummary が英語で返すため、表示時に変換する。
+// 未収録の値は英語のまま表示（網羅は順次拡充）。日本株はもともと日本語なので素通り。
+const INDUSTRY_JA = {
+  // GICSセクター（Yahoo quoteSummary）
+  'Technology': 'テクノロジー', 'Financial Services': '金融', 'Healthcare': 'ヘルスケア', 'Health Care': 'ヘルスケア',
+  'Consumer Cyclical': '一般消費財', 'Consumer Defensive': '生活必需品', 'Communication Services': 'コミュニケーション',
+  'Industrials': '資本財・サービス', 'Energy': 'エネルギー', 'Basic Materials': '素材', 'Real Estate': '不動産', 'Utilities': '公益事業',
+  // Finnhub finnhubIndustry / 業種
+  'Semiconductors': '半導体', 'Software': 'ソフトウェア', 'Hardware': 'ハードウェア', 'Technology Hardware': 'ハードウェア',
+  'Communications': '通信機器', 'Communications Equipment': '通信機器', 'Telecommunication': '通信', 'Telecommunications': '通信',
+  'Media': 'メディア', 'Internet': 'インターネット', 'Retail': '小売', 'Specialty Retail': '専門小売',
+  'Pharmaceuticals': '医薬品', 'Biotechnology': 'バイオテクノロジー', 'Banking': '銀行', 'Banks': '銀行',
+  'Insurance': '保険', 'Diversified Financials': '総合金融', 'Capital Markets': '資本市場', 'Consumer Finance': '消費者金融',
+  'Automobiles': '自動車', 'Auto Manufacturers': '自動車', 'Aerospace & Defense': '航空宇宙・防衛', 'Aerospace': '航空宇宙',
+  'Machinery': '機械', 'Industrial Conglomerates': 'コングロマリット', 'Electrical Equipment': '電気機器',
+  'Chemicals': '化学', 'Metals & Mining': '金属・鉱業', 'Oil & Gas': '石油・ガス', 'Energy Equipment & Services': 'エネルギー機器',
+  'Food Products': '食品', 'Beverages': '飲料', 'Tobacco': 'たばこ', 'Consumer products': '消費財', 'Consumer Products': '消費財',
+  'Textiles, Apparel & Luxury Goods': '繊維・アパレル・高級品', 'Hotels, Restaurants & Leisure': 'ホテル・レジャー',
+  'Airlines': '航空', 'Transportation': '運輸', 'Logistics & Transportation': '物流・運輸', 'Road & Rail': '道路・鉄道',
+  'Building': '建設', 'Construction': '建設', 'Trading Companies & Distributors': '商社・流通', 'Marine': '海運',
+  'IT Services': 'ITサービス', 'Professional Services': '専門サービス', 'Commercial Services & Supplies': '商業サービス',
+  'Entertainment': 'エンターテインメント', 'Interactive Media & Services': 'インタラクティブメディア', 'Restaurants': 'レストラン',
+  'Household Products': '家庭用品', 'Personal Products': 'パーソナルケア', 'Real Estate Management & Development': '不動産管理・開発',
+  'Electric Utilities': '電力', 'Gas Utilities': 'ガス', 'Water Utilities': '水道', 'Packaging': '包装',
+};
+function jpInd(v) { return v ? (INDUSTRY_JA[v] || v) : v; }
+
 // 各カラムの td を返す関数。引数: (sec, ctx)
 const muted = '<span class="muted">—</span>';
 // みなし（取得単価を前回購入単価とみなす）の省スペース表示。数値の「前」に付けて桁ズレを防ぐ
@@ -1290,7 +1333,7 @@ const CF_SCREENS = [
   { id: 'market',   label: 'マーケット' },
 ];
 // 背景色ルールを設定できる数値列（設定UIの選択肢）。
-const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'dividend', 'divYield', 'eps', 'priority', 'marginRatio', 'principalSoldAmount'];
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount'];
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
@@ -1384,8 +1427,10 @@ function cfCellValue(key, sec, ctx) {
     case 'fixedBuyPrice': return typeof sec.fixedBuyPrice === 'number' ? sec.fixedBuyPrice : null;
     case 'per': return calc.per(sec);
     case 'pbr': return calc.pbr(sec);
+    case 'psr': return calc.psr(sec);
     case 'dividend': return calc.field(sec, 'dividend');
     case 'divYield': return calc.divYield(sec);
+    case 'yieldOnCost': return calc.yieldOnCost(sec);
     case 'eps': return calc.field(sec, 'eps');
     case 'priority': return sec.priority;
     case 'marginRatio': return sec.market === 'JP' ? calc.marginRatio(sec) : null;
@@ -1433,8 +1478,8 @@ const COL_RENDERERS = {
   // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
   prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
   dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
-  sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
-  industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
+  sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(jpInd(v)) : muted}</td>`; },
+  industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(jpInd(v)) : muted}</td>`; },
   // 時価総額: 兆/億/万（米株は$T/B）表記に統一（売買代金と同形式）。marketCapは百万単位なので×1e6で実額化
   marketCap: (s,c) => { const v = calc.marketCap(s); return `<td title="時価総額">${v != null ? fmtTurnover(v * 1e6, c.market) : muted}</td>`; },
   turnover:  (s,c) => { const v = calc.turnover(s); return `<td title="現在値×当日出来高">${v != null ? fmtTurnover(v, c.market) : muted}</td>`; },
@@ -1459,8 +1504,11 @@ const COL_RENDERERS = {
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
   per:       (s,c) => { const v = calc.per(s); return `<td>${v != null ? num(v) : muted}</td>`; },
   pbr:       (s,c) => { const v = calc.pbr(s); return `<td>${v != null ? num(v) : muted}</td>`; },
+  psr:       (s,c) => { const v = calc.psr(s); return `<td>${v != null ? num(v) : muted}</td>`; },
   dividend:  (s,c) => { const v = calc.field(s,'dividend'); return `<td>${v != null ? c.m(v) : muted}</td>`; },
   divYield:  (s,c) => { const v = calc.divYield(s); return `<td>${v != null ? v.toFixed(2) + '%' : muted}</td>`; },
+  // 取得利回り＝1株配当÷取得単価。取得時点のコストに対する配当利回り（簿価利回り）。
+  yieldOnCost: (s,c) => { const v = calc.yieldOnCost(s); return `<td title="取得単価ベースの配当利回り（1株配当÷取得単価）">${v != null ? v.toFixed(2) + '%' : muted}</td>`; },
   eps:       (s,c) => { const v = calc.field(s,'eps'); return `<td>${v != null ? c.m(v) : muted}</td>`; },
   // 信用倍率（日本株のみ・週次）。最新＋前週分。値クリックで信用残時系列ページを開く。
   marginRatio: (s,c) => {
@@ -1786,9 +1834,8 @@ function updateHeader() {
       lw.className = 'login-warn';
       lw.title = '自動同期はONですが未ログインのため、変更はこの端末にしか保存されません。クリックでそのままログインできます';
       lw.innerHTML = '⚠ 未ログイン<br><span>クリックでログイン</span>';
-      // クリック＝ユーザー操作のまま即ログイン（スマホはタップ同期でないとポップアップが塞がれるため signIn を直接呼ぶ）。
-      // 設定画面も開いて状態を表示する。
-      lw.onclick = () => { go('master'); gsyncSignIn(); };
+      // クリック＝ユーザー操作のまま即ログイン（画面遷移はしない。スマホはタップ同期でないとポップアップが塞がれるため signIn を直接呼ぶ）。
+      lw.onclick = () => { gsyncSignIn(); };
     } else {
       lw.hidden = true;
       lw.onclick = null;
@@ -1984,7 +2031,9 @@ function sortValue(sec, key) {
     case 'turnover': return calc.turnover(sec) ?? -Infinity;
     case 'per': return calc.per(sec) ?? Infinity;
     case 'pbr': return calc.pbr(sec) ?? Infinity;
+    case 'psr': return calc.psr(sec) ?? Infinity;
     case 'divYield': return calc.divYield(sec) ?? -Infinity;
+    case 'yieldOnCost': return calc.yieldOnCost(sec) ?? -Infinity;
     case 'eps': return calc.field(sec, 'eps') ?? -Infinity;
     case 'marginRatio': return calc.marginRatio(sec) ?? -Infinity;
     case 'overallGrade': return GRADE_RANK[sec.overallGrade] ?? 99;
@@ -2925,6 +2974,7 @@ const SM_BULK_FIELDS = [
   { key: 'rating', label: '銘柄格付' },
   { key: 'overallGrade', label: '総合評価' },
   { key: 'buyGrade', label: '買い時評価' },
+  { key: 'clearOverrides', label: '手動上書きを削除' },
 ];
 let smBulkField = 'detailType';
 // 一括変更の値コントロール（id指定で銘柄マスタ/保有の両方から使う）
@@ -2938,6 +2988,7 @@ function bulkValueHtml(field, id) {
     case 'category': return `<select id="${id}">${catOpts}</select>`;
     case 'ruleId': return `<select id="${id}">${store.data.rules.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
     case 'rating': case 'overallGrade': case 'buyGrade': return `<select id="${id}">${gradeOpts}</select>`;
+    case 'clearOverrides': return `<select id="${id}"><option value="all">名前・セクター・業種すべて</option><option value="nameOverride">銘柄名のみ</option><option value="sectorOverride">セクターのみ</option><option value="industryOverride">業種のみ</option></select>`;
     default: return `<input id="${id}" type="text">`;
   }
 }
@@ -2948,15 +2999,23 @@ function bulkConvert(field, raw) {
   if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return raw || null;
   return raw;
 }
+// 一括変更で銘柄に適用する patch を作る。clearOverrides は手動上書き(name/sector/industry)を null クリアする特別処理。
+function bulkPatch(field, val) {
+  if (field === 'clearOverrides') {
+    return val === 'all' ? { nameOverride: null, sectorOverride: null, industryOverride: null } : { [val]: null };
+  }
+  return { [field]: val };
+}
 function smBulkFieldChange(f) { smBulkField = f; const c = document.getElementById('sm-bulk-value-wrap'); if (c) c.innerHTML = bulkValueHtml(f, 'sm-bulk-value'); }
 function smBulkApply() {
   const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
   if (!ids.length) { toast('銘柄を選択してください'); return; }
   const val = bulkConvert(smBulkField, (document.getElementById('sm-bulk-value') || {}).value);
-  for (const id of ids) store.updateSecurity(id, { [smBulkField]: val });
+  const patch = bulkPatch(smBulkField, val);
+  for (const id of ids) store.updateSecurity(id, patch);
   store.save(); renderSecMaster();
   const fl = SM_BULK_FIELDS.find(f => f.key === smBulkField);
-  toast(`${ids.length}件の「${fl ? fl.label : smBulkField}」を変更しました`, 4000);
+  toast(`${ids.length}件の「${fl ? fl.label : smBulkField}」を${smBulkField === 'clearOverrides' ? '削除' : '変更'}しました`, 4000);
 }
 // 保有銘柄一覧の一括変更（選択した .row-select に対して）
 let holdBulkField = 'detailType';
@@ -2965,10 +3024,11 @@ function holdBulkApply() {
   const ids = [...document.querySelectorAll('.row-select:checked')].map(b => parseInt(b.dataset.id, 10));
   if (!ids.length) { toast('銘柄を選択してください'); return; }
   const val = bulkConvert(holdBulkField, (document.getElementById('hold-bulk-value') || {}).value);
-  for (const id of ids) store.updateSecurity(id, { [holdBulkField]: val });
+  const patch = bulkPatch(holdBulkField, val);
+  for (const id of ids) store.updateSecurity(id, patch);
   store.save(); render();
   const fl = SM_BULK_FIELDS.find(f => f.key === holdBulkField);
-  toast(`${ids.length}件の「${fl ? fl.label : holdBulkField}」を変更しました`, 4000);
+  toast(`${ids.length}件の「${fl ? fl.label : holdBulkField}」を${holdBulkField === 'clearOverrides' ? '削除' : '変更'}しました`, 4000);
 }
 function setSecMasterSort(key) {
   if (secMasterSort.key === key) secMasterSort.dir *= -1; else { secMasterSort.key = key; secMasterSort.dir = 1; }
@@ -3018,8 +3078,8 @@ function renderSecMaster() {
       <td class="l"><strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
       <td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>
       ${inlineEditOn ? ieCellHtml(s, 'detailType', null) : `<td class="l">${dtTag}</td>`}
-      <td class="l">${calc.field(s, 'sector') ? esc(calc.field(s, 'sector')) + ov('sector') : muted}</td>
-      <td class="l">${calc.field(s, 'industry') ? esc(calc.field(s, 'industry')) + ov('industry') : muted}</td>
+      <td class="l">${calc.field(s, 'sector') ? esc(jpInd(calc.field(s, 'sector'))) + ov('sector') : muted}</td>
+      <td class="l">${calc.field(s, 'industry') ? esc(jpInd(calc.field(s, 'industry'))) + ov('industry') : muted}</td>
       <td class="l">${gradeBadge(s)}</td>
       ${cell(s.overallGrade, true)}
       ${cell(s.buyGrade, true)}
@@ -3581,9 +3641,9 @@ function openSecurityForm(id, presetMarket) {
           <input name="nameOverride" value="${sec && sec.nameOverride ? esc(sec.nameOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).name || sec.ticker) : '空欄で自動取得名を使用'}"></div>
         <div class="row">
           <div class="field"><label>セクター（上書き）</label>
-            <input name="sectorOverride" value="${sec && sec.sectorOverride ? esc(sec.sectorOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).sector || '空欄で自動取得') : '空欄で自動取得'}"></div>
+            <input name="sectorOverride" value="${sec && sec.sectorOverride ? esc(sec.sectorOverride) : ''}" placeholder="${sec ? esc(jpInd((store.data.meta[priceKey(sec)] || {}).sector) || '空欄で自動取得') : '空欄で自動取得'}"></div>
           <div class="field"><label>業種（上書き）</label>
-            <input name="industryOverride" value="${sec && sec.industryOverride ? esc(sec.industryOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).industry || '空欄で自動取得') : '空欄で自動取得'}"></div>
+            <input name="industryOverride" value="${sec && sec.industryOverride ? esc(sec.industryOverride) : ''}" placeholder="${sec ? esc(jpInd((store.data.meta[priceKey(sec)] || {}).industry) || '空欄で自動取得') : '空欄で自動取得'}"></div>
         </div>
         <p class="muted" style="margin:6px 0 0">空欄にすると自動取得値に戻ります。</p>
       </fieldset>
@@ -3715,7 +3775,7 @@ function autoInfoPanelHtml(market, ticker) {
   const meta = store.data.meta[key] || {};
   const ccy = MARKET_CCY[market];
   const r = (label, val) => `<div class="ai-row"><span class="muted">${label}</span><span>${val}</span></div>`;
-  const sectorInd = [meta.sector, meta.industry].filter(Boolean).join(' / ');
+  const sectorInd = [meta.sector, meta.industry].filter(Boolean).map(jpInd).join(' / ');
   const marginTxt = meta.marginRatio != null
     ? `${num(meta.marginRatio)}${meta.marginRatioPrev != null ? `（前週 ${num(meta.marginRatioPrev)}）` : ''}`
     : '—';
@@ -3724,6 +3784,7 @@ function autoInfoPanelHtml(market, ticker) {
     + r('時価総額', meta.marketCap != null ? Number(meta.marketCap).toLocaleString('ja-JP') + ' 百万' : '—')
     + r('PER', meta.per != null ? num(meta.per) : '—')
     + r('PBR', meta.pbr != null ? num(meta.pbr) : '—')
+    + (market === 'US' ? r('PSR', meta.psr != null ? num(meta.psr) : '—') : '')
     + r('配当/株', meta.dividend != null ? money(meta.dividend, ccy) : '—')
     + (market === 'JP' ? r('信用倍率', marginTxt) : '');
 }
@@ -5227,7 +5288,8 @@ const GI_AUTOMAP = { ...GENERIC_MAP,
   '推奨カテゴリ': 'category', 'カテゴリ': 'category', '購入優先順位': 'priority', '優先順位': 'priority',
   '評価日': 'analysisDate', '備考': 'analysisNote', '分析メモ': 'analysisNote',
   'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
-  'セクター': 'sectorOverride', '業種': 'industryOverride', '銘柄名': 'nameOverride',
+  'セクター': 'sectorOverride', '業種': 'industryOverride',
+  // 銘柄名は自動取得名を優先するため、取込列の自動割当からは外す（既定=取込まない。必要なら手動で割当可）
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount', '売却元本': 'principalSoldAmount',
 };
 let _giHeaders = [], _giRows = [], _giMapping = []; // _giMapping[colIdx] = fieldKey | ''
