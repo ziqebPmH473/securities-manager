@@ -90,35 +90,46 @@ async function fetchInfoDebug(symbol, finnhubKey) {
     } catch (e) { out.diag.jpPage = { error: String(e?.message || e) }; }
   } else if (type === 'us' && finnhubKey) {
     // Finnhub metric（米株 時価総額）＋計上通貨（外国ADR判定）
-    const [m, cur] = await Promise.all([
+    const [m, prof] = await Promise.all([
       fetchFinnhubMetric(symbol, finnhubKey).catch(() => null),
-      fetchFinnhubCurrency(symbol, finnhubKey).catch(() => null),
+      fetchFinnhubProfile(symbol, finnhubKey).catch(() => null),
     ]);
-    out.diag.finnhub = { marketCap: m?.marketCap ?? null, currency: cur, foreign: !!(cur && cur !== 'USD') };
+    const cur = prof?.currency || null;
+    out.diag.finnhub = { marketCap: m?.marketCap ?? null, pbr: m?.pbr ?? null, currency: cur, industry: prof?.industry ?? null, foreign: !!(cur && cur !== 'USD') };
   }
   return out;
 }
 
 // ---------- 日本株 ----------
 async function fetchJpInfo(symbol) {
-  // 日本語名＋時価総額は Yahoo!ファイナンス日本版（同一ページ）から、その他ファンダは quoteSummary（取れれば）
-  const [jpq, chart, summary] = await Promise.all([
+  // 日本語名・時価総額・参考指標(PER/PBR/EPS/配当利回り/業種)は Yahoo!ファイナンス日本版（同一ページ）から取得。
+  // quoteSummary は日本株でブロックされがちなので、参考指標ページスクレイプを主経路にする（取れれば quoteSummary を優先）。
+  // 信用倍率は信用残時系列ページ（週次更新）から最新＋前週分を取得。
+  const [jpq, chart, summary, margin] = await Promise.all([
     fetchYahooJpQuote(symbol).catch(() => null),
     fetchChartMeta(symbol).catch(() => null),
     fetchQuoteSummary(symbol).catch(() => null),
+    fetchJpMargin(symbol).catch(() => null),
   ]);
   return {
     name:      cleanName(jpq?.name) || cleanName(chart?.name) || null,
     sector:    summary?.sector || null,
-    industry:  summary?.industry || null,
+    industry:  summary?.industry || jpq?.industry || null, // 日本版ページの業種（食料品 等）で補完
     marketCap: summary?.marketCap ?? jpq?.marketCap ?? null, // quoteSummaryがブロックされる日本株は日本版ページの時価総額を使用
-    per:       summary?.per ?? null,
-    eps:       summary?.eps ?? null,
+    per:       summary?.per ?? jpq?.per ?? null,
+    pbr:       summary?.pbr ?? jpq?.pbr ?? null,
+    eps:       summary?.eps ?? jpq?.eps ?? null,
     dividend:  summary?.dividend ?? null,
+    divYield:  jpq?.divYield ?? null, // 日本版ページの配当利回り(%)。divYieldはこれを優先（per-share未取得でも表示可）
     sharesOut: summary?.sharesOut ?? null,
     volume:    chart?.volume ?? null,   // 当日出来高（売買代金=現在値×出来高 の算出用）
     currency:  chart?.currency || 'JPY',
     quoteType: chart?.instrumentType || null, // EQUITY/ETF/MUTUALFUND（詳細種別の判定に使用）
+    // 信用倍率（日本株のみ・週次）。最新＋前週分。
+    marginRatio:     margin?.marginRatio ?? null,
+    marginDate:      margin?.marginDate ?? null,
+    marginRatioPrev: margin?.marginRatioPrev ?? null,
+    marginDatePrev:  margin?.marginDatePrev ?? null,
   };
 }
 
@@ -153,22 +164,25 @@ async function fetchUsInfo(symbol, finnhubKey) {
     fetchChartMeta(symbol).catch(() => null),
     fetchQuoteSummary(symbol).catch(() => null),
   ]);
-  let fh = null, fhCur = null;
-  if (finnhubKey && (!summary || summary.per == null)) {
-    [fh, fhCur] = await Promise.all([
+  let fh = null, fhProfile = null;
+  // Finnhubは「ファンダ未取得 or 業種未取得」のとき取得（業種/通貨は profile2、PER/PBR等は metric）
+  if (finnhubKey && (!summary || summary.per == null || !summary.industry)) {
+    [fh, fhProfile] = await Promise.all([
       fetchFinnhubMetric(symbol, finnhubKey).catch(() => null),
-      fetchFinnhubCurrency(symbol, finnhubKey).catch(() => null),
+      fetchFinnhubProfile(symbol, finnhubKey).catch(() => null),
     ]);
   }
+  const fhCur = fhProfile?.currency || null;
   // 外国ADR（TSM等）はFinnhubの時価総額・配当が現地通貨建て（TWD等）でドルと食い違うため、
   // 計上通貨がUSD以外なら時価総額・配当は出さない（誤った数値を表示しない）。為替換算は行わない。
   const foreign = !!(fhCur && fhCur !== 'USD');
   return {
     name:      cleanName(jpName) || cleanName(chart?.name) || null,
     sector:    summary?.sector || null,
-    industry:  summary?.industry || null,
+    industry:  summary?.industry || fhProfile?.industry || null, // FinnhubのfinnhubIndustryで補完
     marketCap: summary?.marketCap ?? (foreign ? null : fh?.marketCap) ?? null,
     per:       summary?.per ?? fh?.per ?? null,
+    pbr:       summary?.pbr ?? (foreign ? null : fh?.pbr) ?? null,
     eps:       summary?.eps ?? fh?.eps ?? null,
     dividend:  summary?.dividend ?? (foreign ? null : fh?.dividend) ?? null,
     sharesOut: summary?.sharesOut ?? null,
@@ -211,10 +225,77 @@ async function fetchYahooJpQuote(symbol) {
   });
   if (!res.ok) return null;
   const html = await res.text();
-  return { name: extractJpName(html), marketCap: extractJpMarketCap(html) };
+  return {
+    name: extractJpName(html),
+    marketCap: extractJpMarketCap(html),
+    per:      jpRefMetric(html, 'PER'),
+    pbr:      jpRefMetric(html, 'PBR'),
+    eps:      jpRefMetric(html, 'EPS'),
+    divYield: jpRefMetric(html, '配当利回り'),
+    industry: extractJpIndustry(html),
+  };
 }
 // 後方互換: 名前のみ必要な呼び出し用
 async function fetchYahooJpName(symbol) { const q = await fetchYahooJpQuote(symbol); return q ? q.name : null; }
+
+// 日本版ページ「参考指標」から指標値を抽出。各指標は _DataListItem（名称spanの直後の dd に StyledNumber__value）。
+// クラス名のハッシュは変わり得るので、名称spanの接頭辞だけで緩く一致させ、直後の最初の数値を拾う。
+function jpRefMetric(html, label) {
+  const re = new RegExp('_DataListItem__name[^>]*>' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '<');
+  const m = re.exec(html);
+  if (!m) return null;
+  const after = html.slice(m.index, m.index + 1400);
+  const vm = after.match(/_StyledNumber__value[^>]*>([\d.,]+)</);
+  if (!vm) return null;
+  const v = parseFloat(vm[1].replace(/,/g, ''));
+  return isFinite(v) ? v : null;
+}
+// 日本版ページ上部の業種（例: 食料品）。_CommonPriceBoard__industryName の最初の非空テキスト。
+function extractJpIndustry(html) {
+  const m = html.match(/_CommonPriceBoard__industryName[^>]*>([^<]+)</);
+  const v = m ? m[1].trim() : '';
+  return v || null;
+}
+
+// 信用残時系列ページ（週次更新）から信用倍率の最新＋前週分を取得。
+// 表: 日付/売残/買残/売残増減/買残増減/信用倍率（各値は _StyledNumber__value）。
+async function fetchJpMargin(symbol) {
+  const res = await fetchWithTimeout(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}/history?styl=margin`, {
+    headers: { 'User-Agent': UA, 'Accept-Language': 'ja' },
+    cf: { cacheTtl: 21600, cacheEverything: true }, // 週次データなので6時間キャッシュ（再取得負荷を抑える）
+  });
+  if (!res.ok) return null;
+  const html = await res.text();
+  return extractJpMargin(html);
+}
+function extractJpMargin(html) {
+  const ti = html.indexOf('信用残時系列のテーブル');
+  if (ti < 0) return null;
+  const tbl = html.slice(ti, ti + 12000); // 先頭数行で十分（最新＋前週分）
+  const rowRe = /<tr[^>]*>\s*<th[^>]*>([^<]+)<\/th>([\s\S]*?)<\/tr>/g;
+  const rows = [];
+  let m;
+  while ((m = rowRe.exec(tbl)) !== null && rows.length < 2) {
+    const vals = [...m[2].matchAll(/_StyledNumber__value[^>]*>([^<]+)</g)].map(x => x[1].replace(/,/g, ''));
+    if (vals.length < 5) continue; // ヘッダ行（StyledNumber無し）はスキップ
+    const ratio = parseFloat(vals[4]); // 5列目=信用倍率
+    if (!isFinite(ratio)) continue;
+    rows.push({ date: normJpDate(m[1].trim()), ratio });
+  }
+  if (!rows.length) return null;
+  return {
+    marginRatio:     rows[0].ratio,
+    marginDate:      rows[0].date,
+    marginRatioPrev: rows[1]?.ratio ?? null,
+    marginDatePrev:  rows[1]?.date ?? null,
+  };
+}
+// "2026/6/5" → "2026-06-05"
+function normJpDate(s) {
+  const m = String(s).match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if (!m) return s;
+  return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+}
 
 // 日本版ページから「時価総額」を抽出し百万円単位で返す（列の単位＝百万に合わせる）。取れなければ null。
 // 新デザイン（_DataListItem_ 等）で値が複数要素に分かれ、ラベルからやや離れているため、
@@ -296,6 +377,7 @@ async function fetchQuoteSummary(symbol) {
     industry: ap.industry || null,
     marketCap: n(sd.marketCap) ? Math.round(sd.marketCap.raw / 1e6) : (n(ks.marketCap) ? Math.round(ks.marketCap.raw / 1e6) : null),
     per: n(sd.trailingPE) ? sd.trailingPE.raw : (n(ks.trailingPE) ? ks.trailingPE.raw : null),
+    pbr: n(ks.priceToBook) ? ks.priceToBook.raw : (n(sd.priceToBook) ? sd.priceToBook.raw : null),
     eps: n(ks.trailingEps) ? ks.trailingEps.raw : null,
     dividend: n(sd.dividendRate) ? sd.dividendRate.raw : null,
     sharesOut: n(ks.sharesOutstanding) ? ks.sharesOutstanding.raw : null, // 発行済株式数（時価総額=株価×これ で随時算出）
@@ -313,19 +395,22 @@ async function fetchFinnhubMetric(symbol, token) {
   return {
     marketCap: num(m.marketCapitalization),
     per: num(m['peBasicExclExtraTTM']) || num(m['peTTM']),
+    pbr: num(m['pbAnnual']) || num(m['pbQuarterly']) || num(m['pb']),
     eps: num(m['epsBasicExclExtraItemsTTM']),
     dividend: num(m['dividendPerShareAnnual']),
   };
 }
 
-// Finnhub プロフィールから計上通貨を取得（外国ADR判定用）。通貨は不変なので7日キャッシュ＝追加負荷ほぼ無し
-async function fetchFinnhubCurrency(symbol, token) {
+// Finnhub プロフィールから計上通貨（外国ADR判定用）＋業種(finnhubIndustry)を取得。
+// 不変に近いので7日キャッシュ＝追加負荷ほぼ無し。業種は米株セクター/業種が未取得時の補完に使う。
+async function fetchFinnhubProfile(symbol, token) {
   let res;
   try { res = await fetchWithTimeout(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${token}`, { headers: { 'User-Agent': 'securities-manager/1.0' }, cf: { cacheTtl: 604800, cacheEverything: true } }); }
   catch { return null; }
   if (!res.ok) return null;
   const d = await res.json().catch(() => null);
-  return d && d.currency ? d.currency : null;
+  if (!d) return null;
+  return { currency: d.currency || null, industry: d.finnhubIndustry || null };
 }
 
 function n(obj) { return obj && typeof obj.raw === 'number' && isFinite(obj.raw); }

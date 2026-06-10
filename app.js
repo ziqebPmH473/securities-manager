@@ -79,9 +79,11 @@ const MASTER_COLS = [
   { key: 'fixedBuyPrice', label: '買増固定値',       left: false, markets: STKM, noSort: false },
   { key: 'rating',      label: '銘柄格付',         left: true,  markets: STKM, noSort: false },
   { key: 'per',         label: 'PER',              left: false, markets: STKM, noSort: false },
+  { key: 'pbr',         label: 'PBR',              left: false, markets: STKM, noSort: false },
   { key: 'dividend',    label: '配当/株',          left: false, markets: STKM, noSort: false },
   { key: 'divYield',    label: '配当利回り',       left: false, markets: STKM, noSort: false },
   { key: 'eps',         label: 'EPS',              left: false, markets: STKM, noSort: false },
+  { key: 'marginRatio', label: '信用倍率',         left: false, markets: ['JP', 'SIGNAL'], noSort: false },
   // 取り込んだ銘柄分析結果（既定非表示・列設定で表示可）
   { key: 'overallGrade', label: '総合評価',        left: true,  markets: STKM, noSort: false },
   { key: 'buyGrade',     label: '買い時評価',      left: true,  markets: STKM, noSort: false },
@@ -96,7 +98,7 @@ const MASTER_COLS = [
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
   US:   ['ticker','name','price','day','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','turnover','marginRatio','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
@@ -148,6 +150,7 @@ const store = {
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
+    this.data.cfRules ||= defaultCfRules(); // 列の背景色ルール（マスタ管理）。初回は旧ハードコードをシード
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
       this.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k], ...(this.data.importMappings[k] || {}) };
     }
@@ -697,13 +700,17 @@ const calc = {
 
   // PER = 株価/EPS（随時算出）。EPS無ければ取得済みPER
   per(sec) { const eps = this.field(sec, 'eps'); const p = this.price(sec); if (eps && eps > 0 && p != null) return p / eps; return this.field(sec, 'per'); },
+  // PBR（取得値）。日本版ページ参考指標 or Finnhub/quoteSummary 由来
+  pbr(sec) { return this.field(sec, 'pbr'); },
+  // 信用倍率（日本株のみ・週次。情報マスタの最新値）
+  marginRatio(sec) { return this.field(sec, 'marginRatio'); },
   // 時価総額(百万) = 株価×発行済株式数/1e6（随時算出）。無ければ取得済み時価総額
   marketCap(sec) { const sh = this.field(sec, 'sharesOut'); const p = this.price(sec); if (sh && p != null) return p * sh / 1e6; return this.field(sec, 'marketCap'); },
   // 売買代金（原通貨・実額）= 現在値×当日出来高。出来高は価格キャッシュ優先、無ければ銘柄情報(meta)から。
   // （Finnhub利用の米株は価格更新で出来高が入らないため、銘柄情報更新=Yahoo chart の出来高で補完）
   turnover(sec) { const p = store.data.prices[priceKey(sec)] || {}; const pr = this.price(sec); const vol = p.volume != null ? p.volume : this.field(sec, 'volume'); return (pr != null && vol != null) ? pr * vol : null; },
-  // 配当利回り(%) = 1株配当/株価
-  divYield(sec) { const d = this.field(sec, 'dividend'); const p = this.price(sec); return (d != null && p) ? d / p * 100 : null; },
+  // 配当利回り(%)。日本版ページの配当利回り(divYield)があれば優先、無ければ 1株配当/株価 で算出。
+  divYield(sec) { const y = this.field(sec, 'divYield'); if (y != null) return y; const d = this.field(sec, 'dividend'); const p = this.price(sec); return (d != null && p) ? d / p * 100 : null; },
 
   baseHigh(sec) {
     const rule = store.rule(sec.ruleId);
@@ -1293,40 +1300,96 @@ const MINASHI = '<span class="muted" title="みなし（前回購入単価が未
 // 買増固定値（手入力のトリガー）マーカー。数値の前に付ける。
 const FIXED_MARK = '<span class="muted" title="買増固定値（ルール計算でなく手入力のトリガー）" style="cursor:help">固</span>';
 const pctTd = (v) => `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
-// 条件付き強調（参照元スプレッドシート 米国株管理.xlsx の段階を踏襲）。値は%。
-// ダークUI向けに「半透明の色オーバーレイ＋太字」で強調する。文字色は +緑/-赤 のまま維持する。
-// 各配列は上から順に評価し最初に一致した色を使う（しきい値の厳しい順）。
-const CF_RULES = {
-  // 前日比: 上昇=緑系 / 下落=赤系、±5%/±10%で2段階（±5%以内は無強調）。文字色と同系で統一。
-  day: [
-    { t: v => v >= 10, bg: 'rgba(34,197,94,.45)' }, { t: v => v >= 5, bg: 'rgba(34,197,94,.20)' },
-    { t: v => v <= -10, bg: 'rgba(239,68,68,.45)' }, { t: v => v <= -5, bg: 'rgba(239,68,68,.20)' },
-  ],
-  // 5年高値からの下落率＝初回購入の判断。基準は40%下落。
-  // 「超えそう(-35)／超えた(-40)／さらに深い(-60/-80)」の段階で色分け（薄スレート→黄→橙→赤）。
-  dropFrom5y: [
-    { t: v => v <= -80, bg: 'rgba(239,68,68,.52)' }, { t: v => v <= -60, bg: 'rgba(249,115,22,.46)' },
-    { t: v => v <= -40, bg: 'rgba(234,179,8,.40)' }, { t: v => v <= -35, bg: 'rgba(148,163,184,.22)' },
-  ],
-  // 前回からの下落率＝買い増しの判断。-10/-15/-20/-40/-50 の5段階（薄→濃）。
-  dropFromPrev: [
-    { t: v => v <= -50, bg: 'rgba(159,18,57,.50)' }, { t: v => v <= -40, bg: 'rgba(239,68,68,.48)' },
-    { t: v => v <= -20, bg: 'rgba(249,115,22,.42)' }, { t: v => v <= -15, bg: 'rgba(234,179,8,.32)' },
-    { t: v => v <= -10, bg: 'rgba(148,163,184,.22)' },
-  ],
-};
-function condStyle(key, v) {
-  if (v == null) return '';
-  const rules = CF_RULES[key]; if (!rules) return '';
-  // 太字は桁位置がずれるため付けない（背景色のみで強調）
-  for (const r of rules) { if (r.t(v)) return ` style="background:${r.bg}"`; }
+// ---------- 列の背景色ルール（マスタ管理・画面から設定可能） ----------
+// 値の範囲ごとに背景色を割り当てる。適用先の画面（保有銘柄/買い増しサイン/銘柄マスタ/マーケット）を複数選択可。
+// 旧ハードコード（前日比・5年高値比・前回比）は defaultCfRules() に移行し、store.data.cfRules を唯一の参照元とする。
+const CF_SCREENS = [
+  { id: 'holdings', label: '保有銘柄' },
+  { id: 'signal',   label: '買い増しサイン' },
+  { id: 'master',   label: '銘柄マスタ' },
+  { id: 'market',   label: 'マーケット' },
+];
+// 背景色ルールを設定できる数値列（設定UIの選択肢）。
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'dividend', 'divYield', 'eps', 'priority', 'marginRatio', 'principalSoldAmount'];
+// 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
+let cfScreen = 'holdings';
+function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
+// 既定の背景色ルール（旧ハードコードを移行。初回のみ全画面に適用）。範囲は min(以上)〜max(以下)、上にあるルールほど優先（先頭一致）。
+function defaultCfRules() {
+  const all = CF_SCREENS.map(s => s.id);
+  const R = (col, min, max, bg) => ({ id: cfNewId(), col, min, max, bg, screens: all.slice() });
+  return [
+    // 前日比: 上昇=緑系 / 下落=赤系
+    R('day', 10, null, 'rgba(34,197,94,.45)'), R('day', 5, 10, 'rgba(34,197,94,.20)'),
+    R('day', null, -10, 'rgba(239,68,68,.45)'), R('day', -10, -5, 'rgba(239,68,68,.20)'),
+    // 5年高値からの下落率: 薄スレート→黄→橙→赤
+    R('dropFrom5y', null, -80, 'rgba(239,68,68,.52)'), R('dropFrom5y', -80, -60, 'rgba(249,115,22,.46)'),
+    R('dropFrom5y', -60, -40, 'rgba(234,179,8,.40)'), R('dropFrom5y', -40, -35, 'rgba(148,163,184,.22)'),
+    // 前回からの下落率: -10/-15/-20/-40/-50 の5段階
+    R('dropFromPrev', null, -50, 'rgba(159,18,57,.50)'), R('dropFromPrev', -50, -40, 'rgba(239,68,68,.48)'),
+    R('dropFromPrev', -40, -20, 'rgba(249,115,22,.42)'), R('dropFromPrev', -20, -15, 'rgba(234,179,8,.32)'),
+    R('dropFromPrev', -15, -10, 'rgba(148,163,184,.22)'),
+  ];
+}
+// 値 v が key列・screen画面でマッチする背景色（先頭一致優先）。無ければ ''。
+function cfBgFor(key, v, screen) {
+  if (v == null || !isFinite(v)) return '';
+  const rules = store.data.cfRules || [];
+  for (const r of rules) {
+    if (r.col !== key) continue;
+    if (r.screens && r.screens.length && !r.screens.includes(screen)) continue;
+    if ((r.min == null || v >= r.min) && (r.max == null || v <= r.max)) return r.bg;
+  }
   return '';
 }
-// 強調付き％セル。文字色(+緑/-赤=cls)は常に維持し、しきい値超過時のみ半透明オーバーレイ＋太字。
-const pctTdBg = (v, key) => {
-  const st = condStyle(key, v);
-  return `<td class="${cls(v)}"${st}>${v != null ? signed(v) + '%' : '—'}</td>`;
-};
+// style属性文字列（描画中画面 or 指定画面）。<td ...> に直接埋め込む用途。
+function cfStyle(key, v, screen) { const bg = cfBgFor(key, v, screen || cfScreen); return bg ? ` style="background:${bg}"` : ''; }
+// レンダラーが返す <td...> に背景色をマージ注入（既存 style があれば前置で合成）。
+function cfInject(cellHtml, key, v, screen) {
+  const bg = cfBgFor(key, v, screen || cfScreen);
+  if (!bg) return cellHtml;
+  if (/^<td[^>]*\sstyle="/.test(cellHtml)) return cellHtml.replace(/^(<td[^>]*\sstyle=")/, `$1background:${bg};`);
+  return cellHtml.replace(/^<td/, `<td style="background:${bg}"`);
+}
+// 背景色ルール判定に使う、列の数値（表示値に対応）。null=対象外/値なし。
+function cfCellValue(key, sec, ctx) {
+  switch (key) {
+    case 'price': return ctx.price;
+    case 'day': return ctx.dayChg;
+    case 'extPrice': { const p = store.data.prices[priceKey(sec)] || {}; if (p.extPrice == null) return null; const base = p.price != null ? p.price : p.prevClose; return (base && p.extPrice) ? (p.extPrice - base) / base * 100 : null; }
+    case 'trigger': return ctx.ev ? ctx.ev.trigger : null;
+    case 'base': return ctx.ev ? ctx.ev.base : null;
+    case 'drop': return ctx.ev ? ctx.ev.remainingDropPct : null;
+    case 'dropPrev': return calc.remainingDropPrev(sec);
+    case 'high5y': return ctx.high5y;
+    case 'high52w': return ctx.high52w;
+    case 'dropFrom5y': return calc.dropFrom5y(sec);
+    case 'dropFrom52w': return calc.dropFrom52w(sec);
+    case 'prevBuyPrice': return ctx.prevBuy;
+    case 'dropFromPrev': return calc.dropFromPrev(sec);
+    case 'marketCap': return calc.marketCap(sec);
+    case 'turnover': return calc.turnover(sec);
+    case 'value': return ctx.th.qty ? ctx.valN : null;
+    case 'cost': return ctx.th.qty ? ctx.th.acquiredCost : null;
+    case 'acqJpy': { if (sec.market === 'US') { const hs = store.data.holdings.filter(h => h.securityId === sec.id); return hs.some(h => h.acqJpy != null) ? hs.reduce((a, h) => a + (h.acqJpy || 0), 0) : null; } return ctx.th.qty ? ctx.th.avgCost * ctx.th.qty : null; }
+    case 'pnl': return ctx.pnlPct;
+    case 'avgCost': return ctx.th.qty ? ctx.th.avgCost : null;
+    case 'qty': return ctx.th.qty || null;
+    case 'buyCount': return ctx.buyCnt || null;
+    case 'buyAmount': return ctx.buyAmt;
+    case 'reco': return ctx.recoAmt;
+    case 'fixedBuyPrice': return typeof sec.fixedBuyPrice === 'number' ? sec.fixedBuyPrice : null;
+    case 'per': return calc.per(sec);
+    case 'pbr': return calc.pbr(sec);
+    case 'dividend': return calc.field(sec, 'dividend');
+    case 'divYield': return calc.divYield(sec);
+    case 'eps': return calc.field(sec, 'eps');
+    case 'priority': return sec.priority;
+    case 'marginRatio': return sec.market === 'JP' ? calc.marginRatio(sec) : null;
+    case 'principalSoldAmount': return sec.principalSoldAmount;
+    default: return null;
+  }
+}
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
   name:      (s,c) => `<td class="l">${rankBadgeHtml(s)}<strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
@@ -1341,7 +1404,7 @@ const COL_RENDERERS = {
   // p.prevClose は日足の「最後から2番目」で前々日終値になりプレで1日ズレるため使わない。
   extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const base = p.price != null ? p.price : p.prevClose; const d = (base && p.extPrice) ? (p.extPrice - base) / base * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)}${d != null ? ` <span style="font-size:11px">${signed(d)}%</span>` : ''} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
   // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
-  day:       (s,c) => { const v = c.dayChg, st = condStyle('day', v); const pm = c.dayIsPrev ? '<span class="muted" style="font-size:9px" title="寄り付き前のため前営業日の値動きを表示">前</span>' : ''; return `<td class="${st ? '' : cls(v)}"${st}><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a>${pm}</td>`; },
+  day:       (s,c) => { const v = c.dayChg; const pm = c.dayIsPrev ? '<span class="muted" style="font-size:9px" title="寄り付き前のため前営業日の値動きを表示">前</span>' : ''; return `<td class="${cls(v)}"><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a>${pm}</td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
   // 適用区分: 次回購入・残り下落率がどのルール分岐で算出されたか（初=初回 / 増=買い増し / 高=高値更新 / 固=買増固定値 / —=判定外）
   trigBasis: (s,c) => {
@@ -1361,12 +1424,12 @@ const COL_RENDERERS = {
   dropPrev:  (s,c) => { const v = calc.remainingDropPrev(s); return v == null ? `<td>${muted}</td>` : `<td class="drop ${v <= 0 ? 'reached' : (v <= 5 ? 'near' : 'far')}" title="前日終値時点で次回購入(トリガー)まで">${v.toFixed(1)}%</td>`; },
   high5y:    (s,c) => `<td>${c.high5y != null ? fmtAmt(c.high5y, c.market) : muted}</td>`,
   high52w:   (s,c) => `<td>${c.high52w != null ? fmtAmt(c.high52w, c.market) : muted}</td>`,
-  dropFrom5y:  (s,c) => pctTdBg(calc.dropFrom5y(s), 'dropFrom5y'),
+  dropFrom5y:  (s,c) => pctTd(calc.dropFrom5y(s)),
   dropFrom52w: (s,c) => pctTd(calc.dropFrom52w(s)),
   prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
   // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
   prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
-  dropFromPrev: (s,c) => pctTdBg(calc.dropFromPrev(s), 'dropFromPrev'),
+  dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(v) : muted}</td>`; },
   // 時価総額: 兆/億/万（米株は$T/B）表記に統一（売買代金と同形式）。marketCapは百万単位なので×1e6で実額化
@@ -1392,9 +1455,19 @@ const COL_RENDERERS = {
   fixedBuyPrice: (s,c) => `<td>${typeof s.fixedBuyPrice === 'number' ? fmtAmt(s.fixedBuyPrice, c.market) : muted}</td>`,
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
   per:       (s,c) => { const v = calc.per(s); return `<td>${v != null ? num(v) : muted}</td>`; },
+  pbr:       (s,c) => { const v = calc.pbr(s); return `<td>${v != null ? num(v) : muted}</td>`; },
   dividend:  (s,c) => { const v = calc.field(s,'dividend'); return `<td>${v != null ? c.m(v) : muted}</td>`; },
   divYield:  (s,c) => { const v = calc.divYield(s); return `<td>${v != null ? v.toFixed(2) + '%' : muted}</td>`; },
   eps:       (s,c) => { const v = calc.field(s,'eps'); return `<td>${v != null ? c.m(v) : muted}</td>`; },
+  // 信用倍率（日本株のみ・週次）。最新＋前週分。値クリックで信用残時系列ページを開く。
+  marginRatio: (s,c) => {
+    if (s.market !== 'JP') return `<td>${muted}</td>`;
+    const meta = calc.metaOf(s); const r = meta.marginRatio;
+    if (r == null) return `<td>${muted}</td>`;
+    const url = `https://finance.yahoo.co.jp/quote/${esc(s.ticker)}.T/history?styl=margin`;
+    const prev = meta.marginRatioPrev != null ? ` <span class="muted" style="font-size:10px" title="前週 ${esc(meta.marginDatePrev || '')}">(前週 ${num(meta.marginRatioPrev)})</span>` : '';
+    return `<td title="信用倍率 ${esc(meta.marginDate || '')}（クリックで信用残時系列）"><a href="${url}" target="_blank" rel="noopener" class="lnk-ext">${num(r)}</a>${prev}</td>`;
+  },
   overallGrade: (s,c) => `<td class="l">${s.overallGrade ? `<span class="grade grade-${esc(String(s.overallGrade).toLowerCase())}">${esc(s.overallGrade)}</span>` : muted}</td>`,
   buyGrade:  (s,c) => `<td class="l">${s.buyGrade ? `<span class="grade grade-${esc(String(s.buyGrade).toLowerCase())}">${esc(s.buyGrade)}</span>` : muted}</td>`,
   priority:  (s,c) => `<td>${s.priority != null ? num(s.priority) : muted}</td>`,
@@ -1570,6 +1643,8 @@ function render() {
   updateHeader();
   updateSignalBadge();
   updateSplitBadge();
+  // 背景色ルールの適用先画面を現在ビューから決定（us/jp は保有銘柄と同じ列・描画なので holdings 扱い）
+  cfScreen = ({ market: 'market', holdings: 'holdings', us: 'holdings', jp: 'holdings', signals: 'signal', secmaster: 'master' })[currentView] || 'holdings';
   switch (currentView) {
     case 'dashboard': renderDashboard(); break;
     case 'market': renderMarketTab(); break;
@@ -1882,8 +1957,10 @@ function sortValue(sec, key) {
     case 'marketCap': return calc.marketCap(sec) ?? -Infinity;
     case 'turnover': return calc.turnover(sec) ?? -Infinity;
     case 'per': return calc.per(sec) ?? Infinity;
+    case 'pbr': return calc.pbr(sec) ?? Infinity;
     case 'divYield': return calc.divYield(sec) ?? -Infinity;
     case 'eps': return calc.field(sec, 'eps') ?? -Infinity;
+    case 'marginRatio': return calc.marginRatio(sec) ?? -Infinity;
     case 'overallGrade': return GRADE_RANK[sec.overallGrade] ?? 99;
     case 'buyGrade': return GRADE_RANK[sec.buyGrade] ?? 99;
     case 'analysisDate': return sec.analysisDate || '';
@@ -2128,7 +2205,9 @@ function marketRow(sec, visibleCols, opts = {}) {
   const dataCells = visibleCols.map(col => {
     if (editable && INLINE_FIELDS[col.key]) { const h = ieCellHtml(sec, col.key, ctx); if (h) return h; }
     const renderer = COL_RENDERERS[col.key];
-    return renderer ? renderer(sec, ctx) : `<td></td>`;
+    let cell = renderer ? renderer(sec, ctx) : `<td></td>`;
+    // 背景色ルール（マスタ）を中央注入。描画中画面(cfScreen)で該当列の数値がルールにマッチすれば背景色を付与。
+    return cfInject(cell, col.key, cfCellValue(col.key, sec, ctx));
   }).join('');
   let actionsTd = '';
   if (opts.actions === 'signal') {
@@ -2617,12 +2696,12 @@ function renderMarketTab() {
         <td class="l"><span class="tag ${market.toLowerCase()}">${esc(mktMarketLabel(it, market))}</span></td>
         <td class="l col-code"><span class="tk ${market.toLowerCase()}" style="cursor:pointer" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.code)}</span></td>
         <td class="l"><strong class="lnk-ext nm-strong" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.name || it.code)}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
-        <td><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
-        <td class="${cls(dc)}"><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
-        <td>${high5y != null ? fmtAmt(high5y, market) : '—'}</td>
-        <td class="${cls(dropFrom5y)}">${dropFrom5y != null ? signed(dropFrom5y) + '%' : '—'}</td>
-        ${showTurnover ? `<td>${mktAmt(it.turnover, market)}</td>` : ''}
-        ${showMktCap ? `<td>${mktAmt(it.marketCap, market)}</td>` : ''}
+        <td${cfStyle('price', it.price, 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
+        <td class="${cls(dc)}"${cfStyle('day', dc, 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
+        <td${cfStyle('high5y', high5y, 'market')}>${high5y != null ? fmtAmt(high5y, market) : '—'}</td>
+        <td class="${cls(dropFrom5y)}"${cfStyle('dropFrom5y', dropFrom5y, 'market')}>${dropFrom5y != null ? signed(dropFrom5y) + '%' : '—'}</td>
+        ${showTurnover ? `<td${cfStyle('turnover', it.turnover, 'market')}>${mktAmt(it.turnover, market)}</td>` : ''}
+        ${showMktCap ? `<td${cfStyle('marketCap', it.marketCap != null ? it.marketCap / 1e6 : null, 'market')}>${mktAmt(it.marketCap, market)}</td>` : ''}
         <td class="l nowrap">${owned
           ? `<button class="btn btn-sm" disabled title="登録済みの銘柄です">登録済</button>`
           : `<button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button>`}</td>
@@ -2918,7 +2997,7 @@ function renderSecMaster() {
       <td class="l">${gradeBadge(s)}</td>
       ${cell(s.overallGrade, true)}
       ${cell(s.buyGrade, true)}
-      <td>${s.priority != null ? num(s.priority) : muted}</td>
+      <td${cfStyle('priority', s.priority, 'master')}>${s.priority != null ? num(s.priority) : muted}</td>
       ${inlineEditOn ? ieCellHtml(s, 'ruleName', null) : `<td class="l">${rule ? esc(rule.name) : muted}</td>`}
       ${inlineEditOn ? ieCellHtml(s, 'category', null) : `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`}
       <td class="l">${s.createdAt ? fmtDate(s.createdAt) : muted}</td>
@@ -3115,6 +3194,13 @@ function renderMaster() {
       </div>
     </div>
     <div class="section">
+      <div class="section-head"><h2>列の背景色ルール</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="btn-row"><button class="btn btn-primary" onclick="openCfRulesMaster()">開く（数値列の背景色を設定）</button></div>
+        <p class="muted grp-note" style="margin:8px 0 0">数値列に「値の範囲ごとの背景色」を設定します。適用先の画面（保有銘柄・買い増しサイン・銘柄マスタ・マーケット）を複数選択できます。前日比・5年高値比・前回比の既定色もここから変更できます。</p>
+      </div>
+    </div>
+    <div class="section">
       <div class="section-head"><h2>バックアップ・出力</h2></div>
       <div class="section-body" style="padding:16px">
         <div class="grp-label">全データのバックアップ（JSONファイル）</div>
@@ -3145,6 +3231,84 @@ function renderMaster() {
   // モバイルは「タップ直後の同期的処理」でないとポップアップを塞ぐ）。clientId 未設定なら何もしない。
   if (gsync.cfg().clientId) gsync.ensureGis().catch(() => {});
 }
+
+// ---------- 列の背景色ルール（マスタ）の管理UI ----------
+// rgba()/hex を {hex,a} に分解（色入力＝hex、濃さ＝不透明度スライダーで編集するため）
+function cfParseBg(bg) {
+  let m = String(bg).match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/);
+  if (m) return { hex: cfRgbToHex(+m[1], +m[2], +m[3]), a: m[4] != null ? parseFloat(m[4]) : 1 };
+  m = String(bg).match(/^#([0-9a-fA-F]{6})$/);
+  if (m) return { hex: '#' + m[1].toLowerCase(), a: 1 };
+  return { hex: '#eab308', a: 0.35 };
+}
+function cfRgbToHex(r, g, b) { return '#' + [r, g, b].map(x => Math.max(0, Math.min(255, x)).toString(16).padStart(2, '0')).join(''); }
+function cfHexToRgb(hex) { const p = hex.replace('#', '').match(/.{2}/g).map(x => parseInt(x, 16)); return { r: p[0], g: p[1], b: p[2] }; }
+
+function openCfRulesMaster() {
+  const rules = store.data.cfRules || [];
+  const scLabel = id => (CF_SCREENS.find(s => s.id === id) || {}).label || id;
+  const colLabel = k => { const c = MASTER_COLS.find(m => m.key === k); return c ? c.label : k; };
+  const rangeTxt = r => `${r.min != null ? r.min : '−∞'} 〜 ${r.max != null ? r.max : '+∞'}`;
+  const rowsHtml = rules.length ? rules.map(r => `<tr>
+      <td class="l">${esc(colLabel(r.col))}</td>
+      <td class="l">${rangeTxt(r)}</td>
+      <td><span style="display:inline-block;width:38px;height:16px;border-radius:3px;background:${r.bg};border:1px solid var(--border)" title="${esc(r.bg)}"></span></td>
+      <td class="l">${(r.screens && r.screens.length ? r.screens.map(scLabel).join('・') : '（全画面）')}</td>
+      <td class="l nowrap"><button class="btn btn-sm" onclick="openCfRuleEdit('${r.id}')">編集</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCfRule('${r.id}')">削除</button></td>
+    </tr>`).join('') : `<tr><td colspan="5" class="empty">ルールがありません。</td></tr>`;
+  showModal('列の背景色ルール（マスタ）', `
+    <p class="muted" style="margin:0 0 8px">数値列に、値の範囲ごとの背景色を設定します。<strong>上にあるルールほど優先</strong>（先頭一致）。適用先の画面は複数選べます。</p>
+    <div class="table-wrap"><table class="holdings dense"><thead><tr><th class="l">列</th><th class="l">範囲</th><th>色</th><th class="l">適用画面</th><th class="l"></th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+    <div class="form-actions" style="justify-content:space-between">
+      <button type="button" class="btn btn-danger" onclick="resetCfRules()">既定に戻す</button>
+      <span><button type="button" class="btn" onclick="closeModal()">閉じる</button>
+      <button type="button" class="btn btn-primary" onclick="openCfRuleEdit(null)">＋ ルール追加</button></span>
+    </div>`, { wide: true });
+}
+
+function openCfRuleEdit(id) {
+  const rules = store.data.cfRules || [];
+  const r = id ? rules.find(x => x.id === id) : null;
+  const colOpts = CF_NUMERIC_KEYS.map(k => { const l = (MASTER_COLS.find(m => m.key === k) || {}).label || k; return `<option value="${k}" ${r && r.col === k ? 'selected' : ''}>${esc(l)}</option>`; }).join('');
+  const parsed = cfParseBg(r ? r.bg : 'rgba(234,179,8,.35)');
+  const aPct = Math.round(parsed.a * 100);
+  const scChecks = CF_SCREENS.map(s => `<label class="chip"><input type="checkbox" class="cf-screen" value="${s.id}" ${(!r || !r.screens || r.screens.length === 0 || r.screens.includes(s.id)) ? 'checked' : ''}> ${s.label}</label>`).join(' ');
+  showModal(id ? '背景色ルールを編集' : '背景色ルールを追加', `
+    <form id="cf-rule-form" onsubmit="return saveCfRule(event, '${id || ''}')">
+      <div class="form-row"><label>対象列（数値）</label><select name="col">${colOpts}</select></div>
+      <div class="form-row" style="display:flex;gap:12px">
+        <div style="flex:1"><label>最小値（以上・空=制限なし）</label><input name="min" type="number" step="any" value="${r && r.min != null ? r.min : ''}"></div>
+        <div style="flex:1"><label>最大値（以下・空=制限なし）</label><input name="max" type="number" step="any" value="${r && r.max != null ? r.max : ''}"></div>
+      </div>
+      <div class="form-row" style="display:flex;gap:14px;align-items:flex-end">
+        <div><label>色</label><input name="color" type="color" value="${parsed.hex}" style="width:56px;height:34px;padding:2px"></div>
+        <div style="flex:1"><label>濃さ（不透明度 <span id="cf-a-val">${aPct}</span>%）</label><input name="alpha" type="range" min="0" max="100" value="${aPct}" oninput="document.getElementById('cf-a-val').textContent=this.value" style="width:100%"></div>
+      </div>
+      <div class="form-row"><label>適用する画面（複数可）</label><div style="display:flex;gap:10px;flex-wrap:wrap">${scChecks}</div></div>
+      <div class="form-actions"><button type="button" class="btn" onclick="openCfRulesMaster()">戻る</button><button type="submit" class="btn btn-primary">保存</button></div>
+    </form>`, { wide: true });
+}
+
+function saveCfRule(e, id) {
+  e.preventDefault();
+  const f = e.target;
+  const col = f.col.value;
+  const min = f.min.value.trim() === '' ? null : parseFloat(f.min.value);
+  const max = f.max.value.trim() === '' ? null : parseFloat(f.max.value);
+  const { r, g, b } = cfHexToRgb(f.color.value);
+  const a = (parseInt(f.alpha.value, 10) || 0) / 100;
+  const bg = `rgba(${r},${g},${b},${a})`;
+  const screens = [...f.querySelectorAll('.cf-screen:checked')].map(x => x.value);
+  if ((min != null && isNaN(min)) || (max != null && isNaN(max))) { toast('数値が不正です'); return false; }
+  store.data.cfRules = store.data.cfRules || [];
+  if (id) { const rule = store.data.cfRules.find(x => x.id === id); if (rule) Object.assign(rule, { col, min, max, bg, screens }); }
+  else { store.data.cfRules.push({ id: cfNewId(), col, min, max, bg, screens }); }
+  store.save(); render(); openCfRulesMaster();
+  return false;
+}
+function deleteCfRule(id) { store.data.cfRules = (store.data.cfRules || []).filter(x => x.id !== id); store.save(); render(); openCfRulesMaster(); }
+function resetCfRules() { if (!confirm('背景色ルールを既定（初期状態）に戻します。よろしいですか？')) return; store.data.cfRules = defaultCfRules(); store.save(); render(); openCfRulesMaster(); }
 
 // ---------- 取込タブ（銘柄・保有データの取込を集約） ----------
 // ソースカード定義（各社のロゴ色・入力方式）。key は IMPORT_PROFILES に対応
@@ -3492,11 +3656,16 @@ function autoInfoPanelHtml(market, ticker) {
   const ccy = MARKET_CCY[market];
   const r = (label, val) => `<div class="ai-row"><span class="muted">${label}</span><span>${val}</span></div>`;
   const sectorInd = [meta.sector, meta.industry].filter(Boolean).join(' / ');
+  const marginTxt = meta.marginRatio != null
+    ? `${num(meta.marginRatio)}${meta.marginRatioPrev != null ? `（前週 ${num(meta.marginRatioPrev)}）` : ''}`
+    : '—';
   return r('銘柄名', esc(meta.name || '—'))
     + r('セクター / 業種', sectorInd ? esc(sectorInd) : '—')
     + r('時価総額', meta.marketCap != null ? Number(meta.marketCap).toLocaleString('ja-JP') + ' 百万' : '—')
     + r('PER', meta.per != null ? num(meta.per) : '—')
-    + r('配当/株', meta.dividend != null ? money(meta.dividend, ccy) : '—');
+    + r('PBR', meta.pbr != null ? num(meta.pbr) : '—')
+    + r('配当/株', meta.dividend != null ? money(meta.dividend, ccy) : '—')
+    + (market === 'JP' ? r('信用倍率', marginTxt) : '');
 }
 
 // ティッカーをキーに /api/info から銘柄情報を取得し、マスタ(meta)に保存。パネルを更新（フォームには手入力させない）
@@ -6049,6 +6218,11 @@ window.fetchFundName = fetchFundName;
 window.openFundCodeMaster = openFundCodeMaster;
 window.openImportAliasMaster = openImportAliasMaster;
 window.deleteImportAlias = deleteImportAlias;
+window.openCfRulesMaster = openCfRulesMaster;
+window.openCfRuleEdit = openCfRuleEdit;
+window.saveCfRule = saveCfRule;
+window.deleteCfRule = deleteCfRule;
+window.resetCfRules = resetCfRules;
 window.setMktMarket = setMktMarket;
 window.setMktSub = setMktSub;
 window.setMktKind = setMktKind;
