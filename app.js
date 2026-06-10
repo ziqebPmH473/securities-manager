@@ -368,13 +368,16 @@ const store = {
   },
 };
 
-// ---------- Google連携（GIS＋Sheets。方式A=ブラウザ完結。clientId 未設定なら休眠） ----------
-// 設計は DESIGN.md §14。実機での動作確認はクライアントID入手後に行う（現状はスキャフォールド）。
-// サーバー(CF env)から配る公開設定（clientId / spreadsheetId）。リポジトリに置かない。
+// ---------- Google連携（GIS＝ブラウザ完結。clientId 未設定なら休眠） ----------
+// データ同期は Drive 自動マージ同期(dsync)に一本化。Sheets手動保存/読込（旧）は廃止し、
+// OAuthスコープから機微な spreadsheets を外して drive.file のみに軽量化（同意手順の簡素化）。
+// サーバー(CF env)から配る公開設定（clientId）。リポジトリに置かない。
 let _serverConfig = {};
 async function loadServerConfig() {
   try { const r = await fetch('/api/config'); if (r.ok) _serverConfig = (await r.json()) || {}; } catch (_) {}
 }
+// OAuthスコープ: Drive(アプリ作成ファイルのみ)＋本人確認。spreadsheets は廃止。
+const GSCOPE = 'https://www.googleapis.com/auth/drive.file openid email';
 const gsync = {
   _token: null, _email: null, _scope: '',
   hasDrive() { return !!(this._scope && this._scope.indexOf('drive.file') >= 0); },
@@ -384,7 +387,6 @@ const gsync = {
     return {
       clientId: g.clientId || _serverConfig.clientId || '',
       allowedEmails: g.allowedEmails || '',
-      spreadsheetId: g.spreadsheetId || _serverConfig.spreadsheetId || '',
     };
   },
   // GISスクリプトを必要時のみ読み込む（未設定なら一切読み込まない）
@@ -419,11 +421,10 @@ const gsync = {
         try {
           const tc = google.accounts.oauth2.initTokenClient({
             client_id: cfg.clientId,
-            scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file openid email',
+            scope: GSCOPE,
             callback: (r) => (r && r.access_token) ? this._onToken(r, resolve, reject) : reject(new Error('トークン取得失敗')),
             error_callback: (e) => reject(new Error((e && e.type) || 'OAuthエラー')),
           });
-          // force=true で同意画面を必ず出す（新スコープ drive.file を確実に付与するため）
           tc.requestAccessToken({ prompt: force ? 'consent' : '' });   // 同期で呼ぶ＝タップのユーザー操作を維持
         } catch (e) { reject(e); }
       };
@@ -431,43 +432,23 @@ const gsync = {
       else this.ensureGis().then(launch).catch(reject);                            // 未読込時のみフォールバック
     });
   },
-  async _call(method, range, body) {
+  // サイレント再取得: ポップアップ無し(prompt:'')でアクセストークンを更新する。
+  // トークンは約1時間で失効するため、401時や同期前に呼んで「セッションが生きていれば無音で延長」する。
+  // GIS未読込/clientId未設定/セッション無効なら false（その場合のみ手動再ログインが要る）。
+  refresh() {
     const cfg = this.cfg();
-    if (!cfg.spreadsheetId) throw new Error('スプレッドシートIDが未設定です');
-    if (!this._token) { const ok = await this.signIn(); if (!ok) throw new Error('Googleログインが必要です'); }
-    const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(cfg.spreadsheetId)}/values/${encodeURIComponent(range)}`;
-    const url = method === 'PUT' ? `${base}?valueInputOption=RAW` : base;
-    const res = await fetch(url, { method, headers: { Authorization: 'Bearer ' + this._token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-    if (res.status === 401) { this._token = null; throw new Error('トークン失効。再ログインしてください'); }
-    if (!res.ok) { let d = ''; try { d = (await res.json()).error?.message || ''; } catch (_) {} throw new Error(`Sheets API ${res.status}${d ? '：' + d : '（_appdata シートの有無/編集権限を確認）'}`); }
-    return res.json();
-  },
-  // 列Aの値を全消去（POST values/{range}:clear）。:clear はパスのリテラル接尾辞
-  async _clear(range) {
-    const cfg = this.cfg();
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(cfg.spreadsheetId)}/values/${encodeURIComponent(range)}:clear`;
-    const res = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + this._token }, body: '{}' });
-    if (res.status === 401) { this._token = null; throw new Error('トークン失効。再ログインしてください'); }
-    if (!res.ok) { let m = ''; try { m = (await res.json()).error?.message || ''; } catch (_) {} throw new Error(`Sheets API ${res.status}${m ? '：' + m : ''}`); }
-  },
-  async save() {
-    if (!this._token) { const ok = await this.signIn(); if (!ok) throw new Error('Googleログインが必要です'); }
-    // 1セル50,000文字制限を回避: JSONを分割して列A（A1,A2,…）に保存
-    const json = JSON.stringify(dataBundle());
-    const CHUNK = 45000; const rows = [];
-    for (let i = 0; i < json.length; i += CHUNK) rows.push([json.slice(i, i + CHUNK)]);
-    if (!rows.length) rows.push(['']);
-    await this._clear('_appdata!A:A');                                   // 旧データを消去（縮小時の残骸対策）
-    await this._call('PUT', `_appdata!A1:A${rows.length}`, { values: rows });
-    toast(`スプレッドシートへ保存しました（${rows.length}分割）`);
-  },
-  async load() {
-    if (!confirm('スプレッドシートの内容で現在のデータを上書きします。よろしいですか？')) return false;
-    const d = await this._call('GET', '_appdata!A1:A100000');
-    const cells = (d && d.values || []).map(r => (r && r[0]) || '');
-    const json = cells.join('');
-    if (!json) throw new Error('スプレッドシートにデータがありません（_appdata 列Aが空）');
-    restoreBundle(JSON.parse(json)); render(); toast('スプレッドシートから読み込みました（列設定も復元）'); return true;
+    return new Promise((resolve) => {
+      if (!cfg.clientId || !(window.google && google.accounts && google.accounts.oauth2)) return resolve(false);
+      try {
+        const tc = google.accounts.oauth2.initTokenClient({
+          client_id: cfg.clientId,
+          scope: GSCOPE,
+          callback: (r) => { if (r && r.access_token) { this._token = r.access_token; this._scope = r.scope || this._scope; resolve(true); } else resolve(false); },
+          error_callback: () => resolve(false),
+        });
+        tc.requestAccessToken({ prompt: '' });   // 無音更新（同意画面を出さない）
+      } catch (_) { resolve(false); }
+    });
   },
 };
 
@@ -485,9 +466,16 @@ const dsync = {
   _saveBaseRaw(json) { try { localStorage.setItem('sm_sync_base', json); } catch (_) {} },
   _snapshot() { return JSON.stringify(dataBundle()); },
 
-  async _driveFetch(url, opts = {}) {
-    if (!gsync._token) throw new Error('Googleログインが必要です');
+  async _driveFetch(url, opts = {}, _retried) {
+    // トークン無し→まずサイレント再取得を試す（セッションが生きていればポップアップ無しで復帰）
+    if (!gsync._token) { const ok = await gsync.refresh(); if (!ok) throw new Error('Googleログインが必要です'); }
     const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + gsync._token } });
+    if (res.status === 401 && !_retried) {
+      // 失効→サイレント再取得して1回だけ再試行。ダメなら手動再ログインを促す。
+      const ok = await gsync.refresh();
+      if (ok) return this._driveFetch(url, opts, true);
+      gsync._token = null; throw new Error('Google認証の期限切れ。再ログインしてください');
+    }
     if (res.status === 401) { gsync._token = null; throw new Error('Google認証の期限切れ。再ログインしてください'); }
     return res;
   },
@@ -561,9 +549,11 @@ const dsync = {
       return merged;
     } finally { this._busy = false; }
   },
-  // 変更があれば同期（自動・ポップアップは出さない＝未ログイン時はスキップ）
+  // 変更があれば同期（自動・ポップアップは出さない）。トークン失効時はサイレント再取得を試み、
+  // セッションが生きていれば手動ログイン無しで同期を継続する（ダメなら静かにスキップ）。
   async _maybeSync() {
-    if (!this.enabled() || this._busy || !gsync._token || !gsync.hasDrive() || !gsync.cfg().clientId) return;
+    if (!this.enabled() || this._busy || !gsync.cfg().clientId) return;
+    if (!gsync._token || !gsync.hasDrive()) { const ok = await gsync.refresh(); if (!ok || !gsync.hasDrive()) return; }
     if (this._snapshot() === this._lastSnap) return;
     try { await this.syncNow(); } catch (_) {}
   },
@@ -583,7 +573,7 @@ const dsync = {
 };
 function gsaveSettings(f) {
   store.data.settings = store.data.settings || {};
-  store.data.settings.google = { clientId: f.gClientId.value.trim(), allowedEmails: f.gAllowed.value.trim(), spreadsheetId: f.gSheetId.value.trim() };
+  store.data.settings.google = { clientId: f.gClientId.value.trim(), allowedEmails: f.gAllowed.value.trim() };
   store.save(); toast('Google連携設定を保存しました'); renderMaster();
 }
 function gsyncStatus(html) { const el = document.getElementById('gsync-status'); if (el) el.innerHTML = html; }
@@ -591,16 +581,6 @@ async function gsyncSignIn() {
   gsyncStatus('<span class="muted">ログイン中…（ポップアップで承認してください）</span>');
   try { const ok = await gsync.signIn(); gsyncStatus(ok ? `<span class="pos">✓ ログイン中：${esc(gsync._email || 'OK')}</span>` : '<span class="neg">ログインできませんでした（許可アカウント/テストユーザーを確認）</span>'); }
   catch (e) { gsyncStatus('<span class="neg">ログイン失敗：' + esc(e.message || String(e)) + '</span>'); }
-}
-async function gsyncSave() {
-  gsyncStatus('<span class="muted">シートへ保存中…</span>');
-  try { await withBusy('Googleシートへ保存中…', () => gsync.save(), 'シートへ保存しました'); gsyncStatus(`<span class="pos">✓ 保存しました ${new Date().toLocaleString('ja-JP')}${gsync._email ? '（' + esc(gsync._email) + '）' : ''}</span>`); }
-  catch (e) { gsyncStatus('<span class="neg">保存失敗：' + esc(e.message || String(e)) + '</span>'); }
-}
-async function gsyncLoad() {
-  gsyncStatus('<span class="muted">シートから読込中…</span>');
-  try { const ok = await withBusy('Googleシートから読込中…', () => gsync.load(), 'シートから読み込みました'); gsyncStatus(ok ? `<span class="pos">✓ シートから読み込みました ${new Date().toLocaleString('ja-JP')}</span>` : '<span class="muted">読込をキャンセルしました</span>'); }
-  catch (e) { gsyncStatus('<span class="neg">読込失敗：' + esc(e.message || String(e)) + '</span>'); }
 }
 // Drive自動同期 トグル/手動
 function dsyncToggle(on) {
@@ -3410,35 +3390,28 @@ function googleSyncSection() {
   const eff = gsync.cfg();              // サーバー(CF env)由来の clientId も反映
   const configured = !!eff.clientId;
   return `<div class="section">
-    <div class="section-head"><h2>Google連携（実験的・任意）</h2>
+    <div class="section-head"><h2>Google連携（Drive自動同期）</h2>
       <span class="tag ${configured ? 'jp' : ''}">${configured ? '設定済み' : '未設定'}</span></div>
     <div class="section-body" style="padding:16px">
-      <p class="muted" style="margin:0 0 10px">ブラウザ完結方式(GIS)。Googleスプレッドシートへ手動で保存/読込（v1=JSONブロブ）。クライアントID未設定なら何も起きません。</p>
+      <p class="muted" style="margin:0 0 10px">ブラウザ完結方式(GIS)。データは Google Drive の <code>${DSYNC_FOLDER}/${DSYNC_FILE}</code> に<strong>自動マージ同期</strong>（複数端末で両方の変更が残る）。権限は Drive（このアプリが作成したファイルのみ）で、シート権限は使いません。クライアントID未設定なら何も起きません。</p>
       <div id="gsync-status" style="margin:0 0 12px;font-size:13px;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px">${gsync._token ? `<span class="pos">✓ ログイン中：${esc(gsync._email || '')}</span>` : '<span class="muted">未ログイン（「Googleでログイン」を押してください）</span>'}</div>
       <form id="gsync-form" onsubmit="return false">
         <div class="field"><label>OAuthクライアントID（…apps.googleusercontent.com）</label>
           <input name="gClientId" value="${esc(g.clientId || '')}" placeholder="Google Cloudで作成したウェブ用クライアントID"></div>
-        <div class="row">
-          <div class="field"><label>許可メール（カンマ区切り・任意）</label>
-            <input name="gAllowed" value="${esc(g.allowedEmails || '')}" placeholder="you@gmail.com"></div>
-          <div class="field"><label>スプレッドシートID</label>
-            <input name="gSheetId" value="${esc(g.spreadsheetId || '')}" placeholder="スプレッドシートURLの /d/ と /edit の間"></div>
-        </div>
+        <div class="field"><label>許可メール（カンマ区切り・任意）</label>
+          <input name="gAllowed" value="${esc(g.allowedEmails || '')}" placeholder="you@gmail.com"></div>
         <div class="form-actions" style="justify-content:flex-start">
           <button type="button" class="btn btn-primary" onclick="gsaveSettings(this.form)">設定を保存</button>
           <button type="button" class="btn" onclick="gsyncSignIn()" ${configured ? '' : 'disabled'}>Googleでログイン</button>
-          <button type="button" class="btn" onclick="gsyncSave()" ${configured ? '' : 'disabled'}>シートへ保存</button>
-          <button type="button" class="btn" onclick="gsyncLoad()" ${configured ? '' : 'disabled'}>シートから読込</button>
         </div>
       </form>
-      <p class="muted" style="margin:10px 0 0">事前にスプレッドシートへ <code>_appdata</code> という名前のシート(タブ)を1つ作成してください（A1セルにJSONを保存）。</p>
 
       <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0 0 4px">
         <input type="checkbox" style="width:auto" ${dsync.enabled() ? 'checked' : ''} onchange="dsyncToggle(this.checked)">
-        <strong>Drive自動同期（実験的）</strong>
+        <strong>Drive自動同期</strong>
       </label>
-      <p class="muted" style="margin:0 0 8px">ONにすると、ログイン中は約25秒ごと＋タブ離脱時に Drive の <code>${DSYNC_FOLDER}/${DSYNC_FILE}</code> と<strong>自動マージ同期</strong>（複数端末で両方の変更が残る）。手動保存/読込は不要に。初回はログイン直後に同期します。</p>
+      <p class="muted" style="margin:0 0 8px">ONにすると、ログイン中は約25秒ごと＋タブ離脱時に自動マージ同期します。トークンが切れてもセッションが有効なら<strong>自動でログインを延長</strong>（ポップアップ無し）。初回はログイン直後に同期します。手動でのバックアップは「バックアップ・出力」のJSON書出し/読込をご利用ください。</p>
       <div class="form-actions" style="justify-content:flex-start">
         <button type="button" class="btn" onclick="dsyncNow()" ${configured ? '' : 'disabled'}>今すぐDrive同期</button>
         <span id="dsync-status" class="muted" style="font-size:12px;align-self:center">${dsync.syncedAt() ? '最終同期: ' + new Date(dsync.syncedAt()).toLocaleString('ja-JP') : '未同期'}</span>

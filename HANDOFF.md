@@ -220,7 +220,7 @@ python -m http.server 8000   # → http://localhost:8000
 - `store` … localStorage永続化(`sm_data_v1`)・CRUD・取引反映・`applySplit`
 - `calc` … 判定(`evaluate`)・基準高値・残り下落率(`remainingDropPrev`)・円換算(`toJpy`)・前日比(`dayChangeJpy`)・指数(`indexChangePct`)・`lastBroker`
 - `MASTER_COLS`/`COL_RENDERERS`/`getColOrder` … 列定義・描画・列ピッカー
-- `CF_RULES`/`condStyle` … 条件付き背景色、`fmtAmt`/`fmtQty` … 表示桁
+- `store.data.cfRules`/`cfBgFor`/`cfInject`/`cfCellValue` … 列背景色ルール（マスタ管理。マスタ・設定「列の背景色ルール」で編集）、`fmtAmt`/`fmtQty` … 表示桁
 - `api.refreshAll` … 価格・為替・指数(`INDICES`)を取得しキャッシュ
 - `render*` … dashboard / market / signals / splitsTab / report / secMaster / master
 - `openSecurityDetail` … 銘柄詳細＋`detailSvgChart`（バニラSVG）

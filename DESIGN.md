@@ -597,6 +597,13 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 > 当初設計（§10）はサーバー集約＋サービスアカウントだったが、**個人利用1人**のため、
 > 秘密鍵を持たない **ブラウザ完結（Google Identity Services）** を採用する（すみぽん選定）。
 
+> **更新（2026-06-10）**: データ同期は **Drive 自動マージ同期（§14.x dsync）に一本化**し、
+> **Sheets 手動保存/読込（`_appdata` 方式）は廃止**した（Drive同期が上位互換のため）。これに伴い
+> OAuthスコープから機微な `spreadsheets` を外し、**`drive.file`（アプリ作成ファイルのみ）＋`openid email`** に軽量化。
+> 同意画面の項目が減り、再ログインの手順が軽くなる。トークン失効時は **`prompt:''` のサイレント再取得**で
+> セッションが有効なら無音延長（401時に1回リトライ／自動同期前にも試行）。手動バックアップは JSON 書出し/読込で代替。
+> 以下 §14.1〜14.2 の Sheets 記述は歴史的経緯（現行は Drive のみ）。
+
 ### 14.1 方式
 - **Google Identity Services (GIS)** の OAuth トークンフロー（`google.accounts.oauth2.initTokenClient`）で、
   ブラウザから直接アクセストークンを取得し、**Sheets REST API をブラウザから呼ぶ**。
