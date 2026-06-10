@@ -2491,6 +2491,7 @@ function renderSignals() {
       </div>
     </div>`;
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
+  scheduleFit(); // 市場フィルタ切替で renderSignals() を直接呼ばれた時も枠内スクロール化（render() を経由しないため自前で）
 }
 
 // ダッシュボード用の簡易サイン表（到達のみ・上位）
@@ -3133,6 +3134,7 @@ function renderSecMaster() {
       </div>
     </div>`;
   applyStickyCols(document.querySelector('#app table.no-rowclick'));
+  scheduleFit(); // 市場/抽出/検索/ソート等で renderSecMaster() を直接呼ばれた時も枠内スクロール化（render() を経由しないため自前で）
 }
 
 // 投資信託コード（名称↔内部コード）マスタ。投信はコードが無いため自動採番＝ここで協会コード等に編集可
