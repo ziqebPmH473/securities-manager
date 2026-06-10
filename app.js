@@ -150,7 +150,7 @@ const store = {
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
-    this.data.cfRules ||= defaultCfRules(); // 列の背景色ルール（マスタ管理）。初回は旧ハードコードをシード
+    this.data.cfRules = migrateCfRules(this.data.cfRules); // 列の背景色ルール（マスタ管理）。未定義は既定シード／旧フラット型は移行
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
       this.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k], ...(this.data.importMappings[k] || {}) };
     }
@@ -1294,31 +1294,54 @@ const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
-// 既定の背景色ルール（旧ハードコードを移行。初回のみ全画面に適用）。範囲は min(以上)〜max(以下)、上にあるルールほど優先（先頭一致）。
+// 既定の背景色ルール。1グループ＝「列×適用画面の組」で、複数の範囲(ranges)を持つ。範囲は min(以上)〜max(以下)、
+// 上にある範囲ほど優先（先頭一致）。旧ハードコード（前日比/5年高値比/前回比）を移行。初回のみ全画面に適用。
 function defaultCfRules() {
   const all = CF_SCREENS.map(s => s.id);
-  const R = (col, min, max, bg) => ({ id: cfNewId(), col, min, max, bg, screens: all.slice() });
+  const G = (col, ranges) => ({ id: cfNewId(), col, screens: all.slice(), ranges });
   return [
     // 前日比: 上昇=緑系 / 下落=赤系
-    R('day', 10, null, 'rgba(34,197,94,.45)'), R('day', 5, 10, 'rgba(34,197,94,.20)'),
-    R('day', null, -10, 'rgba(239,68,68,.45)'), R('day', -10, -5, 'rgba(239,68,68,.20)'),
+    G('day', [
+      { min: 10, max: null, bg: 'rgba(34,197,94,.45)' }, { min: 5, max: 10, bg: 'rgba(34,197,94,.20)' },
+      { min: null, max: -10, bg: 'rgba(239,68,68,.45)' }, { min: -10, max: -5, bg: 'rgba(239,68,68,.20)' },
+    ]),
     // 5年高値からの下落率: 薄スレート→黄→橙→赤
-    R('dropFrom5y', null, -80, 'rgba(239,68,68,.52)'), R('dropFrom5y', -80, -60, 'rgba(249,115,22,.46)'),
-    R('dropFrom5y', -60, -40, 'rgba(234,179,8,.40)'), R('dropFrom5y', -40, -35, 'rgba(148,163,184,.22)'),
+    G('dropFrom5y', [
+      { min: null, max: -80, bg: 'rgba(239,68,68,.52)' }, { min: -80, max: -60, bg: 'rgba(249,115,22,.46)' },
+      { min: -60, max: -40, bg: 'rgba(234,179,8,.40)' }, { min: -40, max: -35, bg: 'rgba(148,163,184,.22)' },
+    ]),
     // 前回からの下落率: -10/-15/-20/-40/-50 の5段階
-    R('dropFromPrev', null, -50, 'rgba(159,18,57,.50)'), R('dropFromPrev', -50, -40, 'rgba(239,68,68,.48)'),
-    R('dropFromPrev', -40, -20, 'rgba(249,115,22,.42)'), R('dropFromPrev', -20, -15, 'rgba(234,179,8,.32)'),
-    R('dropFromPrev', -15, -10, 'rgba(148,163,184,.22)'),
+    G('dropFromPrev', [
+      { min: null, max: -50, bg: 'rgba(159,18,57,.50)' }, { min: -50, max: -40, bg: 'rgba(239,68,68,.48)' },
+      { min: -40, max: -20, bg: 'rgba(249,115,22,.42)' }, { min: -20, max: -15, bg: 'rgba(234,179,8,.32)' },
+      { min: -15, max: -10, bg: 'rgba(148,163,184,.22)' },
+    ]),
   ];
 }
-// 値 v が key列・screen画面でマッチする背景色（先頭一致優先）。無ければ ''。
+// 旧フラット型（1ルール=1範囲: {col,min,max,bg,screens}）→ グループ型（{col,screens,ranges:[...]}）へ移行。
+// 既にグループ型ならそのまま。未定義は既定をシード。空配列はユーザーの全削除状態として尊重。
+function migrateCfRules(rules) {
+  if (!Array.isArray(rules)) return defaultCfRules();
+  if (!rules.length) return rules;
+  if (rules[0] && Array.isArray(rules[0].ranges)) return rules; // 既にグループ型
+  const groups = []; const map = {};
+  for (const r of rules) {
+    const k = r.col + '|' + JSON.stringify(r.screens || []);
+    if (!map[k]) { map[k] = { id: cfNewId(), col: r.col, screens: (r.screens || []).slice(), ranges: [] }; groups.push(map[k]); }
+    map[k].ranges.push({ min: r.min ?? null, max: r.max ?? null, bg: r.bg });
+  }
+  return groups;
+}
+// 値 v が key列・screen画面でマッチする背景色（グループ→範囲を順に走査、先頭一致優先）。無ければ ''。
 function cfBgFor(key, v, screen) {
   if (v == null || !isFinite(v)) return '';
-  const rules = store.data.cfRules || [];
-  for (const r of rules) {
-    if (r.col !== key) continue;
-    if (r.screens && r.screens.length && !r.screens.includes(screen)) continue;
-    if ((r.min == null || v >= r.min) && (r.max == null || v <= r.max)) return r.bg;
+  const groups = store.data.cfRules || [];
+  for (const g of groups) {
+    if (g.col !== key) continue;
+    if (g.screens && g.screens.length && !g.screens.includes(screen)) continue;
+    for (const r of (g.ranges || [])) {
+      if ((r.min == null || v >= r.min) && (r.max == null || v <= r.max)) return r.bg;
+    }
   }
   return '';
 }
@@ -1659,14 +1682,25 @@ function scheduleFit() {
   setTimeout(fitListTables, 80);
 }
 function fitListTables() {
-  document.querySelectorAll('main .section .table-wrap').forEach(wrap => {
+  const wraps = [...document.querySelectorAll('main .section .table-wrap')];
+  wraps.forEach(wrap => {
     wrap.style.maxHeight = '';                               // 一旦解除して自然な高さを測る
     const top = wrap.getBoundingClientRect().top;            // ビューポート上端からの位置
-    // 画面下端まで（最低200px）。枠下の余白（section margin16 + main padding16 + border ≒ 36px）を引いて
-    // ページ自体がスクロールしないようにする
+    // 画面下端まで（最低240px）。枠下の余白は暫定で引く（次段でページ溢れを実測補正するので決め打ちでよい）
     const avail = Math.max(240, window.innerHeight - top - 14);
     if (wrap.scrollHeight > avail) wrap.style.maxHeight = avail + 'px'; // はみ出す時だけ枠内スクロール化
   });
+  // 一覧（単一テーブル）ビューでページがまだ縦に溢れる場合、その溢れ量だけ枠を縮めてページ内に収める。
+  // section-body の下padding等で枠下の余白が画面ごとに違う（マーケットは大きい）ため、決め打ち定数では
+  // 収まらないことがある。実測補正なら画面差を吸収できる。複数テーブルのレポート/マスタは対象外。
+  if (wraps.length === 1) {
+    const overflow = document.documentElement.scrollHeight - window.innerHeight;
+    if (overflow > 1) {
+      const w = wraps[0];
+      const target = Math.max(200, w.offsetHeight - overflow - 2);
+      w.style.maxHeight = target + 'px';
+    }
+  }
 }
 let _fitTimer = null;
 window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(fitListTables, 120); });
@@ -3135,61 +3169,35 @@ function mergeFundInto(from, to) {
 }
 
 // ---------- マスタ・設定 ----------
+// マスタ・設定のランチャー定義（プルダウン選択→「開く」で各マスタをモーダル表示）
+const MASTER_LAUNCH = [
+  { v: 'category', label: 'カテゴリ別 金額マスタ', open: () => openCategoryMaster(), note: '銘柄カテゴリごとの1回購入額（日本株円・米国株$）と変更履歴。' },
+  { v: 'rule',     label: '買い増しルールマスタ', open: () => openRuleMaster(),     note: '初回/買い増しの下落率・基準高値のルール。銘柄ごとの割当は各銘柄の編集から。' },
+  { v: 'fund',     label: '投資信託 コードマスタ', open: () => openFundCodeMaster(), note: '取り込んだ投信のコード（協会コード）編集・名称取得・統合。' },
+  { v: 'alias',    label: '取込変換マスタ',         open: () => openImportAliasMaster(), note: '取込時の「マスタに無い値」の変換対応（カテゴリ/格付/詳細種別/ルール）。' },
+  { v: 'cf',       label: '列の背景色ルール',       open: () => openCfRulesMaster(),  note: '数値列の値の範囲ごとの背景色。適用画面（保有/サイン/マスタ/マーケット）を複数選択可。' },
+];
+function openMasterPick() {
+  const el = document.getElementById('master-pick'); if (!el) return;
+  const m = MASTER_LAUNCH.find(x => x.v === el.value); if (m) m.open();
+}
+function masterPickNote() {
+  const el = document.getElementById('master-pick'); const m = el && MASTER_LAUNCH.find(x => x.v === el.value);
+  const n = document.getElementById('master-pick-note'); if (n && m) n.textContent = m.note;
+}
 function renderMaster() {
-  const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder);
-  const rules = store.data.rules;
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>カテゴリ別 金額マスタ</h2>
-        <button class="btn btn-primary btn-sm" onclick="openCategoryEdit(null)">＋ カテゴリを追加</button></div>
-      <div class="section-body"><div class="table-wrap"><table>
-        <thead><tr><th class="l">カテゴリ</th><th class="l">位置づけ</th><th>日本株(円)</th><th>米国株($)</th><th>並び順</th><th></th></tr></thead>
-        <tbody>${cats.map(c => `<tr>
-          <td class="l">${esc(c.category)}</td><td class="l muted">${esc(c.label || '')}</td>
-          <td>${yen(c.amountJpy)}</td><td>$${num(c.amountUsd)}</td><td>${c.sortOrder}</td>
-          <td class="l nowrap"><button class="btn btn-sm" onclick="openCategoryEdit('${esc(c.category)}')">編集</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteCategory('${esc(c.category)}')">削除</button></td>
-        </tr>`).join('')}</tbody>
-      </table></div>
-      <p class="muted" style="padding:0 16px 14px">金額は価格に左右されない固定値（ビジネスモデル・財務で決定）。日本株(円)・米国株($)を個別に登録できます。</p>
-      ${amountHistorySection()}
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-head"><h2>買い増しルールマスタ</h2>
-        <button class="btn btn-primary btn-sm" onclick="openRuleEdit(null)">＋ ルールを追加</button></div>
-      <div class="section-body"><div class="table-wrap"><table>
-        <thead><tr><th class="l">ルール名</th><th>初回 下落率</th><th>買い増し 下落率</th><th>基準高値</th><th>既定</th><th></th></tr></thead>
-        <tbody>${rules.map(r => `<tr>
-          <td class="l">${esc(r.name)}</td><td>−${r.initialDropPct}%</td><td>−${r.addonDropPct}%</td>
-          <td>${BASE_HIGH_LABEL[r.baseHighMode] || r.baseHighMode}</td>
-          <td>${r.isDefault ? '<span class="tag">既定</span>' : `<button class="btn btn-sm" onclick="setDefaultRule(${r.id})">既定に</button>`}</td>
-          <td class="l nowrap"><button class="btn btn-sm" onclick="openRuleEdit(${r.id})">編集</button>
-            ${rules.length > 1 ? `<button class="btn btn-sm btn-danger" onclick="deleteRule(${r.id})">削除</button>` : ''}</td>
-        </tr>`).join('')}</tbody>
-      </table></div>
-      <p class="muted" style="padding:0 16px 14px">銘柄ごとの割当は各銘柄の「編集」から。未割当の銘柄は既定ルールを使用します。</p>
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-head"><h2>投資信託 コードマスタ</h2></div>
+      <div class="section-head"><h2>マスタ</h2></div>
       <div class="section-body" style="padding:16px">
-        <div class="btn-row"><button class="btn btn-primary" onclick="openFundCodeMaster()">開く（名称↔コード）</button></div>
-        <p class="muted grp-note" style="margin:8px 0 0">取り込んだ投信のコード（協会コード）編集・名称取得・統合を行います。ボタンから開きます。</p>
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-head"><h2>取込変換マスタ</h2></div>
-      <div class="section-body" style="padding:16px">
-        <div class="btn-row"><button class="btn btn-primary" onclick="openImportAliasMaster()">開く（取込値→マスタ値の変換）</button></div>
-        <p class="muted grp-note" style="margin:8px 0 0">取込時に「マスタに無い値」を変換した対応を記憶しています（カテゴリ/格付/詳細種別/ルール）。次回以降は自動変換されます。不要な対応はここから削除できます。</p>
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-head"><h2>列の背景色ルール</h2></div>
-      <div class="section-body" style="padding:16px">
-        <div class="btn-row"><button class="btn btn-primary" onclick="openCfRulesMaster()">開く（数値列の背景色を設定）</button></div>
-        <p class="muted grp-note" style="margin:8px 0 0">数値列に「値の範囲ごとの背景色」を設定します。適用先の画面（保有銘柄・買い増しサイン・銘柄マスタ・マーケット）を複数選択できます。前日比・5年高値比・前回比の既定色もここから変更できます。</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="muted">マスタを選択</span>
+          <select id="master-pick" style="min-width:240px" onchange="masterPickNote()">
+            ${MASTER_LAUNCH.map(m => `<option value="${m.v}">${esc(m.label)}</option>`).join('')}
+          </select>
+          <button class="btn btn-primary" onclick="openMasterPick()">開く</button>
+        </div>
+        <p class="muted grp-note" id="master-pick-note" style="margin:8px 0 0">${esc(MASTER_LAUNCH[0].note)}</p>
       </div>
     </div>
     <div class="section">
@@ -3243,30 +3251,46 @@ const CF_TEMPLATE_COLORS = [
   { l: 'スレート', bg: 'rgba(148,163,184,.22)' }, { l: '臙脂', bg: 'rgba(159,18,57,.48)' },
   { l: '青', bg: 'rgba(59,130,246,.30)' }, { l: '紫', bg: 'rgba(168,85,247,.30)' },
 ];
-// パレットのスウォッチをクリック→フォームの色/濃さに反映
-function cfPickTemplate(bg) {
-  const f = document.getElementById('cf-rule-form'); if (!f) return;
-  const p = cfParseBg(bg);
-  f.color.value = p.hex; f.alpha.value = Math.round(p.a * 100);
-  const av = document.getElementById('cf-a-val'); if (av) av.textContent = Math.round(p.a * 100);
+// 範囲テーブルの1行（範囲＝min/max＋色＋濃さ＋テンプレ選択）。r は {min,max,bg} or null。
+function cfRangeRowHtml(r) {
+  const p = cfParseBg(r ? r.bg : 'rgba(234,179,8,.35)');
+  const aPct = Math.round(p.a * 100);
+  const tplOpts = CF_TEMPLATE_COLORS.map(t => `<option value="${t.bg}">${esc(t.l)}</option>`).join('');
+  return `<tr class="cf-rrow">
+    <td><input class="cf-min" type="number" step="any" value="${r && r.min != null ? r.min : ''}" placeholder="−∞" style="width:78px"></td>
+    <td><input class="cf-max" type="number" step="any" value="${r && r.max != null ? r.max : ''}" placeholder="+∞" style="width:78px"></td>
+    <td><input class="cf-color" type="color" value="${p.hex}" style="width:42px;height:28px;padding:1px"></td>
+    <td><input class="cf-alpha" type="range" min="0" max="100" value="${aPct}" style="width:84px" title="濃さ（不透明度）"></td>
+    <td><select class="cf-tplsel" onchange="cfApplyTplSel(this)"><option value="">テンプレ…</option>${tplOpts}</select></td>
+    <td><button type="button" class="btn btn-sm btn-danger" onclick="cfDelRangeRow(this)" title="この範囲を削除">×</button></td>
+  </tr>`;
+}
+function cfAddRangeRow() { const tb = document.querySelector('#cf-ranges tbody'); if (tb) tb.insertAdjacentHTML('beforeend', cfRangeRowHtml(null)); }
+function cfDelRangeRow(btn) { const tr = btn.closest('tr'); if (tr) tr.remove(); }
+function cfApplyTplSel(sel) {
+  if (!sel.value) return;
+  const tr = sel.closest('tr'); const p = cfParseBg(sel.value);
+  tr.querySelector('.cf-color').value = p.hex;
+  tr.querySelector('.cf-alpha').value = Math.round(p.a * 100);
+  sel.value = '';
 }
 
 function openCfRulesMaster() {
-  const rules = store.data.cfRules || [];
+  const groups = store.data.cfRules || [];
   const scLabel = id => (CF_SCREENS.find(s => s.id === id) || {}).label || id;
   const colLabel = k => { const c = MASTER_COLS.find(m => m.key === k); return c ? c.label : k; };
-  const rangeTxt = r => `${r.min != null ? r.min : '−∞'} 〜 ${r.max != null ? r.max : '+∞'}`;
-  const rowsHtml = rules.length ? rules.map(r => `<tr>
-      <td class="l">${esc(colLabel(r.col))}</td>
-      <td class="l">${rangeTxt(r)}</td>
-      <td><span style="display:inline-block;width:38px;height:16px;border-radius:3px;background:${r.bg};border:1px solid var(--border)" title="${esc(r.bg)}"></span></td>
-      <td class="l">${(r.screens && r.screens.length ? r.screens.map(scLabel).join('・') : '（全画面）')}</td>
-      <td class="l nowrap"><button class="btn btn-sm" onclick="openCfRuleEdit('${r.id}')">編集</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteCfRule('${r.id}')">削除</button></td>
-    </tr>`).join('') : `<tr><td colspan="5" class="empty">ルールがありません。</td></tr>`;
+  const swatches = g => (g.ranges || []).map(r => `<span title="${r.min != null ? r.min : '−∞'}〜${r.max != null ? r.max : '+∞'}" style="display:inline-block;width:20px;height:14px;border-radius:3px;background:${r.bg};border:1px solid var(--border);vertical-align:middle"></span>`).join(' ');
+  const rowsHtml = groups.length ? groups.map(g => `<tr>
+      <td class="l">${esc(colLabel(g.col))}</td>
+      <td class="l">${(g.screens && g.screens.length ? g.screens.map(scLabel).join('・') : '（全画面）')}</td>
+      <td class="l">${(g.ranges || []).length}段 ${swatches(g)}</td>
+      <td class="l nowrap"><button class="btn btn-sm" onclick="openCfRuleEdit('${g.id}')">編集</button>
+        <button class="btn btn-sm" onclick="openCfRuleEdit(null,'${g.id}')" title="この設定を複製して新規作成">コピー</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCfRule('${g.id}')">削除</button></td>
+    </tr>`).join('') : `<tr><td colspan="4" class="empty">ルールがありません。</td></tr>`;
   showModal('列の背景色ルール（マスタ）', `
-    <p class="muted" style="margin:0 0 8px">数値列に、値の範囲ごとの背景色を設定します。<strong>上にあるルールほど優先</strong>（先頭一致）。適用先の画面は複数選べます。</p>
-    <div class="table-wrap"><table class="holdings dense"><thead><tr><th class="l">列</th><th class="l">範囲</th><th>色</th><th class="l">適用画面</th><th class="l"></th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+    <p class="muted" style="margin:0 0 8px">1行＝「列 × 適用画面の組」。その中に値の範囲と背景色を<strong>複数段</strong>登録できます（上の段ほど優先）。「コピー」で組ごと複製→別の列/画面に転用できます。</p>
+    <div class="table-wrap"><table class="holdings dense"><thead><tr><th class="l">列</th><th class="l">適用画面</th><th class="l">範囲×色</th><th class="l"></th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
     <div class="form-actions" style="justify-content:space-between">
       <button type="button" class="btn btn-danger" onclick="resetCfRules()">既定に戻す</button>
       <span><button type="button" class="btn" onclick="closeModal()">閉じる</button>
@@ -3274,27 +3298,21 @@ function openCfRulesMaster() {
     </div>`, { wide: true });
 }
 
-function openCfRuleEdit(id) {
-  const rules = store.data.cfRules || [];
-  const r = id ? rules.find(x => x.id === id) : null;
-  const colOpts = CF_NUMERIC_KEYS.map(k => { const l = (MASTER_COLS.find(m => m.key === k) || {}).label || k; return `<option value="${k}" ${r && r.col === k ? 'selected' : ''}>${esc(l)}</option>`; }).join('');
-  const parsed = cfParseBg(r ? r.bg : 'rgba(234,179,8,.35)');
-  const aPct = Math.round(parsed.a * 100);
-  const scChecks = CF_SCREENS.map(s => `<label class="chip"><input type="checkbox" class="cf-screen" value="${s.id}" ${(!r || !r.screens || r.screens.length === 0 || r.screens.includes(s.id)) ? 'checked' : ''}> ${s.label}</label>`).join(' ');
-  showModal(id ? '背景色ルールを編集' : '背景色ルールを追加', `
+// id 指定=編集 / copyFrom 指定=その組を複製して新規 / どちらも無し=空の新規
+function openCfRuleEdit(id, copyFrom) {
+  const groups = store.data.cfRules || [];
+  const g = id ? groups.find(x => x.id === id) : (copyFrom ? groups.find(x => x.id === copyFrom) : null);
+  const colOpts = CF_NUMERIC_KEYS.map(k => { const l = (MASTER_COLS.find(m => m.key === k) || {}).label || k; return `<option value="${k}" ${g && g.col === k ? 'selected' : ''}>${esc(l)}</option>`; }).join('');
+  const scChecks = CF_SCREENS.map(s => `<label class="chip"><input type="checkbox" class="cf-screen" value="${s.id}" ${(!g || !g.screens || g.screens.length === 0 || g.screens.includes(s.id)) ? 'checked' : ''}> ${s.label}</label>`).join(' ');
+  const ranges = (g && g.ranges && g.ranges.length) ? g.ranges : [null];
+  const title = id ? '背景色ルールを編集' : (copyFrom ? '背景色ルールをコピーして追加' : '背景色ルールを追加');
+  showModal(title, `
     <form id="cf-rule-form" onsubmit="return saveCfRule(event, '${id || ''}')">
       <div class="form-row"><label>対象列（数値）</label><select name="col">${colOpts}</select></div>
-      <div class="form-row" style="display:flex;gap:12px">
-        <div style="flex:1"><label>最小値（以上・空=制限なし）</label><input name="min" type="number" step="any" value="${r && r.min != null ? r.min : ''}"></div>
-        <div style="flex:1"><label>最大値（以下・空=制限なし）</label><input name="max" type="number" step="any" value="${r && r.max != null ? r.max : ''}"></div>
-      </div>
-      <div class="form-row"><label>テンプレート色（クリックで選択）</label>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${CF_TEMPLATE_COLORS.map(t => `<button type="button" class="cf-tpl" title="${esc(t.l)}" onclick="cfPickTemplate('${t.bg}')" style="width:32px;height:24px;border-radius:4px;background:${t.bg};border:1px solid var(--border);cursor:pointer"></button>`).join('')}</div></div>
-      <div class="form-row" style="display:flex;gap:14px;align-items:flex-end">
-        <div><label>色（詳細）</label><input name="color" type="color" value="${parsed.hex}" style="width:56px;height:34px;padding:2px"></div>
-        <div style="flex:1"><label>濃さ（不透明度 <span id="cf-a-val">${aPct}</span>%）</label><input name="alpha" type="range" min="0" max="100" value="${aPct}" oninput="document.getElementById('cf-a-val').textContent=this.value" style="width:100%"></div>
-      </div>
       <div class="form-row"><label>適用する画面（複数可）</label><div style="display:flex;gap:10px;flex-wrap:wrap">${scChecks}</div></div>
+      <div class="form-row"><label>値の範囲と背景色（上の行ほど優先・複数段OK）</label>
+        <div class="table-wrap"><table class="holdings dense" id="cf-ranges"><thead><tr><th>最小(以上)</th><th>最大(以下)</th><th>色</th><th>濃さ</th><th>テンプレ</th><th></th></tr></thead><tbody>${ranges.map(cfRangeRowHtml).join('')}</tbody></table></div>
+        <button type="button" class="btn btn-sm" style="margin-top:6px" onclick="cfAddRangeRow()">＋ 範囲を追加</button></div>
       <div class="form-actions"><button type="button" class="btn" onclick="openCfRulesMaster()">戻る</button><button type="submit" class="btn btn-primary">保存</button></div>
     </form>`, { wide: true });
 }
@@ -3303,16 +3321,21 @@ function saveCfRule(e, id) {
   e.preventDefault();
   const f = e.target;
   const col = f.col.value;
-  const min = f.min.value.trim() === '' ? null : parseFloat(f.min.value);
-  const max = f.max.value.trim() === '' ? null : parseFloat(f.max.value);
-  const { r, g, b } = cfHexToRgb(f.color.value);
-  const a = (parseInt(f.alpha.value, 10) || 0) / 100;
-  const bg = `rgba(${r},${g},${b},${a})`;
   const screens = [...f.querySelectorAll('.cf-screen:checked')].map(x => x.value);
-  if ((min != null && isNaN(min)) || (max != null && isNaN(max))) { toast('数値が不正です'); return false; }
+  const ranges = [];
+  for (const tr of f.querySelectorAll('#cf-ranges tbody tr.cf-rrow')) {
+    const minS = tr.querySelector('.cf-min').value.trim(), maxS = tr.querySelector('.cf-max').value.trim();
+    const min = minS === '' ? null : parseFloat(minS), max = maxS === '' ? null : parseFloat(maxS);
+    if ((min != null && isNaN(min)) || (max != null && isNaN(max))) { toast('数値が不正です'); return false; }
+    if (min == null && max == null) continue; // 範囲未指定の空行はスキップ
+    const { r, g, b } = cfHexToRgb(tr.querySelector('.cf-color').value);
+    const a = (parseInt(tr.querySelector('.cf-alpha').value, 10) || 0) / 100;
+    ranges.push({ min, max, bg: `rgba(${r},${g},${b},${a})` });
+  }
+  if (!ranges.length) { toast('範囲を1行以上入力してください'); return false; }
   store.data.cfRules = store.data.cfRules || [];
-  if (id) { const rule = store.data.cfRules.find(x => x.id === id); if (rule) Object.assign(rule, { col, min, max, bg, screens }); }
-  else { store.data.cfRules.push({ id: cfNewId(), col, min, max, bg, screens }); }
+  if (id) { const gr = store.data.cfRules.find(x => x.id === id); if (gr) Object.assign(gr, { col, screens, ranges }); }
+  else { store.data.cfRules.push({ id: cfNewId(), col, screens, ranges }); }
   store.save(); render(); openCfRulesMaster();
   return false;
 }
@@ -3395,16 +3418,21 @@ function googleSyncSection() {
     <div class="section-body" style="padding:16px">
       <p class="muted" style="margin:0 0 10px">ブラウザ完結方式(GIS)。データは Google Drive の <code>${DSYNC_FOLDER}/${DSYNC_FILE}</code> に<strong>自動マージ同期</strong>（複数端末で両方の変更が残る）。権限は Drive（このアプリが作成したファイルのみ）で、シート権限は使いません。クライアントID未設定なら何も起きません。</p>
       <div id="gsync-status" style="margin:0 0 12px;font-size:13px;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px">${gsync._token ? `<span class="pos">✓ ログイン中：${esc(gsync._email || '')}</span>` : '<span class="muted">未ログイン（「Googleでログイン」を押してください）</span>'}</div>
-      <form id="gsync-form" onsubmit="return false">
-        <div class="field"><label>OAuthクライアントID（…apps.googleusercontent.com）</label>
-          <input name="gClientId" value="${esc(g.clientId || '')}" placeholder="Google Cloudで作成したウェブ用クライアントID"></div>
-        <div class="field"><label>許可メール（カンマ区切り・任意）</label>
-          <input name="gAllowed" value="${esc(g.allowedEmails || '')}" placeholder="you@gmail.com"></div>
-        <div class="form-actions" style="justify-content:flex-start">
-          <button type="button" class="btn btn-primary" onclick="gsaveSettings(this.form)">設定を保存</button>
-          <button type="button" class="btn" onclick="gsyncSignIn()" ${configured ? '' : 'disabled'}>Googleでログイン</button>
-        </div>
-      </form>
+      <div class="form-actions" style="justify-content:flex-start;margin:0 0 8px">
+        <button type="button" class="btn btn-primary" onclick="gsyncSignIn()" ${configured ? '' : 'disabled'}>Googleでログイン</button>
+      </div>
+      <details ${eff.clientId ? '' : 'open'}>
+        <summary class="muted" style="cursor:pointer;font-size:12px">詳細設定（OAuthクライアントID・許可メール）</summary>
+        <form id="gsync-form" onsubmit="return false" style="margin-top:10px">
+          <div class="field"><label>OAuthクライアントID（…apps.googleusercontent.com）</label>
+            <input name="gClientId" value="${esc(g.clientId || '')}" placeholder="${eff.clientId && !g.clientId ? 'サーバー設定済み（上書きする場合のみ入力）' : 'Google Cloudで作成したウェブ用クライアントID'}"></div>
+          <div class="field"><label>許可メール（カンマ区切り・任意）</label>
+            <input name="gAllowed" value="${esc(g.allowedEmails || '')}" placeholder="you@gmail.com"></div>
+          <div class="form-actions" style="justify-content:flex-start">
+            <button type="button" class="btn" onclick="gsaveSettings(this.form)">設定を保存</button>
+          </div>
+        </form>
+      </details>
 
       <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0 0 4px">
@@ -4114,6 +4142,43 @@ function openPriceInput(secId) {
 }
 
 // カテゴリ: 追加 or 編集（全項目）
+// カテゴリ別金額マスタ（モーダル表示。ランチャーから開く）
+function openCategoryMaster() {
+  const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder);
+  showModal('カテゴリ別 金額マスタ', `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-sm btn-primary" onclick="openCategoryEdit(null)">＋ カテゴリを追加</button></div>
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr><th class="l">カテゴリ</th><th class="l">位置づけ</th><th>日本株(円)</th><th>米国株($)</th><th>並び順</th><th class="l"></th></tr></thead>
+      <tbody>${cats.map(c => `<tr>
+        <td class="l">${esc(c.category)}</td><td class="l muted">${esc(c.label || '')}</td>
+        <td>${yen(c.amountJpy)}</td><td>$${num(c.amountUsd)}</td><td>${c.sortOrder}</td>
+        <td class="l nowrap"><button class="btn btn-sm" onclick="openCategoryEdit('${esc(c.category)}')">編集</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteCategory('${esc(c.category)}')">削除</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <p class="muted" style="margin:8px 0 0">金額は価格に左右されない固定値（ビジネスモデル・財務で決定）。日本株(円)・米国株($)を個別に登録できます。</p>
+    ${amountHistorySection()}
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
+}
+// 買い増しルールマスタ（モーダル表示。ランチャーから開く）
+function openRuleMaster() {
+  const rules = store.data.rules;
+  showModal('買い増しルールマスタ', `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-sm btn-primary" onclick="openRuleEdit(null)">＋ ルールを追加</button></div>
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr><th class="l">ルール名</th><th>初回 下落率</th><th>買い増し 下落率</th><th>基準高値</th><th>既定</th><th class="l"></th></tr></thead>
+      <tbody>${rules.map(r => `<tr>
+        <td class="l">${esc(r.name)}</td><td>−${r.initialDropPct}%</td><td>−${r.addonDropPct}%</td>
+        <td>${BASE_HIGH_LABEL[r.baseHighMode] || r.baseHighMode}</td>
+        <td>${r.isDefault ? '<span class="tag">既定</span>' : `<button class="btn btn-sm" onclick="setDefaultRule(${r.id})">既定に</button>`}</td>
+        <td class="l nowrap"><button class="btn btn-sm" onclick="openRuleEdit(${r.id})">編集</button>
+          ${rules.length > 1 ? `<button class="btn btn-sm btn-danger" onclick="deleteRule(${r.id})">削除</button>` : ''}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <p class="muted" style="margin:8px 0 0">銘柄ごとの割当は各銘柄の「編集」から。未割当の銘柄は既定ルールを使用します。</p>
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
+}
+
 function openCategoryEdit(category) {
   const c = category ? store.data.categories.find(x => x.category === category) : null;
   showModal(category ? `カテゴリを編集 — ${esc(category)}` : 'カテゴリを追加', `
@@ -4130,7 +4195,7 @@ function openCategoryEdit(category) {
       <p class="muted">日本株の金額を入力すると、米国株は ÷100 を初期値として自動入力します（必要なら上書き可）。</p>
       <div class="form-actions">
         ${c ? `<button type="button" class="btn btn-danger" onclick="deleteCategory('${esc(c.category)}')">削除</button>` : ''}
-        <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+        <button type="button" class="btn" onclick="openCategoryMaster()">キャンセル</button>
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
     </form>`);
@@ -4148,7 +4213,7 @@ function openCategoryEdit(category) {
     };
     if (c) store.updateCategory(category, patch);
     else store.addCategory(patch);
-    closeModal(); render();
+    render(); openCategoryMaster();
   };
 }
 // 金額マスタ編集: 日本株入力時に米国株を÷100で連動（米株を直接編集後は連動停止）
@@ -4162,7 +4227,7 @@ function syncUsdAmount(jpyEl) {
 }
 function deleteCategory(name) {
   if (confirm(`カテゴリ「${name}」を削除します。割当済みの銘柄は未設定になります。よろしいですか？`)) {
-    store.removeCategory(name); closeModal(); render();
+    store.removeCategory(name); render(); openCategoryMaster();
   }
 }
 
@@ -4185,7 +4250,7 @@ function openRuleEdit(id) {
         高値更新時は初回ルールで判定（前回購入単価ではなく「高値から初回下落率」で判定。最高値更新中の銘柄向け）
       </label>
       <div class="form-actions">
-        <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+        <button type="button" class="btn" onclick="openRuleMaster()">キャンセル</button>
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
     </form>`);
@@ -4200,16 +4265,16 @@ function openRuleEdit(id) {
     };
     if (r) store.updateRule(id, patch);
     else store.addRule({ ...patch, isDefault: false });
-    closeModal(); render();
+    render(); openRuleMaster();
   };
 }
 function deleteRule(id) {
   const r = store.data.rules.find(x => x.id === id);
   if (confirm(`ルール「${r.name}」を削除します。割当済みの銘柄は既定ルールに戻ります。よろしいですか？`)) {
-    store.removeRule(id); closeModal(); render();
+    store.removeRule(id); render(); openRuleMaster();
   }
 }
-function setDefaultRule(id) { store.setDefaultRule(id); render(); }
+function setDefaultRule(id) { store.setDefaultRule(id); render(); openRuleMaster(); }
 
 // ---------- 一括取込（Excel/CSV 貼り付け） ----------
 function openPasteImport(kind) {
@@ -6156,6 +6221,10 @@ window.closeDrawer = closeDrawer;
 window.enlargeDetailChart = enlargeDetailChart;
 window.openPriceInput = openPriceInput;
 window.openCategoryEdit = openCategoryEdit;
+window.openCategoryMaster = openCategoryMaster;
+window.openRuleMaster = openRuleMaster;
+window.openMasterPick = openMasterPick;
+window.masterPickNote = masterPickNote;
 window.openAmountHistory = openAmountHistory;
 window.syncUsdAmount = syncUsdAmount;
 window.deleteCategory = deleteCategory;
@@ -6225,7 +6294,9 @@ window.openCfRuleEdit = openCfRuleEdit;
 window.saveCfRule = saveCfRule;
 window.deleteCfRule = deleteCfRule;
 window.resetCfRules = resetCfRules;
-window.cfPickTemplate = cfPickTemplate;
+window.cfAddRangeRow = cfAddRangeRow;
+window.cfDelRangeRow = cfDelRangeRow;
+window.cfApplyTplSel = cfApplyTplSel;
 window.setMktMarket = setMktMarket;
 window.setMktSub = setMktSub;
 window.setMktKind = setMktKind;
