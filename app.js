@@ -3303,6 +3303,9 @@ function openCfRuleEdit(id, copyFrom) {
   const groups = store.data.cfRules || [];
   const g = id ? groups.find(x => x.id === id) : (copyFrom ? groups.find(x => x.id === copyFrom) : null);
   const colOpts = CF_NUMERIC_KEYS.map(k => { const l = (MASTER_COLS.find(m => m.key === k) || {}).label || k; return `<option value="${k}" ${g && g.col === k ? 'selected' : ''}>${esc(l)}</option>`; }).join('');
+  // コピー先の列候補（既定で「現在の列以外の最初の列」を選択＝別項目へのコピーを促す）。
+  const copyDefault = CF_NUMERIC_KEYS.find(x => !g || x !== g.col) || CF_NUMERIC_KEYS[0];
+  const cfCopyColOpts = CF_NUMERIC_KEYS.map(k => { const l = (MASTER_COLS.find(m => m.key === k) || {}).label || k; return `<option value="${k}" ${k === copyDefault ? 'selected' : ''}>${esc(l)}</option>`; }).join('');
   const scChecks = CF_SCREENS.map(s => `<label class="chip"><input type="checkbox" class="cf-screen" value="${s.id}" ${(!g || !g.screens || g.screens.length === 0 || g.screens.includes(s.id)) ? 'checked' : ''}> ${s.label}</label>`).join(' ');
   const ranges = (g && g.ranges && g.ranges.length) ? g.ranges : [null];
   const title = id ? '背景色ルールを編集' : (copyFrom ? '背景色ルールをコピーして追加' : '背景色ルールを追加');
@@ -3313,31 +3316,58 @@ function openCfRuleEdit(id, copyFrom) {
       <div class="form-row"><label>値の範囲と背景色（上の行ほど優先・複数段OK）</label>
         <div class="table-wrap"><table class="holdings dense" id="cf-ranges"><thead><tr><th>最小(以上)</th><th>最大(以下)</th><th>色</th><th>濃さ</th><th>テンプレ</th><th></th></tr></thead><tbody>${ranges.map(cfRangeRowHtml).join('')}</tbody></table></div>
         <button type="button" class="btn btn-sm" style="margin-top:6px" onclick="cfAddRangeRow()">＋ 範囲を追加</button></div>
+      <div class="form-row" style="display:flex;gap:8px;align-items:flex-end;border-top:1px dashed var(--border);padding-top:10px">
+        <div><label>この設定を別の列にコピー</label>
+          <select id="cf-copy-col">${cfCopyColOpts}</select></div>
+        <button type="button" class="btn btn-sm" onclick="cfCopyToCol()" title="現在の適用画面・範囲を、選んだ列へ新規ルールとしてコピー">コピー作成</button>
+      </div>
       <div class="form-actions"><button type="button" class="btn" onclick="openCfRulesMaster()">戻る</button><button type="submit" class="btn btn-primary">保存</button></div>
     </form>`, { wide: true });
 }
 
-function saveCfRule(e, id) {
-  e.preventDefault();
-  const f = e.target;
-  const col = f.col.value;
-  const screens = [...f.querySelectorAll('.cf-screen:checked')].map(x => x.value);
+// フォームの範囲行を {min,max,bg}[] に収集。数値不正は toast して null を返す。
+function cfCollectRanges(f) {
   const ranges = [];
   for (const tr of f.querySelectorAll('#cf-ranges tbody tr.cf-rrow')) {
     const minS = tr.querySelector('.cf-min').value.trim(), maxS = tr.querySelector('.cf-max').value.trim();
     const min = minS === '' ? null : parseFloat(minS), max = maxS === '' ? null : parseFloat(maxS);
-    if ((min != null && isNaN(min)) || (max != null && isNaN(max))) { toast('数値が不正です'); return false; }
+    if ((min != null && isNaN(min)) || (max != null && isNaN(max))) { toast('数値が不正です'); return null; }
     if (min == null && max == null) continue; // 範囲未指定の空行はスキップ
     const { r, g, b } = cfHexToRgb(tr.querySelector('.cf-color').value);
     const a = (parseInt(tr.querySelector('.cf-alpha').value, 10) || 0) / 100;
     ranges.push({ min, max, bg: `rgba(${r},${g},${b},${a})` });
   }
+  return ranges;
+}
+function saveCfRule(e, id) {
+  e.preventDefault();
+  const f = e.target;
+  const col = f.col.value;
+  const screens = [...f.querySelectorAll('.cf-screen:checked')].map(x => x.value);
+  const ranges = cfCollectRanges(f);
+  if (ranges == null) return false;
   if (!ranges.length) { toast('範囲を1行以上入力してください'); return false; }
   store.data.cfRules = store.data.cfRules || [];
   if (id) { const gr = store.data.cfRules.find(x => x.id === id); if (gr) Object.assign(gr, { col, screens, ranges }); }
   else { store.data.cfRules.push({ id: cfNewId(), col, screens, ranges }); }
   store.save(); render(); openCfRulesMaster();
   return false;
+}
+// 編集中の設定（適用画面＋範囲）を、選んだ別の列に新規グループとしてコピー作成する。
+function cfCopyToCol() {
+  const f = document.getElementById('cf-rule-form'); if (!f) return;
+  const sel = document.getElementById('cf-copy-col'); const targetCol = sel ? sel.value : '';
+  if (!targetCol) { toast('コピー先の列を選んでください'); return; }
+  const screens = [...f.querySelectorAll('.cf-screen:checked')].map(x => x.value);
+  const ranges = cfCollectRanges(f);
+  if (ranges == null) return;
+  if (!ranges.length) { toast('範囲を1行以上入力してください'); return; }
+  store.data.cfRules = store.data.cfRules || [];
+  store.data.cfRules.push({ id: cfNewId(), col: targetCol, screens, ranges });
+  store.save(); render();
+  const lbl = (MASTER_COLS.find(m => m.key === targetCol) || {}).label || targetCol;
+  toast(`「${lbl}」に設定をコピーしました`);
+  openCfRulesMaster();
 }
 function deleteCfRule(id) { store.data.cfRules = (store.data.cfRules || []).filter(x => x.id !== id); store.save(); render(); openCfRulesMaster(); }
 function resetCfRules() { if (!confirm('背景色ルールを既定（初期状態）に戻します。よろしいですか？')) return; store.data.cfRules = defaultCfRules(); store.save(); render(); openCfRulesMaster(); }
@@ -6297,6 +6327,7 @@ window.resetCfRules = resetCfRules;
 window.cfAddRangeRow = cfAddRangeRow;
 window.cfDelRangeRow = cfDelRangeRow;
 window.cfApplyTplSel = cfApplyTplSel;
+window.cfCopyToCol = cfCopyToCol;
 window.setMktMarket = setMktMarket;
 window.setMktSub = setMktSub;
 window.setMktKind = setMktKind;
