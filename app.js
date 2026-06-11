@@ -5738,7 +5738,13 @@ function importData() {
     const file = inp.files[0]; if (!file) return;
     const r = new FileReader();
     r.onload = () => {
-      try { restoreBundle(JSON.parse(r.result)); render(); toast('インポートしました（列設定も復元）'); }
+      try {
+        restoreBundle(JSON.parse(r.result));
+        // インポート＝この端末のデータを正本に戻す操作。同期基準点を消し、次回同期で
+        // 取り込んだ全データを Drive へ反映（push）させる。base を残すと一部が削除扱いで消えうる。
+        try { localStorage.removeItem('sm_sync_base'); localStorage.removeItem('sm_sync_at'); } catch (_) {}
+        render(); toast('インポートしました（列設定も復元）');
+      }
       catch (_) { toast('JSONの読み込みに失敗しました'); }
     };
     r.readAsText(file);
