@@ -43,6 +43,10 @@
   function mergeRecords3way(base, local, remote, keyFn) {
     const idx = (arr) => { const m = new Map(); for (const it of arr || []) m.set(keyFn(it), it); return m; };
     const B = idx(base), L = idx(local), R = idx(remote);
+    // 配列キーが「存在して空/欠けている（=削除の意思表示）」のか「そもそも未提供（undefined＝情報なし）」
+    // のかを区別する。未提供側を「全削除」と解釈すると、Drive のファイルにキャッシュキーが欠落した
+    // だけで全レコードが消える（rules欠落→空→クラッシュの起点）。未提供側からは削除を伝播しない。
+    const localGiven = Array.isArray(local), remoteGiven = Array.isArray(remote);
     const out = [];
     for (const k of new Set([...B.keys(), ...L.keys(), ...R.keys()])) {
       const b = B.get(k), l = L.get(k), r = R.get(k);
@@ -51,9 +55,11 @@
         const a = tsOf(l), c = tsOf(r);
         out.push(a && c && c > a ? r : l);            // 両在→updatedAt新しい方（無ければlocal）
       } else if (lP && !rP) {
-        if (bP && !changedFromBase(l, b)) { /* remoteで削除＆local未変更→削除反映 */ } else out.push(l);
+        // remote が配列として提供されている時だけ「remoteで削除」とみなす（未提供なら local を保持）
+        if (remoteGiven && bP && !changedFromBase(l, b)) { /* remoteで削除＆local未変更→削除反映 */ } else out.push(l);
       } else if (!lP && rP) {
-        if (bP && !changedFromBase(r, b)) { /* localで削除＆remote未変更→削除反映 */ } else out.push(r);
+        // local が配列として提供されている時だけ「localで削除」とみなす（未提供なら remote を保持）
+        if (localGiven && bP && !changedFromBase(r, b)) { /* localで削除＆remote未変更→削除反映 */ } else out.push(r);
       }
     }
     return out;
