@@ -5748,7 +5748,12 @@ function importData() {
 function resetData() {
   if (confirm('すべてのデータを削除して初期状態に戻します。よろしいですか？\n（誤削除対策として、削除前に現在のデータをJSONで自動ダウンロードします）')) {
     try { exportData(); } catch (_) { /* バックアップ失敗でも削除は続行 */ }
-    localStorage.removeItem(STORAGE_KEY); store.data = null; store.load(); render();
+    localStorage.removeItem(STORAGE_KEY);
+    // 同期の基準点(base)も消す。残すとローカルの「空」が3-wayマージで「全削除」と解釈され、
+    // 次の自動同期で Drive と他端末まで空に上書きされてしまう（＝端末のローカル削除のつもりが全消失）。
+    // base を消せば次回同期は base={} の新規扱いとなり Drive 側を保持（pull）する。
+    try { localStorage.removeItem('sm_sync_base'); localStorage.removeItem('sm_sync_at'); } catch (_) {}
+    store.data = null; store.load(); render();
     toast('全データを削除しました（バックアップJSONをダウンロード済み）');
   }
 }
