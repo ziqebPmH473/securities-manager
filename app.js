@@ -539,8 +539,10 @@ const dsync = {
     try {
       const folderId = await this._ensureFolder();
       const file = await this._findFile(folderId);
-      let remote = {};
-      if (file) { try { remote = JSON.parse(await this._readFile(file.id)); } catch (_) { remote = {}; } }
+      let remote = {}, remoteRaw = null;
+      if (file) { try { remoteRaw = await this._readFile(file.id); remote = JSON.parse(remoteRaw); } catch (_) { remote = {}; remoteRaw = null; } }
+      // その日最初の同期で、上書き前のDrive内容を1世代バックアップ（最大5世代・best-effort）
+      if (remoteRaw) await this.backupDailyOnce(remoteRaw);
       const local = dataBundle();
       const base = JSON.parse(this._loadBaseRaw());
       const merged = SyncMerge.mergeBundle(base, local, remote);
@@ -577,6 +579,60 @@ const dsync = {
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') this._maybeSync(); });
     window.addEventListener('beforeunload', () => { this._maybeSync(); });
   },
+
+  // ===== Drive 世代バックアップ（最大5世代） =====
+  // data.json と同じ securities-manager フォルダに backup-YYYYMMDD-HHMMSS.json として保存。
+  // _findFile は name='data.json' 限定なので本体同期とは干渉しない。
+  _backupDay() { try { return localStorage.getItem('sm_backup_day'); } catch (_) { return null; } },
+  _setBackupDay(d) { try { localStorage.setItem('sm_backup_day', d); } catch (_) {} },
+  _backupFileName() {
+    const d = new Date(), p = (n) => String(n).padStart(2, '0');
+    return `backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.json`;
+  },
+  async _createBackupFile(folderId, name, content) {
+    const boundary = 'smb' + Math.random().toString(36).slice(2);
+    const meta = { name, parents: [folderId] };
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+    const r = await this._driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name', {
+      method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
+    });
+    if (!r.ok) throw new Error(`バックアップ作成失敗 ${r.status}：${await this._bodyMsg(r)}`);
+    return r.json();
+  },
+  async listBackups(folderId) {
+    const q = encodeURIComponent(`name contains 'backup-' and '${folderId}' in parents and trashed=false`);
+    const d = await this._driveJson(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&spaces=drive`);
+    return (d.files || []).sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0)); // 新しい→古い
+  },
+  async _pruneBackups(folderId, keep) {
+    const files = await this.listBackups(folderId);
+    for (const f of files.slice(keep)) {
+      try { await this._driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}`, { method: 'DELETE' }); } catch (_) {}
+    }
+  },
+  // 任意のJSON文字列を世代バックアップとして保存し最大5世代に剪定。失敗は呼び出し側で握りつぶす（best-effort）
+  async makeBackup(content) {
+    if (!content) return null;
+    const folderId = await this._ensureFolder();
+    const created = await this._createBackupFile(folderId, this._backupFileName(), content);
+    try { await this._pruneBackups(folderId, 5); } catch (_) {}
+    return created;
+  },
+  // その日まだ世代を作っていなければ1世代だけ作る（同期内から呼ぶ・best-effort）
+  async backupDailyOnce(content) {
+    try {
+      if (!content || this._backupDay() === today()) return;
+      await this.makeBackup(content);
+      this._setBackupDay(today());
+    } catch (_) { /* バックアップ失敗で同期は止めない */ }
+  },
+  // 世代バックアップから復元（この端末を正本化＝基準点クリアで次回同期に反映）。
+  // _lastSnap は敢えて更新しない＝復元後の状態が差分として検知され、次回同期でDriveへpushされる。
+  async restoreFromBackup(fileId) {
+    const obj = JSON.parse(await this._readFile(fileId));
+    restoreBundle(obj);
+    try { localStorage.removeItem('sm_sync_base'); localStorage.removeItem('sm_sync_at'); } catch (_) {}
+  },
 };
 function gsaveSettings(f) {
   store.data.settings = store.data.settings || {};
@@ -604,6 +660,35 @@ async function dsyncNow() {
     await withBusy('Driveと同期中…', () => dsync.syncNow(), '同期しました');
     renderMaster();
   } catch (e) { toast('同期失敗: ' + (e && e.message || e), 5000); }
+}
+// backup-YYYYMMDD-HHMMSS.json → 「2026-06-11 07:35:58」の表示名へ
+function backupLabel(f) {
+  const m = /backup-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(f.name || '');
+  if (m) return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}`;
+  return f.name || f.id;
+}
+// Driveの世代バックアップ一覧を出し、選んだ世代で復元
+async function openDriveBackups() {
+  showModal('Driveのバックアップ', '<p class="muted">読み込み中…</p>');
+  try {
+    if (!gsync._token || !gsync.hasDrive()) { const ok = await gsync.signIn(true); if (!ok) { closeModal(); return; } }
+    const folderId = await dsync._ensureFolder();
+    const files = await dsync.listBackups(folderId);
+    if (!files.length) { showModal('Driveのバックアップ', '<p class="muted">まだバックアップがありません。Drive自動同期がONなら、その日最初の同期時に自動作成されます。</p>'); return; }
+    const rows = files.map((f) => `<div class="btn-row" style="justify-content:space-between;align-items:center;margin:8px 0;gap:12px">
+        <span>🗂 ${esc(backupLabel(f))}</span>
+        <button class="btn" onclick="restoreDriveBackup('${esc(f.id)}','${esc(backupLabel(f))}')">この時点に復元</button>
+      </div>`).join('');
+    showModal('Driveのバックアップ（新しい順・最大5世代）', rows + '<p class="muted grp-note" style="margin-top:10px">復元すると現在のデータを選んだ世代で置き換えます（置き換え前に現データをJSONで自動ダウンロード）。</p>');
+  } catch (e) { showModal('Driveのバックアップ', '<p class="neg">読み込み失敗：' + esc(e && e.message || String(e)) + '</p>'); }
+}
+async function restoreDriveBackup(id, label) {
+  if (!confirm(`「${label}」の時点に復元します。現在のデータはこの世代で置き換わります。\n（置き換え前に現データをJSONで自動ダウンロードします）よろしいですか？`)) return;
+  try { exportData(); } catch (_) { /* 失敗しても復元は続行 */ }
+  try {
+    await withBusy('バックアップから復元中…', () => dsync.restoreFromBackup(id), '復元しました');
+    closeModal(); render(); renderMaster();
+  } catch (e) { toast('復元失敗: ' + (e && e.message || e), 5000); }
 }
 
 // ---------- 計算 ----------
@@ -3276,6 +3361,11 @@ function renderMaster() {
           <button class="btn" onclick="importData()">バックアップ読込（JSON）</button>
         </div>
         <p class="muted grp-note">このブラウザ(localStorage)の全データをファイルに保存／復元します。保存先は現在このブラウザのみ（将来 Google スプレッドシートへ移行予定）。</p>
+        <div class="grp-label" style="margin-top:18px">Drive 自動バックアップ（最大5世代）</div>
+        <div class="btn-row">
+          <button class="btn" onclick="openDriveBackups()">Driveのバックアップから復元…</button>
+        </div>
+        <p class="muted grp-note">Drive自動同期がONのとき、<strong>1日1回（その日最初の同期）</strong>と<strong>全データ削除／インポートの直前</strong>に、Drive上へ自動で世代バックアップを保存します（古いものから最大5世代を保持）。誤操作や不具合で消えても、ここから過去の状態に戻せます。</p>
         <div class="grp-label" style="margin-top:18px">資産貼付・転記</div>
         <div class="btn-row">
           <button class="btn" onclick="go('transfer')">資産貼付・転記（転記用タブへ）</button>
@@ -5737,9 +5827,12 @@ function importData() {
   inp.onchange = () => {
     const file = inp.files[0]; if (!file) return;
     const r = new FileReader();
-    r.onload = () => {
+    r.onload = async () => {
       try {
-        restoreBundle(JSON.parse(r.result));
+        const parsed = JSON.parse(r.result); // 先に検証（壊れたJSONなら復元前に弾く）
+        // 置き換え前の現データをDriveへ1世代バックアップ（ログイン時のみ・best-effort）
+        try { await dsync.makeBackup(JSON.stringify(dataBundle())); } catch (_) {}
+        restoreBundle(parsed);
         // インポート＝この端末のデータを正本に戻す操作。同期基準点を消し、次回同期で
         // 取り込んだ全データを Drive へ反映（push）させる。base を残すと一部が削除扱いで消えうる。
         try { localStorage.removeItem('sm_sync_base'); localStorage.removeItem('sm_sync_at'); } catch (_) {}
@@ -5751,9 +5844,11 @@ function importData() {
   };
   inp.click();
 }
-function resetData() {
+async function resetData() {
   if (confirm('すべてのデータを削除して初期状態に戻します。よろしいですか？\n（誤削除対策として、削除前に現在のデータをJSONで自動ダウンロードします）')) {
     try { exportData(); } catch (_) { /* バックアップ失敗でも削除は続行 */ }
+    // 破壊前にDriveへ1世代バックアップ（ログイン時のみ・best-effort。未ログインはローカルJSONで代替済み）
+    try { await dsync.makeBackup(JSON.stringify(dataBundle())); } catch (_) {}
     localStorage.removeItem(STORAGE_KEY);
     // 同期の基準点(base)も消す。残すとローカルの「空」が3-wayマージで「全削除」と解釈され、
     // 次の自動同期で Drive と他端末まで空に上書きされてしまう（＝端末のローカル削除のつもりが全消失）。
@@ -6382,6 +6477,8 @@ window.saApplyBulk = saApplyBulk;
 window.runSplitAdjust = runSplitAdjust;
 window.importData = importData;
 window.resetData = resetData;
+window.openDriveBackups = openDriveBackups;
+window.restoreDriveBackup = restoreDriveBackup;
 window.resetTxnData = resetTxnData;
 window.excelExportGenerate = excelExportGenerate;
 window.excelExportCopy = excelExportCopy;
