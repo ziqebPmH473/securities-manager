@@ -646,7 +646,10 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - **3-wayマージ**（`sync-merge.js` の `SyncMerge.mergeBundle(base, local, remote)`）。base=前回同期時点を localStorage `sm_sync_base` に保持。
   - 自然キー: securities=`market:ticker` / holdings=`securityId|broker|accountType` / categories=名前 / その他はid。整数ID2端末衝突を回避。削除も伝播、編集vs削除は編集優先。
   - prices/meta等のキャッシュはキー単位（新しいfetchedAt優先）、settings等は変更側優先、seq/日時はmax。
-- クライアント実装: `app.js` の **`dsync`**（Driveクライアント＋`syncNow`＋自動同期25秒/タブ非表示）。OAuthは `gsync` と共用（スコープに `drive.file` 追加）。サインイン直後に初回同期（`afterSignIn`）。
+  - **削除伝播の安全策（2026-06-11）**: 配列キーが「存在して空（=削除の意思）」か「そもそも未提供（undefined＝情報なし）」かを区別し、**未提供側からは削除を伝播しない**。Driveファイルに配列キー（rules等）が欠落しただけで全レコードが消える事故を防ぐ。`store.load()` は rules が空なら既定ルールを再シード（空配列→`rules[0].isDefault`でのクラッシュを防止＝自己修復）。
+- **Drive世代バックアップ（最大5世代・2026-06-11）**: 誤操作/不具合でのデータ消失対策。同じ `securities-manager` フォルダに `backup-YYYYMMDD-HHMMSS.json` を最大5世代保存（古いものから剪定。`data.json` 同期とは name 条件で非干渉）。作成タイミング＝**①1日1回（その日最初の同期で上書き前のDrive内容）②全データ削除/インポートの直前**。復元UI＝「バックアップ・出力」→「Driveのバックアップから復元…」。復元は `sm_sync_base` クリアで次回同期により反映。
+- **同期基準点(`sm_sync_base`)のクリア規則**: 全データ削除・JSONインポート・バックアップ復元では base/at も消す。残すとローカルの空/置換が3-wayマージで「全削除」と誤解され他端末・Driveを巻き込むため、base={}の新規扱いにして安全側（pull/push）へ倒す。
+- クライアント実装: `app.js` の **`dsync`**（Driveクライアント＋`syncNow`＋自動同期25秒/タブ非表示＋世代バックアップ）。OAuthは `gsync` と共用（スコープに `drive.file` 追加）。サインイン直後に初回同期（`afterSignIn`）。
 - 設定配布: clientId/spreadsheetId はリポジトリに置かず **`/api/config`（CF env: GOOGLE_OAUTH_CLIENT_ID/GOOGLE_SHEET_ID）** から配る。`gsync.cfg()` がローカル空なら env で補完（新端末は入力不要）。
 - Sheets（`_appdata`）は**保険として残置**（手動保存/読込ボタンは従来どおり）。
 
