@@ -15,9 +15,12 @@ export async function onRequestGet(context) {
   if (symbols.length === 0) return json({ error: 'symbols パラメータが必要です' }, 400);
 
   // mode=light: 指数・為替など「現在値と前日比だけ」必要な軽量取得。
-  //   5年分の日足を取らず短期間(range既定5d)だけ取得し、Finnhub経由も避けて高速化する。
+  //   5年分の日足を取らず当日(range=1d)だけ取得し、Finnhub経由も避けて高速化する。
+  //   range=1d なら日足は当日1本のみ→前日終値は配列の len-2 ではなく meta.chartPreviousClose
+  //   （＝本当の前営業日終値）から取られる。5d だと昨日の日足が null 欠損したとき
+  //   「null除外して len-2」が一昨日を前日終値と誤認し、変動幅・変動率が壊れるため 1d にする。
   const mode = url.searchParams.get('mode');
-  const range = url.searchParams.get('range') || (mode === 'light' ? '5d' : null);
+  const range = url.searchParams.get('range') || (mode === 'light' ? '1d' : null);
   // highs=1 の時だけ5年/52週高値を取得（Yahoo追加呼び出し）。通常の価格更新は price のみ＝1銘柄1呼び出しに抑え、
   // Cloudflareの「1リクエストあたりサブリクエスト上限(約50)」超過で多数銘柄が失敗する問題を防ぐ。
   const withHighs = url.searchParams.get('highs') === '1';
@@ -53,7 +56,7 @@ async function fetchOne(symbol, finnhubKey, opts = {}) {
   // 米株のプレ/アフター取得（時間外列用）。Yahoo includePrePost で現在値＋時間外価格を返す
   if (opts.ext && type === 'us') return fetchUsExtended(symbol);
   // 軽量モード: 高値不要・短期間のみ。Finnhub経由(米株3往復)を避けYahooの短期間取得に統一して高速化
-  if (opts.mode === 'light') return fetchYahoo(symbol, type, opts.range || '5d', false);
+  if (opts.mode === 'light') return fetchYahoo(symbol, type, opts.range || '1d', false);
   if (type === 'us' && finnhubKey) return fetchFinnhub(symbol, finnhubKey, opts.withHighs);
   return fetchYahoo(symbol, type, opts.range, opts.withHighs);
 }
@@ -169,16 +172,32 @@ async function fetchYahooChart(symbol, range, interval) {
   const quotes = r.indicators && r.indicators.quote && r.indicators.quote[0];
   const highs = (quotes && quotes.high) || [];
 
-  // 前日終値＝日足終値配列（null除外）の最後から2番目。
-  // 場中は最後が当日partial／引け後は最後が当日確定で、いずれも len-2 が前営業日終値になる。
-  const closes = ((quotes && quotes.close) || []).filter(c => typeof c === 'number');
-  const prevClose = closes.length >= 2
-    ? closes[closes.length - 2]
+  // 前日終値＝「現在値の営業日より前の、最後に存在する有効終値」。
+  // 単純な len-2（null除外して最後から2番目）は、当日の日足が null（寄り付き直後）や
+  // 昨日の日足が欠損していると一昨日を前日終値と誤認し、変動幅・変動率が壊れる
+  // （指数^N225で実際に発生: 6/10欠損→6/09を前日終値と誤認し約-1420(-2.2%)と過大表示）。
+  // そこで timestamp で「現在値の営業日」を特定し、それより前の日の最後の有効終値を選ぶ。
+  const ts = r.timestamp || [];
+  const closeArr = (quotes && quotes.close) || [];
+  const closes = closeArr.filter(c => typeof c === 'number');
+  const dayOf = (t) => (typeof t === 'number') ? Math.floor(t / 86400) : null;
+  // 現在値の営業日: meta.regularMarketTime 優先。無ければ最後の有効終値の日。
+  let curDay = dayOf(meta.regularMarketTime);
+  if (curDay == null) {
+    for (let i = closeArr.length - 1; i >= 0; i--) if (typeof closeArr[i] === 'number') { curDay = dayOf(ts[i]); break; }
+  }
+  let prevCloseArr = null;
+  for (let i = closeArr.length - 1; i >= 0; i--) {
+    if (typeof closeArr[i] !== 'number') continue;
+    const d = dayOf(ts[i]);
+    if (curDay == null || d == null || d < curDay) { prevCloseArr = closeArr[i]; break; }
+  }
+  const prevClose = prevCloseArr != null
+    ? prevCloseArr
     : num(meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose);
 
   // 52週高値（直近52週の最大値）。高値が付いた日付も記録（高値更新判定で「前回購入後に高値更新したか」を見るため）
   const now = Date.now() / 1000;
-  const ts = r.timestamp || [];
   const yr52 = 52 * 7 * 24 * 3600;
   let high52w = 0, high5y = 0, high5yTs = null, high52wTs = null;
   highs.forEach((h, i) => {
