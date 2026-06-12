@@ -18,7 +18,7 @@
 - **データモデル（store）**: `securities / holdings / transactions / rules / categories / prices / fx / meta / indices / amountHistory / amountSnapshots / importHistory / importMappings`。
   - `securities` は分析メタ＋ `nameOverride/sectorOverride/industryOverride`（手動上書き、自動取得で潰れない）、`fixedBuyPrice`（買増固定値）、`prevBuyPrice`、`baseHighMode/baseHighManual`、`watch`（注意＝未保有でも一覧に残す）、`enabled`（判定対象）、`splitHistory[]`、`manualUpdatedAt`。
   - `meta`（`market:ticker`キー）= 名前/セクター/業種/PER/EPS/配当/時価総額/sharesOut の自動取得キャッシュ。
-  - `prices`（`market:ticker`キー）= price/prevClose/high5y/high52w。`indices` = 参考指数 price/prevClose。
+  - `prices`（`market:ticker`キー）= price/prevClose/high5y/high52w/low1y/low3y（＋各 *Date）。`low1y/low3y`＝直近1年/3年の最安値（情報表示専用。買い増し判定には未使用）。`indices` = 参考指数 price/prevClose。
 - **市場**: 日本株(JP)/米国株(US)のみ。**投信(FUND)は除外**（2026-05-30判断。後方互換で定義は残るがUI選択不可）。
 - **一覧の表示条件**: 「保有あり(数量>0) または 注意銘柄」のみ。売却済み・非注意は銘柄マスタタブで管理。
 - **タブ**: ダッシュボード/米国株/日本株/サイン/分割/レポート/銘柄マスタ/マスタ・設定。
@@ -293,7 +293,7 @@ CREATE TABLE settings (
 - 分割日より前の取引: `price /= r` / `quantity ×= r`
 
 **調整しないもの**（自動取得で自己補正・または金額/算出値で不変）:
-- **価格キャッシュ（現在値・前日終値・52週/5年高値）は削除も調整もしない**（SEC-48）。
+- **価格キャッシュ（現在値・前日終値・52週/5年高値・1年/3年安値）は削除も調整もしない**（SEC-48）。
   YahooはEx-date以降は分割調整済みの値を返すため。※当初は delete していたが「自動取得データが消える」ため廃止。
 - EPS・発行済株式数・1株配当（Yahoo が分割反映済み）／ PER・時価総額・配当利回り（常に算出）
 - 1回購入額（金額）・取得価額（数量×単価で不変）

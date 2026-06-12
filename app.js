@@ -58,6 +58,10 @@ const MASTER_COLS = [
   { key: 'high52w',     label: '52週高値',         left: false, markets: STKM, noSort: false },
   { key: 'dropFrom5y',  label: '5年高値からの下落率', left: false, markets: STKM, noSort: false },
   { key: 'dropFrom52w', label: '52週高値からの下落率', left: false, markets: STKM, noSort: false },
+  { key: 'low1y',       label: '1年安値',          left: false, markets: STKM, noSort: false },
+  { key: 'low3y',       label: '3年安値',          left: false, markets: STKM, noSort: false },
+  { key: 'riseFrom1y',  label: '1年安値からの上昇率', left: false, markets: STKM, noSort: false },
+  { key: 'riseFrom3y',  label: '3年安値からの上昇率', left: false, markets: STKM, noSort: false },
   { key: 'prevBuyPrice', label: '前回購入単価',     left: false, markets: STKM, noSort: false },
   { key: 'prevBuyDate',  label: '前回購入日',       left: true,  markets: STKM, noSort: false },
   { key: 'dropFromPrev', label: '前回からの下落率', left: false, markets: STKM, noSort: false },
@@ -99,8 +103,8 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','sector','industry','marketCap','turnover','marginRatio','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
@@ -713,9 +717,15 @@ const calc = {
   // 高値（priceキャッシュ）
   high5y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high5y ?? null; },
   high52w(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high52w ?? null; },
+  // 安値（priceキャッシュ。情報表示用・判定には未使用）
+  low1y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.low1y ?? null; },
+  low3y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.low3y ?? null; },
   // 各種「〜からの下落率」（現在値 vs 基準。負=基準より下）
   dropFrom(sec, base) { return pctFromBase(this.price(sec), base); },
   dropFromPrev(sec) { return this.dropFrom(sec, this.lastBuyPrice(sec)); },
+  // 安値からの上昇率（現在値 vs 安値。正=安値より上＝安値からどれだけ戻したか）
+  riseFrom1y(sec) { return pctFromBase(this.price(sec), this.low1y(sec)); },
+  riseFrom3y(sec) { return pctFromBase(this.price(sec), this.low3y(sec)); },
   // 前日終値時点での「次回購入(トリガー)まで残り下落率」。(前日終値 − トリガー)/前日終値。
   // 既存の残り下落率(現在値ベース)と同じ符号（正=あとこれだけ下落で到達 / 負=超過）。
   remainingDropPrev(sec) {
@@ -1040,6 +1050,10 @@ const api = {
           high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),
           high5yDate: q.high5yDate != null ? q.high5yDate : (prev.high5yDate ?? null),
           high52wDate: q.high52wDate != null ? q.high52wDate : (prev.high52wDate ?? null),
+          low1y: q.low1y != null ? q.low1y : (prev.low1y ?? null),
+          low3y: q.low3y != null ? q.low3y : (prev.low3y ?? null),
+          low1yDate: q.low1yDate != null ? q.low1yDate : (prev.low1yDate ?? null),
+          low3yDate: q.low3yDate != null ? q.low3yDate : (prev.low3yDate ?? null),
           volume: q.volume != null ? q.volume : (prev.volume ?? null), // 当日出来高（売買代金算出用・未取得時は前回値を保持）
           fetchedAt: q.fetchedAt,
         };
@@ -1124,6 +1138,8 @@ const api = {
           price: q.price, prevClose: q.prevClose,
           high5y: q.high5y, high52w: q.high52w,
           high5yDate: q.high5yDate ?? null, high52wDate: q.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
+          low1y: q.low1y ?? null, low3y: q.low3y ?? null,
+          low1yDate: q.low1yDate ?? null, low3yDate: q.low3yDate ?? null, // 安値が付いた日（情報表示用）
           volume: q.volume != null ? q.volume : (prev.volume ?? null), // 当日出来高（売買代金算出用）
           fetchedAt: q.fetchedAt,
         };
@@ -1423,7 +1439,7 @@ const CF_SCREENS = [
   { id: 'market',   label: 'マーケット' },
 ];
 // 背景色ルールを設定できる数値列（設定UIの選択肢）。
-const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount'];
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount'];
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
@@ -1501,6 +1517,10 @@ function cfCellValue(key, sec, ctx) {
     case 'high52w': return ctx.high52w;
     case 'dropFrom5y': return calc.dropFrom5y(sec);
     case 'dropFrom52w': return calc.dropFrom52w(sec);
+    case 'low1y': return ctx.low1y;
+    case 'low3y': return ctx.low3y;
+    case 'riseFrom1y': return calc.riseFrom1y(sec);
+    case 'riseFrom3y': return calc.riseFrom3y(sec);
     case 'prevBuyPrice': return ctx.prevBuy;
     case 'dropFromPrev': return calc.dropFromPrev(sec);
     case 'marketCap': return calc.marketCap(sec);
@@ -1564,6 +1584,10 @@ const COL_RENDERERS = {
   high52w:   (s,c) => `<td>${c.high52w != null ? fmtAmt(c.high52w, c.market) : muted}</td>`,
   dropFrom5y:  (s,c) => pctTd(calc.dropFrom5y(s)),
   dropFrom52w: (s,c) => pctTd(calc.dropFrom52w(s)),
+  low1y:    (s,c) => `<td>${c.low1y != null ? fmtAmt(c.low1y, c.market) : muted}</td>`,
+  low3y:    (s,c) => `<td>${c.low3y != null ? fmtAmt(c.low3y, c.market) : muted}</td>`,
+  riseFrom1y: (s,c) => pctTd(calc.riseFrom1y(s)),
+  riseFrom3y: (s,c) => pctTd(calc.riseFrom3y(s)),
   prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
   // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
   prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
@@ -2141,6 +2165,10 @@ function sortValue(sec, key) {
     case 'dropFromPrev': return calc.dropFromPrev(sec) ?? Infinity;
     case 'dropFrom5y': return calc.dropFrom5y(sec) ?? Infinity;
     case 'dropFrom52w': return calc.dropFrom52w(sec) ?? Infinity;
+    case 'low1y': return calc.low1y(sec) ?? -Infinity;
+    case 'low3y': return calc.low3y(sec) ?? -Infinity;
+    case 'riseFrom1y': return calc.riseFrom1y(sec) ?? Infinity;
+    case 'riseFrom3y': return calc.riseFrom3y(sec) ?? Infinity;
     case 'value': return calc.valueOrCostNative(sec) ?? -Infinity;
     case 'pnl': return calc.pnlPctNative(sec) ?? -Infinity;
     case 'day': { const p = store.data.prices[priceKey(sec)] || {}; return (p.price != null && p.prevClose) ? (p.price - p.prevClose) / p.prevClose * 100 : -Infinity; }
@@ -2361,6 +2389,8 @@ function marketRow(sec, visibleCols, opts = {}) {
     recoAmt: store.categoryAmountFor(sec.category, market),
     high5y: calc.high5y(sec),
     high52w: calc.high52w(sec),
+    low1y: calc.low1y(sec),
+    low3y: calc.low3y(sec),
     prevBuy: calc.lastBuyPrice(sec),
     m: (v) => v != null ? fmtAmt(v, market) : '<span class="muted">—</span>',
   };
@@ -4104,6 +4134,7 @@ function openSecurityDetail(secId) {
     kv('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
     kv('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     kv('時価総額 / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
+    kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
   ].join('');
   // 基本情報の派生値
@@ -4143,6 +4174,7 @@ function openSecurityDetail(secId) {
       <div class="cell"><div class="k">現在値</div><div class="v">${m(price)}</div></div>
       <div class="cell"><div class="k">前日比</div><div class="v ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}</div></div>
       <div class="cell"><div class="k">5年高値 / 52週高値</div><div class="v">${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}</div></div>
+      <div class="cell"><div class="k">1年安値 / 3年安値</div><div class="v">${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}</div></div>
       <div class="cell"><div class="k">平均取得単価</div><div class="v">${held ? m(th.avgCost) : '—'}</div></div>
       <div class="cell"><div class="k">保有数量</div><div class="v">${qtyDisp}</div></div>
       <div class="cell"><div class="k">取得原価（円）</div><div class="v">${held ? yen(costJpyV) : '—'}</div></div>
@@ -4323,7 +4355,10 @@ function openPriceInput(secId) {
       price: parseFloat(f.price.value),
       prevClose: f.prevClose.value ? parseFloat(f.prevClose.value) : null,
       high5y: f.high5y.value ? parseFloat(f.high5y.value) : (p.high5y ?? null),
-      high52w: p.high52w ?? null, fetchedAt: new Date().toISOString(),
+      high52w: p.high52w ?? null,
+      low1y: p.low1y ?? null, low3y: p.low3y ?? null,
+      low1yDate: p.low1yDate ?? null, low3yDate: p.low3yDate ?? null,
+      fetchedAt: new Date().toISOString(),
     };
     store.save(); closeModal(); render();
   };
