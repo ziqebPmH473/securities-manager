@@ -6790,6 +6790,8 @@ function renderAssetChart() {
   }
   if (snaps.length < 2) { el.innerHTML = `<div class="notice" style="margin:0">資産推移は2日分以上たまると表示されます（現在 ${snaps.length} 日分・この期間）。毎朝サーバーが日次記録。過去は下の「過去データの取込」で一括投入できます。</div>`; return; }
   el.classList.remove('muted');
+  // プレースホルダの中央寄せ(display:flex;justify-content:center)が残るとグラフのflexが潰れて極小になるため、block に戻す
+  el.style.display = 'block'; el.style.alignItems = ''; el.style.justifyContent = ''; el.style.minHeight = '';
   const { w, h } = assetChartBox(el);
   el.innerHTML = assetStackChart(snaps, assetAxis, w, h);
 }
@@ -6802,8 +6804,8 @@ function assetChartBox(el) {
   const top = el.getBoundingClientRect().top;
   const tableEl = document.getElementById('asset-table');
   const tableH = tableEl ? (parseFloat(tableEl.style.minHeight) || tableEl.getBoundingClientRect().height || 0) : 0;
-  const avail = bottom - top - tableH - 18; // 表のmargin-top(12)＋わずかな余白
-  const h = Math.max(200, Math.min(560, Math.round(avail)));
+  const avail = bottom - top - tableH - 16; // 表のmargin-top(12)＋わずかな余白
+  const h = Math.max(220, Math.min(720, Math.round(avail)));
   const w = Math.max(240, Math.round((el.clientWidth || 600) - 142)); // 凡例132＋gap10
   return { w, h };
 }
