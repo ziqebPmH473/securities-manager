@@ -6700,17 +6700,17 @@ function aggregateAssetRows(text) {
     if (!d) continue;
     const val = numClean(row[idx['評価円']]) || 0;
     if (!val) continue;
-    const cost = idx['取得円'] != null ? (numClean(row[idx['取得円']]) || 0) : 0;
     const shu = idx['種別'] != null ? String(row[idx['種別']] || '').trim() : '';
-    const market = shu === '日本株' ? 'JP' : shu === '米国株' ? 'US' : 'その他';
+    const market = shu === '日本株' ? 'JP' : shu === '米国株' ? 'US' : null;
+    if (!market) continue; // 日本株・米国株以外（投信・現金等）は集計しない
+    const cost = idx['取得円'] != null ? (numClean(row[idx['取得円']]) || 0) : 0;
     const dt = idx['詳細種別'] != null ? String(row[idx['詳細種別']] || '').trim() : '';
     const type = dt === 'ETF' ? 'ETF' : '個別';
     const s = byDate[d] || (byDate[d] = { date: d, totalJpy: 0, costJpy: 0, byMarket: {}, byMarketType: {} });
     s.totalJpy += val; s.costJpy += cost;
-    const mk = market === 'JP' ? '日本株' : market === 'US' ? '米国株' : 'その他';
+    const mk = market === 'JP' ? '日本株' : '米国株';
     s.byMarket[mk] = (s.byMarket[mk] || 0) + val;
-    const mtk = market === 'その他' ? 'その他' : `${mk}・${type}`;
-    s.byMarketType[mtk] = (s.byMarketType[mtk] || 0) + val;
+    s.byMarketType[`${mk}・${type}`] = (s.byMarketType[`${mk}・${type}`] || 0) + val;
   }
   const out = Object.values(byDate).map(s => ({ date: s.date, totalJpy: Math.round(s.totalJpy), costJpy: Math.round(s.costJpy), byMarket: s.byMarket, byMarketType: s.byMarketType }));
   out.sort((a, b) => a.date < b.date ? -1 : 1);
