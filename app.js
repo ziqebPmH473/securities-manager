@@ -6644,7 +6644,7 @@ async function loadPortfolioChart() {
     const res = await fetch('/api/portfolio-history', { headers: { Authorization: 'Bearer ' + token } });
     const d = await res.json();
     if (!res.ok || !d.ok) { note('資産推移を取得できませんでした：' + esc((d && d.error) || ('HTTP ' + res.status))); return; }
-    _assetSnaps = (d.snapshots || []).slice().sort((a, b) => a.date < b.date ? -1 : 1);
+    _assetSnaps = (d.snapshots || []).map(normalizeSnapKeys).sort((a, b) => a.date < b.date ? -1 : 1);
     // 取得直後でDrive反映待ちでも今日分が出るよう、ライブ計算分を表示側にも反映
     if (todaySnap && (todaySnap.totalJpy || todaySnap.costJpy)) {
       const i = _assetSnaps.findIndex(s => s.date === todaySnap.date);
@@ -6652,6 +6652,15 @@ async function loadPortfolioChart() {
     }
     renderAssetChart();
   } catch (e) { note('資産推移の取得に失敗しました: ' + esc(e && e.message || String(e))); }
+}
+// 旧データのラベル揺れを吸収: byMarketType の「…・個別」を「…・個別株」に正規化して統合（再取込不要で帯を1本に）。
+function normalizeSnapKeys(s) {
+  if (s && s.byMarketType) {
+    const m = {};
+    for (const k in s.byMarketType) { const nk = k.replace(/・個別$/, '・個別株'); m[nk] = (m[nk] || 0) + (s.byMarketType[k] || 0); }
+    s.byMarketType = m;
+  }
+  return s;
 }
 // 今日の内訳つきスナップショットをライブのstore.dataから計算（サーバー computeBreakdowns と同じラベル規則）。
 function computeTodayBreakdown() {
