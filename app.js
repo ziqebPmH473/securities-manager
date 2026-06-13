@@ -6667,7 +6667,7 @@ function computeTodayBreakdown() {
     const v = Math.round(vj), c = Math.round(cj);
     totalJpy += v; costJpy += c;
     const mk = sec.market === 'JP' ? '日本株' : '米国株';
-    const type = (sec.detailType === 'ETF') ? 'ETF' : '個別';
+    const type = (detailTypeOf(sec) === 'ETF') ? 'ETF' : '個別株'; // 既存「種別×市場」表と同じ判定
     add(byCategory, sec.category || '未分類', v);
     add(byMarket, mk, v);
     add(byMarketType, `${mk}・${type}`, v);
@@ -6742,7 +6742,7 @@ function aggregateAssetRows(text) {
     if (!market) continue; // 日本株・米国株以外（投信・現金等）は集計しない
     const cost = costCol != null ? (numClean(row[costCol]) || 0) : 0;
     const dt = idx['詳細種別'] != null ? String(row[idx['詳細種別']] || '').trim() : '';
-    const type = dt === 'ETF' ? 'ETF' : '個別';
+    const type = /ETF|ＥＴＦ/i.test(dt) ? 'ETF' : '個別株'; // 「個別株」表記に統一（既存集計と一致）
     const s = byDate[d] || (byDate[d] = { date: d, totalJpy: 0, costJpy: 0, byMarket: {}, byMarketType: {} });
     s.totalJpy += val; s.costJpy += cost;
     const mk = market === 'JP' ? '日本株' : '米国株';
