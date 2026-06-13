@@ -510,6 +510,26 @@ const gsync = {
       } catch (_) { resolve(false); }
     });
   },
+  // リロード後のサイレント復元（案A）: トークンはディスクに保存せず、Googleの生きたログイン
+  // セッションから無音でトークンを取り直す。成功時はメール照合のうえUIを「ログイン中」に戻し、
+  // 自動同期ONなら初回マージも行う。未ログイン/未同意/別アカウント/オフライン時は静かに諦め、
+  // 従来どおり手動ログインに委ねる（＝悪化はしない）。起動時に1回だけ呼ぶ想定。
+  async restoreSession() {
+    const cfg = this.cfg();
+    if (!cfg.clientId || this._token) return false;            // 未設定/既ログインなら何もしない
+    try { await this.ensureGis(); } catch (_) { return false; } // GIS読込（起動時はまだ未読込）
+    if (!await this.refresh()) return false;                    // セッション切れ等は静かに諦める
+    try {
+      const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + this._token } }).then(x => x.json());
+      const email = ((info && info.email) || '').toLowerCase();
+      const allow = (cfg.allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      if (allow.length && !allow.includes(email)) { this._token = null; this._scope = ''; return false; } // 許可外は復元しない
+      this._email = email;
+    } catch (_) { /* userinfo取得失敗でもトークンは有効＝続行（メール表示だけ空になる） */ }
+    try { render(); } catch (_) {}                              // 「未ログイン」警告を消し状態反映
+    try { if (typeof dsync !== 'undefined') dsync.afterSignIn(); } catch (_) {} // 自動同期ONなら初回マージ
+    return true;
+  },
 };
 
 // ---------- Drive 自動マージ同期（aoiro方式・SyncMerge を利用） ----------
@@ -7143,4 +7163,7 @@ api.dailyStartup();
 loadServerConfig().then(() => {
   if (currentView === 'master') renderMaster();
   if (typeof dsync !== 'undefined' && dsync.enabled()) dsync.startAuto();
+  // リロードでもログイン状態を保つ（案A）: Googleの生きたセッションから無音でトークンを復元。
+  // clientId はサーバー設定で後から入ることがあるため loadServerConfig 後に呼ぶ。
+  gsync.restoreSession().catch(() => {});
 });
