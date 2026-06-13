@@ -2909,7 +2909,7 @@ function importStatusHtml() {
 
 // ---------- レポート（SEC-17） ----------
 let reportPeriod = 'all'; // 'all' | 'ytd'
-function setReportPeriod(p) { reportPeriod = p; renderReport(); }
+function setReportPeriod(p) { reportPeriod = p; const el = document.getElementById('txn-section'); if (el) el.innerHTML = txnSummaryHtml(); else renderReport(); }
 // ============ マーケット（ランキング）タブ ============
 let mktState = { market: 'US', sub: 'all', kind: 'turnover' };
 // ランキングキャッシュは store.data.mktRanking に永続化（localStorage保存＋Google同期）。key -> { items(5年高値込), at }
@@ -3110,6 +3110,7 @@ function renderReport() {
   for (const h of store.data.holdings) {
     if (!(h.quantity > 0)) continue;
     const sec = store.data.securities.find(s => s.id === h.securityId); if (!sec) continue;
+    if (sec.market !== 'JP' && sec.market !== 'US') continue; // 上部サマリも日本株・米国株のみ（下の集計と整合）
     const m = sec.market, price = calc.price(sec);
     const valN = price != null ? h.quantity * price : h.quantity * h.avgCost;
     const costN = h.quantity * h.avgCost;
@@ -3179,7 +3180,35 @@ function renderReport() {
     return `<tr><td class="l">${esc(b)}</td><td>${cell(v('US|個別株'))}</td><td>${cell(v('US|ETF'))}</td><td>${cell(v('JP|個別株'))}</td><td>${cell(v('JP|ETF'))}</td><td><strong>${yen(tot)}</strong></td></tr>`;
   }).join('');
 
-  // 取引サマリー（期間: 全期間 / 今年）
+  app.innerHTML = `
+    <div class="report-summary" style="display:flex;gap:18px;flex-wrap:wrap;align-items:baseline;padding:6px 2px 12px">
+      <div><span class="muted" style="font-size:11px">総資産（円換算）</span> <span style="font-size:20px;font-weight:700">¥${num(Math.round(totalVal))}</span></div>
+      <div><span class="muted" style="font-size:11px">取得原価</span> <span style="font-size:15px;font-weight:600" class="num">${yen(totalCost)}</span></div>
+      <div><span class="muted" style="font-size:11px">評価損益</span> <span style="font-size:17px;font-weight:700" class="num ${pnlCls}">${yen(pnl)}</span> <span class="${cls(pnlPct)}" style="font-weight:700">${signed(pnlPct)}%</span></div>
+      <span class="muted" style="font-size:10px">※日本株・米国株のみ（投資信託は除外）</span>
+    </div>
+    ${fxMissing ? '<div class="notice">USD/JPY 為替が未取得のため、円換算に米国株を含めていません。「価格更新」で取得できます。</div>' : ''}
+    <div class="section"><div class="section-head" style="flex-wrap:wrap;gap:8px"><h2>資産推移・現在の集計</h2>
+        <div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap">
+          <div class="seg" id="asset-axis-seg">${[['market', '市場別'], ['markettype', '市場+種別'], ['category', 'カテゴリ別']].map(([k, l]) => `<button class="${assetAxis === k ? 'active' : ''}" onclick="setAssetAxis('${k}')">${l}</button>`).join('')}</div>
+          <button class="btn btn-sm ${assetTableBroker ? 'btn-primary' : ''}" onclick="toggleAssetBroker()" title="証券会社別に展開">証券会社別</button>
+        </div></div>
+      <div class="section-body" style="padding:12px 16px 16px">
+        <div class="seg" id="asset-period-seg" style="margin-bottom:8px;width:fit-content">${[['1m', '1ヶ月'], ['3m', '3ヶ月'], ['6m', '6ヶ月'], ['1y', '1年'], ['all', '全期間']].map(([k, l]) => `<button class="${assetPeriod === k ? 'active' : ''}" onclick="setAssetPeriod('${k}')">${l}</button>`).join('')}</div>
+        <div id="portfolio-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
+        <div id="asset-table" style="margin-top:12px"></div>
+        <details style="margin-top:14px"><summary class="lnk">過去データの取込（明細を貼り付け）</summary>
+          <p class="muted" style="margin:8px 0">資産明細（1銘柄×日付の行）をそのまま貼り付けると、日付ごとに集計して履歴に統合します。必要な列＝<b>日付・種別・詳細種別・評価額・取得額</b>（他の列は無視）。日本株・米国株のみ集計。カテゴリ別の内訳は今日以降のみ。</p>
+          <textarea id="asset-import-text" rows="5" style="width:100%;font-family:monospace;font-size:12px" placeholder="日付  …  種別  詳細種別 … 評価額 … 取得額 …（ヘッダ行ごと貼り付け）"></textarea>
+          <div class="form-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn btn-primary" onclick="importAssetHistory()">取込んで統合</button><span id="asset-import-msg" class="muted" style="align-self:center"></span></div>
+        </details>
+      </div></div>
+    <div class="section" id="txn-section">${txnSummaryHtml()}</div>`;
+  loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画
+  renderAssetTable();  // 現在の集計（トグル連動・証券会社別トグル）
+}
+// 取引サマリー（期間: 全期間/今年）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
+function txnSummaryHtml() {
   const yStart = `${new Date().getFullYear()}-01-01`;
   let buyTot = 0, sellTot = 0, buyN = 0, sellN = 0;
   for (const t of store.data.transactions) {
@@ -3190,43 +3219,15 @@ function renderReport() {
   }
   const net = buyTot - sellTot;
   const seg = (p, l) => `<button class="${reportPeriod === p ? 'active' : ''}" onclick="setReportPeriod('${p}')">${l}</button>`;
-
-  app.innerHTML = `
-    <div class="page-intro">
-      <h2>レポート</h2>
-      <p>市場・種別・証券会社ごとの資産集計と取引サマリー（円換算）。</p>
-    </div>
-    <div class="cards">
-      <div class="stat feature"><div class="s-label">総資産（円換算）</div><div class="s-value"><span class="cur">¥</span>${num(Math.round(totalVal))}</div></div>
-      <div class="stat"><div class="s-label">取得原価（円換算）</div><div class="s-value num">${yen(totalCost)}</div></div>
-      <div class="stat"><div class="s-label">評価損益</div><div class="s-value num ${pnlCls}">${yen(pnl)}</div><div class="s-sub ${cls(pnlPct)}" style="font-weight:700">${signed(pnlPct)}%</div></div>
-    </div>
-    ${fxMissing ? '<div class="notice">USD/JPY 為替が未取得のため、円換算に米国株を含めていません。「価格更新」で取得できます。</div>' : ''}
-    <div class="section"><div class="section-head"><h2>資産推移・現在の集計（円換算）</h2>
-        <div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap">
-          <div class="seg" id="asset-axis-seg">${[['market', '市場別'], ['markettype', '市場+種別'], ['category', 'カテゴリ別']].map(([k, l]) => `<button class="${assetAxis === k ? 'active' : ''}" onclick="setAssetAxis('${k}')">${l}</button>`).join('')}</div>
-          <button class="btn btn-sm ${assetTableBroker ? 'btn-primary' : ''}" onclick="toggleAssetBroker()" title="証券会社別に展開">証券会社別</button>
-        </div></div>
-      <div class="section-body" style="padding:16px">
-        <div id="portfolio-chart" class="muted" style="min-height:200px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
-        <div id="asset-table" style="margin-top:14px"></div>
-        <details style="margin-top:14px"><summary class="lnk">過去データの取込（明細を貼り付け）</summary>
-          <p class="muted" style="margin:8px 0">資産明細（1銘柄×日付の行）をそのまま貼り付けると、日付ごとに集計して履歴に統合します。必要な列＝<b>日付・種別・詳細種別・評価額・取得額</b>（他の列は無視）。日本株・米国株のみ集計。カテゴリ別の内訳は今日以降のみ。</p>
-          <textarea id="asset-import-text" rows="5" style="width:100%;font-family:monospace;font-size:12px" placeholder="日付  …  種別  詳細種別 … 評価額 … 取得額 …（ヘッダ行ごと貼り付け）"></textarea>
-          <div class="form-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn btn-primary" onclick="importAssetHistory()">取込んで統合</button><span id="asset-import-msg" class="muted" style="align-self:center"></span></div>
-        </details>
-      </div></div>
-    <div class="section"><div class="section-head"><h2>取引サマリー（${reportPeriod === 'ytd' ? '今年' : '全期間'}・円換算）</h2>
-        <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
-      <div class="table-wrap"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
-        <tbody>
-          <tr><td class="l">買い</td><td>${buyN}</td><td>${yen(buyTot)}</td></tr>
-          <tr><td class="l">売り</td><td>${sellN}</td><td>${yen(sellTot)}</td></tr>
-          <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
-        </tbody></table></div>
-      <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p></div>`;
-  loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画
-  renderAssetTable();  // 現在の集計（トグル連動・証券会社別トグル）
+  return `<div class="section-head"><h2>取引サマリー（${reportPeriod === 'ytd' ? '今年' : '全期間'}・円換算）</h2>
+      <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
+    <div class="table-wrap"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
+      <tbody>
+        <tr><td class="l">買い</td><td>${buyN}</td><td>${yen(buyTot)}</td></tr>
+        <tr><td class="l">売り</td><td>${sellN}</td><td>${yen(sellTot)}</td></tr>
+        <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
+      </tbody></table></div>
+    <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
 }
 // トグル連動の「現在の集計」表。assetTableBroker=false: 分類ごとの集計のみ／true: 証券会社×分類のクロス表。
 let assetTableBroker = false;
@@ -3238,19 +3239,21 @@ function toggleAssetBroker() {
 function computeBrokerBreakdowns() {
   const brokers = {};
   const ens = (b) => brokers[b] || (brokers[b] = { market: {}, markettype: {}, category: {} });
+  const addk = (o, k, v, c) => { const e = o[k] || (o[k] = { v: 0, c: 0 }); e.v += v; e.c += c; };
   for (const h of store.data.holdings) {
     if (!(h.quantity > 0)) continue;
     const sec = store.data.securities.find(s => s.id === h.securityId); if (!sec) continue;
     if (sec.market !== 'JP' && sec.market !== 'US') continue;
     const price = calc.price(sec);
     const vj = calc.toJpy(sec.market, price != null ? h.quantity * price : h.quantity * h.avgCost);
-    if (vj == null) continue;
-    const v = Math.round(vj), b = h.broker || '(不明)';
+    const cj = calc.toJpy(sec.market, h.quantity * h.avgCost);
+    if (vj == null || cj == null) continue;
+    const v = Math.round(vj), c = Math.round(cj), b = h.broker || '(不明)';
     const mk = sec.market === 'JP' ? '日本株' : '米国株', isETF = detailTypeOf(sec) === 'ETF';
     const o = ens(b);
-    o.market[mk] = (o.market[mk] || 0) + v;
-    const mtk = `${mk}・${isETF ? 'ETF' : '個別株'}`; o.markettype[mtk] = (o.markettype[mtk] || 0) + v;
-    const ck = isETF ? 'ETF' : (sec.category || '未分類'); o.category[ck] = (o.category[ck] || 0) + v;
+    addk(o.market, mk, v, c);
+    addk(o.markettype, `${mk}・${isETF ? 'ETF' : '個別株'}`, v, c);
+    addk(o.category, isETF ? 'ETF' : (sec.category || '未分類'), v, c);
   }
   return brokers;
 }
@@ -3259,26 +3262,30 @@ function renderAssetTable() {
   const brokers = computeBrokerBreakdowns();
   const ax = assetAxis, names = Object.keys(brokers);
   if (!names.length) { el.innerHTML = '<div class="empty">保有銘柄がありません（日本株・米国株）。</div>'; return; }
-  const colTotals = {};
-  for (const b of names) { const m = brokers[b][ax]; for (const k in m) colTotals[k] = (colTotals[k] || 0) + m[k]; }
-  const keys = assetOrderKeys(Object.keys(colTotals), ax, colTotals);
-  const grand = Object.values(colTotals).reduce((a, c) => a + c, 0) || 1;
+  const colTotals = {}; // key -> {v,c}
+  for (const b of names) { const m = brokers[b][ax]; for (const k in m) { const e = colTotals[k] || (colTotals[k] = { v: 0, c: 0 }); e.v += m[k].v; e.c += m[k].c; } }
+  const keys = assetOrderKeys(Object.keys(colTotals), ax, Object.fromEntries(Object.entries(colTotals).map(([k, e]) => [k, e.v])));
+  const grandV = Object.values(colTotals).reduce((a, e) => a + e.v, 0) || 1;
+  const grandC = Object.values(colTotals).reduce((a, e) => a + e.c, 0) || 1;
   const colorOf = (k) => assetKeyColor(k, keys.indexOf(k));
-  // 数字の裏に半透明の値比例バー（左から）。max=表内の最大セル基準。
-  const barCell = (val, color, maxv) => val ? `<td class="num" style="position:relative"><span style="position:absolute;left:0;top:1px;bottom:1px;width:${Math.max(2, Math.min(100, val / maxv * 100))}%;background:${color};opacity:.16;border-radius:2px"></span><span style="position:relative">${yen(val)}</span></td>` : '<td class="num" style="color:var(--muted)">—</td>';
+  // 数字の裏に半透明バー（全体=100%基準）。base=その指標の総額。
+  const bar = (val, color, base) => `<td class="num" style="position:relative">${val ? `<span style="position:absolute;left:0;top:1px;bottom:1px;width:${Math.max(1.5, Math.min(100, val / base * 100)).toFixed(1)}%;background:${color};opacity:.16;border-radius:2px"></span>` : ''}<span style="position:relative">${val ? yen(val) : '—'}</span></td>`;
   const chip = (k) => `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colorOf(k)};margin-right:5px;vertical-align:-1px"></span>`;
+  const pct = (x, base) => `<td class="num" style="color:var(--muted)">${num(x / base * 100)}%</td>`;
   if (!assetTableBroker) {
-    const maxv = Math.max(...keys.map(k => colTotals[k]), 1);
-    const rows = keys.map(k => `<tr><td class="l">${chip(k)}${esc(k)}</td>${barCell(colTotals[k], colorOf(k), maxv)}<td class="num">${num(colTotals[k] / grand * 100)}%</td></tr>`).join('');
-    el.innerHTML = `<div class="table-wrap"><table><thead><tr><th class="l">分類</th><th>評価額（円換算）</th><th>構成比</th></tr></thead><tbody>${rows}<tr><td class="l"><strong>合計</strong></td><td class="num"><strong>${yen(grand)}</strong></td><td class="num"><strong>100%</strong></td></tr></tbody></table></div>`;
+    // 分類ごと: 取得額 / 構成比 / 評価額 / 構成比 / 損益（バーは全体100%基準・合計にもバー）
+    const rows = keys.map(k => { const e = colTotals[k], p = e.v - e.c; return `<tr><td class="l nowrap">${chip(k)}${esc(k)}</td>${bar(e.c, colorOf(k), grandC)}${pct(e.c, grandC)}${bar(e.v, colorOf(k), grandV)}${pct(e.v, grandV)}<td class="num ${cls(p)}">${yen(p)}</td></tr>`; }).join('');
+    const gp = grandV - grandC;
+    const total = `<tr><td class="l"><strong>合計</strong></td>${bar(grandC, '#64748b', grandC)}<td class="num"><strong>100%</strong></td>${bar(grandV, '#64748b', grandV)}<td class="num"><strong>100%</strong></td><td class="num ${cls(gp)}"><strong>${yen(gp)}</strong></td></tr>`;
+    el.innerHTML = `<div class="table-wrap"><table class="dense"><thead><tr><th class="l">分類</th><th>取得額</th><th>構成比</th><th>評価額</th><th>構成比</th><th>損益</th></tr></thead><tbody>${rows}${total}</tbody></table></div>`;
     return;
   }
-  const bnames = names.sort((a, b) => keys.reduce((t, k) => t + (brokers[b][ax][k] || 0), 0) - keys.reduce((t, k) => t + (brokers[a][ax][k] || 0), 0));
-  let maxCell = 1; for (const b of bnames) for (const k of keys) maxCell = Math.max(maxCell, brokers[b][ax][k] || 0);
-  const head = `<tr><th class="l">証券会社</th>${keys.map(k => `<th class="nowrap">${chip(k)}${esc(k)}</th>`).join('')}<th>合計</th></tr>`;
-  const rows = bnames.map(b => { const m = brokers[b][ax]; const rt = keys.reduce((t, k) => t + (m[k] || 0), 0); return `<tr><td class="l">${esc(b)}</td>${keys.map(k => barCell(m[k] || 0, colorOf(k), maxCell)).join('')}<td class="num"><strong>${yen(rt)}</strong></td></tr>`; }).join('');
-  const totRow = `<tr><td class="l"><strong>合計</strong></td>${keys.map(k => `<td class="num"><strong>${yen(colTotals[k])}</strong></td>`).join('')}<td class="num"><strong>${yen(grand)}</strong></td></tr>`;
-  el.innerHTML = `<div class="table-wrap"><table><thead>${head}</thead><tbody>${rows}${totRow}</tbody></table></div>`;
+  // 証券会社別クロス: 行=分類, 列=証券会社+合計（バーは評価額・全体100%基準）。
+  const bnames = names.sort((a, b) => keys.reduce((t, k) => t + (brokers[b][ax][k] ? brokers[b][ax][k].v : 0), 0) - keys.reduce((t, k) => t + (brokers[a][ax][k] ? brokers[a][ax][k].v : 0), 0));
+  const head = `<tr><th class="l">分類 ＼ 証券会社</th>${bnames.map(b => `<th class="nowrap">${esc(b)}</th>`).join('')}<th>合計</th></tr>`;
+  const rows = keys.map(k => { const col = colorOf(k); return `<tr><td class="l nowrap">${chip(k)}${esc(k)}</td>${bnames.map(b => { const e = brokers[b][ax][k]; return bar(e ? e.v : 0, col, grandV); }).join('')}${bar(colTotals[k].v, col, grandV)}</tr>`; }).join('');
+  const totRow = `<tr><td class="l"><strong>合計</strong></td>${bnames.map(b => { const bt = keys.reduce((t, k) => t + (brokers[b][ax][k] ? brokers[b][ax][k].v : 0), 0); return bar(bt, '#64748b', grandV); }).join('')}${bar(grandV, '#64748b', grandV)}</tr>`;
+  el.innerHTML = `<div class="table-wrap"><table class="dense"><thead>${head}</thead><tbody>${rows}${totRow}</tbody></table></div>`;
 }
 
 // ---------- 銘柄マスタ（SEC-27） ----------
@@ -6666,6 +6673,7 @@ function today() { return new Date().toISOString().slice(0, 10); }
 // サーバー日次（byCategory/byMarket/byMarketType付き）＋取込済み過去（byMarket/byMarketType）を /api/portfolio-history
 // から取得し、3軸（市場/市場+種別/カテゴリ）でスタック描画。取得原価の線を重ねる。
 let assetAxis = 'market';   // 'market' | 'markettype' | 'category'
+let assetPeriod = 'all';    // 'all' | '1y' | '6m' | '3m' | '1m'（チャートの表示期間）
 let _assetSnaps = null;     // 取得した snapshots のキャッシュ（軸切替で再fetchしない）
 function setAssetAxis(a) {
   assetAxis = a;
@@ -6730,10 +6738,20 @@ function computeTodayBreakdown() {
   }
   return { date: today(), totalJpy: Math.round(totalJpy), costJpy: Math.round(costJpy), byCategory, byMarket, byMarketType };
 }
+function setAssetPeriod(p) {
+  assetPeriod = p;
+  document.querySelectorAll('#asset-period-seg button').forEach(b => b.classList.toggle('active', b.getAttribute('onclick') === `setAssetPeriod('${p}')`));
+  renderAssetChart();
+}
 function renderAssetChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
-  const snaps = _assetSnaps || [];
-  if (snaps.length < 2) { el.innerHTML = `<div class="notice" style="margin:0">資産推移は2日分以上たまると表示されます（現在 ${snaps.length} 日分）。毎朝サーバーが日次記録。過去データは下の「過去データの取込」で一気に入れられます。</div>`; return; }
+  let snaps = _assetSnaps || [];
+  // 表示期間でフィルタ（全期間/1年/6ヶ月/3ヶ月/1ヶ月）
+  if (assetPeriod !== 'all' && snaps.length) {
+    const months = { '1m': 1, '3m': 3, '6m': 6, '1y': 12 }[assetPeriod];
+    if (months) { const cut = new Date(); cut.setMonth(cut.getMonth() - months); const cs = cut.toISOString().slice(0, 10); snaps = snaps.filter(s => s.date >= cs); }
+  }
+  if (snaps.length < 2) { el.innerHTML = `<div class="notice" style="margin:0">資産推移は2日分以上たまると表示されます（現在 ${snaps.length} 日分・この期間）。毎朝サーバーが日次記録。過去は下の「過去データの取込」で一括投入できます。</div>`; return; }
   el.classList.remove('muted');
   el.innerHTML = assetStackChart(snaps, assetAxis);
 }
@@ -6757,7 +6775,7 @@ function assetOrderKeys(keys, axis, sums) {
   return keys.slice().sort((a, b) => { const r = (k) => k === 'ETF' ? -2 : k === ASSET_NONE ? 2 : 0; return r(a) !== r(b) ? r(a) - r(b) : (sums[b] || 0) - (sums[a] || 0); });
 }
 function assetStackChart(snaps, axis) {
-  const W = 800, H = 430, pad = { l: 62, r: 12, t: 10, b: 22 };
+  const W = 800, H = 280, pad = { l: 62, r: 12, t: 8, b: 20 };
   const keyOf = { category: 'byCategory', market: 'byMarket', markettype: 'byMarketType' }[axis] || 'byMarket';
   const NONE = ASSET_NONE;
   // この軸の内訳。無い場合: カテゴリ軸は byMarketType から ETF/個別株 を導出（過去データ用）、それも無ければ総資産1本。
@@ -6803,10 +6821,11 @@ function assetStackChart(snaps, axis) {
   // 凡例＝チャート下に縦並び（上から積み上げ最上層の順＝keysの逆順）。軸切替で本体グラフは不変。
   const legend = keys.slice().reverse().map((k, j) => { const ki = keys.indexOf(k); return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:12px"><span style="width:12px;height:12px;flex:0 0 12px;background:${colorOf(k, ki)};border-radius:2px"></span><span>${esc(k)}</span></div>`; }).join('')
     + (hasCost ? `<div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:2px"><span style="width:18px;flex:0 0 18px;border-top:2px dashed #111827"></span>取得原価</div>` : '');
-  const summary = `<b>最新 ${esc(last.date)}</b>：総資産 ${yen(last.totalJpy || 0)}${last.costJpy ? ` ／ 取得原価 ${yen(last.costJpy)} ／ 含み益 <span class="${cls((last.totalJpy || 0) - last.costJpy)}">${yen((last.totalJpy || 0) - last.costJpy)}</span>` : ''}`;
+  // 凡例はチャート下に横並び（コンパクト）。最新サマリは上部カードと重複のため省略。
+  const legendRow = keys.slice().reverse().map((k, j) => { const ki = keys.indexOf(k); return `<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 4px 0;font-size:11px"><span style="width:11px;height:11px;background:${colorOf(k, ki)};border-radius:2px"></span>${esc(k)}</span>`; }).join('')
+    + (hasCost ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px"><span style="width:16px;border-top:2px dashed #111827"></span>取得原価</span>` : '');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${bands}${grid}${xlab}${ylab}${costLine}</svg>
-    <div style="margin-top:8px;font-size:12px">${summary}</div>
-    <div style="margin-top:8px">${legend}</div>`;
+    <div style="margin-top:6px;line-height:1.7">${legendRow}</div>`;
 }
 // 過去の資産明細（1銘柄×日付）を貼り付け→日付別に集計→portfolio-history.json へ統合。
 // 必要列: 日付 / 種別(日本株|米国株) / 詳細種別(ETF→ETF・他→個別) / 評価額(or評価円) / 取得額(or取得円)。
