@@ -774,7 +774,10 @@ table.fixed-cols.holdings.dense tbody td { padding: 4px 12px; line-height: 1.3; 
 table.fixed-cols.holdings.dense .tk { width: 34px; height: 22px; font-size: 10.5px; border-radius: 5px; }
 table.fixed-cols.holdings.dense .nm-strong { font-weight: 600; }
 /* サインのグループ見出し行（横スクロールしても左に固定して見える） */
-table.fixed-cols .sig-group td { background: var(--panel-2); font-weight: 700; }
+/* 小見出し(到達/もうすぐ)の左固定。fixed-cols の td は overflow:hidden だが、祖先の overflow:hidden は
+   子の position:sticky を無効化するため、小見出しセルだけ overflow:visible にしてセル内ラベルを sticky 化する。 */
+table.fixed-cols .sig-group td { background: var(--panel-2); font-weight: 700; overflow: visible; }
+.sig-group-label { position: sticky; left: 0; display: inline-block; padding-left: 2px; z-index: 3; }
 
 /* 一覧でない holdings テーブル（行クリック不可）はカーソルを通常に */
 table.holdings.no-rowclick tbody tr { cursor: default; }
@@ -883,7 +886,7 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent);
   mask-image: linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
 .tickers-track { display: inline-flex; align-items: center; flex: 0 0 auto; }
-.tickers-track.is-scrolling { animation: ticker-marquee 30s linear infinite; }
+.tickers-track.is-scrolling { animation: ticker-marquee 20s linear infinite; }
 .tickers-track > * { flex: 0 0 auto; margin-right: 26px; }
 .tickers-fx { flex: 0 0 auto; }
 .tickers-marquee:hover .tickers-track.is-scrolling { animation-play-state: paused; }

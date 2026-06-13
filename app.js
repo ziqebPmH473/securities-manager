@@ -2682,7 +2682,8 @@ function renderSignals() {
   const sigColgroup = `<colgroup>${visOrderS.map(c => colTag(c)).join('')}<col style="width:${SIG_ACTION_W}px"></colgroup>`;
   const sigTableW = SIG_ACTION_W + visOrderS.reduce((a, c) => a + colWidthPx(c), 0);
   // 到達／もうすぐ を1つの表にまとめ、グループ見出し行で区切る（列幅を揃えるため）
-  const groupRow = (label, cls2, n) => `<tr class="sig-group ${cls2}"><td class="l" colspan="${colCount}" style="position:sticky;left:0;text-align:left">${label}　${n} 件</td></tr>`;
+  // colspanセル自体への position:sticky はブラウザで効きにくいため、セル内のラベル(span)を sticky 化して左固定する。
+  const groupRow = (label, cls2, n) => `<tr class="sig-group ${cls2}"><td class="l" colspan="${colCount}"><span class="sig-group-label">${label}　${n} 件</span></td></tr>`;
   const bodyRows = (secs) => secs.length
     ? secs.map(sec => marketRow(sec, visibleCols, { actions: 'signal' })).join('')
     : `<tr><td class="muted" colspan="${colCount}" style="padding:12px 16px">該当する銘柄はありません。</td></tr>`;
