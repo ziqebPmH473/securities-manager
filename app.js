@@ -1839,7 +1839,10 @@ function toggleInlineEdit() {
 // 先頭から連続する「選択列→コード→銘柄名」のみ固定（途中に他列が挟まる並べ替え時は固定しない＝レイアウト破綻防止）。
 function applyStickyCols(table) {
   if (!table || !table.tHead || !table.tBodies[0]) return;
-  const headRow = table.tHead.rows[0], bodyRow = table.tBodies[0].rows[0];
+  const headRow = table.tHead.rows[0];
+  // 代表データ行は「ヘッダと同じ列数」の行を選ぶ。サインの🔴到達等のグループ見出し行（colspan＝1セル）を
+  // 拾うとコード/銘柄名の列検出が壊れ、銘柄名が固定されない不具合になるため除外する。
+  const bodyRow = [...table.tBodies[0].rows].find(r => r.cells.length === (headRow ? headRow.cells.length : 0));
   if (!headRow || !bodyRow) return;
   [...table.rows].forEach(r => [...r.cells].forEach(c => { c.classList.remove('stick', 'stick-edge'); c.style.left = ''; }));
   const want = new Set([0]); // 先頭=選択(チェックボックス)列
@@ -1991,8 +1994,14 @@ function updateHeader() {
       }
       return `<div class="ticker"><span class="t-label">${ixDef.label}</span><span class="t-val num">${val}</span>${metric}</div>`;
     };
-    tickers.innerHTML = INDICES.map(tk).join('')
+    const _tkItems = INDICES.map(tk).join('')
       + `<div class="fx-chip"><span class="t-label">USD/JPY</span><span class="t-val num">${fx ? fx.toFixed(2) : '—'}</span></div>`;
+    // 電光掲示板（マーキー）: 同じ内容を2連結し translateX(-50%) でシームレスにループ。折り返しによるヘッダ崩れも防ぐ。
+    // 値が変わらない再描画ではDOMを作り直さない（アニメーションが先頭に戻る＝ガクつくのを防止）。
+    if (tickers._tkLast !== _tkItems) {
+      tickers._tkLast = _tkItems;
+      tickers.innerHTML = `<div class="tickers-track">${_tkItems}${_tkItems}</div>`;
+    }
   }
   const um = document.getElementById('update-meta');
   if (um) {
