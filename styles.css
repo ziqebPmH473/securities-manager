@@ -875,18 +875,21 @@ html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 .main { min-height: 0; }
 main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
-/* ===== 指数を電光掲示板（マーキー）表示。折り返しによるヘッダ崩れを防ぎ、横に流す（PC/スマホ共通） =====
-   .tickers は display:flex のまま「窓」にし overflow:hidden で内部のトラックをクリップ。
-   トラックは同内容2連結で、translateX(-50%) によりシームレスにループ。 */
-.tickers { overflow: hidden; gap: 0; min-width: 0; flex: 1 1 0; max-width: none;
+/* ===== 指数を電光掲示板（マーキー）表示。指数だけ流し、ドル円(為替)は流さず固定。
+   幅が足りて全部入る時は流さない（is-scrolling が付いた時だけアニメ）。 ===== */
+.tickers { display: flex; align-items: center; gap: 14px; overflow: visible; min-width: 0; flex: 1 1 0; max-width: none; }
+.tickers-marquee { overflow: hidden; flex: 1 1 0; min-width: 0; }
+.tickers-marquee.is-scrolling {
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent);
   mask-image: linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
+.tickers-track { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.tickers-track.is-scrolling { animation: ticker-marquee 30s linear infinite; }
+.tickers-track > * { flex: 0 0 auto; margin-right: 26px; }
+.tickers-fx { flex: 0 0 auto; }
+.tickers-marquee:hover .tickers-track.is-scrolling { animation-play-state: paused; }
+@keyframes ticker-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .tickers-track.is-scrolling { animation: none; } }
 /* 大きな余白(spacer)はやめ、指数マーキーに横幅を譲って利用可能幅いっぱいに広げる。
    ログイン警告が消えればその分も自動で広がる。指数非表示のスマホ幅では spacer を戻して右寄せを維持。 */
 .topbar-spacer { flex: 0 1 14px; }
 @media (max-width: 720px) { .topbar-spacer { flex: 1 1 auto; } }
-.tickers-track { display: inline-flex; align-items: center; flex: 0 0 auto; animation: ticker-marquee 30s linear infinite; }
-.tickers-track > * { flex: 0 0 auto; margin-right: 26px; }
-.tickers:hover .tickers-track { animation-play-state: paused; }
-@keyframes ticker-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-@media (prefers-reduced-motion: reduce) { .tickers-track { animation: none; } }

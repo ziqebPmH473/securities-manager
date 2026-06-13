@@ -1930,8 +1930,29 @@ function fitListTables() {
     }
   }
 }
+// 指数マーキー: 指数がマーキー窓に収まるなら流さない（is-scrolling 無し＝静止）。あふれる時だけ
+// 同内容を2連結して translateX(-50%) でシームレスに流す。窓幅は可変（リサイズ/ログイン警告の有無）なので
+// 状態が変わった時だけ作り直す（不要な作り直しでアニメが先頭に戻るのを防ぐ）。ドル円は別要素で固定表示。
+function layoutTickerMarquee() {
+  const tickers = document.getElementById('tickers');
+  if (!tickers) return;
+  const marquee = tickers.querySelector('.tickers-marquee');
+  const track = tickers.querySelector('.tickers-track');
+  if (!marquee || !track) return;
+  const idx = tickers._idxItems || '';
+  const isDup = track.dataset.dup === '1';
+  const singleW = isDup ? track.scrollWidth / 2 : track.scrollWidth; // 複製中は半分が単一内容の幅
+  const need = singleW > marquee.clientWidth + 4;
+  if (need && !isDup) {
+    track.innerHTML = idx + idx; track.dataset.dup = '1';
+    track.classList.add('is-scrolling'); marquee.classList.add('is-scrolling');
+  } else if (!need && isDup) {
+    track.innerHTML = idx; track.dataset.dup = '0';
+    track.classList.remove('is-scrolling'); marquee.classList.remove('is-scrolling');
+  }
+}
 let _fitTimer = null;
-window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(fitListTables, 120); });
+window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { fitListTables(); layoutTickerMarquee(); }, 120); });
 
 // 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート等で左端に戻らないように）
 function preserveTableScroll(fn) {
@@ -1994,14 +2015,17 @@ function updateHeader() {
       }
       return `<div class="ticker"><span class="t-label">${ixDef.label}</span><span class="t-val num">${val}</span>${metric}</div>`;
     };
-    const _tkItems = INDICES.map(tk).join('')
-      + `<div class="fx-chip"><span class="t-label">USD/JPY</span><span class="t-val num">${fx ? fx.toFixed(2) : '—'}</span></div>`;
-    // 電光掲示板（マーキー）: 同じ内容を2連結し translateX(-50%) でシームレスにループ。折り返しによるヘッダ崩れも防ぐ。
-    // 値が変わらない再描画ではDOMを作り直さない（アニメーションが先頭に戻る＝ガクつくのを防止）。
-    if (tickers._tkLast !== _tkItems) {
-      tickers._tkLast = _tkItems;
-      tickers.innerHTML = `<div class="tickers-track">${_tkItems}${_tkItems}</div>`;
+    const _idxItems = INDICES.map(tk).join('');
+    const _fxChip = `<div class="fx-chip"><span class="t-label">USD/JPY</span><span class="t-val num">${fx ? fx.toFixed(2) : '—'}</span></div>`;
+    // 指数だけ電光掲示板（マーキー）。ドル円(為替)は流さず右に固定表示。幅が足りれば流さない（layoutTickerMarquee）。
+    const _payload = _idxItems + '||' + _fxChip;
+    if (tickers._tkLast !== _payload) {
+      tickers._tkLast = _payload;
+      tickers._idxItems = _idxItems;
+      tickers.innerHTML = `<div class="tickers-marquee"><div class="tickers-track">${_idxItems}</div></div><div class="tickers-fx">${_fxChip}</div>`;
+      const tr = tickers.querySelector('.tickers-track'); if (tr) tr.dataset.dup = '0';
     }
+    layoutTickerMarquee();
   }
   const um = document.getElementById('update-meta');
   if (um) {
