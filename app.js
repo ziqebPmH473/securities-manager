@@ -3221,7 +3221,7 @@ function txnSummaryHtml() {
   const seg = (p, l) => `<button class="${reportPeriod === p ? 'active' : ''}" onclick="setReportPeriod('${p}')">${l}</button>`;
   return `<div class="section-head"><h2>取引サマリー（${reportPeriod === 'ytd' ? '今年' : '全期間'}・円換算）</h2>
       <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
-    <div class="table-wrap"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
+    <div style="overflow-x:auto;max-width:100%"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
       <tbody>
         <tr><td class="l">買い</td><td>${buyN}</td><td>${yen(buyTot)}</td></tr>
         <tr><td class="l">売り</td><td>${sellN}</td><td>${yen(sellTot)}</td></tr>
@@ -3298,7 +3298,7 @@ function renderAssetTable() {
   const perTd = (cur, past) => { if (!cmp) return '<td class="num" style="color:var(--muted)">—</td>'; if (!past) return '<td class="num" style="color:var(--muted)">—</td>'; const ch = cur - past, cp = past > 0 ? ch / past * 100 : 0; return `<td class="num ${cls(ch)} nowrap">${yen(ch)} <span style="font-size:11px">${signed(cp)}%</span></td>`; };
   if (!assetTableBroker) {
     const perHead = cmp ? cmp.label : '期間比';
-    const row = (k, label, color, v, c, sub) => `<tr${sub ? ' style="background:var(--panel-2)"' : ''}><td class="l nowrap">${color ? `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};margin-right:5px;vertical-align:-1px"></span>` : ''}${sub ? '<strong>' : ''}${esc(label)}${sub ? '</strong>' : ''}</td>${bar(c, color || '#64748b', grandC)}${pct(c, grandC)}${bar(v, color || '#64748b', grandV)}${pct(v, grandV)}${pnlTd(v, c)}${perTd(v, (cmp ? (sub ? sub.past : (cmp.past[k] || 0)) : 0))}</tr>`;
+    const row = (k, label, color, v, c, sub) => `<tr${sub ? ' style="background:var(--panel-2)"' : ''}><td class="l nowrap">${color ? `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};margin-right:5px;vertical-align:-1px"></span>` : ''}${sub ? '<strong>' : ''}${esc(label)}${sub ? '</strong>' : ''}</td>${bar(c, color || '#64748b', grandC)}${pct(c, grandC)}${bar(v, color || '#64748b', grandV)}${pct(v, grandV)}${perTd(v, (cmp ? (sub ? sub.past : (cmp.past[k] || 0)) : 0))}${pnlTd(v, c)}</tr>`;
     let rows = '';
     if (ax === 'markettype') {
       for (const [g, re] of [['個別株', /個別株$/], ['ETF', /ETF$/]]) {
@@ -3310,8 +3310,8 @@ function renderAssetTable() {
     } else {
       keys.forEach(k => { rows += row(k, k, colorOf(k), colTotals[k].v, colTotals[k].c); });
     }
-    const total = `<tr style="font-weight:700"><td class="l">合計</td>${bar(grandC, '#64748b', grandC)}<td class="num">100%</td>${bar(grandV, '#64748b', grandV)}<td class="num">100%</td>${pnlTd(grandV, grandC)}${perTd(grandV, cmp ? cmp.total : 0)}</tr>`;
-    el.innerHTML = `<div class="table-wrap"><table class="dense"><thead><tr><th class="l">分類</th><th>取得額</th><th>比</th><th>評価額</th><th>比</th><th>損益</th><th class="nowrap">${esc(perHead)}</th></tr></thead><tbody>${rows}${total}</tbody></table></div>`;
+    const total = `<tr style="font-weight:700"><td class="l">合計</td>${bar(grandC, '#64748b', grandC)}<td class="num">100%</td>${bar(grandV, '#64748b', grandV)}<td class="num">100%</td>${perTd(grandV, cmp ? cmp.total : 0)}${pnlTd(grandV, grandC)}</tr>`;
+    el.innerHTML = `<div style="overflow-x:auto;max-width:100%"><table class="dense"><thead><tr><th class="l">分類</th><th>取得額</th><th>割合</th><th>評価額</th><th>割合</th><th class="nowrap">${esc(perHead)}</th><th>損益</th></tr></thead><tbody>${rows}${total}</tbody></table></div>`;
     return;
   }
   // 証券会社別クロス: 行=分類, 列=証券会社+合計（評価額・全体100%基準のバー）。
@@ -3319,7 +3319,7 @@ function renderAssetTable() {
   const head = `<tr><th class="l">分類 ＼ 証券会社</th>${bnames.map(b => `<th class="nowrap">${esc(b)}</th>`).join('')}<th>合計</th></tr>`;
   const rows = keys.map(k => { const col = colorOf(k); return `<tr><td class="l nowrap">${chip(k)}${esc(k)}</td>${bnames.map(b => { const e = brokers[b][ax][k]; return bar(e ? e.v : 0, col, grandV); }).join('')}${bar(colTotals[k].v, col, grandV)}</tr>`; }).join('');
   const totRow = `<tr style="font-weight:700"><td class="l">合計</td>${bnames.map(b => { const bt = keys.reduce((t, k) => t + (brokers[b][ax][k] ? brokers[b][ax][k].v : 0), 0); return bar(bt, '#64748b', grandV); }).join('')}${bar(grandV, '#64748b', grandV)}</tr>`;
-  el.innerHTML = `<div class="table-wrap"><table class="dense"><thead>${head}</thead><tbody>${rows}${totRow}</tbody></table></div>`;
+  el.innerHTML = `<div style="overflow-x:auto;max-width:100%"><table class="dense"><thead>${head}</thead><tbody>${rows}${totRow}</tbody></table></div>`;
 }
 
 // ---------- 銘柄マスタ（SEC-27） ----------
@@ -6776,6 +6776,7 @@ function setAssetPeriod(p) {
   assetPeriod = p;
   document.querySelectorAll('#asset-period-seg button').forEach(b => b.classList.toggle('active', b.getAttribute('onclick') === `setAssetPeriod('${p}')`));
   renderAssetChart();
+  renderAssetTable(); // 期間損益の比較対象も連動して更新
 }
 function renderAssetChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
