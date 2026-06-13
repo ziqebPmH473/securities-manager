@@ -539,8 +539,9 @@ const gsync = {
       this._token = saved.t; this._scope = saved.s || ''; this._email = saved.e || '';
       try { render(); } catch (_) {}
       try { if (typeof dsync !== 'undefined') dsync.afterSignIn(); } catch (_) {}
-      // 背景でトークン延長を試みる（Cookieが通る環境なら有効期限が伸びる。失敗してもこのセッションは有効）
-      this.ensureGis().then(() => this.refresh()).catch(() => {});
+      // 注意: ここで無音再取得(refresh)を呼ばない。保存トークンは失効前で有効なため再取得は不要で、
+      // GISの再取得はCookieブロック時にGoogleのアカウント選択画面を開いてしまう（リロード毎に出る不具合の原因）。
+      // 失効後は Drive アクセスの401時に必要に応じて再取得する。
       return true;
     }
     // ② 保存が無い/失効 → サイレント再取得（セッション＆Cookieが生きていれば成功）
@@ -3253,8 +3254,8 @@ function renderReport() {
         </details>
       </div></div>
     <div class="section" id="txn-section">${txnSummaryHtml()}</div>`;
-  loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画
-  renderAssetTable();  // 現在の集計（トグル連動・証券会社別トグル）
+  renderAssetTable();  // 先に表を確定（min-height）＝グラフの利用可能高さが安定し、表が後から動かない
+  loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画（領域の高さは先に確保）
 }
 // 取引サマリー（期間: 全期間/今年）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
 function txnSummaryHtml() {
@@ -6771,7 +6772,11 @@ async function loadPortfolioChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
   const note = (html) => { el.innerHTML = `<div class="notice" style="margin:0">${html}</div>`; };
   const token = (typeof gsync !== 'undefined' && gsync._token) ? gsync._token : null;
-  if (!token) { _assetSnaps = null; note('資産推移はGoogleログイン時に表示されます（総資産＝本人のみ閲覧可）。マスタ・設定からログインしてください。'); return; }
+  if (!token) { _assetSnaps = null; el.style.height = ''; note('資産推移はGoogleログイン時に表示されます（総資産＝本人のみ閲覧可）。マスタ・設定からログインしてください。'); return; }
+  // ③対策: グラフ領域の高さを先に確保＝表示の前後で下の表が動かない（プレースホルダもグラフも同じ高さ）。
+  try { const rh = assetChartBox(el).h; el.style.height = rh + 'px'; el.style.minHeight = rh + 'px'; } catch (_) {}
+  // ②対策: 取得済みスナップショットがあれば即描画＝再render時に「読み込み中…」へ戻る点滅を防ぐ。
+  if (Array.isArray(_assetSnaps) && _assetSnaps.length >= 2) { try { renderAssetChart(); } catch (_) {} }
   // 履歴ファイルが無ければ作成（サーバーcronが書けるように）。※アプリはJSONには書かない（表示専用）。
   try { if (typeof dsync !== 'undefined' && gsync.hasDrive && gsync.hasDrive()) await dsync.ensureHistoryFile(); } catch (_) {}
   try {
@@ -6842,6 +6847,7 @@ function renderAssetChart() {
   // プレースホルダの中央寄せ(display:flex;justify-content:center)が残るとグラフのflexが潰れて極小になるため、block に戻す
   el.style.display = 'block'; el.style.alignItems = ''; el.style.justifyContent = ''; el.style.minHeight = '';
   const { w, h } = assetChartBox(el);
+  el.style.height = h + 'px'; // 高さを固定＝期間/軸トグルやグラフ更新でも下の表が動かない
   el.innerHTML = assetStackChart(snaps, assetAxis, w, h);
 }
 // グラフを「上部サマリ＋トグル＋グラフ＋表」がスクロールせず収まる範囲で最大サイズにする。
