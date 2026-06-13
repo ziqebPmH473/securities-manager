@@ -3257,34 +3257,68 @@ function computeBrokerBreakdowns() {
   }
   return brokers;
 }
+// 表示期間に対応する過去スナップショットの分類別評価額（期間損益の比較用）。{label, past:{key:val}, total} or null。
+function periodComparison(ax) {
+  const snaps = _assetSnaps || []; if (snaps.length < 2) return null;
+  let chosen = null;
+  if (assetPeriod === 'all') { chosen = snaps[0]; }
+  else {
+    const months = { '1m': 1, '3m': 3, '6m': 6, '1y': 12 }[assetPeriod];
+    const cut = new Date(); cut.setMonth(cut.getMonth() - months); const cs = cut.toISOString().slice(0, 10);
+    for (const s of snaps) { if (s.date <= cs) chosen = s; else break; } // cut以前で最新
+    if (!chosen) chosen = snaps[0]; // 履歴が期間より短ければ最古
+  }
+  if (!chosen) return null;
+  const keyOf = { market: 'byMarket', markettype: 'byMarketType', category: 'byCategory' }[ax];
+  let b = chosen[keyOf];
+  if (ax === 'category' && (!b || !Object.keys(b).length) && chosen.byMarketType) { b = {}; for (const k in chosen.byMarketType) { const e = /ETF$/.test(k) ? 'ETF' : 'その他'; b[e] = (b[e] || 0) + chosen.byMarketType[k]; } }
+  const nb = {}; for (const k in (b || {})) { const nk = k.replace(/・個別$/, '・個別株'); nb[nk] = (nb[nk] || 0) + b[k]; }
+  const dt = new Date(Date.parse(chosen.date));
+  return { label: `${dt.getFullYear()}/${dt.getMonth() + 1}比`, past: nb, total: chosen.totalJpy || 0 };
+}
 function renderAssetTable() {
   const el = document.getElementById('asset-table'); if (!el) return;
   const brokers = computeBrokerBreakdowns();
   const ax = assetAxis, names = Object.keys(brokers);
   if (!names.length) { el.innerHTML = '<div class="empty">保有銘柄がありません（日本株・米国株）。</div>'; return; }
-  const colTotals = {}; // key -> {v,c}
+  // トグルで表サイズが変わらないよう、全軸の最大行数で min-height を固定（情報量最大に合わせる）
+  const keyCount = (axis) => { const s = new Set(); for (const b of names) for (const k in brokers[b][axis]) s.add(k); return s.size; };
+  el.style.minHeight = ((Math.max(keyCount('market'), keyCount('markettype') + 2, keyCount('category')) + 3) * 31 + 4) + 'px';
+  const colTotals = {};
   for (const b of names) { const m = brokers[b][ax]; for (const k in m) { const e = colTotals[k] || (colTotals[k] = { v: 0, c: 0 }); e.v += m[k].v; e.c += m[k].c; } }
   const keys = assetOrderKeys(Object.keys(colTotals), ax, Object.fromEntries(Object.entries(colTotals).map(([k, e]) => [k, e.v])));
   const grandV = Object.values(colTotals).reduce((a, e) => a + e.v, 0) || 1;
   const grandC = Object.values(colTotals).reduce((a, e) => a + e.c, 0) || 1;
   const colorOf = (k) => assetKeyColor(k, keys.indexOf(k));
-  // 数字の裏に半透明バー（全体=100%基準）。base=その指標の総額。
+  const cmp = periodComparison(ax);
   const bar = (val, color, base) => `<td class="num" style="position:relative">${val ? `<span style="position:absolute;left:0;top:1px;bottom:1px;width:${Math.max(1.5, Math.min(100, val / base * 100)).toFixed(1)}%;background:${color};opacity:.16;border-radius:2px"></span>` : ''}<span style="position:relative">${val ? yen(val) : '—'}</span></td>`;
   const chip = (k) => `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colorOf(k)};margin-right:5px;vertical-align:-1px"></span>`;
   const pct = (x, base) => `<td class="num" style="color:var(--muted)">${num(x / base * 100)}%</td>`;
+  const pnlTd = (v, c) => { const p = v - c, pp = c > 0 ? p / c * 100 : 0; return `<td class="num ${cls(p)} nowrap">${yen(p)} <span style="font-size:11px">${signed(pp)}%</span></td>`; };
+  const perTd = (cur, past) => { if (!cmp) return '<td class="num" style="color:var(--muted)">—</td>'; if (!past) return '<td class="num" style="color:var(--muted)">—</td>'; const ch = cur - past, cp = past > 0 ? ch / past * 100 : 0; return `<td class="num ${cls(ch)} nowrap">${yen(ch)} <span style="font-size:11px">${signed(cp)}%</span></td>`; };
   if (!assetTableBroker) {
-    // 分類ごと: 取得額 / 構成比 / 評価額 / 構成比 / 損益（バーは全体100%基準・合計にもバー）
-    const rows = keys.map(k => { const e = colTotals[k], p = e.v - e.c; return `<tr><td class="l nowrap">${chip(k)}${esc(k)}</td>${bar(e.c, colorOf(k), grandC)}${pct(e.c, grandC)}${bar(e.v, colorOf(k), grandV)}${pct(e.v, grandV)}<td class="num ${cls(p)}">${yen(p)}</td></tr>`; }).join('');
-    const gp = grandV - grandC;
-    const total = `<tr><td class="l"><strong>合計</strong></td>${bar(grandC, '#64748b', grandC)}<td class="num"><strong>100%</strong></td>${bar(grandV, '#64748b', grandV)}<td class="num"><strong>100%</strong></td><td class="num ${cls(gp)}"><strong>${yen(gp)}</strong></td></tr>`;
-    el.innerHTML = `<div class="table-wrap"><table class="dense"><thead><tr><th class="l">分類</th><th>取得額</th><th>構成比</th><th>評価額</th><th>構成比</th><th>損益</th></tr></thead><tbody>${rows}${total}</tbody></table></div>`;
+    const perHead = cmp ? cmp.label : '期間比';
+    const row = (k, label, color, v, c, sub) => `<tr${sub ? ' style="background:var(--panel-2)"' : ''}><td class="l nowrap">${color ? `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};margin-right:5px;vertical-align:-1px"></span>` : ''}${sub ? '<strong>' : ''}${esc(label)}${sub ? '</strong>' : ''}</td>${bar(c, color || '#64748b', grandC)}${pct(c, grandC)}${bar(v, color || '#64748b', grandV)}${pct(v, grandV)}${pnlTd(v, c)}${perTd(v, (cmp ? (sub ? sub.past : (cmp.past[k] || 0)) : 0))}</tr>`;
+    let rows = '';
+    if (ax === 'markettype') {
+      for (const [g, re] of [['個別株', /個別株$/], ['ETF', /ETF$/]]) {
+        const gk = keys.filter(k => re.test(k)); if (!gk.length) continue;
+        let sv = 0, sc = 0, sp = 0; gk.forEach(k => { sv += colTotals[k].v; sc += colTotals[k].c; sp += (cmp ? (cmp.past[k] || 0) : 0); });
+        rows += row('__' + g, g + ' 小計', '#64748b', sv, sc, { past: sp });
+        gk.forEach(k => { rows += row(k, '　' + k, colorOf(k), colTotals[k].v, colTotals[k].c); });
+      }
+    } else {
+      keys.forEach(k => { rows += row(k, k, colorOf(k), colTotals[k].v, colTotals[k].c); });
+    }
+    const total = `<tr style="font-weight:700"><td class="l">合計</td>${bar(grandC, '#64748b', grandC)}<td class="num">100%</td>${bar(grandV, '#64748b', grandV)}<td class="num">100%</td>${pnlTd(grandV, grandC)}${perTd(grandV, cmp ? cmp.total : 0)}</tr>`;
+    el.innerHTML = `<div class="table-wrap"><table class="dense"><thead><tr><th class="l">分類</th><th>取得額</th><th>比</th><th>評価額</th><th>比</th><th>損益</th><th class="nowrap">${esc(perHead)}</th></tr></thead><tbody>${rows}${total}</tbody></table></div>`;
     return;
   }
-  // 証券会社別クロス: 行=分類, 列=証券会社+合計（バーは評価額・全体100%基準）。
+  // 証券会社別クロス: 行=分類, 列=証券会社+合計（評価額・全体100%基準のバー）。
   const bnames = names.sort((a, b) => keys.reduce((t, k) => t + (brokers[b][ax][k] ? brokers[b][ax][k].v : 0), 0) - keys.reduce((t, k) => t + (brokers[a][ax][k] ? brokers[a][ax][k].v : 0), 0));
   const head = `<tr><th class="l">分類 ＼ 証券会社</th>${bnames.map(b => `<th class="nowrap">${esc(b)}</th>`).join('')}<th>合計</th></tr>`;
   const rows = keys.map(k => { const col = colorOf(k); return `<tr><td class="l nowrap">${chip(k)}${esc(k)}</td>${bnames.map(b => { const e = brokers[b][ax][k]; return bar(e ? e.v : 0, col, grandV); }).join('')}${bar(colTotals[k].v, col, grandV)}</tr>`; }).join('');
-  const totRow = `<tr><td class="l"><strong>合計</strong></td>${bnames.map(b => { const bt = keys.reduce((t, k) => t + (brokers[b][ax][k] ? brokers[b][ax][k].v : 0), 0); return bar(bt, '#64748b', grandV); }).join('')}${bar(grandV, '#64748b', grandV)}</tr>`;
+  const totRow = `<tr style="font-weight:700"><td class="l">合計</td>${bnames.map(b => { const bt = keys.reduce((t, k) => t + (brokers[b][ax][k] ? brokers[b][ax][k].v : 0), 0); return bar(bt, '#64748b', grandV); }).join('')}${bar(grandV, '#64748b', grandV)}</tr>`;
   el.innerHTML = `<div class="table-wrap"><table class="dense"><thead>${head}</thead><tbody>${rows}${totRow}</tbody></table></div>`;
 }
 
@@ -6763,7 +6797,7 @@ function assetKeyColor(k, ki) {
     '米国株': '#2563eb', '日本株': '#dc2626',
     '米国株・ETF': '#60a5fa', '米国株・個別株': '#1e40af',
     '日本株・ETF': '#f87171', '日本株・個別株': '#991b1b',
-    'ETF': '#64748b', '個別株': '#0d9488', [ASSET_NONE]: '#94a3b8',
+    'ETF': '#64748b', '個別株': '#0d9488', 'その他': '#a8a29e', '未分類': '#a8a29e', [ASSET_NONE]: '#94a3b8',
   };
   return M[k] || ASSET_COLORS[ki % ASSET_COLORS.length];
 }
@@ -6782,7 +6816,7 @@ function assetStackChart(snaps, axis) {
   const breakdownAt = (s) => {
     const b = s[keyOf]; if (b && Object.keys(b).length) return b;
     if (keyOf === 'byCategory' && s.byMarketType && Object.keys(s.byMarketType).length) {
-      const o = {}; for (const k in s.byMarketType) { const e = /ETF$/.test(k) ? 'ETF' : '個別株'; o[e] = (o[e] || 0) + s.byMarketType[k]; } return o;
+      const o = {}; for (const k in s.byMarketType) { const e = /ETF$/.test(k) ? 'ETF' : 'その他'; o[e] = (o[e] || 0) + s.byMarketType[k]; } return o;
     }
     return { [NONE]: s.totalJpy || 0 };
   };
@@ -6817,15 +6851,13 @@ function assetStackChart(snaps, axis) {
   months.forEach((t, i) => { if (i % stepM) return; const dt = new Date(t * 1000); const x = px(t).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${H - pad.b}" stroke="rgba(100,116,139,.2)" stroke-dasharray="2 3"/><text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="9" text-anchor="middle">${dt.getMonth() === 0 || i === 0 ? dt.getFullYear() + '/' : ''}${dt.getMonth() + 1}</text>`; });
   const hasCost = snaps.some(s => s.costJpy);
   const costLine = hasCost ? `<path d="${snaps.map((s, i) => (i ? 'L' : 'M') + px(xs[i]).toFixed(1) + ' ' + py(s.costJpy || 0).toFixed(1)).join(' ')}" fill="none" stroke="#111827" stroke-width="1.4" stroke-dasharray="5 3"/>` : '';
-  const last = snaps[snaps.length - 1];
-  // 凡例＝チャート下に縦並び（上から積み上げ最上層の順＝keysの逆順）。軸切替で本体グラフは不変。
-  const legend = keys.slice().reverse().map((k, j) => { const ki = keys.indexOf(k); return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:12px"><span style="width:12px;height:12px;flex:0 0 12px;background:${colorOf(k, ki)};border-radius:2px"></span><span>${esc(k)}</span></div>`; }).join('')
-    + (hasCost ? `<div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:2px"><span style="width:18px;flex:0 0 18px;border-top:2px dashed #111827"></span>取得原価</div>` : '');
-  // 凡例はチャート下に横並び（コンパクト）。最新サマリは上部カードと重複のため省略。
-  const legendRow = keys.slice().reverse().map((k, j) => { const ki = keys.indexOf(k); return `<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 4px 0;font-size:11px"><span style="width:11px;height:11px;background:${colorOf(k, ki)};border-radius:2px"></span>${esc(k)}</span>`; }).join('')
-    + (hasCost ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px"><span style="width:16px;border-top:2px dashed #111827"></span>取得原価</span>` : '');
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${bands}${grid}${xlab}${ylab}${costLine}</svg>
-    <div style="margin-top:6px;line-height:1.7">${legendRow}</div>`;
+  // 凡例＝チャート右に縦並び（軸を切替えても本体グラフの幅・高さは変わらない）。最新サマリは上部カードと重複のため省略。
+  const legend = keys.slice().reverse().map((k) => { const ki = keys.indexOf(k); return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px"><span style="width:11px;height:11px;flex:0 0 11px;background:${colorOf(k, ki)};border-radius:2px"></span><span style="word-break:break-all">${esc(k)}</span></div>`; }).join('')
+    + (hasCost ? `<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:2px"><span style="width:16px;flex:0 0 16px;border-top:2px dashed #111827"></span>取得原価</div>` : '');
+  return `<div style="display:flex;gap:10px;align-items:flex-start">
+    <div style="flex:1;min-width:0"><svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${bands}${grid}${xlab}${ylab}${costLine}</svg></div>
+    <div style="flex:0 0 132px;width:132px">${legend}</div>
+  </div>`;
 }
 // 過去の資産明細（1銘柄×日付）を貼り付け→日付別に集計→portfolio-history.json へ統合。
 // 必要列: 日付 / 種別(日本株|米国株) / 詳細種別(ETF→ETF・他→個別) / 評価額(or評価円) / 取得額(or取得円)。
