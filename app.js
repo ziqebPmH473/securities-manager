@@ -6676,10 +6676,10 @@ function computeTodayBreakdown() {
     const v = Math.round(vj), c = Math.round(cj);
     totalJpy += v; costJpy += c;
     const mk = sec.market === 'JP' ? '日本株' : '米国株';
-    const type = (detailTypeOf(sec) === 'ETF') ? 'ETF' : '個別株'; // 既存「種別×市場」表と同じ判定
-    add(byCategory, sec.category || '未分類', v);
+    const isETF = detailTypeOf(sec) === 'ETF';
+    add(byCategory, isETF ? 'ETF' : (sec.category || '未分類'), v); // ETFはカテゴリを持たないので別バンド
     add(byMarket, mk, v);
-    add(byMarketType, `${mk}・${type}`, v);
+    add(byMarketType, `${mk}・${isETF ? 'ETF' : '個別株'}`, v);
   }
   return { date: today(), totalJpy: Math.round(totalJpy), costJpy: Math.round(costJpy), byCategory, byMarket, byMarketType };
 }
@@ -6690,16 +6690,41 @@ function renderAssetChart() {
   el.classList.remove('muted');
   el.innerHTML = assetStackChart(snaps, assetAxis);
 }
-const ASSET_COLORS = ['#2563eb', '#dc2626', '#f59e0b', '#0d9488', '#7c3aed', '#0891b2', '#65a30d', '#db2777', '#64748b', '#ca8a04', '#0ea5e9', '#9333ea'];
+const ASSET_COLORS = ['#f59e0b', '#0d9488', '#7c3aed', '#0891b2', '#65a30d', '#db2777', '#ca8a04', '#0ea5e9', '#9333ea', '#e11d48'];
+const ASSET_NONE = '（内訳なし）';
+// 色: 米株=青系/日本株=赤系（種別は濃淡）、ETF=スレート、カテゴリは ASSET_COLORS。
+function assetKeyColor(k, ki) {
+  const M = {
+    '米国株': '#2563eb', '日本株': '#dc2626',
+    '米国株・ETF': '#60a5fa', '米国株・個別株': '#1e40af',
+    '日本株・ETF': '#f87171', '日本株・個別株': '#991b1b',
+    'ETF': '#64748b', '個別株': '#0d9488', [ASSET_NONE]: '#94a3b8',
+  };
+  return M[k] || ASSET_COLORS[ki % ASSET_COLORS.length];
+}
+// 積み上げ順（配列先頭=最下層）。市場/市場+種別は固定順、カテゴリはETF最下層→額大きい順→内訳なし最上。
+function assetOrderKeys(keys, axis, sums) {
+  const withPref = (pref) => pref.filter(k => keys.includes(k)).concat(keys.filter(k => !pref.includes(k)).sort((a, b) => (sums[b] || 0) - (sums[a] || 0)));
+  if (axis === 'market') return withPref(['米国株', '日本株']);
+  if (axis === 'markettype') return withPref(['米国株・ETF', '日本株・ETF', '米国株・個別株', '日本株・個別株']);
+  return keys.slice().sort((a, b) => { const r = (k) => k === 'ETF' ? -2 : k === ASSET_NONE ? 2 : 0; return r(a) !== r(b) ? r(a) - r(b) : (sums[b] || 0) - (sums[a] || 0); });
+}
 function assetStackChart(snaps, axis) {
-  const W = 720, H = 300, pad = { l: 60, r: 12, t: 10, b: 22 };
+  const W = 800, H = 430, pad = { l: 62, r: 12, t: 10, b: 22 };
   const keyOf = { category: 'byCategory', market: 'byMarket', markettype: 'byMarketType' }[axis] || 'byMarket';
-  const NONE = '（内訳なし）';
-  const breakdownAt = (s) => { const b = s[keyOf]; return (b && Object.keys(b).length) ? b : { [NONE]: s.totalJpy || 0 }; };
+  const NONE = ASSET_NONE;
+  // この軸の内訳。無い場合: カテゴリ軸は byMarketType から ETF/個別株 を導出（過去データ用）、それも無ければ総資産1本。
+  const breakdownAt = (s) => {
+    const b = s[keyOf]; if (b && Object.keys(b).length) return b;
+    if (keyOf === 'byCategory' && s.byMarketType && Object.keys(s.byMarketType).length) {
+      const o = {}; for (const k in s.byMarketType) { const e = /ETF$/.test(k) ? 'ETF' : '個別株'; o[e] = (o[e] || 0) + s.byMarketType[k]; } return o;
+    }
+    return { [NONE]: s.totalJpy || 0 };
+  };
   const sums = {};
   snaps.forEach(s => { const b = breakdownAt(s); for (const k in b) sums[k] = (sums[k] || 0) + (b[k] || 0); });
-  const keys = Object.keys(sums).sort((a, b) => (a === NONE ? 1 : b === NONE ? -1 : sums[b] - sums[a]));
-  const colorOf = (k, ki) => k === NONE ? '#94a3b8' : ASSET_COLORS[ki % ASSET_COLORS.length];
+  const keys = assetOrderKeys(Object.keys(sums), axis, sums);
+  const colorOf = (k, ki) => assetKeyColor(k, ki);
   const xs = snaps.map(s => Date.parse(s.date) / 1000);
   const dmax = Math.max(1, ...snaps.map(s => Math.max(s.totalJpy || 0, s.costJpy || 0)));
   const stepY = niceStep(dmax || 1, 5), ymax = Math.ceil(dmax / stepY) * stepY;
@@ -6728,17 +6753,13 @@ function assetStackChart(snaps, axis) {
   const hasCost = snaps.some(s => s.costJpy);
   const costLine = hasCost ? `<path d="${snaps.map((s, i) => (i ? 'L' : 'M') + px(xs[i]).toFixed(1) + ' ' + py(s.costJpy || 0).toFixed(1)).join(' ')}" fill="none" stroke="#111827" stroke-width="1.4" stroke-dasharray="5 3"/>` : '';
   const last = snaps[snaps.length - 1];
-  // 凡例＝右に縦並び（軸を切替えても本体グラフの幅・高さが変わらない）
-  const legend = keys.map((k, ki) => `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:11px"><span style="width:11px;height:11px;flex:0 0 11px;background:${colorOf(k, ki)};border-radius:2px"></span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(k)}">${esc(k)}</span></div>`).join('')
-    + (hasCost ? `<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:2px"><span style="width:16px;flex:0 0 16px;border-top:2px dashed #111827"></span>取得原価</div>` : '');
+  // 凡例＝チャート下に縦並び（上から積み上げ最上層の順＝keysの逆順）。軸切替で本体グラフは不変。
+  const legend = keys.slice().reverse().map((k, j) => { const ki = keys.indexOf(k); return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:12px"><span style="width:12px;height:12px;flex:0 0 12px;background:${colorOf(k, ki)};border-radius:2px"></span><span>${esc(k)}</span></div>`; }).join('')
+    + (hasCost ? `<div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:2px"><span style="width:18px;flex:0 0 18px;border-top:2px dashed #111827"></span>取得原価</div>` : '');
   const summary = `<b>最新 ${esc(last.date)}</b>：総資産 ${yen(last.totalJpy || 0)}${last.costJpy ? ` ／ 取得原価 ${yen(last.costJpy)} ／ 含み益 <span class="${cls((last.totalJpy || 0) - last.costJpy)}">${yen((last.totalJpy || 0) - last.costJpy)}</span>` : ''}`;
-  return `<div style="display:flex;gap:12px;align-items:flex-start">
-    <div style="flex:1;min-width:0">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${bands}${grid}${xlab}${ylab}${costLine}</svg>
-      <div style="margin-top:8px;font-size:12px">${summary}</div>
-    </div>
-    <div style="flex:0 0 150px;width:150px">${legend}</div>
-  </div>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${bands}${grid}${xlab}${ylab}${costLine}</svg>
+    <div style="margin-top:8px;font-size:12px">${summary}</div>
+    <div style="margin-top:8px">${legend}</div>`;
 }
 // 過去の資産明細（1銘柄×日付）を貼り付け→日付別に集計→portfolio-history.json へ統合。
 // 必要列: 日付 / 種別(日本株|米国株) / 詳細種別(ETF→ETF・他→個別) / 評価額(or評価円) / 取得額(or取得円)。

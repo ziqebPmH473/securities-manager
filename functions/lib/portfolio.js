@@ -123,10 +123,10 @@ export function computeBreakdowns(bundle) {
     const meta = (bundle.meta || {})[priceKey(sec)] || {};
     const nm = displayName(bundle, sec) || '';
     const dt = sec.detailType || (((meta.quoteType || '').toUpperCase() === 'ETF' || /ETF|ＥＴＦ/i.test(nm)) ? 'ETF' : '個別株');
-    const type = (dt === 'ETF') ? 'ETF' : '個別株';
-    add(byCategory, sec.category || '未分類', valJpy);
+    const isETF = (dt === 'ETF');
+    add(byCategory, isETF ? 'ETF' : (sec.category || '未分類'), valJpy); // ETFはカテゴリ別バンドとして分離
     add(byMarket, mk, valJpy);
-    add(byMarketType, `${mk}・${type}`, valJpy);
+    add(byMarketType, `${mk}・${isETF ? 'ETF' : '個別株'}`, valJpy);
   }
   return { totalJpy, costJpy, byCategory, byMarket, byMarketType };
 }
