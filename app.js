@@ -2740,15 +2740,10 @@ function openAnalysisHistory(secId) {
     const parts = [a.starValuation, a.starStrength, a.starRisk].map(v => v != null ? '★' + v : '—');
     return parts.every(p => p === '—') ? dash : parts.join('/');
   };
-  // 推奨投資額は円建て（分析シート由来。旧実装が米株を÷100して概算USD化していたのも円前提だった証拠）。
-  // 市場に関わらず円表示にする（従来は米株に "$" を付けて単位を誤っていた）。
-  const reco = (a) => a.recoAmount == null ? dash : yen(a.recoAmount);
-  const hasReco = list.some(a => a.recoAmount != null); // 推奨額は取込時のみ。1件も無ければ列を出さない
   // [見出し, 列幅px]。table-layout:fixed なので幅はこの colgroup で決まる。
-  // 総合/格付/買い時はグレード1〜2文字なので狭く。推奨額は末尾が切れて見えないよう広めに。
-  const cols = [['評価日', 92], ['総合', 50], ['格付', 50], ['買い時', 60], ['★ ﾊﾞﾘｭ/強/ﾘｽｸ', 122], ['優先順', 60]];
-  if (hasReco) cols.push(['推奨額', 110]);
-  cols.push(['分析メモ', 280]);
+  // 総合/格付/買い時はグレード1〜2文字なので狭く。推奨投資額(recoAmount)は手入力口が無く
+  // メイン表にも出さない取込専用項目で混乱の元のため、履歴には表示しない（推奨購入額はカテゴリ管理）。
+  const cols = [['評価日', 92], ['総合', 50], ['格付', 50], ['買い時', 60], ['★ ﾊﾞﾘｭ/強/ﾘｽｸ', 122], ['優先順', 60], ['分析メモ', 280]];
   const colgroup = `<colgroup>${cols.map(c => `<col style="width:${c[1]}px">`).join('')}</colgroup>`;
   const tableW = cols.reduce((a, c) => a + c[1], 0);
   const head = `<tr>${cols.map(c => `<th>${esc(c[0])}</th>`).join('')}</tr>`;
@@ -2759,7 +2754,6 @@ function openAnalysisHistory(secId) {
     <td>${g(a.buyGrade)}</td>
     <td style="white-space:nowrap">${starTxt(a)}</td>
     <td>${a.priority != null ? a.priority : dash}</td>
-    ${hasReco ? `<td style="text-align:left;white-space:nowrap">${reco(a)}</td>` : ''}
     <td class="ah-memo">${a.analysisNote ? esc(a.analysisNote) : dash}</td>
   </tr>`).join('');
   showModal(`分析履歴 — ${esc(calc.displayName(sec))}`, `
