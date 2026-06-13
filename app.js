@@ -437,8 +437,22 @@ async function loadServerConfig() {
 // OAuthスコープ: Drive(アプリ作成ファイルのみ)＋本人確認。spreadsheets は廃止。
 const GSCOPE = 'https://www.googleapis.com/auth/drive.file openid email';
 const gsync = {
-  _token: null, _email: null, _scope: '',
+  _token: null, _email: null, _scope: '', _refreshExpMs: 0,
   hasDrive() { return !!(this._scope && this._scope.indexOf('drive.file') >= 0); },
+  // === アクセストークンの永続化（リロードでログインを保つ） ===
+  // GISの無音再取得(prompt:'')はサードパーティCookieブロックで失敗しやすいため、トークン自体を
+  // localStorageに保存し、失効(約1時間)まではGoogleへ通信せず即復帰する。drive.fileスコープ限定の
+  // 短命トークン＆個人ツール前提。失効後はサイレント再取得→不可なら手動ログイン。
+  _TOKEN_KEY: 'sm_gtoken',
+  _writeToken(token, scope, email, expMs) {
+    try { localStorage.setItem(this._TOKEN_KEY, JSON.stringify({ t: token, s: scope || '', e: email || '', x: expMs })); } catch (_) {}
+  },
+  _clearToken() { try { localStorage.removeItem(this._TOKEN_KEY); } catch (_) {} },
+  _loadToken() {
+    try { const o = JSON.parse(localStorage.getItem(this._TOKEN_KEY) || 'null'); if (o && o.t && o.x && Date.now() < o.x) return o; } catch (_) {}
+    return null;
+  },
+  _expMs(expiresInSec) { return Date.now() + Math.max(0, ((expiresInSec || 3600) - 60)) * 1000; }, // 60秒マージン
   // ローカル設定が空なら サーバー(CF env)の公開設定で補う（新端末は入力不要でログイン可）
   cfg() {
     const g = (store.data.settings && store.data.settings.google) || {};
@@ -464,8 +478,10 @@ const gsync = {
       const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } }).then(x => x.json());
       const email = ((info && info.email) || '').toLowerCase();
       const allow = (this.cfg().allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
-      if (allow.length && !allow.includes(email)) { this._token = null; toast(`許可されていないアカウントです: ${email}`); return resolve(false); }
-      this._token = token; this._email = email; toast(`ログイン: ${email || 'OK'}`);
+      if (allow.length && !allow.includes(email)) { this._token = null; this._clearToken(); toast(`許可されていないアカウントです: ${email}`); return resolve(false); }
+      this._token = token; this._email = email;
+      this._writeToken(token, this._scope, email, this._expMs(r.expires_in)); // リロード後も保持
+      toast(`ログイン: ${email || 'OK'}`);
       try { render(); } catch (_) {}   // ログイン成功で即UI更新（未ログイン警告を消す・状態反映）。syncNow完了を待たない
       resolve(true);
       try { if (typeof dsync !== 'undefined') dsync.afterSignIn(); } catch (_) {}   // 自動同期ONなら初回マージ
@@ -503,28 +519,41 @@ const gsync = {
         const tc = google.accounts.oauth2.initTokenClient({
           client_id: cfg.clientId,
           scope: GSCOPE,
-          callback: (r) => { if (r && r.access_token) { this._token = r.access_token; this._scope = r.scope || this._scope; resolve(true); } else resolve(false); },
+          callback: (r) => { if (r && r.access_token) { this._token = r.access_token; this._scope = r.scope || this._scope; this._refreshExpMs = this._expMs(r.expires_in); this._writeToken(this._token, this._scope, this._email, this._refreshExpMs); resolve(true); } else resolve(false); },
           error_callback: () => resolve(false),
         });
         tc.requestAccessToken({ prompt: '' });   // 無音更新（同意画面を出さない）
       } catch (_) { resolve(false); }
     });
   },
-  // リロード後のサイレント復元（案A）: トークンはディスクに保存せず、Googleの生きたログイン
-  // セッションから無音でトークンを取り直す。成功時はメール照合のうえUIを「ログイン中」に戻し、
-  // 自動同期ONなら初回マージも行う。未ログイン/未同意/別アカウント/オフライン時は静かに諦め、
-  // 従来どおり手動ログインに委ねる（＝悪化はしない）。起動時に1回だけ呼ぶ想定。
+  // リロード後のログイン復元: ①保存済みトークンが生きていれば無通信で即復帰（サードパーティCookie
+  // 不要・これが主役）。②保存が無い/失効していれば、Googleの生きたセッションから無音再取得を試す
+  // （Cookieが通れば成功）。どちらも不可なら静かに未ログインのまま＝従来どおり手動ログイン（悪化なし）。
+  // 起動時に1回だけ呼ぶ想定。
   async restoreSession() {
     const cfg = this.cfg();
-    if (!cfg.clientId || this._token) return false;            // 未設定/既ログインなら何もしない
-    try { await this.ensureGis(); } catch (_) { return false; } // GIS読込（起動時はまだ未読込）
-    if (!await this.refresh()) return false;                    // セッション切れ等は静かに諦める
+    if (this._token) return true;
+    // ① 保存済みトークン（失効前）→ Googleへ通信せず即ログイン状態に戻す
+    const saved = this._loadToken();
+    if (saved) {
+      this._token = saved.t; this._scope = saved.s || ''; this._email = saved.e || '';
+      try { render(); } catch (_) {}
+      try { if (typeof dsync !== 'undefined') dsync.afterSignIn(); } catch (_) {}
+      // 背景でトークン延長を試みる（Cookieが通る環境なら有効期限が伸びる。失敗してもこのセッションは有効）
+      this.ensureGis().then(() => this.refresh()).catch(() => {});
+      return true;
+    }
+    // ② 保存が無い/失効 → サイレント再取得（セッション＆Cookieが生きていれば成功）
+    if (!cfg.clientId) return false;
+    try { await this.ensureGis(); } catch (_) { return false; }
+    if (!await this.refresh()) return false;                    // 無音取得不可（Cookieブロック等）は静かに諦める
     try {
       const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + this._token } }).then(x => x.json());
       const email = ((info && info.email) || '').toLowerCase();
       const allow = (cfg.allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
-      if (allow.length && !allow.includes(email)) { this._token = null; this._scope = ''; return false; } // 許可外は復元しない
+      if (allow.length && !allow.includes(email)) { this._token = null; this._scope = ''; this._clearToken(); return false; } // 許可外は復元しない
       this._email = email;
+      this._writeToken(this._token, this._scope, email, this._refreshExpMs || this._expMs(3600)); // メール込みで保存し直す
     } catch (_) { /* userinfo取得失敗でもトークンは有効＝続行（メール表示だけ空になる） */ }
     try { render(); } catch (_) {}                              // 「未ログイン」警告を消し状態反映
     try { if (typeof dsync !== 'undefined') dsync.afterSignIn(); } catch (_) {} // 自動同期ONなら初回マージ
@@ -554,9 +583,9 @@ const dsync = {
       // 失効→サイレント再取得して1回だけ再試行。ダメなら手動再ログインを促す。
       const ok = await gsync.refresh();
       if (ok) return this._driveFetch(url, opts, true);
-      gsync._token = null; throw new Error('Google認証の期限切れ。再ログインしてください');
+      gsync._token = null; gsync._clearToken(); throw new Error('Google認証の期限切れ。再ログインしてください');
     }
-    if (res.status === 401) { gsync._token = null; throw new Error('Google認証の期限切れ。再ログインしてください'); }
+    if (res.status === 401) { gsync._token = null; gsync._clearToken(); throw new Error('Google認証の期限切れ。再ログインしてください'); }
     return res;
   },
   // 非ok時にDrive APIのエラーメッセージ本文を取り出す（403の原因＝スコープ不足/API未有効 を見分けるため）
