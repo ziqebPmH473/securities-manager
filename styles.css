@@ -777,7 +777,8 @@ table.fixed-cols.holdings.dense .nm-strong { font-weight: 600; }
 /* 小見出し(到達/もうすぐ)の左固定。fixed-cols の td は overflow:hidden だが、祖先の overflow:hidden は
    子の position:sticky を無効化するため、小見出しセルだけ overflow:visible にしてセル内ラベルを sticky 化する。 */
 table.fixed-cols .sig-group td { background: var(--panel-2); font-weight: 700; overflow: visible; }
-.sig-group-label { position: sticky; left: 0; display: inline-block; padding-left: 2px; z-index: 3; }
+/* left は dense表の td 左padding(12px)に合わせる。0だと開始位置(12px)から left:0 まで少しドリフトするため。 */
+.sig-group-label { position: sticky; left: 12px; display: inline-block; z-index: 3; }
 
 /* 一覧でない holdings テーブル（行クリック不可）はカーソルを通常に */
 table.holdings.no-rowclick tbody tr { cursor: default; }

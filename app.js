@@ -6507,8 +6507,16 @@ function renderTransfer() {
 }
 
 // ---------- ユーティリティ ----------
+// 時間帯による初期市場。平日8:00-18:00 JST=日本株(JP)、それ以外(夜間・週末)=米国株(US)。
+// 端末のタイムゾーンに依存しないよう UTC+9 で JST を算出する。
+function timeBasedMarket() {
+  const jst = new Date(Date.now() + 9 * 3600 * 1000);
+  const day = jst.getUTCDay(), hour = jst.getUTCHours(); // JSTの曜日/時
+  return (day >= 1 && day <= 5 && hour >= 8 && hour < 18) ? 'JP' : 'US';
+}
 function go(view) {
   currentView = view;
+  try { sessionStorage.setItem('sm_view', view); } catch (_) {} // リロードで復元（開き直しはクリアされ dashboard）
   renderNav();
   render();
 }
@@ -6516,6 +6524,7 @@ function go(view) {
 function setHoldingsMarket(m) {
   holdingsMarket = m;
   if (currentView !== 'holdings') currentView = 'holdings';
+  try { sessionStorage.setItem('sm_view', currentView); } catch (_) {} // 市場(m)は保存しない＝リロードで時間帯初期化
   renderNav();
   render();
 }
@@ -6746,6 +6755,12 @@ document.addEventListener('compositionend', (e) => {
 
 store.load();
 loadColPrefs();
+// タブ維持: リロードでは sessionStorage から現在タブを復元。タブ/ブラウザを閉じて開き直すと
+// sessionStorage はクリアされるので自動的に dashboard に戻る（＝開き直しはダッシュボード）。
+try { const v = sessionStorage.getItem('sm_view'); if (v && PAGE_TITLE[v]) currentView = v; } catch (_) {}
+// 市場の初期表示は時間帯で決定（平日8-18時JST=日本株/それ以外=米国株）。リロード毎に再判定し、保存しない
+// （＝開き直し・リロードのたびに時間帯で初期化。セッション中の手動切替は in-memory で維持）。
+{ const m0 = timeBasedMarket(); holdingsMarket = m0; signalMarketFilter = m0; }
 render();
 // 1日1回（起動時）だけ銘柄名・セクター・業種・高値を更新
 api.dailyStartup();
