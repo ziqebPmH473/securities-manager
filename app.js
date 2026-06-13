@@ -2729,26 +2729,32 @@ function openAmountHistory(secId) {
 }
 
 // 銘柄ごとの分析履歴（モーダル・閲覧専用）。記録は編集フォームの「分析メタ」保存／分析結果の取込でたまる。
+// 入力した全項目（総合評価・銘柄格付・買い時評価・★3種・優先順位・推奨額・分析メモ）を表示する。
 function openAnalysisHistory(secId) {
   const sec = store.data.securities.find(s => s.id === secId);
   const list = store.analysesSorted(secId);
   const dash = '<span class="muted">—</span>';
+  const g = (v) => (v != null && v !== '') ? esc(String(v)) : dash;
   const starTxt = (a) => {
     const parts = [a.starValuation, a.starStrength, a.starRisk].map(v => v != null ? '★' + v : '—');
     return parts.every(p => p === '—') ? dash : parts.join('/');
   };
+  const reco = (a) => a.recoAmount == null ? dash : (sec.market === 'US' ? '$' + num(a.recoAmount) : yen(a.recoAmount));
+  const hasReco = list.some(a => a.recoAmount != null); // 推奨額は取込時のみ。1件も無ければ列を出さない
   const rows = list.map(a => `<tr>
     <td class="l">${esc(a.analysisDate)}</td>
-    <td class="l">${a.overallGrade ? esc(a.overallGrade) : dash}</td>
-    <td class="l">${a.buyGrade ? esc(a.buyGrade) : dash}</td>
+    <td class="l">${g(a.overallGrade)}</td>
+    <td class="l">${g(a.rating)}</td>
+    <td class="l">${g(a.buyGrade)}</td>
     <td class="l">${starTxt(a)}</td>
     <td>${a.priority != null ? a.priority : dash}</td>
-    <td class="l" title="${esc(a.analysisNote || '')}">${a.analysisNote ? esc(String(a.analysisNote).slice(0, 30)) + (a.analysisNote.length > 30 ? '…' : '') : dash}</td>
+    ${hasReco ? `<td>${reco(a)}</td>` : ''}
+    <td class="l" style="white-space:normal;max-width:240px">${a.analysisNote ? esc(a.analysisNote) : dash}</td>
   </tr>`).join('');
   showModal(`分析履歴 — ${esc(calc.displayName(sec))}`, `
     <p class="muted">この銘柄の分析評価の履歴です（評価日の新しい順）。記録は銘柄編集フォームの「分析メタ」保存、または分析結果の取込でたまります。最新行が現在の表示値です。</p>
     <div class="table-wrap"><table>
-      <thead><tr><th class="l">評価日</th><th class="l">総合</th><th class="l">買い時</th><th class="l">★(ﾊﾞﾘｭ/強/ﾘｽｸ)</th><th>優先</th><th class="l">分析メモ</th></tr></thead>
+      <thead><tr><th class="l">評価日</th><th class="l">総合評価</th><th class="l">銘柄格付</th><th class="l">買い時</th><th class="l">★(ﾊﾞﾘｭ/強/ﾘｽｸ)</th><th>優先</th>${hasReco ? '<th>推奨額</th>' : ''}<th class="l">分析メモ</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     ${list.length === 0 ? '<div class="empty">分析履歴はまだありません。</div>' : ''}
