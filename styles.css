@@ -689,7 +689,7 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .drawer-overlay { position: fixed; inset: 0; background: rgba(15,24,40,.32); z-index: 80; opacity: 0; transition: opacity .2s; }
 .drawer-overlay.show { opacity: 1; }
 .drawer {
-  position: fixed; top: 0; right: 0; height: 100vh; width: 480px; max-width: 94vw; background: var(--panel);
+  position: fixed; top: 0; right: 0; height: 100vh; height: 100dvh; width: 480px; max-width: 94vw; background: var(--panel);
   z-index: 90; box-shadow: var(--shadow-lg); display: flex; flex-direction: column;
   transform: translateX(100%); transition: transform .26s cubic-bezier(.4,0,.2,1);
 }
