@@ -864,3 +864,12 @@ table.holdings tbody tr:hover td.stick { background: #f6f8fb; }
 .ah-table thead th:first-child { z-index: 3; background: var(--panel-2, var(--panel)); }
 .ah-table tbody td { font-variant-numeric: tabular-nums; }
 .ah-table .ah-memo { white-space: pre-wrap; word-break: break-word; font-variant-numeric: normal; }
+
+/* ===== ビューポート固定: ルート(body)はスクロールさせず、main 内だけ内部スクロールにする。
+   モバイルでスワイプ時にアドレスバーが出入りして innerHeight が変わり、一覧の高さ(fitListTables)が
+   揺れる／バーが気持ち悪く出入りするのを防ぐ。アプリ設計の「枠内スクロール・ページは固定」とも一致。 ===== */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+.shell { min-height: 0; height: 100vh; height: 100dvh; }
+.sidebar { height: 100vh; height: 100dvh; }
+.main { min-height: 0; }
+main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
