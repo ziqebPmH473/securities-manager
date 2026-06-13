@@ -2001,7 +2001,7 @@ function layoutTickerMarquee() {
   }
 }
 let _fitTimer = null;
-window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { fitListTables(); layoutTickerMarquee(); }, 120); });
+window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); }, 120); });
 
 // 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート等で左端に戻らないように）
 function preserveTableScroll(fn) {
@@ -3311,7 +3311,9 @@ function renderAssetTable() {
       keys.forEach(k => { rows += row(k, k, colorOf(k), colTotals[k].v, colTotals[k].c); });
     }
     const total = `<tr style="font-weight:700"><td class="l">合計</td>${bar(grandC, '#64748b', grandC)}<td class="num">100%</td>${bar(grandV, '#64748b', grandV)}<td class="num">100%</td>${perTd(grandV, cmp ? cmp.total : 0)}${pnlTd(grandV, grandC)}</tr>`;
-    el.innerHTML = `<div style="overflow-x:auto;max-width:100%"><table class="dense"><thead><tr><th class="l">分類</th><th>取得額</th><th>割合</th><th>評価額</th><th>割合</th><th class="nowrap">${esc(perHead)}</th><th>損益</th></tr></thead><tbody>${rows}${total}</tbody></table></div>`;
+    // table-layout:fixed＋列幅固定で、期間トグル（期間比ラベルの文字数）が変わっても列がずれないようにする
+    const cg = `<colgroup><col style="width:22%"><col style="width:14%"><col style="width:9%"><col style="width:14%"><col style="width:9%"><col style="width:16%"><col style="width:16%"></colgroup>`;
+    el.innerHTML = `<div style="overflow-x:auto;max-width:100%"><table class="dense" style="table-layout:fixed;width:100%">${cg}<thead><tr><th class="l">分類</th><th>取得額</th><th>割合</th><th>評価額</th><th>割合</th><th class="nowrap">${esc(perHead)}</th><th>損益</th></tr></thead><tbody>${rows}${total}</tbody></table></div>`;
     return;
   }
   // 証券会社別クロス: 行=分類, 列=証券会社+合計（評価額・全体100%基準のバー）。
@@ -6712,8 +6714,8 @@ let _assetSnaps = null;     // 取得した snapshots のキャッシュ（軸�
 function setAssetAxis(a) {
   assetAxis = a;
   document.querySelectorAll('#asset-axis-seg button').forEach(b => b.classList.toggle('active', b.getAttribute('onclick') === `setAssetAxis('${a}')`));
+  renderAssetTable();  // 先に表を確定（高さ固定）させてからグラフを残り高さに合わせる
   renderAssetChart();
-  renderAssetTable();
 }
 function todayJst() { return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
 async function loadPortfolioChart() {
@@ -6775,8 +6777,8 @@ function computeTodayBreakdown() {
 function setAssetPeriod(p) {
   assetPeriod = p;
   document.querySelectorAll('#asset-period-seg button').forEach(b => b.classList.toggle('active', b.getAttribute('onclick') === `setAssetPeriod('${p}')`));
+  renderAssetTable(); // 期間損益の比較対象も連動して更新（先に表を確定させてからグラフを残り高さに合わせる）
   renderAssetChart();
-  renderAssetTable(); // 期間損益の比較対象も連動して更新
 }
 function renderAssetChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
@@ -6788,7 +6790,22 @@ function renderAssetChart() {
   }
   if (snaps.length < 2) { el.innerHTML = `<div class="notice" style="margin:0">資産推移は2日分以上たまると表示されます（現在 ${snaps.length} 日分・この期間）。毎朝サーバーが日次記録。過去は下の「過去データの取込」で一括投入できます。</div>`; return; }
   el.classList.remove('muted');
-  el.innerHTML = assetStackChart(snaps, assetAxis);
+  const { w, h } = assetChartBox(el);
+  el.innerHTML = assetStackChart(snaps, assetAxis, w, h);
+}
+// グラフを「上部サマリ＋トグル＋グラフ＋表」がスクロールせず収まる範囲で最大サイズにする。
+// 高さ＝スクロール領域の下端 − グラフ上端 − 表の高さ（最も行数の多いカテゴリ別に固定済み）− 余白。
+// 幅は SVG が width:100% で容器幅に追従するので、容器幅(=凡例132+gap10を除く)を W に渡してアスペクト比＝高さを決める。
+function assetChartBox(el) {
+  const cont = el.closest('.content') || document.documentElement;
+  const bottom = cont.getBoundingClientRect().bottom;
+  const top = el.getBoundingClientRect().top;
+  const tableEl = document.getElementById('asset-table');
+  const tableH = tableEl ? (parseFloat(tableEl.style.minHeight) || tableEl.getBoundingClientRect().height || 0) : 0;
+  const avail = bottom - top - tableH - 18; // 表のmargin-top(12)＋わずかな余白
+  const h = Math.max(200, Math.min(560, Math.round(avail)));
+  const w = Math.max(240, Math.round((el.clientWidth || 600) - 142)); // 凡例132＋gap10
+  return { w, h };
 }
 const ASSET_COLORS = ['#f59e0b', '#0d9488', '#7c3aed', '#0891b2', '#65a30d', '#db2777', '#ca8a04', '#0ea5e9', '#9333ea', '#e11d48'];
 const ASSET_NONE = '（内訳なし）';
@@ -6809,8 +6826,8 @@ function assetOrderKeys(keys, axis, sums) {
   if (axis === 'markettype') return withPref(['米国株・ETF', '日本株・ETF', '米国株・個別株', '日本株・個別株']);
   return keys.slice().sort((a, b) => { const r = (k) => k === 'ETF' ? -2 : k === ASSET_NONE ? 2 : 0; return r(a) !== r(b) ? r(a) - r(b) : (sums[b] || 0) - (sums[a] || 0); });
 }
-function assetStackChart(snaps, axis) {
-  const W = 800, H = 280, pad = { l: 62, r: 12, t: 8, b: 20 };
+function assetStackChart(snaps, axis, W, H) {
+  W = W || 800; H = H || 280; const pad = { l: 62, r: 12, t: 8, b: 20 };
   const keyOf = { category: 'byCategory', market: 'byMarket', markettype: 'byMarketType' }[axis] || 'byMarket';
   const NONE = ASSET_NONE;
   // この軸の内訳。無い場合: カテゴリ軸は byMarketType から ETF/個別株 を導出（過去データ用）、それも無ければ総資産1本。
