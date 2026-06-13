@@ -120,6 +120,10 @@ const ANALYSIS_COLMAP = {
   'セクター': 'sector', '業種': 'industry', '時価総額(百万)': 'marketCap',
   'PER': 'per', 'EPS': 'eps', '年間配当/株': 'dividend',
 };
+// 分析履歴(analyses)に持たせる評価項目。銘柄レコードの平置きは「最新分析のミラー」で、
+// 実体はこの項目群を securityId×評価日(analysisDate)ごとに analyses へ積む（履歴）。
+// フォーム保存・取込の両方がこの集合を上書き源にする（手入力↔取込↔ミラーで一貫）。
+const ANALYSIS_FIELDS = ['overallGrade', 'rating', 'buyGrade', 'starValuation', 'starStrength', 'starRisk', 'priority', 'recoAmount', 'analysisNote'];
 // 保有取込列マッピング（Excel「10_保有株」）
 const HOLDING_COLMAP = {
   'ティッカー': 'ticker', '証券会社': 'broker', '口座種別': 'accountType',
@@ -148,6 +152,8 @@ const store = {
     this.data.meta ||= {}; // 銘柄情報マスタ（名前・セクター・ファンダ）priceKeyでキャッシュ
     this.data.amountHistory ||= [];   // 金額マスタ変更履歴（版管理）
     this.data.amountSnapshots ||= []; // 銘柄ごとの適用金額スナップショット
+    this.data.analyses ||= [];        // 銘柄分析の履歴（securityId×評価日がキー。銘柄平置きは最新のミラー）
+    this._migrateAnalyses();          // 後方互換: 平置きの分析を履歴へ1件起こす
     this.data.importHistory ||= [];   // 取込履歴
     this.data.lastPriceUpdate ||= null; // 価格更新日時
     this.data.importMappings ||= {};  // 取込フィールド設定（列名・位置）のマスタ
@@ -174,7 +180,7 @@ const store = {
       securities: [], holdings: [], transactions: [],
       rules: [structuredClone(DEFAULT_RULE)],
       categories: structuredClone(DEFAULT_CATEGORIES),
-      prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [],
+      prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [], analyses: [],
       importHistory: [], lastPriceUpdate: null, seq: 1,
     };
   },
@@ -203,6 +209,7 @@ const store = {
     this.data.securities = this.data.securities.filter(s => s.id !== id);
     this.data.holdings = this.data.holdings.filter(h => h.securityId !== id);
     this.data.transactions = this.data.transactions.filter(t => t.securityId !== id);
+    this.data.analyses = (this.data.analyses || []).filter(a => a.securityId !== id);
     this.save();
   },
   findSecurity(market, ticker) {
@@ -352,6 +359,49 @@ const store = {
   setMeta(key, obj) {
     this.data.meta[key] = { ...(this.data.meta[key] || {}), ...obj, updatedAt: this._now() };
     this.save();
+  },
+
+  // ===== 銘柄分析の履歴（analyses） =====
+  // 1銘柄×1評価日=1レコード。同期マージは自然キー `securityId|analysisDate`（sync-merge.js）。
+  // 銘柄レコードの平置き分析フィールドは「最新評価日のミラー」で、表・ソート・既存配線はそれを参照する。
+  analysesOf(secId) { return (this.data.analyses || []).filter(a => a.securityId === secId); },
+  // 評価日の新しい順（同日は updatedAt 新しい方）の先頭＝最新分析
+  _analysisCmp(a, b) { return a.analysisDate < b.analysisDate ? 1 : a.analysisDate > b.analysisDate ? -1 : ((a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1); },
+  analysesSorted(secId) { return this.analysesOf(secId).slice().sort((a, b) => this._analysisCmp(a, b)); },
+  latestAnalysis(secId) { const l = this.analysesSorted(secId); return l[0] || null; },
+  // 履歴へ upsert（securityId×analysisDate がキー）。fields は ANALYSIS_FIELDS のサブセット（空キーは触らない）。
+  upsertAnalysis(secId, analysisDate, fields) {
+    if (!analysisDate) return null;
+    this.data.analyses ||= [];
+    const now = this._now();
+    let a = this.data.analyses.find(x => x.securityId === secId && x.analysisDate === analysisDate);
+    if (a) Object.assign(a, fields, { updatedAt: now });
+    else { a = { id: this.nextId(), securityId: secId, analysisDate, ...fields, createdAt: now, updatedAt: now }; this.data.analyses.push(a); }
+    this.save();
+    return a;
+  },
+  // 最新分析を銘柄平置きへミラー（評価日＋ANALYSIS_FIELDS）。履歴を更新したら必ず呼ぶ。
+  syncLatestAnalysis(secId) {
+    const sec = this.data.securities.find(s => s.id === secId);
+    if (!sec) return;
+    const a = this.latestAnalysis(secId);
+    if (!a) return;
+    sec.analysisDate = a.analysisDate;
+    for (const k of ANALYSIS_FIELDS) sec[k] = (a[k] !== undefined ? a[k] : null);
+    sec.updatedAt = this._now();
+    this.save();
+  },
+  // 後方互換: 平置き分析（analysisDate あり）をまだ履歴に無ければ1件起こす。idは新規・自然キーで重複防止。
+  _migrateAnalyses() {
+    let added = false;
+    for (const s of this.data.securities || []) {
+      if (!s.analysisDate) continue;
+      if (this.data.analyses.some(a => a.securityId === s.id && a.analysisDate === s.analysisDate)) continue;
+      const rec = { id: this.nextId(), securityId: s.id, analysisDate: s.analysisDate, createdAt: s.updatedAt || this._now(), updatedAt: s.updatedAt || this._now() };
+      for (const k of ANALYSIS_FIELDS) if (s[k] != null) rec[k] = s[k];
+      this.data.analyses.push(rec); added = true;
+    }
+    if (added) this.save();
   },
 
   // 株式分割・併合を適用（比率 r。1:5分割→5 / 5:1併合→0.2）
@@ -2678,6 +2728,33 @@ function openAmountHistory(secId) {
     <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`);
 }
 
+// 銘柄ごとの分析履歴（モーダル・閲覧専用）。記録は編集フォームの「分析メタ」保存／分析結果の取込でたまる。
+function openAnalysisHistory(secId) {
+  const sec = store.data.securities.find(s => s.id === secId);
+  const list = store.analysesSorted(secId);
+  const dash = '<span class="muted">—</span>';
+  const starTxt = (a) => {
+    const parts = [a.starValuation, a.starStrength, a.starRisk].map(v => v != null ? '★' + v : '—');
+    return parts.every(p => p === '—') ? dash : parts.join('/');
+  };
+  const rows = list.map(a => `<tr>
+    <td class="l">${esc(a.analysisDate)}</td>
+    <td class="l">${a.overallGrade ? esc(a.overallGrade) : dash}</td>
+    <td class="l">${a.buyGrade ? esc(a.buyGrade) : dash}</td>
+    <td class="l">${starTxt(a)}</td>
+    <td>${a.priority != null ? a.priority : dash}</td>
+    <td class="l" title="${esc(a.analysisNote || '')}">${a.analysisNote ? esc(String(a.analysisNote).slice(0, 30)) + (a.analysisNote.length > 30 ? '…' : '') : dash}</td>
+  </tr>`).join('');
+  showModal(`分析履歴 — ${esc(calc.displayName(sec))}`, `
+    <p class="muted">この銘柄の分析評価の履歴です（評価日の新しい順）。記録は銘柄編集フォームの「分析メタ」保存、または分析結果の取込でたまります。最新行が現在の表示値です。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">評価日</th><th class="l">総合</th><th class="l">買い時</th><th class="l">★(ﾊﾞﾘｭ/強/ﾘｽｸ)</th><th>優先</th><th class="l">分析メモ</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    ${list.length === 0 ? '<div class="empty">分析履歴はまだありません。</div>' : ''}
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`);
+}
+
 // 取込履歴セクション
 function importHistorySection() {
   const hist = store.data.importHistory || [];
@@ -3836,7 +3913,8 @@ function openSecurityForm(id, presetMarket) {
 
       <div class="form-actions">
         ${id ? `<button type="button" class="btn btn-danger" onclick="deleteSecurity(${id})">削除</button>
-        <button type="button" class="btn" onclick="openAmountHistory(${id})">適用金額履歴</button>` : ''}
+        <button type="button" class="btn" onclick="openAmountHistory(${id})">適用金額履歴</button>
+        <button type="button" class="btn" onclick="openAnalysisHistory(${id})">分析履歴</button>` : ''}
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
@@ -3890,6 +3968,17 @@ function openSecurityForm(id, presetMarket) {
       target = store.addSecurity({ ...patch });
       const qty = parseFloat(f.initQty.value), cost = parseFloat(f.initCost.value);
       if (!isNaN(qty) && qty !== 0) store.setHolding(target.id, f.broker.value, f.accountType.value, qty, isNaN(cost) ? 0 : cost);
+    }
+    // 分析メタを履歴(analyses)へ記録（評価日がある時のみ）。同じ評価日＝その日の更新／別の評価日＝新エントリ。
+    // updateSecurity でいったん平置きに書いた後、syncLatestAnalysis で「真の最新評価日」を平置きへミラーし直す
+    // （古い評価日を後から入れても表示は最新のまま保つ）。フォーム値は空＝null をそのまま渡し、クリアも反映する。
+    if (target && patch.analysisDate) {
+      store.upsertAnalysis(target.id, patch.analysisDate, {
+        overallGrade: patch.overallGrade ?? null, rating: patch.rating ?? null, buyGrade: patch.buyGrade ?? null,
+        starValuation: patch.starValuation ?? null, starStrength: patch.starStrength ?? null, starRisk: patch.starRisk ?? null,
+        priority: patch.priority ?? null, analysisNote: patch.analysisNote ?? null,
+      });
+      store.syncLatestAnalysis(target.id);
     }
     // 編集時は一覧のスクロール位置を維持（保存後に先頭へ戻らないように）。新規追加は先頭から見せる
     closeModal(); if (id) preserveTableScroll(render); else render();
@@ -4619,35 +4708,35 @@ async function importAnalysis(text, market, create) {
         assetClass: market === 'FUND' ? 'fund' : 'stock', enabled: market !== 'FUND', ruleId: store.defaultRule().id,
       });
     }
-    // 分析日が既存より古ければ取り込まない（最新の分析を保持）。同一取込内の重複も最新日が勝つ
     const incDate = normDate(rec.analysisDate);
-    if (!isNew && sec.analysisDate && incDate && incDate < sec.analysisDate) { stale++; continue; }
     if (isNew) created++; else updated++;
     const nf = (v) => (v && v.trim()) ? parseFloat(v) : null;
     const sf = (v, fb) => (v && v.trim()) || fb || null;
-    // 分析の「判断」項目はレコードへ
-    const patch = {
-      overallGrade: cg(rec, 'overallGrade', sec.overallGrade),
-      rating: cg(rec, 'rating', sec.rating),
-      buyGrade: cg(rec, 'buyGrade', sec.buyGrade),
-      starValuation: parseStars(rec.starValuation) ?? sec.starValuation ?? null,
-      starStrength: parseStars(rec.starStrength) ?? sec.starStrength ?? null,
-      starRisk: parseStars(rec.starRisk) ?? sec.starRisk ?? null,
-      analysisNote: sf(rec.analysisNote, sec.analysisNote),
-      analysisDate: normDate(rec.analysisDate) || sec.analysisDate || null,
-      category: cg(rec, 'category', sec.category), // シートの「カテゴリ」列→割り当てカテゴリ（取込値があれば更新・変換マスタ適用）
-      recoAmount: rec.recoAmount ? parseFloat(rec.recoAmount) : (sec.recoAmount ?? null),
-    };
-    if (rec.priority) { const p = parseInt(rec.priority, 10); if (!isNaN(p)) patch.priority = p; }
+    // 評価項目（履歴 analyses へ積む対象）。空セルは含めない＝同一評価日の再取込でも既存値を消さない。
+    const aFields = clean({
+      overallGrade: cg(rec, 'overallGrade'),
+      rating: cg(rec, 'rating'),
+      buyGrade: cg(rec, 'buyGrade'),
+      starValuation: parseStars(rec.starValuation),
+      starStrength: parseStars(rec.starStrength),
+      starRisk: parseStars(rec.starRisk),
+      analysisNote: sf(rec.analysisNote),
+      recoAmount: rec.recoAmount ? parseFloat(rec.recoAmount) : null,
+      priority: (rec.priority && !isNaN(parseInt(rec.priority, 10))) ? parseInt(rec.priority, 10) : null,
+    });
+    const cat = cg(rec, 'category'); // シートの「カテゴリ」列→割り当てカテゴリ（取込値があれば更新・変換マスタ適用）
     // セクター/業種/時価総額/PER/EPS/配当はマスタ(meta)へ（自動取得項目と同じ置き場所）
     const metaPatch = clean({
       sector: sf(rec.sector), industry: sf(rec.industry),
       marketCap: nf(rec.marketCap), per: nf(rec.per), eps: nf(rec.eps), dividend: nf(rec.dividend),
     });
     if (Object.keys(metaPatch).length) store.setMeta(priceKey(sec), metaPatch);
-    // 買い増し予定額・推奨購入額はカテゴリ別金額マスタから算出するため、推奨投資額(recoAmount)からの自動設定は行わない
-    // （旧実装は米株を recoAmount÷100 して 0.6 等の誤値を生んでいた。SEC: 金額はマスタ基準に統一）
-    store.updateSecurity(sec.id, patch);
+    if (cat) store.updateSecurity(sec.id, { category: cat });
+    // 評価日があれば履歴へ upsert→最新を平置きへミラー。古い評価日も履歴として残す（旧実装の stale 破棄は廃止）。
+    // 評価日が無い行は履歴化できないので平置きへ直接反映（最新ミラー相当）。
+    // 買い増し予定額・推奨購入額はカテゴリ別金額マスタから算出するため、recoAmount からの自動設定は行わない。
+    if (incDate) { store.upsertAnalysis(sec.id, incDate, aFields); store.syncLatestAnalysis(sec.id); }
+    else if (Object.keys(aFields).length) store.updateSecurity(sec.id, aFields);
     touched.push(sec);
   }
   _convSession = {};

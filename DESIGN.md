@@ -15,8 +15,9 @@
 - **保存**: ブラウザ **localStorage**（キー `sm_data_v1`、列設定は `sm_colprefs_v2`）。Sheets/KV は未実装。
 - **デプロイ**: GitHub のブランチ `claude/securities-portfolio-tool-WGIsF`（既定＝本番）への push で **CF Pages 自動デプロイ**。
 - **API（Pages Functions）**: `/api/price`（Yahoo価格・**日足で前日比正常化**）、`/api/info`（日本語名・セクター/業種・EPS/発行済株式数）、`/api/splits`（分割）、`/api/history`（終値時系列・チャート用）。Finnhub は `FINNHUB_API_KEY` 設定時のみ米株に使用。
-- **データモデル（store）**: `securities / holdings / transactions / rules / categories / prices / fx / meta / indices / amountHistory / amountSnapshots / importHistory / importMappings`。
-  - `securities` は分析メタ＋ `nameOverride/sectorOverride/industryOverride`（手動上書き、自動取得で潰れない）、`fixedBuyPrice`（買増固定値）、`prevBuyPrice`、`baseHighMode/baseHighManual`、`watch`（注意＝未保有でも一覧に残す）、`enabled`（判定対象）、`splitHistory[]`、`manualUpdatedAt`。
+- **データモデル（store）**: `securities / holdings / transactions / rules / categories / prices / fx / meta / indices / amountHistory / amountSnapshots / analyses / importHistory / importMappings`。
+  - `securities` は分析メタ（**最新分析のミラー**）＋ `nameOverride/sectorOverride/industryOverride`（手動上書き、自動取得で潰れない）、`fixedBuyPrice`（買増固定値）、`prevBuyPrice`、`baseHighMode/baseHighManual`、`watch`（注意＝未保有でも一覧に残す）、`enabled`（判定対象）、`splitHistory[]`、`manualUpdatedAt`。
+  - `analyses`（**銘柄分析の履歴**・2026-06-13）= `{ id, securityId, analysisDate, overallGrade, rating, buyGrade, starValuation, starStrength, starRisk, priority, recoAmount, analysisNote, createdAt, updatedAt }`。**自然キー＝`securityId|analysisDate`**（1銘柄×1評価日＝1件、別評価日は別レコード＝履歴）。銘柄レコードの平置き分析フィールドは `latestAnalysis`（評価日が最も新しい1件）の**ミラー**で、表・ソート・ドロワー・背景色・取込往復などの既存配線はそのミラーを参照する（`amountHistory`/`amountSnapshots` と同じ「履歴は別ストア・現在値は本体」方式）。記録の入口は **①銘柄編集フォーム「分析メタ」保存**（評価日キーで upsert→ `syncLatestAnalysis` でミラー更新）と **②分析結果の取込**（評価日ごとに upsert。古い評価日も履歴として残す＝旧実装の stale 破棄は廃止）。閲覧は編集フォームの **「分析履歴」ボタン→モーダル（閲覧専用・評価日降順）**。後方互換で初回 load 時に既存の平置き分析（`analysisDate` あり）を履歴へ1件起こす（`_migrateAnalyses`・自然キーで冪等）。
   - `meta`（`market:ticker`キー）= 名前/セクター/業種/PER/EPS/配当/時価総額/sharesOut の自動取得キャッシュ。
   - `prices`（`market:ticker`キー）= price/prevClose/high5y/high52w/low1y/low3y（＋各 *Date）。`low1y/low3y`＝直近1年/3年の最安値（情報表示専用。買い増し判定には未使用）。`indices` = 参考指数 price/prevClose。
 - **市場**: 日本株(JP)/米国株(US)のみ。**投信(FUND)は除外**（2026-05-30判断。後方互換で定義は残るがUI選択不可）。

@@ -23,6 +23,7 @@
     categories:      ['records', (c) => `c:${c.category}`],
     amountHistory:   ['records', (r) => `ah:${r.id}`],
     amountSnapshots: ['records', (r) => `as:${r.id}`],
+    analyses:        ['records', (r) => `an:${r.securityId}|${r.analysisDate}`],
     importHistory:   ['records', (r) => `ih:${r.id}`],
     importFormats:   ['records', (f) => f && f.name != null ? `if:n:${f.name}` : `if:${JSON.stringify(f)}`],
     prices:          ['map', byFetchedAt],
