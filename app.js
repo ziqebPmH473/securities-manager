@@ -2674,6 +2674,7 @@ function renderSignals() {
       </div>
     </div>`;
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
+  applyStickyCols(document.querySelector('#app table.fixed-cols')); // コード・銘柄名を左端固定（保有銘柄と同様）
   scheduleFit(); // 市場フィルタ切替で renderSignals() を直接呼ばれた時も枠内スクロール化（render() を経由しないため自前で）
 }
 
@@ -2730,7 +2731,7 @@ function openAmountHistory(secId) {
       <tbody>${curRow}${rows || ''}</tbody>
     </table></div>
     ${snaps.length === 0 ? '<div class="empty">変更履歴はまだありません。</div>' : ''}
-    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`);
+    <div class="form-actions"><button type="button" class="btn" onclick="openSecurityForm(${secId})">← 編集に戻る</button><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`);
 }
 
 // 銘柄ごとの分析履歴（モーダル・閲覧専用）。記録は編集フォームの「分析メタ」保存／分析結果の取込でたまる。
@@ -2766,7 +2767,7 @@ function openAnalysisHistory(secId) {
     ${list.length ? `<div class="table-wrap"><table class="ah-table" style="width:100%;min-width:${minW}px">${colgroup}
       <thead>${head}</thead><tbody>${rows}</tbody>
     </table></div>` : '<div class="empty">分析履歴はまだありません。</div>'}
-    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
+    <div class="form-actions"><button type="button" class="btn" onclick="openSecurityForm(${secId})">← 編集に戻る</button><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
 }
 
 // 取込履歴セクション

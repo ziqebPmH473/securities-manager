@@ -747,12 +747,12 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
   .brand { justify-content: center; padding: 18px 0; }
   .nav-item { justify-content: center; padding: 11px 0; }
   .nav-item.active::before { left: 0; }
-  .tickers { display: none; }
 }
 @media (max-width: 720px) {
   .content { padding: 16px 14px 32px; }
   .topbar { padding: 10px 14px; gap: 10px; }
   .update-meta { display: none; }
+  .tickers { display: none; }
 }
 
 /* ===== P2: ダッシュボード追加クラス ===== */
@@ -851,7 +851,8 @@ table.ie-on tbody tr:hover { background: transparent; }
 
 /* ===== SEC-94: コード・銘柄名の列を横スクロール時に左端固定 ===== */
 table.holdings td.stick, table.holdings th.stick { position: sticky; z-index: 2; background: var(--panel); }
-table.holdings thead th.stick { z-index: 3; background: var(--panel-2); }
+/* 固定列のヘッダは通常th(z-index:5)より上に置く。低いと横スクロール時に隣の見出しに覆われて潰れる。 */
+table.holdings thead th.stick { z-index: 6; background: var(--panel-2); }
 table.holdings td.stick-edge, table.holdings th.stick-edge { box-shadow: 6px 0 6px -6px rgba(0,0,0,.28); }
 /* sig到達/ホバー行でも固定セルの背景を不透明に保つ（下の行が透けないように） */
 table.holdings tbody tr:hover td.stick { background: #f6f8fb; }
