@@ -350,7 +350,7 @@ const store = {
 
   // 銘柄情報マスタ（meta）への書き込み。key = `${market}:${ticker}`
   setMeta(key, obj) {
-    this.data.meta[key] = { ...(this.data.meta[key] || {}), ...obj };
+    this.data.meta[key] = { ...(this.data.meta[key] || {}), ...obj, updatedAt: this._now() };
     this.save();
   },
 
@@ -641,6 +641,7 @@ const dsync = {
 function gsaveSettings(f) {
   store.data.settings = store.data.settings || {};
   store.data.settings.google = { clientId: f.gClientId.value.trim(), allowedEmails: f.gAllowed.value.trim() };
+  store.data.settings._updatedAt = store._now(); // 同期マージで両端末変更時に新しい方を採るため
   store.save(); toast('Google連携設定を保存しました'); renderMaster();
 }
 function gsyncStatus(html) { const el = document.getElementById('gsync-status'); if (el) el.innerHTML = html; }
@@ -1177,7 +1178,7 @@ const api = {
           const inc = clean(d);
           // 日本語名は英語フォールバックで上書きしない（取得のたびに名称がブレないように）
           if (inc.name && ex.name && hasJa(ex.name) && !hasJa(inc.name)) delete inc.name;
-          store.data.meta[key] = { ...ex, ...inc };
+          store.data.meta[key] = { ...ex, ...inc, updatedAt: store._now() };
         }
       }
       store.save();
@@ -1339,6 +1340,13 @@ function loadColPrefs() {
   try { colPrefs = JSON.parse(localStorage.getItem(COL_PREFS_KEY)) || {}; } catch(_) { colPrefs = {}; }
 }
 function saveColPrefs() { localStorage.setItem(COL_PREFS_KEY, JSON.stringify(colPrefs)); }
+// ユーザーが実際に列を編集した時だけ呼ぶ。市場ごとの編集時刻(_ts)を更新し、同期マージで「最新の編集が勝つ」
+// 判定に使う。reconcile/reset（画面表示に伴う受動的な補完）では呼ばない＝別端末の本物の編集を上書きしない。
+function touchColPrefs(market) {
+  if (!colPrefs._ts || typeof colPrefs._ts !== 'object') colPrefs._ts = {};
+  colPrefs._ts[market] = new Date().toISOString();
+  saveColPrefs();
+}
 // バックアップ/同期用の“全状態”バンドル。store.data に加え列設定(colPrefs)も同梱（_colPrefs）
 function dataBundle() { return Object.assign({}, store.data, { _colPrefs: colPrefs }); }
 // バンドルを復元（store.data ＋ 列設定）。_colPrefs が無い旧バックアップとも互換
@@ -2508,37 +2516,37 @@ function copyColLayout(fromMarket, toMarket) {
   reconcileColPrefs(fromMarket);
   colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width, labelOverride: c.labelOverride, auto: c.auto }));
   reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（米国株/日本株は同一列なので実質そのまま）
-  saveColPrefs();
+  saveColPrefs(); touchColPrefs(toMarket);
   toast(`列設定を${MARKET_LABEL[toMarket]}にコピーしました`, 4000);
   openColPicker(_colPickerMarket);
 }
 function cpToggle(key, checked) {
   const order = getColOrder(_colPickerMarket);
   const c = order.find(x => x.key === key);
-  if (c) { c.visible = checked; saveColPrefs(); }
+  if (c) { c.visible = checked; saveColPrefs(); touchColPrefs(_colPickerMarket); }
 }
 function cpSetWidth(key, px) {
   const order = getColOrder(_colPickerMarket);
   const c = order.find(x => x.key === key);
-  if (c) { const n = parseInt(px, 10); c.width = (isNaN(n) || n < 40) ? undefined : n; saveColPrefs(); }
+  if (c) { const n = parseInt(px, 10); c.width = (isNaN(n) || n < 40) ? undefined : n; saveColPrefs(); touchColPrefs(_colPickerMarket); }
 }
 // 列幅モード: auto=データ最大幅に自動調整（列名無視）／固定=px指定
 function cpSetAuto(key, checked) {
   const order = getColOrder(_colPickerMarket);
   const c = order.find(x => x.key === key);
-  if (c) { c.auto = !!checked; saveColPrefs(); openColPicker(_colPickerMarket); }
+  if (c) { c.auto = !!checked; saveColPrefs(); touchColPrefs(_colPickerMarket); openColPicker(_colPickerMarket); }
 }
 function cpSetAllWidths() {
   const n = parseInt((document.getElementById('cp-all-width') || {}).value, 10);
   if (isNaN(n) || n < 40) { toast('40以上の幅を入力してください'); return; }
   getColOrder(_colPickerMarket).forEach(c => c.width = n);
-  saveColPrefs(); openColPicker(_colPickerMarket);
+  saveColPrefs(); touchColPrefs(_colPickerMarket); openColPicker(_colPickerMarket);
   toast(`全列幅を ${n}px にしました`, 3000);
 }
 function cpSetLabel(key, val) {
   const order = getColOrder(_colPickerMarket);
   const c = order.find(x => x.key === key);
-  if (c) { const v = (val || '').trim(); c.labelOverride = v || undefined; saveColPrefs(); }
+  if (c) { const v = (val || '').trim(); c.labelOverride = v || undefined; saveColPrefs(); touchColPrefs(_colPickerMarket); }
 }
 function cpDragStart(e, idx) { _dragSrcIdx = idx; e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('cp-dragging'); }
 function cpDragOver(e, idx) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
@@ -2548,12 +2556,12 @@ function cpDrop(e, idx) {
   const order = getColOrder(_colPickerMarket);
   const [moved] = order.splice(_dragSrcIdx, 1);
   order.splice(idx, 0, moved);
-  saveColPrefs();
+  saveColPrefs(); touchColPrefs(_colPickerMarket);
   // DOM内で並び替え反映（モーダル再描画）
   openColPicker(_colPickerMarket);
 }
 function cpDragEnd() { _dragSrcIdx = null; document.querySelectorAll('.cp-dragging').forEach(el => el.classList.remove('cp-dragging')); }
-function cpReset() { resetColPrefs(_colPickerMarket); openColPicker(_colPickerMarket); }
+function cpReset() { resetColPrefs(_colPickerMarket); touchColPrefs(_colPickerMarket); openColPicker(_colPickerMarket); }
 
 // ---------- サイン一覧 ----------
 // 到達（reached）と もうすぐ（残り5%以内）の銘柄を分けて返す

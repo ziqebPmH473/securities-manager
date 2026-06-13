@@ -645,7 +645,9 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - 正本＝**Google Drive の `securities-manager/data.json`**（`dataBundle()`=store.data+_colPrefs のJSON）。手動保存/読込は不要。
 - **3-wayマージ**（`sync-merge.js` の `SyncMerge.mergeBundle(base, local, remote)`）。base=前回同期時点を localStorage `sm_sync_base` に保持。
   - 自然キー: securities=`market:ticker` / holdings=`securityId|broker|accountType` / categories=名前 / その他はid。整数ID2端末衝突を回避。削除も伝播、編集vs削除は編集優先。
-  - prices/meta等のキャッシュはキー単位（新しいfetchedAt優先）、settings等は変更側優先、seq/日時はmax。
+  - prices はキー単位で新しい fetchedAt 優先、**meta はキー単位で新しい `updatedAt` 優先**（2026-06-13。従来は両端末に同キーがあると local 固定で別端末の更新を握り潰していた）、seq/日時はmax。
+  - **列設定 `_colPrefs` は市場ごとに3-wayマージ（`colprefs` 規則・2026-06-13）**: 市場単位で内容を比較し、編集時刻 `_ts[market]` の**新しい方を採用**。`_ts` は **ユーザーが実際に列を編集した時だけ**更新（`touchColPrefs`）し、画面表示に伴う `reconcileColPrefs`/`resetColPrefs`（新列補完・初回生成）では更新しない。これにより「別端末でタブを開いただけ」の受動的な列補完が、他端末の本物の編集を上書き＝巻き戻す事故を防ぐ（旧 `single` 規則は base から変化していれば局所優先で、受動変化でも local が勝ち巻き戻していた）。`_ts` が両端末とも無い市場は従来どおり base 基準にフォールバック。
+  - **`settings` は `singleTs` 規則（2026-06-13）**: 両端末で変更された時は `_updatedAt` の新しい方を採用（無ければ local）。Google 連携設定を2端末で別々に編集した際の取りこぼしを防ぐ。
   - **削除伝播の安全策（2026-06-11）**: 配列キーが「存在して空（=削除の意思）」か「そもそも未提供（undefined＝情報なし）」かを区別し、**未提供側からは削除を伝播しない**。Driveファイルに配列キー（rules等）が欠落しただけで全レコードが消える事故を防ぐ。`store.load()` は rules が空なら既定ルールを再シード（空配列→`rules[0].isDefault`でのクラッシュを防止＝自己修復）。
 - **Drive世代バックアップ（最大5世代・2026-06-11）**: 誤操作/不具合でのデータ消失対策。同じ `securities-manager` フォルダに `backup-YYYYMMDD-HHMMSS.json` を最大5世代保存（古いものから剪定。`data.json` 同期とは name 条件で非干渉）。作成タイミング＝**①1日1回（その日最初の同期で上書き前のDrive内容）②全データ削除/インポートの直前**。復元UI＝「バックアップ・出力」→「Driveのバックアップから復元…」。復元は `sm_sync_base` クリアで次回同期により反映。
 - **同期基準点(`sm_sync_base`)のクリア規則**: 全データ削除・JSONインポート・バックアップ復元では base/at も消す。残すとローカルの空/置換が3-wayマージで「全削除」と誤解され他端末・Driveを巻き込むため、base={}の新規扱いにして安全側（pull/push）へ倒す。
