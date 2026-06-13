@@ -99,3 +99,28 @@ export function computeTotalsJpy(bundle) {
   }
   return { totalJpy: Math.round(totalJpy), costJpy: Math.round(costJpy) };
 }
+
+// 資産推移（積み上げ）用: 総資産・取得原価＋内訳（カテゴリ別/市場別/市場×種別ETF・個別）を円換算で返す。
+export function computeBreakdowns(bundle) {
+  const fx = bundle.fx && (bundle.fx.USDJPY != null ? bundle.fx.USDJPY : bundle.fx.usdjpy);
+  const rate = (fx != null && isFinite(fx)) ? fx : null;
+  let totalJpy = 0, costJpy = 0;
+  const byCategory = {}, byMarket = {}, byMarketType = {};
+  const add = (o, k, v) => { o[k] = (o[k] || 0) + v; };
+  for (const sec of (bundle.securities || [])) {
+    if (sec.market !== 'JP' && sec.market !== 'US') continue;
+    const th = totalHolding(bundle, sec.id);
+    if (!(th.qty > 0)) continue;
+    const p = (bundle.prices || {})[priceKey(sec)] || {};
+    const price = (p.price != null) ? p.price : th.avgCost;
+    let valJpy = th.qty * price, costJ = th.qty * th.avgCost;
+    if (sec.market === 'US') { if (rate == null) continue; valJpy *= rate; costJ *= rate; }
+    valJpy = Math.round(valJpy); costJ = Math.round(costJ);
+    totalJpy += valJpy; costJpy += costJ;
+    add(byCategory, sec.category || '未分類', valJpy);
+    add(byMarket, sec.market, valJpy);
+    const type = (sec.detailType === 'ETF') ? 'ETF' : '個別'; // detailType未設定は個別扱い
+    add(byMarketType, `${sec.market}・${type}`, valJpy);
+  }
+  return { totalJpy, costJpy, byCategory, byMarket, byMarketType };
+}

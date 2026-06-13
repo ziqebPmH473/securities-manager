@@ -5,7 +5,7 @@
 // GET /api/notify-run?send=1&token=XXX      … NOTIFY_TRIGGER_TOKEN を設定している場合は必須
 // GET /api/notify-run?near=3                … 近接の閾値%
 import { readAppDataBundle, writePortfolioSnapshot } from '../lib/sheets.js';
-import { computeSignals, computeTotalsJpy } from '../lib/portfolio.js';
+import { computeSignals, computeBreakdowns } from '../lib/portfolio.js';
 import { fetchFreshPrices, mergeFreshPrices } from '../lib/prices.js';
 import { buildSignalEmail, sendResend } from '../lib/notify.js';
 import { checkToken } from '../lib/auth.js';
@@ -34,10 +34,11 @@ export async function onRequestGet(context) {
     // フォルダがSAに「編集者」共有されていないと失敗するが、その場合も snapshot.error に入れて続行。
     let snapshot = null;
     try {
-      const t = computeTotalsJpy(bundle);
+      const t = computeBreakdowns(bundle);
       if (t.totalJpy || t.costJpy) {
         const dateStr = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); // JSTの日付
-        await writePortfolioSnapshot(context.env, { date: dateStr, totalJpy: t.totalJpy, costJpy: t.costJpy });
+        const rec = { date: dateStr, totalJpy: t.totalJpy, costJpy: t.costJpy, byCategory: t.byCategory, byMarket: t.byMarket, byMarketType: t.byMarketType };
+        await writePortfolioSnapshot(context.env, rec);
         snapshot = { date: dateStr, totalJpy: t.totalJpy, costJpy: t.costJpy };
       } else snapshot = { skipped: '保有ゼロ/未集計' };
     } catch (e) { snapshot = { error: String(e && e.message || e) }; }
