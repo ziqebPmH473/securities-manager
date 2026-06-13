@@ -6681,29 +6681,29 @@ function setAssetAxis(a) {
   renderAssetChart();
   renderAssetTable();
 }
+function todayJst() { return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
 async function loadPortfolioChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
   const note = (html) => { el.innerHTML = `<div class="notice" style="margin:0">${html}</div>`; };
   const token = (typeof gsync !== 'undefined' && gsync._token) ? gsync._token : null;
   if (!token) { _assetSnaps = null; note('資産推移はGoogleログイン時に表示されます（総資産＝本人のみ閲覧可）。マスタ・設定からログインしてください。'); return; }
-  // 今日分はアプリ側でライブ計算（内訳＝カテゴリ/市場/市場×種別つき）して履歴へ記録。サーバーcronは保険。
-  let todaySnap = null;
-  try {
-    if (typeof dsync !== 'undefined' && gsync.hasDrive && gsync.hasDrive()) {
-      await dsync.ensureHistoryFile();
-      todaySnap = computeTodayBreakdown();
-      if (todaySnap.totalJpy || todaySnap.costJpy) await dsync.historyMerge([todaySnap]);
-    }
-  } catch (_) {}
+  // 履歴ファイルが無ければ作成（サーバーcronが書けるように）。※アプリはJSONには書かない（表示専用）。
+  try { if (typeof dsync !== 'undefined' && gsync.hasDrive && gsync.hasDrive()) await dsync.ensureHistoryFile(); } catch (_) {}
   try {
     const res = await fetch('/api/portfolio-history', { headers: { Authorization: 'Bearer ' + token } });
     const d = await res.json();
     if (!res.ok || !d.ok) { note('資産推移を取得できませんでした：' + esc((d && d.error) || ('HTTP ' + res.status))); return; }
     _assetSnaps = (d.snapshots || []).map(normalizeSnapKeys).sort((a, b) => a.date < b.date ? -1 : 1);
-    // 取得直後でDrive反映待ちでも今日分が出るよう、ライブ計算分を表示側にも反映
-    if (todaySnap && (todaySnap.totalJpy || todaySnap.costJpy)) {
-      const i = _assetSnaps.findIndex(s => s.date === todaySnap.date);
-      if (i >= 0) _assetSnaps[i] = todaySnap; else { _assetSnaps.push(todaySnap); _assetSnaps.sort((a, b) => a.date < b.date ? -1 : 1); }
+    // 今日の点: アプリ内で価格更新した時刻が、その日の最後のcron取得(at)より新しければ、ライブ値を表示に重ねる
+    // （JSONには保存しない＝表示専用）。価格未更新ならJSON＝cron値のまま。
+    const tj = todayJst();
+    const ti = _assetSnaps.findIndex(s => s.date === tj);
+    const todayAt = ti >= 0 ? (Date.parse(_assetSnaps[ti].at || '') || 0) : 0;
+    const lpu = store.data.lastPriceUpdate ? (Date.parse(store.data.lastPriceUpdate) || 0) : 0;
+    const lpuJstDate = lpu ? new Date(lpu + 9 * 3600 * 1000).toISOString().slice(0, 10) : '';
+    if (lpu && lpuJstDate === tj && lpu > todayAt) {
+      const live = computeTodayBreakdown();
+      if (live.totalJpy || live.costJpy) { if (ti >= 0) _assetSnaps[ti] = live; else { _assetSnaps.push(live); _assetSnaps.sort((a, b) => a.date < b.date ? -1 : 1); } }
     }
     renderAssetChart();
   } catch (e) { note('資産推移の取得に失敗しました: ' + esc(e && e.message || String(e))); }
@@ -6736,7 +6736,7 @@ function computeTodayBreakdown() {
     add(byMarket, mk, v);
     add(byMarketType, `${mk}・${isETF ? 'ETF' : '個別株'}`, v);
   }
-  return { date: today(), totalJpy: Math.round(totalJpy), costJpy: Math.round(costJpy), byCategory, byMarket, byMarketType };
+  return { date: todayJst(), at: new Date().toISOString(), totalJpy: Math.round(totalJpy), costJpy: Math.round(costJpy), byCategory, byMarket, byMarketType };
 }
 function setAssetPeriod(p) {
   assetPeriod = p;

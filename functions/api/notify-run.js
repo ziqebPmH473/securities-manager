@@ -37,7 +37,7 @@ export async function onRequestGet(context) {
       const t = computeBreakdowns(bundle);
       if (t.totalJpy || t.costJpy) {
         const dateStr = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); // JSTの日付
-        const rec = { date: dateStr, totalJpy: t.totalJpy, costJpy: t.costJpy, byCategory: t.byCategory, byMarket: t.byMarket, byMarketType: t.byMarketType };
+        const rec = { date: dateStr, at: new Date().toISOString(), totalJpy: t.totalJpy, costJpy: t.costJpy, byCategory: t.byCategory, byMarket: t.byMarket, byMarketType: t.byMarketType };
         await writePortfolioSnapshot(context.env, rec);
         snapshot = { date: dateStr, totalJpy: t.totalJpy, costJpy: t.costJpy, byMarket: t.byMarket, byMarketType: t.byMarketType };
       } else snapshot = { skipped: '保有ゼロ/未集計' };
