@@ -6631,14 +6631,48 @@ async function loadPortfolioChart() {
   const note = (html) => { el.innerHTML = `<div class="notice" style="margin:0">${html}</div>`; };
   const token = (typeof gsync !== 'undefined' && gsync._token) ? gsync._token : null;
   if (!token) { _assetSnaps = null; note('資産推移はGoogleログイン時に表示されます（総資産＝本人のみ閲覧可）。マスタ・設定からログインしてください。'); return; }
-  try { if (typeof dsync !== 'undefined' && gsync.hasDrive && gsync.hasDrive()) await dsync.ensureHistoryFile(); } catch (_) {}
+  // 今日分はアプリ側でライブ計算（内訳＝カテゴリ/市場/市場×種別つき）して履歴へ記録。サーバーcronは保険。
+  let todaySnap = null;
+  try {
+    if (typeof dsync !== 'undefined' && gsync.hasDrive && gsync.hasDrive()) {
+      await dsync.ensureHistoryFile();
+      todaySnap = computeTodayBreakdown();
+      if (todaySnap.totalJpy || todaySnap.costJpy) await dsync.historyMerge([todaySnap]);
+    }
+  } catch (_) {}
   try {
     const res = await fetch('/api/portfolio-history', { headers: { Authorization: 'Bearer ' + token } });
     const d = await res.json();
     if (!res.ok || !d.ok) { note('資産推移を取得できませんでした：' + esc((d && d.error) || ('HTTP ' + res.status))); return; }
     _assetSnaps = (d.snapshots || []).slice().sort((a, b) => a.date < b.date ? -1 : 1);
+    // 取得直後でDrive反映待ちでも今日分が出るよう、ライブ計算分を表示側にも反映
+    if (todaySnap && (todaySnap.totalJpy || todaySnap.costJpy)) {
+      const i = _assetSnaps.findIndex(s => s.date === todaySnap.date);
+      if (i >= 0) _assetSnaps[i] = todaySnap; else { _assetSnaps.push(todaySnap); _assetSnaps.sort((a, b) => a.date < b.date ? -1 : 1); }
+    }
     renderAssetChart();
   } catch (e) { note('資産推移の取得に失敗しました: ' + esc(e && e.message || String(e))); }
+}
+// 今日の内訳つきスナップショットをライブのstore.dataから計算（サーバー computeBreakdowns と同じラベル規則）。
+function computeTodayBreakdown() {
+  let totalJpy = 0, costJpy = 0;
+  const byCategory = {}, byMarket = {}, byMarketType = {};
+  const add = (o, k, v) => { o[k] = (o[k] || 0) + v; };
+  for (const sec of store.data.securities) {
+    if (sec.market !== 'JP' && sec.market !== 'US') continue;
+    if (calc.totalHolding(sec.id).qty <= 0) continue;
+    const vj = calc.toJpy(sec.market, calc.valueOrCostNative(sec) || 0);
+    if (vj == null) continue; // 為替未取得の米株は除外
+    const cj = calc.toJpy(sec.market, calc.costNative(sec) || 0) || 0;
+    const v = Math.round(vj), c = Math.round(cj);
+    totalJpy += v; costJpy += c;
+    const mk = sec.market === 'JP' ? '日本株' : '米国株';
+    const type = (sec.detailType === 'ETF') ? 'ETF' : '個別';
+    add(byCategory, sec.category || '未分類', v);
+    add(byMarket, mk, v);
+    add(byMarketType, `${mk}・${type}`, v);
+  }
+  return { date: today(), totalJpy: Math.round(totalJpy), costJpy: Math.round(costJpy), byCategory, byMarket, byMarketType };
 }
 function renderAssetChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
