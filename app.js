@@ -7184,6 +7184,10 @@ try { const v = sessionStorage.getItem('sm_view'); if (v && PAGE_TITLE[v]) curre
 // 市場の初期表示は時間帯で決定（平日8-18時JST=日本株/それ以外=米国株）。リロード毎に再判定し、保存しない
 // （＝開き直し・リロードのたびに時間帯で初期化。セッション中の手動切替は in-memory で維持）。
 { const m0 = timeBasedMarket(); holdingsMarket = m0; signalMarketFilter = m0; }
+// ログイン復元は localStorage の保存トークンだけで完結し、サーバー設定への通信を必要としない。
+// loadServerConfig を待たず render の前に即実行＝最初の描画から「ログイン中」を反映し、
+// 「ログイン済みなのに未ログイン表示」を防ぐ（保存トークンがあれば path① が同期的に _token を確定）。
+gsync.restoreSession().catch(() => {});
 render();
 // 1日1回（起動時）だけ銘柄名・セクター・業種・高値を更新
 api.dailyStartup();
@@ -7192,7 +7196,7 @@ api.dailyStartup();
 loadServerConfig().then(() => {
   if (currentView === 'master') renderMaster();
   if (typeof dsync !== 'undefined' && dsync.enabled()) dsync.startAuto();
-  // リロードでもログイン状態を保つ（案A）: Googleの生きたセッションから無音でトークンを復元。
-  // clientId はサーバー設定で後から入ることがあるため loadServerConfig 後に呼ぶ。
+  // 保存トークンが無く clientId がサーバー設定で後から入った場合のフォールバック（無音再取得を再試行）。
+  // 既にログイン済みなら restoreSession は即 return するため二重実行は無害。
   gsync.restoreSession().catch(() => {});
 });
