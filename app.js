@@ -2757,7 +2757,7 @@ function openAnalysisHistory(secId) {
     <td>${g(a.buyGrade)}</td>
     <td style="white-space:nowrap">${starTxt(a)}</td>
     <td>${a.priority != null ? a.priority : dash}</td>
-    ${hasReco ? `<td style="text-align:right;white-space:nowrap">${reco(a)}</td>` : ''}
+    ${hasReco ? `<td style="text-align:left;white-space:nowrap">${reco(a)}</td>` : ''}
     <td class="ah-memo">${a.analysisNote ? esc(a.analysisNote) : dash}</td>
   </tr>`).join('');
   showModal(`分析履歴 — ${esc(calc.displayName(sec))}`, `
