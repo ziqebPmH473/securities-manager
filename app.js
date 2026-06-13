@@ -1904,7 +1904,7 @@ function scheduleFit() {
 function fitListTables() {
   const wraps = [...document.querySelectorAll('main .section .table-wrap')];
   wraps.forEach(wrap => {
-    wrap.style.maxHeight = '';                               // 一旦解除して自然な高さを測る
+    wrap.style.maxHeight = ''; wrap.style.minHeight = '';     // 一旦解除して自然な高さを測る
     const top = wrap.getBoundingClientRect().top;            // ビューポート上端からの位置
     // 画面下端まで（最低240px）。枠下の余白は暫定で引く（次段でページ溢れを実測補正するので決め打ちでよい）
     const avail = Math.max(240, window.innerHeight - top - 14);
@@ -1912,13 +1912,18 @@ function fitListTables() {
   });
   // 一覧（単一テーブル）ビューでページがまだ縦に溢れる場合、その溢れ量だけ枠を縮めてページ内に収める。
   // section-body の下padding等で枠下の余白が画面ごとに違う（マーケットは大きい）ため、決め打ち定数では
-  // 収まらないことがある。実測補正なら画面差を吸収できる。複数テーブルのレポート/マスタは対象外。
+  // 収まらない。実測補正なら画面差を吸収できる。複数テーブルのレポート/マスタは対象外。
   if (wraps.length === 1) {
+    const w = wraps[0];
     const overflow = document.documentElement.scrollHeight - window.innerHeight;
     if (overflow > 1) {
-      const w = wraps[0];
       const target = Math.max(200, w.offsetHeight - overflow - 2);
       w.style.maxHeight = target + 'px';
+    } else {
+      // 行が少なくて画面下に余白が出る時は、枠を画面下端まで伸ばし保有銘柄のように画面いっぱいに見せる（買い増しサイン等）
+      const top = w.getBoundingClientRect().top;
+      const avail = Math.max(240, window.innerHeight - top - 14);
+      if (w.scrollHeight < avail) w.style.minHeight = avail + 'px';
     }
   }
 }
@@ -2740,12 +2745,12 @@ function openAnalysisHistory(secId) {
     const parts = [a.starValuation, a.starStrength, a.starRisk].map(v => v != null ? '★' + v : '—');
     return parts.every(p => p === '—') ? dash : parts.join('/');
   };
-  // [見出し, 列幅px]。table-layout:fixed なので幅はこの colgroup で決まる。
-  // 総合/格付/買い時はグレード1〜2文字なので狭く。推奨投資額(recoAmount)は手入力口が無く
-  // メイン表にも出さない取込専用項目で混乱の元のため、履歴には表示しない（推奨購入額はカテゴリ管理）。
-  const cols = [['評価日', 92], ['総合', 50], ['格付', 50], ['買い時', 60], ['★ ﾊﾞﾘｭ/強/ﾘｽｸ', 122], ['優先順', 60], ['分析メモ', 280]];
-  const colgroup = `<colgroup>${cols.map(c => `<col style="width:${c[1]}px">`).join('')}</colgroup>`;
-  const tableW = cols.reduce((a, c) => a + c[1], 0);
+  // [見出し, 列幅px]。table-layout:fixed なので幅はこの colgroup で決まる。分析メモは width 未指定＝可変にし、
+  // モーダルの余り幅を吸収させる（テーブルとモーダルの幅を一致＝右余白をなくす）。
+  const cols = [['評価日', 92], ['総合', 50], ['格付', 50], ['買い時', 60], ['★ ﾊﾞﾘｭ/強/ﾘｽｸ', 122], ['優先順', 60], ['分析メモ', null]];
+  const MEMO_MIN = 240; // 可変メモ列の最小幅。これを下回るとテーブルが横スクロール
+  const colgroup = `<colgroup>${cols.map(c => `<col${c[1] ? ` style="width:${c[1]}px"` : ''}>`).join('')}</colgroup>`;
+  const minW = cols.reduce((a, c) => a + (c[1] || MEMO_MIN), 0);
   const head = `<tr>${cols.map(c => `<th>${esc(c[0])}</th>`).join('')}</tr>`;
   const rows = list.map(a => `<tr>
     <td>${esc(a.analysisDate)}</td>
@@ -2758,7 +2763,7 @@ function openAnalysisHistory(secId) {
   </tr>`).join('');
   showModal(`分析履歴 — ${esc(calc.displayName(sec))}`, `
     <p class="muted">この銘柄の分析評価の履歴です（評価日の新しい順）。記録は銘柄編集フォームの「分析メタ」保存、または分析結果の取込でたまります。先頭が現在の表示値です。横にスクロールできます。</p>
-    ${list.length ? `<div class="table-wrap"><table class="ah-table" style="width:${tableW}px">${colgroup}
+    ${list.length ? `<div class="table-wrap"><table class="ah-table" style="width:100%;min-width:${minW}px">${colgroup}
       <thead>${head}</thead><tbody>${rows}</tbody>
     </table></div>` : '<div class="empty">分析履歴はまだありません。</div>'}
     <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
