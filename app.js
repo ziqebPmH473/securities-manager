@@ -583,6 +583,32 @@ const dsync = {
       if (r.ok) this._histEnsured = true;
     } catch (_) { /* best-effort */ }
   },
+  // 過去データを portfolio-history.json に統合（日付キーで upsert）。返り値=統合後の日数。
+  async historyMerge(incoming) {
+    const folderId = await this._ensureFolder();
+    const q = encodeURIComponent(`name='portfolio-history.json' and '${folderId}' in parents and trashed=false`);
+    const d = await this._driveJson(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)&spaces=drive`);
+    const fileId = (d.files && d.files[0]) ? d.files[0].id : null;
+    let snaps = [];
+    if (fileId) { try { const j = JSON.parse(await this._readFile(fileId)); snaps = Array.isArray(j) ? j : (j.snapshots || []); } catch (_) {} }
+    const map = new Map(snaps.map(s => [s.date, s]));
+    for (const s of incoming) map.set(s.date, { ...(map.get(s.date) || {}), ...s }); // 同日は取込で上書き（マージ）
+    const merged = [...map.values()].sort((a, b) => a.date < b.date ? -1 : 1);
+    const content = JSON.stringify({ snapshots: merged, updatedAt: new Date().toISOString() });
+    if (fileId) {
+      const r = await this._driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: content });
+      if (!r.ok) throw new Error('履歴更新失敗 ' + r.status);
+    } else {
+      const boundary = 'phm' + Math.random().toString(36).slice(2);
+      const meta = { name: 'portfolio-history.json', parents: [folderId] };
+      const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+      const r = await this._driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+        method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
+      if (!r.ok) throw new Error('履歴作成失敗 ' + r.status);
+    }
+    return merged.length;
+  },
   async _readFile(id) {
     const r = await this._driveFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`);
     if (!r.ok) throw new Error(`Drive読込失敗 ${r.status}：${await this._bodyMsg(r)}`);
@@ -3197,9 +3223,16 @@ function renderReport() {
         </tbody></table></div>
       <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p></div>
     <div class="section"><div class="section-head"><h2>資産推移（円換算）</h2>
-        <span class="muted" style="margin-left:auto;font-size:11px">実線=総資産 / 破線=取得原価。毎朝サーバーが日次記録</span></div>
-      <div class="section-body" style="padding:16px"><div id="portfolio-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center">読み込み中…</div></div></div>`;
-  loadPortfolioChart(); // サーバーの日次スナップショットを取得して描画
+        <div class="seg" style="margin-left:auto">${[['market', '市場別'], ['markettype', '市場+種別'], ['category', 'カテゴリ別']].map(([k, l]) => `<button class="${assetAxis === k ? 'active' : ''}" onclick="setAssetAxis('${k}')">${l}</button>`).join('')}</div></div>
+      <div class="section-body" style="padding:16px">
+        <div id="portfolio-chart" class="muted" style="min-height:200px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
+        <details style="margin-top:14px"><summary class="lnk">過去データの取込（明細を貼り付け）</summary>
+          <p class="muted" style="margin:8px 0">資産明細（1銘柄×日付の行）をそのまま貼り付けると、日付ごとに集計して履歴に統合します。必要な列＝<b>日付・種別・詳細種別・評価円・取得円</b>（他の列は無視）。市場×種別の内訳まで反映されます（カテゴリ別は今日以降のみ）。</p>
+          <textarea id="asset-import-text" rows="5" style="width:100%;font-family:monospace;font-size:12px" placeholder="日付  ドル円レート  銘柄  コード  種別  詳細種別 … 評価円 … 取得円 …（ヘッダ行ごと貼り付け）"></textarea>
+          <div class="form-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn btn-primary" onclick="importAssetHistory()">取込んで統合</button><span id="asset-import-msg" class="muted" style="align-self:center"></span></div>
+        </details>
+      </div></div>`;
+  loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画
 }
 
 // ---------- 銘柄マスタ（SEC-27） ----------
@@ -6583,31 +6616,121 @@ function pctFromBase(price, base) { if (price == null || !base) return null; ret
 function signed(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
 function cls(n) { return n == null ? '' : (n > 0 ? 'pos' : (n < 0 ? 'neg' : '')); }
 function today() { return new Date().toISOString().slice(0, 10); }
-// 資産推移グラフ: サーバー(毎朝のcron)が別ファイル portfolio-history.json に貯めた日次総資産を /api/portfolio-history
-// から取得して描画する。レンダリングは非同期（プレースホルダ→fetch→detailSvgChart）。
+// ===== 資産推移（積み上げ面グラフ） =====
+// サーバー日次（byCategory/byMarket/byMarketType付き）＋取込済み過去（byMarket/byMarketType）を /api/portfolio-history
+// から取得し、3軸（市場/市場+種別/カテゴリ）でスタック描画。取得原価の線を重ねる。
+let assetAxis = 'market';   // 'market' | 'markettype' | 'category'
+let _assetSnaps = null;     // 取得した snapshots のキャッシュ（軸切替で再fetchしない）
+function setAssetAxis(a) {
+  assetAxis = a;
+  document.querySelectorAll('#app .section-head .seg button').forEach(b => b.classList.toggle('active', b.getAttribute('onclick') === `setAssetAxis('${a}')`));
+  renderAssetChart();
+}
 async function loadPortfolioChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
   const note = (html) => { el.innerHTML = `<div class="notice" style="margin:0">${html}</div>`; };
-  // 総資産は本人のみ閲覧可。Googleログイントークンを付けて取得（未ログインなら案内）。
   const token = (typeof gsync !== 'undefined' && gsync._token) ? gsync._token : null;
-  if (!token) { note('資産推移はGoogleログイン時に表示されます（総資産＝本人のみ閲覧可）。マスタ・設定からログインしてください。'); return; }
-  // 履歴ファイルはクライアントがユーザー所有で用意する（サーバーは容量ゼロで新規作成できないため）。
+  if (!token) { _assetSnaps = null; note('資産推移はGoogleログイン時に表示されます（総資産＝本人のみ閲覧可）。マスタ・設定からログインしてください。'); return; }
   try { if (typeof dsync !== 'undefined' && gsync.hasDrive && gsync.hasDrive()) await dsync.ensureHistoryFile(); } catch (_) {}
   try {
     const res = await fetch('/api/portfolio-history', { headers: { Authorization: 'Bearer ' + token } });
     const d = await res.json();
     if (!res.ok || !d.ok) { note('資産推移を取得できませんでした：' + esc((d && d.error) || ('HTTP ' + res.status))); return; }
-    const snaps = (d && d.snapshots) || [];
-    if (!Array.isArray(snaps) || snaps.length < 2) {
-      note(`資産推移は毎朝サーバーが日次で総資産を記録します（現在 ${snaps.length} 日分）。2日分たまるとグラフが表示されます。`);
-      return;
-    }
-    const pts = snaps.map(s => [Date.parse(s.date) / 1000, s.totalJpy]);
-    const costPts = snaps.some(s => s.costJpy != null) ? snaps.map(s => [Date.parse(s.date) / 1000, s.costJpy]) : null;
-    el.innerHTML = detailSvgChart(pts, [], costPts);
-  } catch (e) {
-    note('資産推移の取得に失敗しました: ' + esc(e && e.message || String(e)));
+    _assetSnaps = (d.snapshots || []).slice().sort((a, b) => a.date < b.date ? -1 : 1);
+    renderAssetChart();
+  } catch (e) { note('資産推移の取得に失敗しました: ' + esc(e && e.message || String(e))); }
+}
+function renderAssetChart() {
+  const el = document.getElementById('portfolio-chart'); if (!el) return;
+  const snaps = _assetSnaps || [];
+  if (snaps.length < 2) { el.innerHTML = `<div class="notice" style="margin:0">資産推移は2日分以上たまると表示されます（現在 ${snaps.length} 日分）。毎朝サーバーが日次記録。過去データは下の「過去データの取込」で一気に入れられます。</div>`; return; }
+  el.classList.remove('muted');
+  el.innerHTML = assetStackChart(snaps, assetAxis);
+}
+const ASSET_COLORS = ['#2563eb', '#dc2626', '#f59e0b', '#0d9488', '#7c3aed', '#0891b2', '#65a30d', '#db2777', '#64748b', '#ca8a04', '#0ea5e9', '#9333ea'];
+function assetStackChart(snaps, axis) {
+  const W = 760, H = 320, pad = { l: 70, r: 14, t: 12, b: 24 };
+  const keyOf = { category: 'byCategory', market: 'byMarket', markettype: 'byMarketType' }[axis] || 'byMarket';
+  const NONE = '（内訳なし）';
+  // 各点のこの軸の内訳（無ければ総資産を単一バンドに）
+  const breakdownAt = (s) => { const b = s[keyOf]; return (b && Object.keys(b).length) ? b : { [NONE]: s.totalJpy || 0 }; };
+  // 凡例キー（全点unionを合計額の大きい順、内訳なしは末尾）
+  const sums = {};
+  snaps.forEach(s => { const b = breakdownAt(s); for (const k in b) sums[k] = (sums[k] || 0) + (b[k] || 0); });
+  let keys = Object.keys(sums).sort((a, b) => (a === NONE ? 1 : b === NONE ? -1 : sums[b] - sums[a]));
+  const xs = snaps.map(s => Date.parse(s.date) / 1000);
+  const tops = snaps.map(s => Math.max(s.totalJpy || 0, s.costJpy || 0));
+  const dmax = Math.max(1, ...tops);
+  const step = niceStep(dmax || 1, 5), ymax = Math.ceil(dmax / step) * step;
+  const xmin = xs[0], xmax = xs[xs.length - 1];
+  const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
+  const py = v => pad.t + (1 - v / ymax) * (H - pad.t - pad.b);
+  let grid = '';
+  for (let v = 0; v <= ymax + 1e-6; v += step) { const y = py(v).toFixed(1); grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="var(--border)"/><text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${v >= 1e8 ? (Math.round(v / 1e7) / 10) + '億' : v >= 1e4 ? Math.round(v / 1e4) + '万' : v}</text>`; }
+  let xlab = '', lastM = null;
+  snaps.forEach((s, i) => { const dt = new Date(Date.parse(s.date)); const m = dt.getFullYear() + '/' + (dt.getMonth() + 1); if (m !== lastM) { lastM = m; const x = px(xs[i]).toFixed(1); xlab += `<text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="9" text-anchor="middle">${dt.getMonth() === 0 ? dt.getFullYear() + '/' : ''}${dt.getMonth() + 1}</text>`; } });
+  const cum = snaps.map(() => 0); let bands = '';
+  keys.forEach((k, ki) => {
+    const color = k === NONE ? '#94a3b8' : ASSET_COLORS[ki % ASSET_COLORS.length];
+    const top = snaps.map((s, i) => cum[i] + (breakdownAt(s)[k] || 0));
+    const up = snaps.map((s, i) => `${px(xs[i]).toFixed(1)},${py(top[i]).toFixed(1)}`).join(' ');
+    const dn = snaps.map((s, i) => `${px(xs[i]).toFixed(1)},${py(cum[i]).toFixed(1)}`).reverse().join(' ');
+    bands += `<polygon points="${up} ${dn}" fill="${color}" fill-opacity="0.82"/>`;
+    snaps.forEach((s, i) => { cum[i] = top[i]; });
+  });
+  const costLine = snaps.some(s => s.costJpy) ? `<path d="${snaps.map((s, i) => (i ? 'L' : 'M') + px(xs[i]).toFixed(1) + ' ' + py(s.costJpy || 0).toFixed(1)).join(' ')}" fill="none" stroke="#111827" stroke-width="1.4" stroke-dasharray="5 3"/>` : '';
+  const last = snaps[snaps.length - 1];
+  const legend = keys.map((k, ki) => `<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 4px 0;font-size:11px"><span style="width:11px;height:11px;background:${k === NONE ? '#94a3b8' : ASSET_COLORS[ki % ASSET_COLORS.length]};border-radius:2px"></span>${esc(k)}</span>`).join('')
+    + (costLine ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px"><span style="width:16px;border-top:2px dashed #111827"></span>取得原価</span>` : '');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${grid}${bands}${costLine}${xlab}</svg>
+    <div style="margin-top:6px;font-size:12px"><b>最新 ${esc(last.date)}</b>：総資産 ${yen(last.totalJpy || 0)}${last.costJpy ? ` ／ 取得原価 ${yen(last.costJpy)} ／ 含み益 <span class="${cls((last.totalJpy || 0) - last.costJpy)}">${yen((last.totalJpy || 0) - last.costJpy)}</span>` : ''}</div>
+    <div style="margin-top:6px;line-height:1.9">${legend}</div>`;
+}
+// 過去の資産明細（1銘柄×日付）を貼り付け→日付別に集計→portfolio-history.json へ統合。
+// 必要列: 日付 / 種別(日本株|米国株) / 詳細種別(ETF→ETF・他→個別) / 評価円 / 取得円。
+function aggregateAssetRows(text) {
+  const rows = parsePasted(text);
+  if (rows.length < 2) return { error: '行が足りません（ヘッダ＋明細を貼り付けてください）' };
+  const idx = {}; rows[0].forEach((h, i) => { idx[String(h == null ? '' : h).trim()] = i; });
+  if (idx['日付'] == null || idx['評価円'] == null) return { error: '「日付」と「評価円」の列が見つかりません（ヘッダ行も含めて貼り付けてください）' };
+  const byDate = {};
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const d = normDate(String(row[idx['日付']] == null ? '' : row[idx['日付']]).trim());
+    if (!d) continue;
+    const val = numClean(row[idx['評価円']]) || 0;
+    if (!val) continue;
+    const cost = idx['取得円'] != null ? (numClean(row[idx['取得円']]) || 0) : 0;
+    const shu = idx['種別'] != null ? String(row[idx['種別']] || '').trim() : '';
+    const market = shu === '日本株' ? 'JP' : shu === '米国株' ? 'US' : 'その他';
+    const dt = idx['詳細種別'] != null ? String(row[idx['詳細種別']] || '').trim() : '';
+    const type = dt === 'ETF' ? 'ETF' : '個別';
+    const s = byDate[d] || (byDate[d] = { date: d, totalJpy: 0, costJpy: 0, byMarket: {}, byMarketType: {} });
+    s.totalJpy += val; s.costJpy += cost;
+    const mk = market === 'JP' ? '日本株' : market === 'US' ? '米国株' : 'その他';
+    s.byMarket[mk] = (s.byMarket[mk] || 0) + val;
+    const mtk = market === 'その他' ? 'その他' : `${mk}・${type}`;
+    s.byMarketType[mtk] = (s.byMarketType[mtk] || 0) + val;
   }
+  const out = Object.values(byDate).map(s => ({ date: s.date, totalJpy: Math.round(s.totalJpy), costJpy: Math.round(s.costJpy), byMarket: s.byMarket, byMarketType: s.byMarketType }));
+  out.sort((a, b) => a.date < b.date ? -1 : 1);
+  return { snapshots: out };
+}
+async function importAssetHistory() {
+  const ta = document.getElementById('asset-import-text'); const msg = document.getElementById('asset-import-msg');
+  const setMsg = (t, neg) => { if (msg) { msg.textContent = t; msg.className = neg ? 'neg' : 'pos'; } };
+  if (!ta || !ta.value.trim()) { setMsg('明細を貼り付けてください', true); return; }
+  if (typeof gsync === 'undefined' || !gsync.hasDrive || !gsync.hasDrive()) { setMsg('Googleログイン（Drive）が必要です', true); return; }
+  const agg = aggregateAssetRows(ta.value);
+  if (agg.error) { setMsg(agg.error, true); return; }
+  if (!agg.snapshots.length) { setMsg('集計できる行がありませんでした', true); return; }
+  setMsg('統合中…');
+  try {
+    const n = await dsync.historyMerge(agg.snapshots);
+    setMsg(`${agg.snapshots.length}日分を統合しました（履歴 計${n}日分）`);
+    ta.value = '';
+    await loadPortfolioChart();
+  } catch (e) { setMsg('統合に失敗: ' + (e && e.message || e), true); }
 }
 function fmtDateTime(iso) {
   if (!iso) return '—';

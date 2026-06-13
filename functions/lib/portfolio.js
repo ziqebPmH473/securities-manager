@@ -117,10 +117,12 @@ export function computeBreakdowns(bundle) {
     if (sec.market === 'US') { if (rate == null) continue; valJpy *= rate; costJ *= rate; }
     valJpy = Math.round(valJpy); costJ = Math.round(costJ);
     totalJpy += valJpy; costJpy += costJ;
-    add(byCategory, sec.category || '未分類', valJpy);
-    add(byMarket, sec.market, valJpy);
+    // ラベルは取込(クライアント)と一致させる: 市場=日本株/米国株、種別=ETF/個別
+    const mk = sec.market === 'JP' ? '日本株' : '米国株';
     const type = (sec.detailType === 'ETF') ? 'ETF' : '個別'; // detailType未設定は個別扱い
-    add(byMarketType, `${sec.market}・${type}`, valJpy);
+    add(byCategory, sec.category || '未分類', valJpy);
+    add(byMarket, mk, valJpy);
+    add(byMarketType, `${mk}・${type}`, valJpy);
   }
   return { totalJpy, costJpy, byCategory, byMarket, byMarketType };
 }
