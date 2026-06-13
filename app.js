@@ -6692,42 +6692,53 @@ function renderAssetChart() {
 }
 const ASSET_COLORS = ['#2563eb', '#dc2626', '#f59e0b', '#0d9488', '#7c3aed', '#0891b2', '#65a30d', '#db2777', '#64748b', '#ca8a04', '#0ea5e9', '#9333ea'];
 function assetStackChart(snaps, axis) {
-  const W = 760, H = 320, pad = { l: 70, r: 14, t: 12, b: 24 };
+  const W = 720, H = 300, pad = { l: 60, r: 12, t: 10, b: 22 };
   const keyOf = { category: 'byCategory', market: 'byMarket', markettype: 'byMarketType' }[axis] || 'byMarket';
   const NONE = '（内訳なし）';
-  // 各点のこの軸の内訳（無ければ総資産を単一バンドに）
   const breakdownAt = (s) => { const b = s[keyOf]; return (b && Object.keys(b).length) ? b : { [NONE]: s.totalJpy || 0 }; };
-  // 凡例キー（全点unionを合計額の大きい順、内訳なしは末尾）
   const sums = {};
   snaps.forEach(s => { const b = breakdownAt(s); for (const k in b) sums[k] = (sums[k] || 0) + (b[k] || 0); });
-  let keys = Object.keys(sums).sort((a, b) => (a === NONE ? 1 : b === NONE ? -1 : sums[b] - sums[a]));
+  const keys = Object.keys(sums).sort((a, b) => (a === NONE ? 1 : b === NONE ? -1 : sums[b] - sums[a]));
+  const colorOf = (k, ki) => k === NONE ? '#94a3b8' : ASSET_COLORS[ki % ASSET_COLORS.length];
   const xs = snaps.map(s => Date.parse(s.date) / 1000);
-  const tops = snaps.map(s => Math.max(s.totalJpy || 0, s.costJpy || 0));
-  const dmax = Math.max(1, ...tops);
-  const step = niceStep(dmax || 1, 5), ymax = Math.ceil(dmax / step) * step;
+  const dmax = Math.max(1, ...snaps.map(s => Math.max(s.totalJpy || 0, s.costJpy || 0)));
+  const stepY = niceStep(dmax || 1, 5), ymax = Math.ceil(dmax / stepY) * stepY;
   const xmin = xs[0], xmax = xs[xs.length - 1];
   const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
   const py = v => pad.t + (1 - v / ymax) * (H - pad.t - pad.b);
-  let grid = '';
-  for (let v = 0; v <= ymax + 1e-6; v += step) { const y = py(v).toFixed(1); grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="var(--border)"/><text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${v >= 1e8 ? (Math.round(v / 1e7) / 10) + '億' : v >= 1e4 ? Math.round(v / 1e4) + '万' : v}</text>`; }
-  let xlab = '', lastM = null;
-  snaps.forEach((s, i) => { const dt = new Date(Date.parse(s.date)); const m = dt.getFullYear() + '/' + (dt.getMonth() + 1); if (m !== lastM) { lastM = m; const x = px(xs[i]).toFixed(1); xlab += `<text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="9" text-anchor="middle">${dt.getMonth() === 0 ? dt.getFullYear() + '/' : ''}${dt.getMonth() + 1}</text>`; } });
+  // 金額表記: 億/万＋カンマで見やすく
+  const yfmt = (v) => v === 0 ? '0' : v >= 1e8 ? (Math.round(v / 1e7) / 10) + '億' : Math.round(v / 1e4).toLocaleString('ja-JP') + '万';
+  // 積み上げ面（先に描いて、グリッド/線/ラベルを上に重ねる）
   const cum = snaps.map(() => 0); let bands = '';
   keys.forEach((k, ki) => {
-    const color = k === NONE ? '#94a3b8' : ASSET_COLORS[ki % ASSET_COLORS.length];
     const top = snaps.map((s, i) => cum[i] + (breakdownAt(s)[k] || 0));
     const up = snaps.map((s, i) => `${px(xs[i]).toFixed(1)},${py(top[i]).toFixed(1)}`).join(' ');
     const dn = snaps.map((s, i) => `${px(xs[i]).toFixed(1)},${py(cum[i]).toFixed(1)}`).reverse().join(' ');
-    bands += `<polygon points="${up} ${dn}" fill="${color}" fill-opacity="0.82"/>`;
+    bands += `<polygon points="${up} ${dn}" fill="${colorOf(k, ki)}" fill-opacity="0.82"/>`;
     snaps.forEach((s, i) => { cum[i] = top[i]; });
   });
-  const costLine = snaps.some(s => s.costJpy) ? `<path d="${snaps.map((s, i) => (i ? 'L' : 'M') + px(xs[i]).toFixed(1) + ' ' + py(s.costJpy || 0).toFixed(1)).join(' ')}" fill="none" stroke="#111827" stroke-width="1.4" stroke-dasharray="5 3"/>` : '';
+  // Yグリッド（バンドの上に薄く）＋左の金額ラベル
+  let grid = '', ylab = '';
+  for (let v = 0; v <= ymax + 1e-6; v += stepY) { const y = py(v).toFixed(1); grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="rgba(100,116,139,.28)"/>`; ylab += `<text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${yfmt(v)}</text>`; }
+  // X: 月初を範囲全体に生成し ~8本に間引いて等間隔表示（データ位置でなく時間軸の等間隔）
+  const months = []; { const d0 = new Date(xmin * 1000); let cur = new Date(d0.getFullYear(), d0.getMonth(), 1).getTime() / 1000; while (cur <= xmax + 1) { months.push(cur); const dd = new Date(cur * 1000); cur = new Date(dd.getFullYear(), dd.getMonth() + 1, 1).getTime() / 1000; } }
+  const stepM = Math.max(1, Math.ceil(months.length / 8));
+  let xlab = '';
+  months.forEach((t, i) => { if (i % stepM) return; const dt = new Date(t * 1000); const x = px(t).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${H - pad.b}" stroke="rgba(100,116,139,.2)" stroke-dasharray="2 3"/><text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="9" text-anchor="middle">${dt.getMonth() === 0 || i === 0 ? dt.getFullYear() + '/' : ''}${dt.getMonth() + 1}</text>`; });
+  const hasCost = snaps.some(s => s.costJpy);
+  const costLine = hasCost ? `<path d="${snaps.map((s, i) => (i ? 'L' : 'M') + px(xs[i]).toFixed(1) + ' ' + py(s.costJpy || 0).toFixed(1)).join(' ')}" fill="none" stroke="#111827" stroke-width="1.4" stroke-dasharray="5 3"/>` : '';
   const last = snaps[snaps.length - 1];
-  const legend = keys.map((k, ki) => `<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 4px 0;font-size:11px"><span style="width:11px;height:11px;background:${k === NONE ? '#94a3b8' : ASSET_COLORS[ki % ASSET_COLORS.length]};border-radius:2px"></span>${esc(k)}</span>`).join('')
-    + (costLine ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px"><span style="width:16px;border-top:2px dashed #111827"></span>取得原価</span>` : '');
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${grid}${bands}${costLine}${xlab}</svg>
-    <div style="margin-top:6px;font-size:12px"><b>最新 ${esc(last.date)}</b>：総資産 ${yen(last.totalJpy || 0)}${last.costJpy ? ` ／ 取得原価 ${yen(last.costJpy)} ／ 含み益 <span class="${cls((last.totalJpy || 0) - last.costJpy)}">${yen((last.totalJpy || 0) - last.costJpy)}</span>` : ''}</div>
-    <div style="margin-top:6px;line-height:1.9">${legend}</div>`;
+  // 凡例＝右に縦並び（軸を切替えても本体グラフの幅・高さが変わらない）
+  const legend = keys.map((k, ki) => `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:11px"><span style="width:11px;height:11px;flex:0 0 11px;background:${colorOf(k, ki)};border-radius:2px"></span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(k)}">${esc(k)}</span></div>`).join('')
+    + (hasCost ? `<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:2px"><span style="width:16px;flex:0 0 16px;border-top:2px dashed #111827"></span>取得原価</div>` : '');
+  const summary = `<b>最新 ${esc(last.date)}</b>：総資産 ${yen(last.totalJpy || 0)}${last.costJpy ? ` ／ 取得原価 ${yen(last.costJpy)} ／ 含み益 <span class="${cls((last.totalJpy || 0) - last.costJpy)}">${yen((last.totalJpy || 0) - last.costJpy)}</span>` : ''}`;
+  return `<div style="display:flex;gap:12px;align-items:flex-start">
+    <div style="flex:1;min-width:0">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${bands}${grid}${xlab}${ylab}${costLine}</svg>
+      <div style="margin-top:8px;font-size:12px">${summary}</div>
+    </div>
+    <div style="flex:0 0 150px;width:150px">${legend}</div>
+  </div>`;
 }
 // 過去の資産明細（1銘柄×日付）を貼り付け→日付別に集計→portfolio-history.json へ統合。
 // 必要列: 日付 / 種別(日本株|米国株) / 詳細種別(ETF→ETF・他→個別) / 評価額(or評価円) / 取得額(or取得円)。
