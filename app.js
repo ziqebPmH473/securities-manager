@@ -1844,7 +1844,7 @@ function applyStickyCols(table) {
   // 拾うとコード/銘柄名の列検出が壊れ、銘柄名が固定されない不具合になるため除外する。
   const bodyRow = [...table.tBodies[0].rows].find(r => r.cells.length === (headRow ? headRow.cells.length : 0));
   if (!headRow || !bodyRow) return;
-  [...table.rows].forEach(r => [...r.cells].forEach(c => { c.classList.remove('stick', 'stick-edge'); c.style.left = ''; }));
+  [...table.rows].forEach(r => [...r.cells].forEach(c => { if (c.colSpan > 1) return; c.classList.remove('stick', 'stick-edge'); c.style.left = ''; }));
   const want = new Set([0]); // 先頭=選択(チェックボックス)列
   [...bodyRow.cells].forEach((td, i) => {
     if (i === 0) return;
@@ -1857,7 +1857,7 @@ function applyStickyCols(table) {
   contiguous.forEach((ci, n) => {
     const w = headRow.cells[ci] ? headRow.cells[ci].getBoundingClientRect().width : 0;
     [...table.rows].forEach(r => {
-      const c = r.cells[ci]; if (!c) return;
+      const c = r.cells[ci]; if (!c || c.colSpan > 1) return; // 横結合(グループ見出し)セルは触らない＝inlineのleft:0固定を保つ
       c.classList.add('stick'); if (n === contiguous.length - 1) c.classList.add('stick-edge');
       c.style.left = left + 'px';
     });
