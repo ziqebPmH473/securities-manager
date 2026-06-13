@@ -141,22 +141,27 @@ async function findHistoryFile(token, folderId) {
 function parseSnaps(txt) {
   try { const j = JSON.parse(txt || '{}'); return Array.isArray(j) ? j : (j.snapshots || []); } catch (_) { return []; }
 }
-// 履歴を読む（無ければ空配列）。{ snapshots:[{date,totalJpy,costJpy}], _source:'drive' }
+// 履歴を読む（無ければ空配列）。フォルダ共有でも、portfolio-history.json 単体共有でも見つける。
 export async function readPortfolioHistory(env) {
   const token = await driveRwToken(env);
-  const folderId = await findFolderId(token);
-  const file = await findHistoryFile(token, folderId);
+  let folderId = null;
+  try { folderId = await findFolderId(token); } catch (_) {}
+  let file = await findHistoryFile(token, folderId);
+  if (!file && folderId) file = await findHistoryFile(token, null);
   if (!file) return { snapshots: [] };
   const r = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('履歴読込失敗 ' + r.status);
   return { snapshots: parseSnaps(await r.text()) };
 }
-// 当日の総資産を upsert して書き戻す（同日は上書き）。フォルダ未共有(編集者)なら例外。
+// 当日の総資産を upsert して書き戻す（同日は上書き）。
+// 共有パターンは2通りに対応: (1) securities-manager フォルダを「編集者」共有 → SAが履歴ファイルを自動作成/更新。
+// (2) portfolio-history.json 単体を「編集者」共有 → そのファイルへ更新（フォルダ未共有でも可）。
 export async function writePortfolioSnapshot(env, snapshot) {
   const token = await driveRwToken(env);
-  const folderId = await findFolderId(token);
-  if (!folderId) throw new Error(`${SYNC_FOLDER} フォルダが見つかりません（サービスアカウントに「編集者」で共有してください）`);
-  const file = await findHistoryFile(token, folderId);
+  let folderId = null;
+  try { folderId = await findFolderId(token); } catch (_) {}
+  let file = await findHistoryFile(token, folderId);
+  if (!file && folderId) file = await findHistoryFile(token, null);
   let snaps = [];
   if (file) {
     const r = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
@@ -170,13 +175,15 @@ export async function writePortfolioSnapshot(env, snapshot) {
     const r = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${file.id}?uploadType=media&fields=id`, {
       method: 'PATCH', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: content });
     if (!r.ok) throw new Error('履歴更新失敗 ' + r.status + '：' + (await r.text()).slice(0, 200));
-  } else {
+  } else if (folderId) {
     const boundary = 'phb' + Math.random().toString(36).slice(2);
     const meta = { name: HISTORY_FILE, parents: [folderId] };
     const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
     const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
       method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
     if (!r.ok) throw new Error('履歴作成失敗 ' + r.status + '：' + (await r.text()).slice(0, 200));
+  } else {
+    throw new Error('portfolio-history.json も securities-manager フォルダもサービスアカウントに共有されていません。①フォルダを「編集者」で共有（自動作成）、②または空の portfolio-history.json を作成して「編集者」で共有、のどちらかを行ってください。');
   }
   return snaps.length;
 }
