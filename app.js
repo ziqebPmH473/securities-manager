@@ -561,6 +561,26 @@ const dsync = {
     const d = await this._driveJson(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)&spaces=drive`);
     return (d.files && d.files[0]) || null;
   },
+  // 資産推移の空ファイル portfolio-history.json を「ユーザー所有」で1度だけ作成する。
+  // サーバー(サービスアカウント)は容量ゼロで新規作成できない（403）が、ユーザー所有の既存ファイルへの
+  // 更新(PATCH)は可能なため、作成はクライアントが担い、日次の書き込みはサーバーが行う分担にする。
+  async ensureHistoryFile(folderId) {
+    if (this._histEnsured) return;
+    try {
+      folderId = folderId || await this._ensureFolder();
+      const q = encodeURIComponent(`name='portfolio-history.json' and '${folderId}' in parents and trashed=false`);
+      const d = await this._driveJson(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)&spaces=drive`);
+      if (d.files && d.files.length) { this._histEnsured = true; return; }
+      const boundary = 'phc' + Math.random().toString(36).slice(2);
+      const meta = { name: 'portfolio-history.json', parents: [folderId] };
+      const content = '{"snapshots":[]}';
+      const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+      const r = await this._driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+        method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
+      });
+      if (r.ok) this._histEnsured = true;
+    } catch (_) { /* best-effort */ }
+  },
   async _readFile(id) {
     const r = await this._driveFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`);
     if (!r.ok) throw new Error(`Drive読込失敗 ${r.status}：${await this._bodyMsg(r)}`);
@@ -592,6 +612,7 @@ const dsync = {
     this._busy = true;
     try {
       const folderId = await this._ensureFolder();
+      await this.ensureHistoryFile(folderId); // 資産推移の空ファイルをユーザー所有で用意（サーバーはこれをPATCH更新）
       const file = await this._findFile(folderId);
       let remote = {}, remoteRaw = null;
       if (file) { try { remoteRaw = await this._readFile(file.id); remote = JSON.parse(remoteRaw); } catch (_) { remote = {}; remoteRaw = null; } }
@@ -6568,6 +6589,8 @@ async function loadPortfolioChart() {
   // 総資産は本人のみ閲覧可。Googleログイントークンを付けて取得（未ログインなら案内）。
   const token = (typeof gsync !== 'undefined' && gsync._token) ? gsync._token : null;
   if (!token) { note('資産推移はGoogleログイン時に表示されます（総資産＝本人のみ閲覧可）。マスタ・設定からログインしてください。'); return; }
+  // 履歴ファイルはクライアントがユーザー所有で用意する（サーバーは容量ゼロで新規作成できないため）。
+  try { if (typeof dsync !== 'undefined' && gsync.hasDrive && gsync.hasDrive()) await dsync.ensureHistoryFile(); } catch (_) {}
   try {
     const res = await fetch('/api/portfolio-history', { headers: { Authorization: 'Bearer ' + token } });
     const d = await res.json();
