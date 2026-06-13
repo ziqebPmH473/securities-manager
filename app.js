@@ -2729,35 +2729,41 @@ function openAmountHistory(secId) {
 }
 
 // 銘柄ごとの分析履歴（モーダル・閲覧専用）。記録は編集フォームの「分析メタ」保存／分析結果の取込でたまる。
-// 評価日ごとの「カード」で全項目（総合評価・銘柄格付・買い時評価・★3種・優先順位・推奨額・分析メモ）を表示。
-// テーブルだと狭幅モーダルでメモが1文字ずつ潰れ・推奨額が切れるため、縦並びカードにしてメモを全幅にする。
+// 評価日=行・項目=列の表で比較しやすく。列幅は固定（table-layout:fixed）し、最長になりがちな分析メモは
+// 専用の広い列で折り返し（1文字潰れ防止）、評価日列は横スクロール時も左固定で見出しが残る。
 function openAnalysisHistory(secId) {
   const sec = store.data.securities.find(s => s.id === secId);
   const list = store.analysesSorted(secId);
+  const dash = '<span class="muted">—</span>';
+  const g = (v) => (v != null && v !== '') ? esc(String(v)) : dash;
   const starTxt = (a) => {
     const parts = [a.starValuation, a.starStrength, a.starRisk].map(v => v != null ? '★' + v : '—');
-    return parts.every(p => p === '—') ? null : parts.join(' / ');
+    return parts.every(p => p === '—') ? dash : parts.join('/');
   };
-  const reco = (a) => a.recoAmount == null ? null : (sec.market === 'US' ? '$' + num(a.recoAmount) : yen(a.recoAmount));
-  const hasReco = list.some(a => a.recoAmount != null); // 推奨額は取込時のみ。1件も無ければ項目を出さない
-  const cell = (k, v) => `<div class="ah-cell"><span class="ah-k">${esc(k)}</span><span class="ah-v">${(v == null || v === '') ? '<span class="muted">—</span>' : esc(String(v))}</span></div>`;
-  const entries = list.map(a => {
-    const cells = [
-      cell('総合評価', a.overallGrade),
-      cell('銘柄格付', a.rating),
-      cell('買い時評価', a.buyGrade),
-      cell('★ ﾊﾞﾘｭ/強/ﾘｽｸ', starTxt(a)),
-      cell('購入優先順位', a.priority != null ? a.priority : null),
-    ];
-    if (hasReco) cells.push(cell('推奨額', reco(a)));
-    const note = a.analysisNote
-      ? `<div class="ah-note"><span class="ah-k">分析メモ</span><span>${esc(a.analysisNote)}</span></div>` : '';
-    return `<div class="ah-entry"><div class="ah-date">${esc(a.analysisDate)}</div>
-      <div class="ah-grid">${cells.join('')}</div>${note}</div>`;
-  }).join('');
+  const reco = (a) => a.recoAmount == null ? dash : (sec.market === 'US' ? '$' + num(a.recoAmount) : yen(a.recoAmount));
+  const hasReco = list.some(a => a.recoAmount != null); // 推奨額は取込時のみ。1件も無ければ列を出さない
+  // [見出し, 列幅px]。table-layout:fixed なので幅はこの colgroup で決まる。
+  const cols = [['評価日', 96], ['総合評価', 78], ['銘柄格付', 78], ['買い時', 72], ['★ ﾊﾞﾘｭ/強/ﾘｽｸ', 124], ['優先', 52]];
+  if (hasReco) cols.push(['推奨額', 90]);
+  cols.push(['分析メモ', 280]);
+  const colgroup = `<colgroup>${cols.map(c => `<col style="width:${c[1]}px">`).join('')}</colgroup>`;
+  const tableW = cols.reduce((a, c) => a + c[1], 0);
+  const head = `<tr>${cols.map(c => `<th>${esc(c[0])}</th>`).join('')}</tr>`;
+  const rows = list.map(a => `<tr>
+    <td>${esc(a.analysisDate)}</td>
+    <td>${g(a.overallGrade)}</td>
+    <td>${g(a.rating)}</td>
+    <td>${g(a.buyGrade)}</td>
+    <td style="white-space:nowrap">${starTxt(a)}</td>
+    <td>${a.priority != null ? a.priority : dash}</td>
+    ${hasReco ? `<td>${reco(a)}</td>` : ''}
+    <td class="ah-memo">${a.analysisNote ? esc(a.analysisNote) : dash}</td>
+  </tr>`).join('');
   showModal(`分析履歴 — ${esc(calc.displayName(sec))}`, `
-    <p class="muted">この銘柄の分析評価の履歴です（評価日の新しい順）。記録は銘柄編集フォームの「分析メタ」保存、または分析結果の取込でたまります。先頭が現在の表示値です。</p>
-    ${list.length ? `<div class="ah-list">${entries}</div>` : '<div class="empty">分析履歴はまだありません。</div>'}
+    <p class="muted">この銘柄の分析評価の履歴です（評価日の新しい順）。記録は銘柄編集フォームの「分析メタ」保存、または分析結果の取込でたまります。先頭が現在の表示値です。横にスクロールできます。</p>
+    ${list.length ? `<div class="table-wrap"><table class="ah-table" style="width:${tableW}px">${colgroup}
+      <thead>${head}</thead><tbody>${rows}</tbody>
+    </table></div>` : '<div class="empty">分析履歴はまだありません。</div>'}
     <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
 }
 

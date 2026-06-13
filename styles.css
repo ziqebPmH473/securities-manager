@@ -856,14 +856,11 @@ table.holdings td.stick-edge, table.holdings th.stick-edge { box-shadow: 6px 0 6
 /* sig到達/ホバー行でも固定セルの背景を不透明に保つ（下の行が透けないように） */
 table.holdings tbody tr:hover td.stick { background: #f6f8fb; }
 
-/* ===== 分析履歴モーダル: 評価日ごとのカード（狭幅でもメモが潰れない縦並び） ===== */
-.ah-list { display: flex; flex-direction: column; gap: 10px; }
-.ah-entry { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--panel-2, var(--panel)); }
-.ah-date { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
-.ah-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 16px; }
-.ah-cell { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 13px; min-width: 0; }
-.ah-k { color: var(--muted); white-space: nowrap; }
-.ah-v { font-variant-numeric: tabular-nums; text-align: right; word-break: break-word; }
-.ah-note { margin-top: 10px; font-size: 13px; line-height: 1.5; }
-.ah-note .ah-k { display: block; margin-bottom: 2px; }
-.ah-note span:last-child { white-space: pre-wrap; word-break: break-word; }
+/* ===== 分析履歴モーダル: 比較しやすい表（評価日=行 / 項目=列）。列幅固定でメモは折り返し、評価日列は左固定 ===== */
+.ah-table { table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.ah-table th, .ah-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.ah-table thead th { position: sticky; top: 0; z-index: 2; background: var(--panel-2, var(--panel)); white-space: nowrap; }
+.ah-table th:first-child, .ah-table td:first-child { position: sticky; left: 0; background: var(--panel); }
+.ah-table thead th:first-child { z-index: 3; background: var(--panel-2, var(--panel)); }
+.ah-table tbody td { font-variant-numeric: tabular-nums; }
+.ah-table .ah-memo { white-space: pre-wrap; word-break: break-word; font-variant-numeric: normal; }
