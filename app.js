@@ -6687,23 +6687,26 @@ function assetStackChart(snaps, axis) {
     <div style="margin-top:6px;line-height:1.9">${legend}</div>`;
 }
 // 過去の資産明細（1銘柄×日付）を貼り付け→日付別に集計→portfolio-history.json へ統合。
-// 必要列: 日付 / 種別(日本株|米国株) / 詳細種別(ETF→ETF・他→個別) / 評価円 / 取得円。
+// 必要列: 日付 / 種別(日本株|米国株) / 詳細種別(ETF→ETF・他→個別) / 評価額(or評価円) / 取得額(or取得円)。
+// ※米国株は「評価円」が空で円換算は「評価額」(¥付き)に入るため、評価額/取得額を優先して使う。
 function aggregateAssetRows(text) {
   const rows = parsePasted(text);
   if (rows.length < 2) return { error: '行が足りません（ヘッダ＋明細を貼り付けてください）' };
   const idx = {}; rows[0].forEach((h, i) => { idx[String(h == null ? '' : h).trim()] = i; });
-  if (idx['日付'] == null || idx['評価円'] == null) return { error: '「日付」と「評価円」の列が見つかりません（ヘッダ行も含めて貼り付けてください）' };
+  const valCol = idx['評価額'] != null ? idx['評価額'] : idx['評価円'];
+  const costCol = idx['取得額'] != null ? idx['取得額'] : idx['取得円'];
+  if (idx['日付'] == null || valCol == null) return { error: '「日付」と「評価額（または評価円）」の列が見つかりません（ヘッダ行も含めて貼り付けてください）' };
   const byDate = {};
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
     const d = normDate(String(row[idx['日付']] == null ? '' : row[idx['日付']]).trim());
     if (!d) continue;
-    const val = numClean(row[idx['評価円']]) || 0;
+    const val = numClean(row[valCol]) || 0;
     if (!val) continue;
     const shu = idx['種別'] != null ? String(row[idx['種別']] || '').trim() : '';
     const market = shu === '日本株' ? 'JP' : shu === '米国株' ? 'US' : null;
     if (!market) continue; // 日本株・米国株以外（投信・現金等）は集計しない
-    const cost = idx['取得円'] != null ? (numClean(row[idx['取得円']]) || 0) : 0;
+    const cost = costCol != null ? (numClean(row[costCol]) || 0) : 0;
     const dt = idx['詳細種別'] != null ? String(row[idx['詳細種別']] || '').trim() : '';
     const type = dt === 'ETF' ? 'ETF' : '個別';
     const s = byDate[d] || (byDate[d] = { date: d, totalJpy: 0, costJpy: 0, byMarket: {}, byMarketType: {} });
