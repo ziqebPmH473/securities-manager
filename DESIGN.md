@@ -670,6 +670,14 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
   - **デプロイ**: Worker は Pages とは別物。`.github/workflows/deploy.yml` に Worker デプロイステップ（`workingDirectory: worker` / `command: deploy`）を追加済みで、push時に Pages＋Worker を同時デプロイ（2026-06-07）。手動は `cd worker && npx wrangler deploy`。GitHub の `CLOUDFLARE_API_TOKEN` には **Account/Workersスクリプト/Edit** 権限が必要。
 - 重複防止は「毎回その時点のサインを送る」シンプル方式（サインなしは送信スキップ）。高値は通知では再取得しない。
 
+### 15.3 資産推移（日次スナップショット・2026-06-13）
+- 目的: 総資産（円換算）の時系列グラフをレポートに表示。**毎朝の通知cronに相乗り**して日次で蓄積（アプリ未起動でも貯まる）。
+- **保存先＝別ファイル `portfolio-history.json`**（`securities-manager` フォルダ内）。`data.json`(同期本体)とは別にすることで、アプリの3-wayマージ同期と**競合しない**。
+- 書込: `notify-run` が判定後に `computeTotalsJpy(bundle)`（保有>0のJP/US合算・為替未取得の米株は除外）で当日(JST)の `{date,totalJpy,costJpy}` を `writePortfolioSnapshot`（`functions/lib/sheets.js`）で upsert（同日上書き・best-effort、失敗は応答 `snapshot.error` に記録し通知は継続）。**SAに `drive`(書込)スコープ＋フォルダを「編集者」共有**が必要。
+- 読取: `GET /api/portfolio-history`。総資産は機微なため**クライアントのGoogleアクセストークンを検証**（`tokeninfo`で email/aud 取得→aud=本アプリclientId＋allowedEmails一致のみ許可）。クライアントは `gsync._token` を Authorization に付与。
+- 表示: `renderReport` の従来「対応予定」注記を置換し、`loadPortfolioChart()` が `/api/portfolio-history` を取得して `detailSvgChart`（実線=総資産/破線=取得原価）で描画。**今日以降のみ蓄積**（過去遡及なし）。
+- セットアップ（すみぽん）: Driveの `securities-manager` フォルダを `GOOGLE_SA_EMAIL` に**「編集者」で共有**（従来は閲覧者）。これだけで cron が日次記録を開始。
+
 ### 15.3 セキュリティ
 - 内部API（notify-run/signals-check/sheet-check）と Worker手動fetch は **`NOTIFY_TRIGGER_TOKEN` 必須**（`functions/lib/auth.js` checkToken・fail-closed）。
 - 価格/情報API（price/info/config）は公開市場データ/公開設定のみで非保護。

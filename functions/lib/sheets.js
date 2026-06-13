@@ -112,3 +112,81 @@ export async function readAppDataBundle(env) {
     }
   }
 }
+
+// ===== 資産推移（portfolio-history.json）: securities-manager フォルダにSAが書く別ファイル =====
+const DRIVE_RW_SCOPE = 'https://www.googleapis.com/auth/drive'; // 書込にはフォルダをSAに「編集者」で共有する必要あり
+const HISTORY_FILE = 'portfolio-history.json';
+const SYNC_FOLDER = 'securities-manager';
+
+async function driveRwToken(env) {
+  const email = env && env.GOOGLE_SA_EMAIL;
+  const keyRaw = env && env.GOOGLE_SA_PRIVATE_KEY;
+  if (!email || !keyRaw) throw new Error('環境変数が未設定: GOOGLE_SA_EMAIL / GOOGLE_SA_PRIVATE_KEY');
+  return getAccessToken(email, normalizePrivateKey(keyRaw), DRIVE_RW_SCOPE);
+}
+async function findFolderId(token) {
+  const q = encodeURIComponent(`name='${SYNC_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=10`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw new Error('フォルダ検索失敗 ' + r.status + '：' + (await r.text()).slice(0, 200));
+  const d = await r.json();
+  return ((d.files || [])[0] || {}).id || null;
+}
+async function findHistoryFile(token, folderId) {
+  const q = encodeURIComponent(`name='${HISTORY_FILE}' and trashed=false` + (folderId ? ` and '${folderId}' in parents` : ''));
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)&orderBy=modifiedTime desc&pageSize=10`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw new Error('履歴ファイル検索失敗 ' + r.status);
+  const d = await r.json();
+  return (d.files || [])[0] || null;
+}
+function parseSnaps(txt) {
+  try { const j = JSON.parse(txt || '{}'); return Array.isArray(j) ? j : (j.snapshots || []); } catch (_) { return []; }
+}
+// 履歴を読む（無ければ空配列）。{ snapshots:[{date,totalJpy,costJpy}], _source:'drive' }
+export async function readPortfolioHistory(env) {
+  const token = await driveRwToken(env);
+  const folderId = await findFolderId(token);
+  const file = await findHistoryFile(token, folderId);
+  if (!file) return { snapshots: [] };
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw new Error('履歴読込失敗 ' + r.status);
+  return { snapshots: parseSnaps(await r.text()) };
+}
+// 当日の総資産を upsert して書き戻す（同日は上書き）。フォルダ未共有(編集者)なら例外。
+export async function writePortfolioSnapshot(env, snapshot) {
+  const token = await driveRwToken(env);
+  const folderId = await findFolderId(token);
+  if (!folderId) throw new Error(`${SYNC_FOLDER} フォルダが見つかりません（サービスアカウントに「編集者」で共有してください）`);
+  const file = await findHistoryFile(token, folderId);
+  let snaps = [];
+  if (file) {
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
+    if (r.ok) snaps = parseSnaps(await r.text());
+  }
+  const i = snaps.findIndex(s => s.date === snapshot.date);
+  if (i >= 0) snaps[i] = { ...snaps[i], ...snapshot }; else snaps.push(snapshot);
+  snaps.sort((a, b) => (a.date < b.date ? -1 : 1));
+  const content = JSON.stringify({ snapshots: snaps, updatedAt: new Date().toISOString() });
+  if (file) {
+    const r = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${file.id}?uploadType=media&fields=id`, {
+      method: 'PATCH', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: content });
+    if (!r.ok) throw new Error('履歴更新失敗 ' + r.status + '：' + (await r.text()).slice(0, 200));
+  } else {
+    const boundary = 'phb' + Math.random().toString(36).slice(2);
+    const meta = { name: HISTORY_FILE, parents: [folderId] };
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+    const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
+    if (!r.ok) throw new Error('履歴作成失敗 ' + r.status + '：' + (await r.text()).slice(0, 200));
+  }
+  return snaps.length;
+}
+// クライアントのGoogleアクセストークンを検証して { email, aud } を返す（許可者確認用）。失敗時 null。
+export async function verifyGoogleToken(accessToken) {
+  if (!accessToken) return null;
+  try {
+    const r = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(accessToken));
+    if (!r.ok) return null;
+    const d = await r.json();
+    return { email: (d.email || '').toLowerCase(), aud: d.aud || d.azp || '', verified: d.email_verified === 'true' || d.email_verified === true };
+  } catch (_) { return null; }
+}

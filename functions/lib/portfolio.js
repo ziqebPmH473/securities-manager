@@ -76,3 +76,26 @@ export function computeSignals(bundle, opts = {}) {
   out.sort((a, b) => (a.reached === b.reached ? a.remainingDropPct - b.remainingDropPct : (a.reached ? -1 : 1)));
   return out;
 }
+
+// 資産推移用: 円換算の総資産・取得原価（保有>0 の日本株・米国株を合算）。為替は bundle.fx.USDJPY。
+// 価格未取得は取得単価で代替。為替未取得の米株は合計から除外。
+export function computeTotalsJpy(bundle) {
+  const fx = bundle.fx && (bundle.fx.USDJPY != null ? bundle.fx.USDJPY : bundle.fx.usdjpy);
+  const rate = (fx != null && isFinite(fx)) ? fx : null;
+  let totalJpy = 0, costJpy = 0;
+  for (const sec of (bundle.securities || [])) {
+    if (sec.market !== 'JP' && sec.market !== 'US') continue;
+    const th = totalHolding(bundle, sec.id);
+    if (!(th.qty > 0)) continue;
+    const p = (bundle.prices || {})[priceKey(sec)] || {};
+    const price = (p.price != null) ? p.price : th.avgCost; // 価格未取得は取得単価で代替
+    const valN = th.qty * price, costN = th.qty * th.avgCost;
+    if (sec.market === 'US') {
+      if (rate == null) continue; // 為替未取得の米株は合計から除外
+      totalJpy += valN * rate; costJpy += costN * rate;
+    } else {
+      totalJpy += valN; costJpy += costN;
+    }
+  }
+  return { totalJpy: Math.round(totalJpy), costJpy: Math.round(costJpy) };
+}

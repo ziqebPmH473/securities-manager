@@ -4,8 +4,8 @@
 // GET /api/notify-run?send=1&market=JP      … 日本株のみ（US も可）。定時バッチが市場別に叩く
 // GET /api/notify-run?send=1&token=XXX      … NOTIFY_TRIGGER_TOKEN を設定している場合は必須
 // GET /api/notify-run?near=3                … 近接の閾値%
-import { readAppDataBundle } from '../lib/sheets.js';
-import { computeSignals } from '../lib/portfolio.js';
+import { readAppDataBundle, writePortfolioSnapshot } from '../lib/sheets.js';
+import { computeSignals, computeTotalsJpy } from '../lib/portfolio.js';
 import { fetchFreshPrices, mergeFreshPrices } from '../lib/prices.js';
 import { buildSignalEmail, sendResend } from '../lib/notify.js';
 import { checkToken } from '../lib/auth.js';
@@ -30,6 +30,18 @@ export async function onRequestGet(context) {
     let signals = computeSignals(bundle, { nearPct: isFinite(near) ? near : 5 });
     if (market === 'JP' || market === 'US') signals = signals.filter(s => s.market === market);
 
+    // 資産推移: 当日(JST)の円換算総資産を portfolio-history.json へ記録（best-effort・通知には影響させない）。
+    // フォルダがSAに「編集者」共有されていないと失敗するが、その場合も snapshot.error に入れて続行。
+    let snapshot = null;
+    try {
+      const t = computeTotalsJpy(bundle);
+      if (t.totalJpy || t.costJpy) {
+        const dateStr = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); // JSTの日付
+        await writePortfolioSnapshot(context.env, { date: dateStr, totalJpy: t.totalJpy, costJpy: t.costJpy });
+        snapshot = { date: dateStr, totalJpy: t.totalJpy, costJpy: t.costJpy };
+      } else snapshot = { skipped: '保有ゼロ/未集計' };
+    } catch (e) { snapshot = { error: String(e && e.message || e) }; }
+
     // 件名の日付は JST（UTC+9）の M/D
     const jst = new Date(Date.now() + 9 * 3600 * 1000);
     const dateLabel = `${jst.getUTCMonth() + 1}/${jst.getUTCDate()}`;
@@ -48,6 +60,7 @@ export async function onRequestGet(context) {
       freshPrices: Object.keys(fresh).length,
       reached: signals.filter(s => s.reached).length,
       near: signals.filter(s => !s.reached).length,
+      snapshot,
       sent, skipped,
       subject: email.subject,
       preview: email.text,

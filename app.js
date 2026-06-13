@@ -3173,7 +3173,10 @@ function renderReport() {
           <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
         </tbody></table></div>
       <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p></div>
-    <div class="notice">資産推移（時系列グラフ）とサイン到達の履歴は、日々のスナップショット保存が前提のため、Googleスプレッドシート保存への移行後に対応予定です。</div>`;
+    <div class="section"><div class="section-head"><h2>資産推移（円換算）</h2>
+        <span class="muted" style="margin-left:auto;font-size:11px">実線=総資産 / 破線=取得原価。毎朝サーバーが日次記録</span></div>
+      <div class="section-body" style="padding:16px"><div id="portfolio-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center">読み込み中…</div></div></div>`;
+  loadPortfolioChart(); // サーバーの日次スナップショットを取得して描画
 }
 
 // ---------- 銘柄マスタ（SEC-27） ----------
@@ -4400,11 +4403,12 @@ function niceStep(range, target) {
   return f * mag;
 }
 // バニラSVGの折れ線チャート（外部ライブラリ不要）。Y補助目盛・X年ラベル・高値/安値マーカー付き。
-function detailSvgChart(points, overlays) {
+function detailSvgChart(points, overlays, costPts) {
   const W = 760, H = 300, pad = { l: 56, r: 86, t: 14, b: 26 };
   const ys = points.map(p => p[1]); const xs = points.map(p => p[0]);
   let dmin = Math.min(...ys), dmax = Math.max(...ys);
   overlays.forEach(o => { if (o.y != null) { dmin = Math.min(dmin, o.y); dmax = Math.max(dmax, o.y); } });
+  if (costPts && costPts.length) costPts.forEach(p => { if (p[1] != null) { dmin = Math.min(dmin, p[1]); dmax = Math.max(dmax, p[1]); } });
   if (dmin === dmax) { dmin -= 1; dmax += 1; }
   // 切りのいい刻み幅（…/10/20/50/100/200/500/1000/…）を範囲から自動決定し、Y軸の上下端もその倍数に丸める
   const step = niceStep((dmax - dmin) || 1, 5);
@@ -4429,10 +4433,12 @@ function detailSvgChart(points, overlays) {
   const hl = mark(hiI, hi, '高値', '#c026d3', true) + mark(loI, lo, '安値', '#0d9488', false);
   // データ線
   const dpath = points.map((p, i) => (i ? 'L' : 'M') + px(p[0]).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ');
+  // 副系列（取得原価など）の破線。資産推移で総資産＝実線/取得原価＝破線を重ねる用途。
+  const cpath = (costPts && costPts.length) ? `<path d="${costPts.map((p, i) => (i ? 'L' : 'M') + px(p[0]).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ')}" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3"/>` : '';
   // overlays（右ラベル）
   const ov = overlays.filter(o => o.y != null).map(o => { const y = py(o.y).toFixed(1); return `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="${o.color}" stroke-width="1" stroke-dasharray="4 3"/><text x="${W - pad.r + 4}" y="${(+y + 3).toFixed(1)}" fill="${o.color}" font-size="10">${esc(o.label)} ${num(o.y)}</text>`; }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">
-    ${grid}${xlab}<path d="${dpath}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${ov}${hl}
+    ${grid}${xlab}${cpath}<path d="${dpath}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${ov}${hl}
   </svg>`;
 }
 
@@ -6554,6 +6560,30 @@ function pctFromBase(price, base) { if (price == null || !base) return null; ret
 function signed(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
 function cls(n) { return n == null ? '' : (n > 0 ? 'pos' : (n < 0 ? 'neg' : '')); }
 function today() { return new Date().toISOString().slice(0, 10); }
+// 資産推移グラフ: サーバー(毎朝のcron)が別ファイル portfolio-history.json に貯めた日次総資産を /api/portfolio-history
+// から取得して描画する。レンダリングは非同期（プレースホルダ→fetch→detailSvgChart）。
+async function loadPortfolioChart() {
+  const el = document.getElementById('portfolio-chart'); if (!el) return;
+  const note = (html) => { el.innerHTML = `<div class="notice" style="margin:0">${html}</div>`; };
+  // 総資産は本人のみ閲覧可。Googleログイントークンを付けて取得（未ログインなら案内）。
+  const token = (typeof gsync !== 'undefined' && gsync._token) ? gsync._token : null;
+  if (!token) { note('資産推移はGoogleログイン時に表示されます（総資産＝本人のみ閲覧可）。マスタ・設定からログインしてください。'); return; }
+  try {
+    const res = await fetch('/api/portfolio-history', { headers: { Authorization: 'Bearer ' + token } });
+    const d = await res.json();
+    if (!res.ok || !d.ok) { note('資産推移を取得できませんでした：' + esc((d && d.error) || ('HTTP ' + res.status))); return; }
+    const snaps = (d && d.snapshots) || [];
+    if (!Array.isArray(snaps) || snaps.length < 2) {
+      note(`資産推移は毎朝サーバーが日次で総資産を記録します（現在 ${snaps.length} 日分）。2日分たまるとグラフが表示されます。`);
+      return;
+    }
+    const pts = snaps.map(s => [Date.parse(s.date) / 1000, s.totalJpy]);
+    const costPts = snaps.some(s => s.costJpy != null) ? snaps.map(s => [Date.parse(s.date) / 1000, s.costJpy]) : null;
+    el.innerHTML = detailSvgChart(pts, [], costPts);
+  } catch (e) {
+    note('資産推移の取得に失敗しました: ' + esc(e && e.message || String(e)));
+  }
+}
 function fmtDateTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
