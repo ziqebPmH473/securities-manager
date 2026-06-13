@@ -3202,17 +3202,20 @@ function renderReport() {
       <div class="stat"><div class="s-label">評価損益</div><div class="s-value num ${pnlCls}">${yen(pnl)}</div><div class="s-sub ${cls(pnlPct)}" style="font-weight:700">${signed(pnlPct)}%</div></div>
     </div>
     ${fxMissing ? '<div class="notice">USD/JPY 為替が未取得のため、円換算に米国株を含めていません。「価格更新」で取得できます。</div>' : ''}
-    <div class="section"><div class="section-head"><h2>市場別の集計（円換算）</h2><span class="muted" style="margin-left:auto;font-size:11px">バー＝総資産に対する構成比</span></div>
-      ${mkBreak ? `<div class="breakdown">${mkBreak}</div>` : '<div class="empty">保有銘柄がありません。</div>'}</div>
-    <div class="section"><div class="section-head"><h2>種別 × 市場の集計（円換算）</h2></div>
-      <div class="table-wrap"><table><thead><tr><th class="l">種別 / 市場</th><th>評価額</th><th>取得原価</th><th>評価損益</th><th>損益率</th><th>銘柄数</th></tr></thead>
-      <tbody>${tmRows || `<tr><td colspan="6" class="empty">保有銘柄がありません。</td></tr>`}</tbody></table></div>
-      <p class="muted" style="padding:0 16px 12px">ETF・個別株・投資信託を分け、その下に日本株/米国株の内訳。種別行は小計です。詳細種別は「銘柄マスタ」で変更できます。</p></div>
-    <div class="section"><div class="section-head"><h2>証券会社別の集計（円換算）</h2><span class="muted" style="margin-left:auto;font-size:11px">バー＝総資産比・色＝市場×種別</span></div>
-      ${bkBreak ? `${segLegend}<div class="breakdown">${bkBreak}</div>` : '<div class="empty">保有銘柄がありません。</div>'}</div>
-    <div class="section"><div class="section-head"><h2>証券会社 × 市場×種別（評価額・円換算）</h2></div>
-      <div class="table-wrap"><table><thead><tr><th class="l">証券会社</th><th>米国株 個別株</th><th>米国株 ETF</th><th>日本株 個別株</th><th>日本株 ETF</th><th>合計</th></tr></thead>
-      <tbody>${mxRows || `<tr><td colspan="6" class="empty">—</td></tr>`}</tbody></table></div></div>
+    <div class="section"><div class="section-head"><h2>資産推移・現在の集計（円換算）</h2>
+        <div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap">
+          <div class="seg" id="asset-axis-seg">${[['market', '市場別'], ['markettype', '市場+種別'], ['category', 'カテゴリ別']].map(([k, l]) => `<button class="${assetAxis === k ? 'active' : ''}" onclick="setAssetAxis('${k}')">${l}</button>`).join('')}</div>
+          <button class="btn btn-sm ${assetTableBroker ? 'btn-primary' : ''}" onclick="toggleAssetBroker()" title="証券会社別に展開">証券会社別</button>
+        </div></div>
+      <div class="section-body" style="padding:16px">
+        <div id="portfolio-chart" class="muted" style="min-height:200px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
+        <div id="asset-table" style="margin-top:14px"></div>
+        <details style="margin-top:14px"><summary class="lnk">過去データの取込（明細を貼り付け）</summary>
+          <p class="muted" style="margin:8px 0">資産明細（1銘柄×日付の行）をそのまま貼り付けると、日付ごとに集計して履歴に統合します。必要な列＝<b>日付・種別・詳細種別・評価額・取得額</b>（他の列は無視）。日本株・米国株のみ集計。カテゴリ別の内訳は今日以降のみ。</p>
+          <textarea id="asset-import-text" rows="5" style="width:100%;font-family:monospace;font-size:12px" placeholder="日付  …  種別  詳細種別 … 評価額 … 取得額 …（ヘッダ行ごと貼り付け）"></textarea>
+          <div class="form-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn btn-primary" onclick="importAssetHistory()">取込んで統合</button><span id="asset-import-msg" class="muted" style="align-self:center"></span></div>
+        </details>
+      </div></div>
     <div class="section"><div class="section-head"><h2>取引サマリー（${reportPeriod === 'ytd' ? '今年' : '全期間'}・円換算）</h2>
         <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
       <div class="table-wrap"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
@@ -3221,18 +3224,61 @@ function renderReport() {
           <tr><td class="l">売り</td><td>${sellN}</td><td>${yen(sellTot)}</td></tr>
           <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
         </tbody></table></div>
-      <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p></div>
-    <div class="section"><div class="section-head"><h2>資産推移（円換算）</h2>
-        <div class="seg" style="margin-left:auto">${[['market', '市場別'], ['markettype', '市場+種別'], ['category', 'カテゴリ別']].map(([k, l]) => `<button class="${assetAxis === k ? 'active' : ''}" onclick="setAssetAxis('${k}')">${l}</button>`).join('')}</div></div>
-      <div class="section-body" style="padding:16px">
-        <div id="portfolio-chart" class="muted" style="min-height:200px;display:flex;align-items:center;justify-content:center">読み込み中…</div>
-        <details style="margin-top:14px"><summary class="lnk">過去データの取込（明細を貼り付け）</summary>
-          <p class="muted" style="margin:8px 0">資産明細（1銘柄×日付の行）をそのまま貼り付けると、日付ごとに集計して履歴に統合します。必要な列＝<b>日付・種別・詳細種別・評価円・取得円</b>（他の列は無視）。市場×種別の内訳まで反映されます（カテゴリ別は今日以降のみ）。</p>
-          <textarea id="asset-import-text" rows="5" style="width:100%;font-family:monospace;font-size:12px" placeholder="日付  ドル円レート  銘柄  コード  種別  詳細種別 … 評価円 … 取得円 …（ヘッダ行ごと貼り付け）"></textarea>
-          <div class="form-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn btn-primary" onclick="importAssetHistory()">取込んで統合</button><span id="asset-import-msg" class="muted" style="align-self:center"></span></div>
-        </details>
-      </div></div>`;
+      <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p></div>`;
   loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画
+  renderAssetTable();  // 現在の集計（トグル連動・証券会社別トグル）
+}
+// トグル連動の「現在の集計」表。assetTableBroker=false: 分類ごとの集計のみ／true: 証券会社×分類のクロス表。
+let assetTableBroker = false;
+function toggleAssetBroker() {
+  assetTableBroker = !assetTableBroker;
+  const btn = document.querySelector('#app [onclick="toggleAssetBroker()"]'); if (btn) btn.classList.toggle('btn-primary', assetTableBroker);
+  renderAssetTable();
+}
+function computeBrokerBreakdowns() {
+  const brokers = {};
+  const ens = (b) => brokers[b] || (brokers[b] = { market: {}, markettype: {}, category: {} });
+  for (const h of store.data.holdings) {
+    if (!(h.quantity > 0)) continue;
+    const sec = store.data.securities.find(s => s.id === h.securityId); if (!sec) continue;
+    if (sec.market !== 'JP' && sec.market !== 'US') continue;
+    const price = calc.price(sec);
+    const vj = calc.toJpy(sec.market, price != null ? h.quantity * price : h.quantity * h.avgCost);
+    if (vj == null) continue;
+    const v = Math.round(vj), b = h.broker || '(不明)';
+    const mk = sec.market === 'JP' ? '日本株' : '米国株', isETF = detailTypeOf(sec) === 'ETF';
+    const o = ens(b);
+    o.market[mk] = (o.market[mk] || 0) + v;
+    const mtk = `${mk}・${isETF ? 'ETF' : '個別株'}`; o.markettype[mtk] = (o.markettype[mtk] || 0) + v;
+    const ck = isETF ? 'ETF' : (sec.category || '未分類'); o.category[ck] = (o.category[ck] || 0) + v;
+  }
+  return brokers;
+}
+function renderAssetTable() {
+  const el = document.getElementById('asset-table'); if (!el) return;
+  const brokers = computeBrokerBreakdowns();
+  const ax = assetAxis, names = Object.keys(brokers);
+  if (!names.length) { el.innerHTML = '<div class="empty">保有銘柄がありません（日本株・米国株）。</div>'; return; }
+  const colTotals = {};
+  for (const b of names) { const m = brokers[b][ax]; for (const k in m) colTotals[k] = (colTotals[k] || 0) + m[k]; }
+  const keys = assetOrderKeys(Object.keys(colTotals), ax, colTotals);
+  const grand = Object.values(colTotals).reduce((a, c) => a + c, 0) || 1;
+  const colorOf = (k) => assetKeyColor(k, keys.indexOf(k));
+  // 数字の裏に半透明の値比例バー（左から）。max=表内の最大セル基準。
+  const barCell = (val, color, maxv) => val ? `<td class="num" style="position:relative"><span style="position:absolute;left:0;top:1px;bottom:1px;width:${Math.max(2, Math.min(100, val / maxv * 100))}%;background:${color};opacity:.16;border-radius:2px"></span><span style="position:relative">${yen(val)}</span></td>` : '<td class="num" style="color:var(--muted)">—</td>';
+  const chip = (k) => `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colorOf(k)};margin-right:5px;vertical-align:-1px"></span>`;
+  if (!assetTableBroker) {
+    const maxv = Math.max(...keys.map(k => colTotals[k]), 1);
+    const rows = keys.map(k => `<tr><td class="l">${chip(k)}${esc(k)}</td>${barCell(colTotals[k], colorOf(k), maxv)}<td class="num">${num(colTotals[k] / grand * 100)}%</td></tr>`).join('');
+    el.innerHTML = `<div class="table-wrap"><table><thead><tr><th class="l">分類</th><th>評価額（円換算）</th><th>構成比</th></tr></thead><tbody>${rows}<tr><td class="l"><strong>合計</strong></td><td class="num"><strong>${yen(grand)}</strong></td><td class="num"><strong>100%</strong></td></tr></tbody></table></div>`;
+    return;
+  }
+  const bnames = names.sort((a, b) => keys.reduce((t, k) => t + (brokers[b][ax][k] || 0), 0) - keys.reduce((t, k) => t + (brokers[a][ax][k] || 0), 0));
+  let maxCell = 1; for (const b of bnames) for (const k of keys) maxCell = Math.max(maxCell, brokers[b][ax][k] || 0);
+  const head = `<tr><th class="l">証券会社</th>${keys.map(k => `<th class="nowrap">${chip(k)}${esc(k)}</th>`).join('')}<th>合計</th></tr>`;
+  const rows = bnames.map(b => { const m = brokers[b][ax]; const rt = keys.reduce((t, k) => t + (m[k] || 0), 0); return `<tr><td class="l">${esc(b)}</td>${keys.map(k => barCell(m[k] || 0, colorOf(k), maxCell)).join('')}<td class="num"><strong>${yen(rt)}</strong></td></tr>`; }).join('');
+  const totRow = `<tr><td class="l"><strong>合計</strong></td>${keys.map(k => `<td class="num"><strong>${yen(colTotals[k])}</strong></td>`).join('')}<td class="num"><strong>${yen(grand)}</strong></td></tr>`;
+  el.innerHTML = `<div class="table-wrap"><table><thead>${head}</thead><tbody>${rows}${totRow}</tbody></table></div>`;
 }
 
 // ---------- 銘柄マスタ（SEC-27） ----------
@@ -6623,8 +6669,9 @@ let assetAxis = 'market';   // 'market' | 'markettype' | 'category'
 let _assetSnaps = null;     // 取得した snapshots のキャッシュ（軸切替で再fetchしない）
 function setAssetAxis(a) {
   assetAxis = a;
-  document.querySelectorAll('#app .section-head .seg button').forEach(b => b.classList.toggle('active', b.getAttribute('onclick') === `setAssetAxis('${a}')`));
+  document.querySelectorAll('#asset-axis-seg button').forEach(b => b.classList.toggle('active', b.getAttribute('onclick') === `setAssetAxis('${a}')`));
   renderAssetChart();
+  renderAssetTable();
 }
 async function loadPortfolioChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
