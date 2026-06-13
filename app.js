@@ -465,7 +465,9 @@ const gsync = {
       const email = ((info && info.email) || '').toLowerCase();
       const allow = (this.cfg().allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
       if (allow.length && !allow.includes(email)) { this._token = null; toast(`許可されていないアカウントです: ${email}`); return resolve(false); }
-      this._token = token; this._email = email; toast(`ログイン: ${email || 'OK'}`); resolve(true);
+      this._token = token; this._email = email; toast(`ログイン: ${email || 'OK'}`);
+      try { render(); } catch (_) {}   // ログイン成功で即UI更新（未ログイン警告を消す・状態反映）。syncNow完了を待たない
+      resolve(true);
       try { if (typeof dsync !== 'undefined') dsync.afterSignIn(); } catch (_) {}   // 自動同期ONなら初回マージ
     } catch (e) { reject(e); }
   },
