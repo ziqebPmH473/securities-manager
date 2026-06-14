@@ -6963,13 +6963,15 @@ function attachChartHover(el) {
     let snap = h.snaps[0];
     for (const s of h.snaps) { if (Date.parse(s.date) / 1000 <= dayTs + 1) snap = s; else break; }
     const b = h.breakdownAt(snap);
+    // 数字を等幅(tabular-nums)＋右寄せにして、同じ桁数なら桁位置が縦に揃うようにする
+    const numStyle = 'margin-left:12px;text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:"tnum"';
     const rows = h.keys.slice().reverse().map((k) => {
       const v = b[k] || 0; if (!v) return '';
-      return `<div style="display:flex;align-items:center;gap:6px"><span style="width:9px;height:9px;flex:0 0 9px;border-radius:2px;background:${h.colorOf(k, h.keys.indexOf(k))}"></span><span style="flex:1">${esc(k)}</span><span style="font-weight:600;margin-left:12px">${num(Math.round(v))}円</span></div>`;
+      return `<div style="display:flex;align-items:center;gap:6px"><span style="width:9px;height:9px;flex:0 0 9px;border-radius:2px;background:${h.colorOf(k, h.keys.indexOf(k))}"></span><span style="flex:1">${esc(k)}</span><span style="font-weight:600;${numStyle}">${num(Math.round(v))}円</span></div>`;
     }).join('');
     const total = snap.totalJpy || h.keys.reduce((a, k) => a + (b[k] || 0), 0);
-    const costRow = (h.hasCost && snap.costJpy) ? `<div style="display:flex;gap:6px;color:var(--muted)"><span style="flex:1">取得原価</span><span style="margin-left:12px">${num(Math.round(snap.costJpy))}円</span></div>` : '';
-    tip.innerHTML = `<div style="font-weight:700;margin-bottom:3px">${cursorDate}</div>${rows}<div style="display:flex;gap:6px;margin-top:3px;border-top:1px solid var(--border);padding-top:3px;font-weight:700"><span style="flex:1">合計</span><span style="margin-left:12px">${num(Math.round(total))}円</span></div>${costRow}`;
+    const costRow = (h.hasCost && snap.costJpy) ? `<div style="display:flex;gap:6px;color:var(--muted)"><span style="flex:1">取得原価</span><span style="${numStyle}">${num(Math.round(snap.costJpy))}円</span></div>` : '';
+    tip.innerHTML = `<div style="font-weight:700;margin-bottom:3px">${cursorDate}</div>${rows}<div style="display:flex;gap:6px;margin-top:3px;border-top:1px solid var(--border);padding-top:3px;font-weight:700"><span style="flex:1">合計</span><span style="${numStyle}">${num(Math.round(total))}円</span></div>${costRow}`;
     const gx = h.px(dayTs);
     guide.setAttribute('x1', gx.toFixed(1)); guide.setAttribute('x2', gx.toFixed(1));
     guide.style.display = '';
