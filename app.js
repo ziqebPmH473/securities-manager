@@ -6761,6 +6761,7 @@ function today() { return new Date().toISOString().slice(0, 10); }
 let assetAxis = 'market';   // 'market' | 'markettype' | 'category'
 let assetPeriod = 'all';    // 'all' | '1y' | '6m' | '3m' | '1m'（チャートの表示期間）
 let _assetSnaps = null;     // 取得した snapshots のキャッシュ（軸切替で再fetchしない）
+let _chartHover = null;      // ホバーツールチップ用データ（assetStackChart が設定）
 function setAssetAxis(a) {
   assetAxis = a;
   document.querySelectorAll('#asset-axis-seg button').forEach(b => b.classList.toggle('active', b.getAttribute('onclick') === `setAssetAxis('${a}')`));
@@ -6849,6 +6850,7 @@ function renderAssetChart() {
   const { w, h } = assetChartBox(el);
   el.style.height = h + 'px'; // 高さを固定＝期間/軸トグルやグラフ更新でも下の表が動かない
   el.innerHTML = assetStackChart(snaps, assetAxis, w, h);
+  attachChartHover(el); // カーソルで日付・分類別評価額・合計を表示
 }
 // グラフを「上部サマリ＋トグル＋グラフ＋表」がスクロールせず収まる範囲で最大サイズにする。
 // 高さ＝スクロール領域の下端 − グラフ上端 − 表の高さ（最も行数の多いカテゴリ別に固定済み）− 余白。
@@ -6929,10 +6931,60 @@ function assetStackChart(snaps, axis, W, H) {
   // 凡例＝チャート右に縦並び（軸を切替えても本体グラフの幅・高さは変わらない）。最新サマリは上部カードと重複のため省略。
   const legend = keys.slice().reverse().map((k) => { const ki = keys.indexOf(k); return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px"><span style="width:11px;height:11px;flex:0 0 11px;background:${colorOf(k, ki)};border-radius:2px"></span><span style="word-break:break-all">${esc(k)}</span></div>`; }).join('')
     + (hasCost ? `<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:2px"><span style="width:16px;flex:0 0 16px;border-top:2px dashed #111827"></span>取得原価</div>` : '');
+  // ホバー時にカーソル位置の日付・分類別評価額・合計を表示するためのデータを保持（attachChartHover が参照）
+  _chartHover = { snaps, keys, breakdownAt, colorOf, hasCost, px, W, H, pad, xmin, xmax };
+  // ガイド線（縦）とツールチップ枠を初期非表示で重ねる。ガイドは bands の上に描くため最後に置く。
+  const guide = `<line id="asset-chart-guide" x1="0" y1="${pad.t}" x2="0" y2="${H - pad.b}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3" style="display:none"/>`;
   return `<div style="display:flex;gap:10px;align-items:flex-start">
-    <div style="flex:1;min-width:0"><svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">${bands}${grid}${xlab}${ylab}${costLine}</svg></div>
+    <div style="flex:1;min-width:0;position:relative">
+      <svg id="asset-chart-svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px;cursor:crosshair">${bands}${grid}${xlab}${ylab}${costLine}${guide}</svg>
+      <div id="asset-chart-tip" style="position:absolute;display:none;pointer-events:none;z-index:5;top:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:11px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.18);white-space:nowrap"></div>
+    </div>
     <div style="flex:0 0 132px;width:132px">${legend}</div>
   </div>`;
+}
+// グラフ上のマウス/タッチ移動で、カーソル位置の日付・分類別評価額・合計をツールチップ表示する。
+// 値はカーソル日（時間軸を日単位に丸めた日付）以前で最新のスナップショットから取る（その日にデータが無ければ前のデータ）。
+function attachChartHover(el) {
+  const h = _chartHover; if (!h) return;
+  const svg = el.querySelector('#asset-chart-svg');
+  const tip = el.querySelector('#asset-chart-tip');
+  const guide = el.querySelector('#asset-chart-guide');
+  if (!svg || !tip || !guide) return;
+  const wrap = svg.parentElement;
+  const move = (clientX) => {
+    const rect = svg.getBoundingClientRect(); if (!(rect.width > 0)) return;
+    const sx = (clientX - rect.left) * (h.W / rect.width); // 画面px → SVG座標
+    const frac = h.xmax === h.xmin ? 0 : (sx - h.pad.l) / (h.W - h.pad.l - h.pad.r);
+    const t = h.xmin + Math.max(0, Math.min(1, frac)) * (h.xmax - h.xmin);
+    const dayTs = Math.round(t / 86400) * 86400; // データ範囲内で日単位に丸める
+    const cursorDate = new Date(dayTs * 1000).toISOString().slice(0, 10);
+    // カーソル日以前で最新のスナップショット（無ければ最古）
+    let snap = h.snaps[0];
+    for (const s of h.snaps) { if (Date.parse(s.date) / 1000 <= dayTs + 1) snap = s; else break; }
+    const b = h.breakdownAt(snap);
+    const rows = h.keys.slice().reverse().map((k) => {
+      const v = b[k] || 0; if (!v) return '';
+      return `<div style="display:flex;align-items:center;gap:6px"><span style="width:9px;height:9px;flex:0 0 9px;border-radius:2px;background:${h.colorOf(k, h.keys.indexOf(k))}"></span><span style="flex:1">${esc(k)}</span><span style="font-weight:600;margin-left:12px">${num(Math.round(v))}円</span></div>`;
+    }).join('');
+    const total = snap.totalJpy || h.keys.reduce((a, k) => a + (b[k] || 0), 0);
+    const costRow = (h.hasCost && snap.costJpy) ? `<div style="display:flex;gap:6px;color:var(--muted)"><span style="flex:1">取得原価</span><span style="margin-left:12px">${num(Math.round(snap.costJpy))}円</span></div>` : '';
+    tip.innerHTML = `<div style="font-weight:700;margin-bottom:3px">${cursorDate}</div>${rows}<div style="display:flex;gap:6px;margin-top:3px;border-top:1px solid var(--border);padding-top:3px;font-weight:700"><span style="flex:1">合計</span><span style="margin-left:12px">${num(Math.round(total))}円</span></div>${costRow}`;
+    const gx = h.px(dayTs);
+    guide.setAttribute('x1', gx.toFixed(1)); guide.setAttribute('x2', gx.toFixed(1));
+    guide.style.display = '';
+    tip.style.display = 'block';
+    const gxPx = (gx / h.W) * rect.width; // SVG座標 → wrap内px
+    const tipW = tip.offsetWidth;
+    let left = gxPx + 12;
+    if (left + tipW > rect.width) left = gxPx - tipW - 12; // 右端で見切れるなら左側へ
+    tip.style.left = Math.max(0, left) + 'px';
+  };
+  const hide = () => { tip.style.display = 'none'; guide.style.display = 'none'; };
+  svg.addEventListener('mousemove', (e) => move(e.clientX));
+  svg.addEventListener('mouseleave', hide);
+  svg.addEventListener('touchmove', (e) => { if (e.touches[0]) { move(e.touches[0].clientX); e.preventDefault(); } }, { passive: false });
+  svg.addEventListener('touchend', hide);
 }
 // 過去の資産明細（1銘柄×日付）を貼り付け→日付別に集計→portfolio-history.json へ統合。
 // 必要列: 日付 / 種別(日本株|米国株) / 詳細種別(ETF→ETF・他→個別) / 評価額(or評価円) / 取得額(or取得円)。
