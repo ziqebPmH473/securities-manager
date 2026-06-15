@@ -16,13 +16,42 @@
 const STORAGE_KEY = 'sm_data_v1';
 
 const DEFAULT_CATEGORIES = [
-  { category: '王道・鉄板', label: '文明のインフラ', amountJpy: 80000, amountUsd: 800, sortOrder: 1 },
-  { category: '主力・成長', label: '世界的覇権', amountJpy: 60000, amountUsd: 600, sortOrder: 2 },
-  { category: '準主力', label: '地域覇者・ニッチ', amountJpy: 50000, amountUsd: 500, sortOrder: 3 },
-  { category: '防御・配当', label: '成熟・安定', amountJpy: 40000, amountUsd: 400, sortOrder: 4 },
-  { category: '有望な投機', label: '宝くじのエース', amountJpy: 25000, amountUsd: 250, sortOrder: 5 },
-  { category: 'お遊び', label: '記念・優待', amountJpy: 15000, amountUsd: 150, sortOrder: 6 },
-  { category: '対象外', label: '投資不適格', amountJpy: 0, amountUsd: 0, sortOrder: 7 },
+  { category: '王道・鉄板', label: '文明のインフラ', amountJpy: 80000, amountUsd: 800, sortOrder: 1, color: 'gold' },
+  { category: '主力・成長', label: '世界的覇権', amountJpy: 60000, amountUsd: 600, sortOrder: 2, color: 'blue' },
+  { category: '準主力', label: '地域覇者・ニッチ', amountJpy: 50000, amountUsd: 500, sortOrder: 3, color: 'cyan' },
+  { category: '防御・配当', label: '成熟・安定', amountJpy: 40000, amountUsd: 400, sortOrder: 4, color: 'green' },
+  { category: '有望な投機', label: '宝くじのエース', amountJpy: 25000, amountUsd: 250, sortOrder: 5, color: 'orange' },
+  { category: 'お遊び', label: '記念・優待', amountJpy: 15000, amountUsd: 150, sortOrder: 6, color: 'purple' },
+  { category: '対象外', label: '投資不適格', amountJpy: 0, amountUsd: 0, sortOrder: 7, color: 'gray' },
+];
+
+// ラベル色プリセット（カテゴリ・格付け等のマスタで共有。将来ルール名など他ラベルにも流用可）。
+// key を categories[].color / grades[].color に保存し、labelColorStyle() でインライン style を生成する。
+const LABEL_COLORS = [
+  { key: 'gray',   name: 'グレー', bg: 'var(--panel-3)',    border: 'var(--border)', text: 'var(--muted)' },
+  { key: 'brass',  name: '真鍮',   bg: 'var(--brass-soft)', border: '#e8dcc2',       text: 'var(--brass-d)' },
+  { key: 'blue',   name: '青',     bg: '#eef3fb',           border: '#aac4e6',       text: '#2a5599' },
+  { key: 'green',  name: '緑',     bg: '#eef7f1',           border: '#9ccbb0',       text: 'var(--up-ink)' },
+  { key: 'red',    name: '赤',     bg: '#fbeeee',           border: '#e3a9a5',       text: 'var(--down-ink)' },
+  { key: 'gold',   name: '金',     bg: '#fbf3e0',           border: '#d6ad5b',       text: '#9a6a12' },
+  { key: 'purple', name: '紫',     bg: '#f1edf8',           border: '#e3d9f1',       text: '#6a4ca8' },
+  { key: 'cyan',   name: 'シアン', bg: '#eafafc',           border: '#bfe3ea',       text: '#0e7490' },
+  { key: 'orange', name: '橙',     bg: 'var(--warn-soft)',  border: '#ecd9b3',       text: 'var(--warn)' },
+  { key: 'pink',   name: '桃',     bg: '#fdeef4',           border: '#f3c9da',       text: '#b13a6a' },
+];
+const LABEL_COLOR_MAP = Object.fromEntries(LABEL_COLORS.map(c => [c.key, c]));
+function labelColorStyle(key) {
+  const c = LABEL_COLOR_MAP[key];
+  return c ? `background:${c.bg};border-color:${c.border};color:${c.text}` : '';
+}
+
+// 銘柄格付け（S/A/B/C/D）の色マスタ。値・順位は GRADE_RANK 固定、ここでは表示色だけを管理する。
+const DEFAULT_GRADES = [
+  { grade: 'S', color: 'gold',  desc: '最上位' },
+  { grade: 'A', color: 'green', desc: '優良' },
+  { grade: 'B', color: 'blue',  desc: '標準' },
+  { grade: 'C', color: 'gray',  desc: '要検討' },
+  { grade: 'D', color: 'red',   desc: '不適格' },
 ];
 
 const DEFAULT_RULE = {
@@ -147,6 +176,7 @@ const store = {
     // 同期マージの削除伝播で空配列が Drive に書かれた場合も含め、空/不正なら既定を再シード（自己修復）
     if (!Array.isArray(this.data.rules) || this.data.rules.length === 0) this.data.rules = [structuredClone(DEFAULT_RULE)];
     this.data.categories ||= structuredClone(DEFAULT_CATEGORIES);
+    this.data.grades ||= structuredClone(DEFAULT_GRADES); // 格付け色マスタ（S/A/B/C/D の表示色）
     this.data.prices ||= {};
     this.data.fx ||= { USDJPY: null };
     this.data.meta ||= {}; // 銘柄情報マスタ（名前・セクター・ファンダ）priceKeyでキャッシュ
@@ -172,6 +202,10 @@ const store = {
     if (!this.data.rules.some(r => r.isDefault)) this.data.rules[0].isDefault = true;
     // 後方互換: カテゴリに米国株金額が無ければ日本株の÷100で補完
     for (const c of this.data.categories) if (c.amountUsd == null) c.amountUsd = (c.amountJpy || 0) / 100;
+    // 後方互換: 色未設定のカテゴリは、既定カテゴリと同名なら既定色を補完（既存ユーザーにも初期色を反映）
+    for (const c of this.data.categories) {
+      if (c.color == null) { const d = DEFAULT_CATEGORIES.find(x => x.category === c.category); if (d) c.color = d.color; }
+    }
     return this.data;
   },
   save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data)); },
@@ -180,6 +214,7 @@ const store = {
       securities: [], holdings: [], transactions: [],
       rules: [structuredClone(DEFAULT_RULE)],
       categories: structuredClone(DEFAULT_CATEGORIES),
+      grades: structuredClone(DEFAULT_GRADES),
       prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [], analyses: [],
       importHistory: [], lastPriceUpdate: null, seq: 1,
     };
@@ -1769,7 +1804,7 @@ const COL_RENDERERS = {
   buyCount:  (s,c) => `<td>${c.buyCnt ? num(c.buyCnt) : muted}</td>`,
   buyAmount: (s,c) => `<td>${c.buyAmt != null ? fmtAmtInt(c.buyAmt) : muted}</td>`,
   reco:      (s,c) => `<td>${c.recoAmt ? fmtAmtInt(c.recoAmt) : muted}</td>`,
-  category:  (s,c) => `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`,
+  category:  (s,c) => `<td class="l">${categoryTag(s.category)}</td>`,
   ruleName:  (s,c) => { const r = store.rule(s.ruleId); return `<td class="l">${r ? esc(r.name) : muted}</td>`; },
   fixedBuyPrice: (s,c) => `<td>${typeof s.fixedBuyPrice === 'number' ? fmtAmt(s.fixedBuyPrice, c.market) : muted}</td>`,
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
@@ -2612,13 +2647,37 @@ function marketRow(sec, visibleCols, opts = {}) {
   return `<tr>${selectTd}${dataCells}${actionsTd}</tr>`;
 }
 
-// 銘柄格付（★評価はツールチップに格納してコンパクトに）
+// カテゴリのラベル（マスタの色を反映）。色未設定の旧データは従来の .tag.cat 表示にフォールバック
+function categoryTag(cat) {
+  if (!cat) return muted;
+  const c = (store.data.categories || []).find(x => x.category === cat);
+  const st = c && c.color ? labelColorStyle(c.color) : '';
+  return `<span class="tag${st ? '' : ' cat'}"${st ? ` style="${st}"` : ''}>${esc(cat)}</span>`;
+}
+
+// 銘柄格付（★評価はツールチップに格納してコンパクトに）。色は格付けマスタ(store.data.grades)を反映
 function gradeBadge(sec) {
   const g = sec.rating || sec.overallGrade;
   if (!g) return '<span class="muted">—</span>';
   const stars = [sec.starValuation, sec.starStrength, sec.starRisk].filter(x => x != null);
   const title = stars.length ? ` title="バリュエーション/強み/リスク ★${stars.join('/')}"` : '';
-  return `<span class="grade grade-${esc(String(g).toLowerCase())}"${title}>${esc(g)}</span>`;
+  const gm = (store.data.grades || []).find(x => x.grade === String(g).toUpperCase());
+  const st = gm && gm.color ? labelColorStyle(gm.color) : '';
+  return `<span class="grade grade-${esc(String(g).toLowerCase())}"${st ? ` style="${st}"` : ''}${title}>${esc(g)}</span>`;
+}
+
+// ラベル色プリセットのスウォッチ選択UI（hidden input に key を格納）。スマホでもタップで選べる
+function colorSwatchPicker(name, selected) {
+  return `<div class="color-pick" data-name="${esc(name)}">${LABEL_COLORS.map(c => `
+    <button type="button" class="cswatch${c.key === selected ? ' on' : ''}" data-key="${c.key}" title="${esc(c.name)}" style="${labelColorStyle(c.key)}" onclick="pickColor(this)">A</button>`).join('')}
+    <input type="hidden" name="${esc(name)}" value="${esc(selected || '')}"></div>`;
+}
+function pickColor(btn) {
+  const wrap = btn.closest('.color-pick');
+  wrap.querySelectorAll('.cswatch').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  const inp = wrap.querySelector('input[type=hidden]');
+  if (inp) inp.value = btn.dataset.key;
 }
 
 function priceInputBtn(sec) {
@@ -2851,7 +2910,7 @@ function openAmountHistory(secId) {
     .sort((a, b) => (a.recordedAt < b.recordedAt ? 1 : -1));
   const trigLabel = { master_change: 'マスタ金額変更', category_change: 'カテゴリ変更' };
   const cur = store.data.categories.find(c => c.category === sec.category);
-  const curRow = `<tr><td class="l">現在</td><td class="l">${sec.category ? esc(sec.category) : '—'}</td>
+  const curRow = `<tr><td class="l">現在</td><td class="l">${sec.category ? categoryTag(sec.category) : '—'}</td>
     <td>${cur ? yen(cur.amountJpy) : '—'}</td><td>${cur ? '$' + num(cur.amountUsd) : '—'}</td></tr>`;
   const rows = snaps.map(s => `<tr>
     <td class="l">${fmtDateTime(s.recordedAt)}<br><span class="muted">${trigLabel[s.trigger] || s.trigger}</span></td>
@@ -3538,7 +3597,7 @@ function renderSecMaster() {
       ${cell(s.buyGrade, true)}
       <td${cfStyle('priority', s.priority, 'master')}>${s.priority != null ? num(s.priority) : muted}</td>
       ${inlineEditOn ? ieCellHtml(s, 'ruleName', null) : `<td class="l">${rule ? esc(rule.name) : muted}</td>`}
-      ${inlineEditOn ? ieCellHtml(s, 'category', null) : `<td class="l">${s.category ? `<span class="tag">${esc(s.category)}</span>` : muted}</td>`}
+      ${inlineEditOn ? ieCellHtml(s, 'category', null) : `<td class="l">${categoryTag(s.category)}</td>`}
       <td class="l">${s.createdAt ? fmtDate(s.createdAt) : muted}</td>
       <td class="l">${s.updatedAt ? fmtDate(s.updatedAt) : muted}</td>
       <td class="l nowrap"><button class="btn btn-sm" onclick="openSecurityForm(${s.id})">編集</button></td>
@@ -3687,6 +3746,7 @@ function mergeFundInto(from, to) {
 const MASTER_LAUNCH = [
   { v: 'category', label: 'カテゴリ別 金額マスタ', open: () => openCategoryMaster(), note: '銘柄カテゴリごとの1回購入額（日本株円・米国株$）と変更履歴。' },
   { v: 'rule',     label: '買い増しルールマスタ', open: () => openRuleMaster(),     note: '初回/買い増しの下落率・基準高値のルール。銘柄ごとの割当は各銘柄の編集から。' },
+  { v: 'grade',    label: '銘柄格付けマスタ',     open: () => openGradeMaster(),    note: '銘柄格付け（S/A/B/C/D）の一覧・詳細での表示色を設定。' },
   { v: 'fund',     label: '投資信託 コードマスタ', open: () => openFundCodeMaster(), note: '取り込んだ投信のコード（協会コード）編集・名称取得・統合。' },
   { v: 'alias',    label: '取込変換マスタ',         open: () => openImportAliasMaster(), note: '取込時の「マスタに無い値」の変換対応（カテゴリ/格付/詳細種別/ルール）。' },
   { v: 'cf',       label: '列の背景色ルール',       open: () => openCfRulesMaster(),  note: '数値列の値の範囲ごとの背景色。適用画面（保有/サイン/マスタ/マーケット）を複数選択可。' },
@@ -4468,7 +4528,7 @@ function openSecurityDetail(secId) {
   const meta = [
     kv('銘柄格付 / 総合 / 買い時', `${esc(sec.rating || '—')} / ${esc(sec.overallGrade || '—')} / ${esc(sec.buyGrade || '—')}`),
     kv('★(ﾊﾞﾘｭ/強/ﾘｽｸ)', [sec.starValuation, sec.starStrength, sec.starRisk].some(x => x != null) ? [sec.starValuation, sec.starStrength, sec.starRisk].map(x => x ?? '—').join('/') : '—'),
-    kv('カテゴリ', `${esc(sec.category || '—')}`),
+    kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
     sec.analysisNote ? kv('分析メモ', esc(sec.analysisNote)) : '',
   ].join('');
@@ -4491,7 +4551,7 @@ function openSecurityDetail(secId) {
   const dayPct = (pr.price != null && pr.prevClose) ? (pr.price - pr.prevClose) / pr.prevClose * 100 : null;
   // 保有数量は小数点以下を「あるところまで」表示（表とは別表記）
   const qtyDisp = th.qty != null ? Number(th.qty).toLocaleString('ja-JP', { maximumFractionDigits: 8 }) : '—';
-  const gradeTag = g => g ? `<span class="grade grade-${esc(String(g).toLowerCase())}">${esc(g)}</span>` : '<span class="muted">—</span>';
+  const gradeTag = g => { if (!g) return '<span class="muted">—</span>'; const gm = (store.data.grades || []).find(x => x.grade === String(g).toUpperCase()); const st = gm && gm.color ? labelColorStyle(gm.color) : ''; return `<span class="grade grade-${esc(String(g).toLowerCase())}"${st ? ` style="${st}"` : ''}>${esc(g)}</span>`; };
   const starsFmt = n => n == null ? '<span class="muted">—</span>' : `<span style="color:var(--brass);letter-spacing:1px">${'★'.repeat(n)}<span style="color:var(--border-strong)">${'☆'.repeat(Math.max(0, 5 - n))}</span></span>`;
   const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${detailTypeOf(sec) === 'ETF' ? '<span class="tag detail-etf">ETF</span>' : ''}${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}`;
   // 評価（格付＝銘柄格付のみ。総合/買い時は出さない）＋☆＋分析メモ
@@ -4503,7 +4563,7 @@ function openSecurityDetail(secId) {
     sec.analysisNote ? kv('分析メモ' + (sec.analysisDate ? `（${esc(sec.analysisDate)}）` : ''), esc(sec.analysisNote)) : '',
   ].join('');
   const metaBox = [
-    kv('カテゴリ', `${esc(sec.category || '—')}`),
+    kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
   ].join('');
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
@@ -4720,7 +4780,7 @@ function openCategoryMaster() {
     <div class="table-wrap"><table class="holdings dense">
       <thead><tr><th class="l">カテゴリ</th><th class="l">位置づけ</th><th>日本株(円)</th><th>米国株($)</th><th>並び順</th><th class="l"></th></tr></thead>
       <tbody>${cats.map(c => `<tr>
-        <td class="l">${esc(c.category)}</td><td class="l muted">${esc(c.label || '')}</td>
+        <td class="l">${categoryTag(c.category)}</td><td class="l muted">${esc(c.label || '')}</td>
         <td>${yen(c.amountJpy)}</td><td>$${num(c.amountUsd)}</td><td>${c.sortOrder}</td>
         <td class="l nowrap"><button class="btn btn-sm" onclick="openCategoryEdit('${esc(c.category)}')">編集</button>
           <button class="btn btn-sm btn-danger" onclick="deleteCategory('${esc(c.category)}')">削除</button></td>
@@ -4729,6 +4789,29 @@ function openCategoryMaster() {
     <p class="muted" style="margin:8px 0 0">金額は価格に左右されない固定値（ビジネスモデル・財務で決定）。日本株(円)・米国株($)を個別に登録できます。</p>
     ${amountHistorySection()}
     <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
+}
+// 銘柄格付けマスタ（S/A/B/C/D の表示色を管理。値・順位は固定なので色のみ編集）
+function openGradeMaster() {
+  const grades = store.data.grades || [];
+  showModal('銘柄格付けマスタ', `
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr><th class="l">格付け</th><th class="l">位置づけ</th><th class="l">表示色</th></tr></thead>
+      <tbody>${grades.map(g => `<tr>
+        <td class="l">${gradeBadge({ rating: g.grade })}</td>
+        <td class="l muted">${esc(g.desc || '')}</td>
+        <td class="l">${colorSwatchPicker('grade-' + g.grade, g.color)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <p class="muted" style="margin:8px 0 0">格付け（S/A/B/C/D）の一覧・詳細での表示色です。色をタップすると即時に反映されます。値の追加・削除はできません。</p>
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
+  // 各行の色スウォッチ選択で即保存
+  document.querySelectorAll('#modal-body .color-pick').forEach(wrap => {
+    const grade = wrap.dataset.name.replace(/^grade-/, '');
+    wrap.querySelectorAll('.cswatch').forEach(btn => btn.addEventListener('click', () => {
+      const g = store.data.grades.find(x => x.grade === grade);
+      if (g) { g.color = btn.dataset.key; store.save(); render(); openGradeMaster(); }
+    }));
+  });
 }
 // 買い増しルールマスタ（モーダル表示。ランチャーから開く）
 function openRuleMaster() {
@@ -4762,6 +4845,7 @@ function openCategoryEdit(category) {
           <input name="amountUsd" type="number" step="any" value="${c ? c.amountUsd : 0}" required></div>
       </div>
       <div class="field"><label>並び順</label><input name="sortOrder" type="number" step="1" value="${c ? c.sortOrder : ''}" placeholder="自動"></div>
+      <div class="field"><label>表示色（一覧のラベル色）</label>${colorSwatchPicker('color', c ? c.color : 'gray')}</div>
       <p class="muted">日本株の金額を入力すると、米国株は ÷100 を初期値として自動入力します（必要なら上書き可）。</p>
       <div class="form-actions">
         ${c ? `<button type="button" class="btn btn-danger" onclick="deleteCategory('${esc(c.category)}')">削除</button>` : ''}
@@ -4780,6 +4864,7 @@ function openCategoryEdit(category) {
       amountJpy: parseFloat(f.amountJpy.value) || 0,
       amountUsd: parseFloat(f.amountUsd.value) || 0,
       sortOrder: f.sortOrder.value ? parseInt(f.sortOrder.value, 10) : undefined,
+      color: f.color.value || undefined,
     };
     if (c) store.updateCategory(category, patch);
     else store.addCategory(patch);
@@ -7100,6 +7185,8 @@ window.enlargeDetailChart = enlargeDetailChart;
 window.openPriceInput = openPriceInput;
 window.openCategoryEdit = openCategoryEdit;
 window.openCategoryMaster = openCategoryMaster;
+window.openGradeMaster = openGradeMaster;
+window.pickColor = pickColor;
 window.openRuleMaster = openRuleMaster;
 window.openMasterPick = openMasterPick;
 window.masterPickNote = masterPickNote;

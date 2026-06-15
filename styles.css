@@ -563,6 +563,11 @@ table.holdings tbody tr.sig-reached:hover { background: rgba(194,54,47,.075); }
 .grade-c { color: var(--muted); border-color: var(--border-strong); }
 .grade-d { color: var(--down-ink); border-color: #e3a9a5; background: #fbeeee; }
 
+/* ラベル色プリセットのスウォッチ選択UI（カテゴリ・格付けマスタ） */
+.color-pick { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.cswatch { width: 28px; height: 24px; border-radius: 7px; border: 1.4px solid; font-weight: 700; font-size: 12px; cursor: pointer; line-height: 1; padding: 0; }
+.cswatch.on { outline: 2px solid var(--ink); outline-offset: 1px; }
+
 /* 買い増しサイン・セル */
 .signal {
   display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px;
