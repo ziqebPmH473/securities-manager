@@ -77,6 +77,8 @@ const MASTER_COLS = [
   { key: 'sigType',     label: '種別',             left: true,  markets: ['SIGNAL'], noSort: false },
   { key: 'price',       label: '現在値',           left: false, markets: ALLM, noSort: false },
   { key: 'day',         label: '前日比',           left: false, markets: ALLM, noSort: false },
+  { key: 'prevClose',   label: '前日終値',         left: false, markets: ALLM, noSort: false },
+  { key: 'dayAmt',      label: '前日比値幅',       left: false, markets: ALLM, noSort: false },
   { key: 'extPrice',    label: '時間外',           left: false, markets: ['US', 'SIGNAL'], noSort: false },
   { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: false },
   { key: 'trigBasis',   label: '適用区分',         left: true,  markets: STKM, noSort: true, narrow: true },
@@ -132,10 +134,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -296,48 +298,62 @@ const store = {
       }
       return;
     }
-    // 当該 security の同一口座 holding を取得 or 作成
-    let h = this.data.holdings.find(x =>
+    const findLot = () => this.data.holdings.find(x =>
       x.securityId === t.securityId && x.broker === t.broker && x.accountType === t.accountType);
-    if (!h) {
-      h = { id: this.nextId(), securityId: t.securityId, broker: t.broker, accountType: t.accountType, quantity: 0, avgCost: 0 };
-      this.data.holdings.push(h);
-    }
     if (t.type === 'buy') {
+      let h = findLot();
+      if (!h) { h = { id: this.nextId(), securityId: t.securityId, broker: t.broker, accountType: t.accountType, quantity: 0, avgCost: 0 }; this.data.holdings.push(h); }
       const totalCost = h.avgCost * h.quantity + t.price * t.quantity;
       h.quantity += t.quantity;
       h.avgCost = h.quantity > 0 ? totalCost / h.quantity : 0; // 加重平均
+      t._dq = t.quantity;                                      // 実際に適用した数量変化（買い=+）。逆操作で使用
       // 取得円(円)累計: 米国株の受渡金額(円)が入力されていれば加算（買=+）。SEC-59
       if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) + t.settleJpy;
       // 購入回数を加算
       const sec = this.data.securities.find(s => s.id === t.securityId);
       if (sec) sec.buyCount = (sec.buyCount || 0) + 1;
-    } else { // sell: 数量のみ減算（平均取得単価は不変）。ただし数量0なら保有解消につき単価もクリア
-      h.quantity = Math.max(0, h.quantity - t.quantity);
+    } else { // sell: 既存ロットの数量のみ減算（平均取得単価は不変）。対応ロットが無ければ保有は触らない（空ロットを作らない）
+      const h = findLot();
+      if (!h) { t._dq = 0; return; }                          // 一致する保有ロットが無い売り＝保有に影響なし
+      const removed = Math.min(t.quantity, h.quantity);        // 実際に減った数量（在庫を超えてマイナスにしない）
+      h.quantity -= removed;
+      t._dq = -removed;                                        // 逆操作はこの実減少分だけ戻す（非対称による幽霊ロットを防止）
       // 取得円(円)累計: 受渡金額(円)が入力されていれば減算（売=−。台帳式に一致）。SEC-59
       if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) - t.settleJpy;
       if (h.quantity === 0) h.avgCost = 0;
     }
+    this._pruneEmptyHoldings(t.securityId);
+  },
+  // 数量0・取得単価0・取得円なしの空ロットを除去（売買の打ち消しで残る0株ロットの掃除）。
+  // 取込/手入力で作った保有は source で保護し、消さない。
+  _pruneEmptyHoldings(securityId) {
+    this.data.holdings = this.data.holdings.filter(h =>
+      h.securityId !== securityId || h.quantity > 1e-9 || h.avgCost > 0
+      || (h.acqJpy != null && Math.abs(h.acqJpy) > 1e-6) || h.source === 'import' || h.source === 'manual');
   },
   // applyTransaction の逆操作（取引の削除・編集時に保有への影響を取り消す）。
-  // 買い=数量と取得原価を差し引き／売り=数量を戻す。ledgerOnly は買い回数のみ戻す。
+  // 買い=数量と取得原価を差し引き／売り=実際に減った数量(_dq)を戻す。ledgerOnly は買い回数のみ戻す。
   reverseTransaction(t) {
     if (t.ledgerOnly) {
       if (t.type === 'buy') { const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) sec.buyCount = Math.max(0, sec.buyCount - 1); }
       return;
     }
     const h = this.data.holdings.find(x => x.securityId === t.securityId && x.broker === t.broker && x.accountType === t.accountType);
-    if (!h) return;
-    if (t.type === 'buy') {
-      const totalCost = h.avgCost * h.quantity - t.price * t.quantity;
-      h.quantity = Math.max(0, h.quantity - t.quantity);
-      h.avgCost = h.quantity > 0 ? Math.max(0, totalCost) / h.quantity : 0;
-      if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) - t.settleJpy;
-      const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) sec.buyCount = Math.max(0, sec.buyCount - 1);
-    } else {
-      h.quantity += t.quantity;
-      if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) + t.settleJpy;
+    if (h) {
+      if (t.type === 'buy') {
+        const dq = (t._dq != null ? t._dq : t.quantity);       // 適用した数量（買い=+）
+        const totalCost = h.avgCost * h.quantity - t.price * dq;
+        h.quantity = Math.max(0, h.quantity - dq);
+        h.avgCost = h.quantity > 0 ? Math.max(0, totalCost) / h.quantity : 0;
+        if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) - t.settleJpy;
+      } else {
+        const removed = (t._dq != null ? -t._dq : t.quantity); // 実際に減った数量だけ戻す（旧データは数量で代替）
+        h.quantity += removed;
+        if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) + t.settleJpy;
+      }
     }
+    if (t.type === 'buy') { const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) sec.buyCount = Math.max(0, sec.buyCount - 1); }
+    this._pruneEmptyHoldings(t.securityId);
   },
   // 取引の削除（保有への影響を取り消してから除去）
   removeTransaction(id) {
@@ -1282,10 +1298,11 @@ const api = {
         store.data.prices[priceKey(sec)] = {
           ...prev,
           price: q.price,
-          // 前日終値: 通常ティックの米株(Finnhub)は prevClose=null（pc が一部ETFで不正確なため返さない）。
-          // その場合は日次 Yahoo 取得で確定済みの既存値を保持する（high5y 等と同じ扱い）。日本株/指数(Yahoo)は毎回返る。
-          prevClose: q.prevClose != null ? q.prevClose : (prev.prevClose ?? null),
-          prevDayPct: q.prevDayPct != null ? q.prevDayPct : (prev.prevDayPct ?? null), // 前営業日の値動き%（寄り付き前表示用）
+          // 前日終値は通常の価格取得では一切上書きしない。Finnhub の pc も Yahoo 長期配列も一部銘柄で
+          // 前々日終値になり不正確なため、信頼できる日次 light(range=1d) 取得(refreshPrevCloses)のみを正とし、
+          // ここでは常に既存のキャッシュ値を保持する（前日終値は1日1回確定すれば足りる）。
+          prevClose: prev.prevClose ?? null,
+          prevCloseDate: prev.prevCloseDate ?? null,
           high5y: q.high5y != null ? q.high5y : (prev.high5y ?? null),
           high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),
           high5yDate: q.high5yDate != null ? q.high5yDate : (prev.high5yDate ?? null),
@@ -1311,6 +1328,10 @@ const api = {
     }
     store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
+    // 前日終値を日次で確実取得（信頼できる light=range=1d の chartPreviousClose）。1日1回で足りる。
+    if (store.data.lastPrevCloseDate !== today()) {
+      try { await this.refreshPrevCloses(allSecs); store.data.lastPrevCloseDate = today(); store.save(); } catch (_) {}
+    }
     // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
     await this.refreshExtended(allSecs);
     // 名前未取得の銘柄だけ銘柄情報を取得
@@ -1357,6 +1378,35 @@ const api = {
     store.save();
   },
 
+  // 前日終値を信頼できる方法で取得してキャッシュ（1日1回でよい）。
+  // Finnhub の pc・Yahoo 長期配列は一部銘柄（レバETF等で昨日の日足が欠損する等）で前々日終値になり
+  // 不正確なため、mode=light(range=1d) の chartPreviousClose（＝本当の前営業日終値）を唯一の正とする。
+  // 取れた銘柄だけ prevClose とその引け日(prevCloseDate)を保存。取れない時は既存値を壊さず保持。
+  async refreshPrevCloses(secs) {
+    secs = (secs || []).filter(s => s && s.ticker);
+    if (!secs.length) return;
+    const pd = prevBizDate();
+    const syms = [...new Set(secs.map(yahooSymbol))];
+    const BATCH = 40;
+    const batches = [];
+    for (let i = 0; i < syms.length; i += BATCH) batches.push(syms.slice(i, i + BATCH));
+    let quotes = {};
+    try {
+      const results = await Promise.all(batches.map(b =>
+        fetch(`/api/price?mode=light&symbols=${encodeURIComponent(b.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({}))));
+      quotes = Object.assign({}, ...results);
+    } catch (_) { return; }
+    for (const sec of secs) {
+      const q = quotes[yahooSymbol(sec)];
+      if (!q || q.error || q.prevClose == null) continue; // 取れない時は既存値を保持（壊さない）
+      const key = priceKey(sec);
+      const p = store.data.prices[key] || (store.data.prices[key] = {});
+      p.prevClose = q.prevClose;
+      p.prevCloseDate = pd;
+    }
+    store.save();
+  },
+
   // 指定銘柄だけ価格（＋5年/52週高値）を取得して保存。新規追加銘柄（保有/ウォッチ問わず）の即時反映用。
   // refreshAll は全銘柄＋指数を取り日次更新後の新規追加では走らないため、ピンポイント取得を用意。
   async refreshPrice(secs) {
@@ -1375,7 +1425,9 @@ const api = {
       if (q && !q.error && q.price != null) {
         const prev = store.data.prices[priceKey(sec)] || {};
         store.data.prices[priceKey(sec)] = {
-          price: q.price, prevClose: q.prevClose,
+          price: q.price,
+          // 前日終値は highs=1 の値(Finnhub pc/Yahoo長期配列)を使わず、下の refreshPrevCloses で確定する。
+          prevClose: prev.prevClose ?? null, prevCloseDate: prev.prevCloseDate ?? null,
           high5y: q.high5y, high52w: q.high52w,
           high5yDate: q.high5yDate ?? null, high52wDate: q.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
           low1y: q.low1y ?? null, low3y: q.low3y ?? null,
@@ -1386,6 +1438,8 @@ const api = {
       }
     }
     store.save();
+    // 前日終値を信頼できる light(range=1d) で確定（新規追加銘柄の即時反映）
+    try { await this.refreshPrevCloses(secs); } catch (_) {}
   },
 
   // 銘柄情報マスタを取得して store.data.meta にキャッシュ。
@@ -1605,6 +1659,8 @@ function colDefaultWidth(key) {
   if (key === 'market' || key === 'detailType') return 72;
   if (key === 'trigBasis') return 64; // 1文字バッジ（初/増/高/固）
   if (key === 'extPrice') return 92;  // 時間外価格＋種別タグ
+  if (key === 'prevClose') return 96; // 前日終値＋引け日(MM-DD)
+  if (key === 'dayAmt') return 88;    // 前日比の値幅（符号つき金額）
   if (key === 'prevBuyDate') return 100; // YYYY-MM-DD
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
@@ -1756,6 +1812,8 @@ function cfCellValue(key, sec, ctx) {
   switch (key) {
     case 'price': return ctx.price;
     case 'day': return ctx.dayChg;
+    case 'prevClose': return ctx.prevCloseV;
+    case 'dayAmt': return ctx.dayAmt;
     case 'extPrice': { const p = store.data.prices[priceKey(sec)] || {}; if (p.extPrice == null) return null; const base = p.price != null ? p.price : p.prevClose; return (base && p.extPrice) ? (p.extPrice - base) / base * 100 : null; }
     case 'trigger': return ctx.ev ? ctx.ev.trigger : null;
     case 'base': return ctx.ev ? ctx.ev.base : null;
@@ -1811,6 +1869,10 @@ const COL_RENDERERS = {
   extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const base = p.price != null ? p.price : p.prevClose; const d = (base && p.extPrice) ? (p.extPrice - base) / base * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)}${d != null ? ` <span style="font-size:11px">${signed(d)}%</span>` : ''} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
   // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
   day:       (s,c) => { const v = c.dayChg; return `<td class="${cls(v)}"><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a></td>`; },
+  // 前日終値: 日次 light(range=1d) 取得の確定値。引け日(MM-DD)を小さく併記。
+  prevClose: (s,c) => `<td>${c.prevCloseV != null ? fmtAmt(c.prevCloseV, c.market) : muted}${c.prevCloseDate ? ` <span class="muted" style="font-size:10px" title="${c.prevCloseDate}の終値">${c.prevCloseDate.slice(5)}</span>` : ''}</td>`,
+  // 前日比値幅: 現在値−前日終値（原通貨）。符号つき・緑/赤。
+  dayAmt:    (s,c) => { const v = c.dayAmt; return `<td class="${cls(v)}">${v != null ? (v >= 0 ? '+' : '−') + fmtAmt(Math.abs(v), c.market) : '—'}</td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
   // 適用区分: 次回購入・残り下落率がどのルール分岐で算出されたか（初=初回 / 増=買い増し / 高=高値更新 / 固=買増固定値 / —=判定外）
   trigBasis: (s,c) => {
@@ -2459,6 +2521,8 @@ function sortValue(sec, key) {
     case 'value': return calc.valueOrCostNative(sec) ?? -Infinity;
     case 'pnl': return calc.pnlPctNative(sec) ?? -Infinity;
     case 'day': { const p = store.data.prices[priceKey(sec)] || {}; return (p.price != null && p.prevClose) ? (p.price - p.prevClose) / p.prevClose * 100 : -Infinity; }
+    case 'prevClose': { const p = store.data.prices[priceKey(sec)] || {}; return p.prevClose ?? -Infinity; }
+    case 'dayAmt': { const p = store.data.prices[priceKey(sec)] || {}; return (p.price != null && p.prevClose != null) ? (p.price - p.prevClose) : -Infinity; }
     case 'trigger': { const ev = calc.evaluate(sec); return ev ? ev.trigger : -Infinity; }
     case 'base': { const ev = calc.evaluate(sec); return ev ? ev.base : -Infinity; }
     case 'drop': { const ev = calc.evaluate(sec); return ev ? ev.remainingDropPct : Infinity; }
@@ -2670,6 +2734,9 @@ function marketRow(sec, visibleCols, opts = {}) {
     pnlPct: calc.pnlPctNative(sec),
     // 前日比: 現在値−前日終値（常にライブ値）。寄り付き前や同値引けは 0% と表示する（旧「前」マーカーは廃止）。
     dayChg: (price == null || !p.prevClose) ? null : (price - p.prevClose) / p.prevClose * 100,
+    prevCloseV: p.prevClose ?? null,                 // 前日終値（日次 light 取得で確定・列表示用）
+    prevCloseDate: p.prevCloseDate ?? null,          // その前日終値がいつの引けか（YYYY-MM-DD）
+    dayAmt: (price == null || p.prevClose == null) ? null : (price - p.prevClose), // 前日比の値幅（原通貨）
     buyAmt: calc.buyAmount(sec),
     buyCnt: calc.buyCount(sec),
     recoAmt: store.categoryAmountFor(sec.category, market),
@@ -5130,6 +5197,7 @@ function openPriceInput(secId) {
     store.data.prices[priceKey(sec)] = {
       price: parseFloat(f.price.value),
       prevClose: f.prevClose.value ? parseFloat(f.prevClose.value) : null,
+      prevCloseDate: f.prevClose.value ? prevBizDate() : null, // 手入力時の前日終値の引け日（近似）
       high5y: f.high5y.value ? parseFloat(f.high5y.value) : (p.high5y ?? null),
       high52w: p.high52w ?? null,
       low1y: p.low1y ?? null, low3y: p.low3y ?? null,
@@ -7209,6 +7277,8 @@ function pctFromBase(price, base) { if (price == null || !base) return null; ret
 function signed(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
 function cls(n) { return n == null ? '' : (n > 0 ? 'pos' : (n < 0 ? 'neg' : '')); }
 function today() { return new Date().toISOString().slice(0, 10); }
+// 前営業日の日付(YYYY-MM-DD)。前日終値が「いつの引けか」の表示用（祝日は考慮しない近似）。
+function prevBizDate() { const d = new Date(); do { d.setUTCDate(d.getUTCDate() - 1); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6); return d.toISOString().slice(0, 10); }
 // ===== 資産推移（積み上げ面グラフ） =====
 // サーバー日次（byCategory/byMarket/byMarketType付き）＋取込済み過去（byMarket/byMarketType）を /api/portfolio-history
 // から取得し、3軸（市場/市場+種別/カテゴリ）でスタック描画。取得原価の線を重ねる。
