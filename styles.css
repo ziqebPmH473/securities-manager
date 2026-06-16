@@ -716,18 +716,18 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 
 /* ===== 銘柄カルテ（密度重視・1画面完結。フォント/余白は共通スケール） ===== */
 .kt {
-  --fs-cap: 11.5px;   /* ラベル・キャプション */
-  --fs-body: 13px;    /* 本文・数値 */
-  --fs-head: 12px;    /* セクション見出し */
-  --fs-strong: 15px;  /* 強調数値（買い増しライン等） */
-  --fs-name: 20px;    /* 銘柄名 */
-  --fs-hero: 26px;    /* 現在値 */
-  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px;
+  --fs-cap: 10.5px;   /* ラベル・キャプション */
+  --fs-body: 12.5px;  /* 本文・数値 */
+  --fs-head: 11.5px;  /* セクション見出し */
+  --fs-strong: 14px;  /* 強調数値（買い増しライン等） */
+  --fs-name: 18px;    /* 銘柄名 */
+  --fs-hero: 23px;    /* 現在値 */
+  --sp-1: 3px; --sp-2: 6px; --sp-3: 10px;
 }
 .kt-search { display: flex; align-items: flex-end; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 var(--sp-2); }
 .kt-search .field { margin: 0; }
 .kt-search .field label { font-size: var(--fs-cap); font-weight: 400; color: var(--muted); margin-bottom: var(--sp-1); }
-.kt-search .field select, .kt-search .field input { height: 36px; padding: 5px 10px; font-size: var(--fs-body); line-height: 1.3; }
+.kt-search .field select, .kt-search .field input { height: 32px; padding: 4px 9px; font-size: var(--fs-body); line-height: 1.3; }
 .kt-search .kt-code { width: 160px; }
 
 .kt-head { display: flex; align-items: center; gap: var(--sp-2) var(--sp-3); flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-bottom: var(--sp-2); }
@@ -742,7 +742,7 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 
 .kt-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 1px; background: var(--hair); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; margin-bottom: var(--sp-2); }
-.kt-metrics .cell { background: var(--panel); padding: 7px var(--sp-3); }
+.kt-metrics .cell { background: var(--panel); padding: 5px var(--sp-3); }
 .kt-metrics .k { font-size: var(--fs-cap); color: var(--muted); }
 .kt-metrics .v { font-size: var(--fs-body); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }
 
@@ -751,8 +751,8 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 @media (max-width: 900px) { .kt-main { grid-template-columns: 1fr; } }
 
 .kt-box { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: var(--sp-2) var(--sp-3); }
-.kt-box > h3, .kt-box-head h3 { font-size: var(--fs-head); color: var(--muted); font-weight: 600; margin: 0 0 6px; letter-spacing: .02em; }
-.kt-box-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: 6px; }
+.kt-box > h3, .kt-box-head h3 { font-size: var(--fs-head); color: var(--muted); font-weight: 600; margin: 0 0 var(--sp-1); letter-spacing: .02em; }
+.kt-box-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-1); }
 .kt-box-head h3 { margin: 0; }
 .kt-box-head .seg { margin: 0; }
 
@@ -763,11 +763,11 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-row.kt-hl { background: var(--bg); margin: var(--sp-1) calc(-1 * var(--sp-3)); padding: var(--sp-1) var(--sp-3); border-top: none; }
 .kt-row.kt-hl .v { font-size: var(--fs-strong); color: var(--accent); }
 
-.kt-chart { min-height: 184px; display: flex; align-items: center; justify-content: center; cursor: zoom-in; }
+.kt-chart { min-height: 150px; display: flex; align-items: center; justify-content: center; cursor: zoom-in; }
 .kt-chart-legend { margin: 6px 0 0; font-size: var(--fs-cap); }
 
 .kt-tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-2); margin-bottom: var(--sp-2); align-items: start; }
-.kt-scroll { max-height: 172px; overflow-y: auto; }
+.kt-scroll { max-height: 150px; overflow-y: auto; }
 .kt-scroll > h3 { position: sticky; top: 0; background: var(--panel); padding-bottom: var(--sp-1); z-index: 1; }
 
 /* モーダル */
