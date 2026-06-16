@@ -285,6 +285,17 @@ const store = {
     this.save();
   },
   applyTransaction(t) {
+    // 履歴のみ記録（ledgerOnly）: 数量・平均取得単価・取得円(acqJpy)には反映しない。
+    // ただし買い回数は加算し、前回購入日・購入回数・高値更新判定など「トランザクション走査ベースの
+    // 派生値」（lastBuyInfo/buyCount/取引サマリー）には通常どおり反映される。過去の購入履歴を、現在の
+    // 保有（取込/手入力済みで既に正しい）を崩さずに登録する用途。SEC: ledgerOnly
+    if (t.ledgerOnly) {
+      if (t.type === 'buy') {
+        const sec = this.data.securities.find(s => s.id === t.securityId);
+        if (sec) sec.buyCount = (sec.buyCount || 0) + 1;
+      }
+      return;
+    }
     // 当該 security の同一口座 holding を取得 or 作成
     let h = this.data.holdings.find(x =>
       x.securityId === t.securityId && x.broker === t.broker && x.accountType === t.accountType);
@@ -1447,6 +1458,7 @@ const NAV_GROUPS = [
     { id: 'dashboard', label: 'ダッシュボード', icon: 'dashboard' },
     { id: 'market',    label: 'マーケット',     icon: 'report' },
     { id: 'holdings',  label: '保有銘柄',       icon: 'holdings' },
+    { id: 'trade',     label: '銘柄カルテ',     icon: 'trade' },
     { id: 'signals',   label: '買い増しサイン', icon: 'signal', badge: 'sig' },
     { id: 'report',    label: 'レポート',       icon: 'report' },
   ] },
@@ -1462,7 +1474,7 @@ const NAV_GROUPS = [
 ];
 const PAGE_TITLE = {
   dashboard: 'ダッシュボード', market: 'マーケット', holdings: '保有銘柄', signals: '買い増しサイン',
-  report: 'レポート', import: '取込', secmaster: '銘柄マスタ', splits: '株式分割',
+  report: 'レポート', import: '取込', secmaster: '銘柄マスタ', splits: '株式分割', trade: '銘柄カルテ',
   transfer: '転記用', master: 'マスタ・設定', us: '米国株', jp: '日本株',
 };
 const ICON_PATHS = {
@@ -2012,6 +2024,7 @@ function render() {
     case 'us': renderMarket('US'); break;
     case 'jp': renderMarket('JP'); break;
     case 'signals': renderSignals(); break;
+    case 'trade': renderTradeEntry(); break;
     case 'splits': renderSplitsTab(); break;
     case 'report': renderReport(); break;
     case 'secmaster': renderSecMaster(); break;
@@ -4005,6 +4018,15 @@ function renderImport() {
       </div>
     </div>
     <div class="section">
+      <div class="section-head"><h2>③ 取引履歴を取り込む</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="openTxnImport()">取引履歴を一括取込（貼付け）</button>
+        </div>
+        <p class="muted grp-note">1銘柄分の過去の売買明細（日付・種別・数量・単価…）を貼り付けて一括登録。<strong>「保有に反映しない（履歴のみ）」を既定ON</strong>にしてあるので、現在の保有数量・平均取得単価を崩さず過去履歴を入れられます（前回購入日・購入回数・判定には反映）。</p>
+      </div>
+    </div>
+    <div class="section">
       <div class="section-head"><h2>汎用データ（取込 ⇄ 出力）</h2></div>
       <div class="section-body" style="padding:16px">
         <div class="btn-row">
@@ -4014,6 +4036,100 @@ function renderImport() {
         <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます。</p>
       </div>
     </div>`;
+}
+
+// ---------- 取引履歴の一括取込（1銘柄分の売買明細を貼付けで一括登録） ----------
+let _txnImportRows = [];
+let _txnImportMarket = 'JP';
+function openTxnImport() {
+  _txnImportRows = [];
+  const mktOpts = [['JP', '日本株'], ['US', '米国株']].map(([v, l]) => `<option value="${v}" ${_txnImportMarket === v ? 'selected' : ''}>${l}</option>`).join('');
+  showModal('取引履歴を一括取込', `
+    <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
+      <div class="field" style="max-width:140px"><label>市場</label><select id="ti-market" onchange="_txnImportMarket=this.value">${mktOpts}</select></div>
+      <div class="field" style="max-width:180px"><label>証券コード/ティッカー</label><input id="ti-code" type="text" placeholder="例: 7203 / AAPL" autocomplete="off"></div>
+      <div class="field" style="max-width:160px"><label>既定の証券会社</label><select id="ti-broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+      <div class="field" style="max-width:140px"><label>既定の口座種別</label><select id="ti-account">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>明細を貼り付け（1行=1取引／タブ・カンマ区切り）</label>
+      <textarea id="ti-text" rows="8" placeholder="日付&#9;種別&#9;数量&#9;単価&#9;[証券会社]&#9;[口座]&#9;[受渡金額]&#10;2024-01-15&#9;買い&#9;100&#9;2500&#9;SBI&#9;特定&#10;2024/03/02&#9;売り&#9;50&#9;2700"></textarea></div>
+    <p class="muted" style="font-size:12px;margin:2px 0 8px">列の順番: <strong>日付 / 種別(買い・売り) / 数量 / 単価 / 証券会社(任意) / 口座種別(任意) / 受渡金額(任意・米株の取得円用)</strong>。先頭の見出し行は自動スキップ。証券会社・口座が空の行は上の「既定」を使います。</p>
+    <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:2px 0 8px;cursor:pointer">
+      <input id="ti-ledger" type="checkbox" checked style="margin-top:3px">
+      <span>保有数量・平均取得単価に反映しない（履歴のみ＝推奨）<br><span class="muted" style="font-size:12px">※ 現在の保有を崩さず過去履歴を登録。前回購入日・購入回数・判定には反映します。OFFにすると保有数量・平均取得単価も再計算されます。</span></span>
+    </label>
+    <div class="form-actions" style="justify-content:flex-start">
+      <button type="button" class="btn" onclick="txnImportPreview()">プレビュー</button>
+      <button type="button" class="btn btn-primary" id="ti-commit" onclick="txnImportCommit()" disabled>取込実行</button>
+      <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+    </div>
+    <div id="ti-preview" style="margin-top:10px"></div>`, { wide: true });
+}
+function _txnImportParse() {
+  const market = document.getElementById('ti-market').value;
+  const code = document.getElementById('ti-code').value.trim();
+  const text = document.getElementById('ti-text').value;
+  const result = { market, code, sec: code ? mktFindSec(code, market) : null, rows: [], errors: [] };
+  const toNum = s => { const v = parseFloat(String(s).replace(/[,¥$\s]/g, '')); return isFinite(v) ? v : NaN; };
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  lines.forEach((line, i) => {
+    const cols = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim());
+    // 見出し行スキップ（先頭行かつ単価列が数値でない場合）
+    if (i === 0 && /日付|種別|単価|数量|date|type|price|qty/i.test(line) && isNaN(toNum(cols[2]))) return;
+    if (cols.length < 4) { result.errors.push(`${i + 1}行目: 列が足りません（日付/種別/数量/単価が必要）`); return; }
+    const [d, ty, q, p, br, ac, st] = cols;
+    const dm = d.replace(/\//g, '-').match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (!dm) { result.errors.push(`${i + 1}行目: 日付の形式が不正（${d}）`); return; }
+    const tradedAt = `${dm[1]}-${dm[2].padStart(2, '0')}-${dm[3].padStart(2, '0')}`;
+    const type = /買|buy/i.test(ty) ? 'buy' : /売|sell/i.test(ty) ? 'sell' : null;
+    if (!type) { result.errors.push(`${i + 1}行目: 種別が不明（${ty}）`); return; }
+    const quantity = toNum(q), price = toNum(p);
+    if (isNaN(quantity) || isNaN(price)) { result.errors.push(`${i + 1}行目: 数量・単価が数値ではありません`); return; }
+    const settleJpy = (st != null && st !== '') ? toNum(st) : NaN;
+    result.rows.push({ tradedAt, type, quantity, price, broker: (br || '').trim() || null, accountType: (ac || '').trim() || null, settleJpy: isNaN(settleJpy) ? null : settleJpy });
+  });
+  return result;
+}
+function txnImportPreview() {
+  const r = _txnImportParse();
+  _txnImportRows = [];
+  const el = document.getElementById('ti-preview');
+  const commitBtn = document.getElementById('ti-commit');
+  if (!r.code) { el.innerHTML = '<div class="notice">証券コード/ティッカーを入力してください。</div>'; commitBtn.disabled = true; return; }
+  if (!r.sec) { el.innerHTML = `<div class="notice">「${esc(MARKET_LABEL[r.market] || r.market)} / ${esc(r.code)}」は未登録です。先に銘柄マスタで登録してください。</div>`; commitBtn.disabled = true; return; }
+  const defBroker = document.getElementById('ti-broker').value;
+  const defAccount = document.getElementById('ti-account').value;
+  r.rows.forEach(row => { row.broker = row.broker || defBroker; row.accountType = row.accountType || defAccount; });
+  _txnImportRows = r.rows;
+  const ccy = MARKET_CCY[r.sec.market];
+  const rowsHtml = r.rows.map(t => `<tr><td class="l">${esc(t.tradedAt)}</td><td class="l">${t.type === 'buy' ? '買い' : '売り'}</td><td>${fmtQty(t.quantity, r.sec.market)}</td><td>${ccy}${num(t.price)}</td><td class="l">${esc(t.broker)}</td><td class="l">${esc(t.accountType)}</td></tr>`).join('');
+  const errHtml = r.errors.length ? `<div class="notice" style="margin-top:8px">${r.errors.map(esc).join('<br>')}</div>` : '';
+  el.innerHTML = `<div class="muted" style="margin:4px 0">対象: <strong>${esc(calc.displayName(r.sec))}</strong> ／ 取込可能 ${r.rows.length}件${r.errors.length ? ` ／ エラー ${r.errors.length}件` : ''}</div>
+    ${r.rows.length ? `<div class="table-wrap"><table class="holdings dense"><thead><tr><th class="l">日付</th><th class="l">種別</th><th>数量</th><th>単価</th><th class="l">証券会社</th><th class="l">口座</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>` : ''}
+    ${errHtml}`;
+  commitBtn.disabled = r.rows.length === 0;
+}
+function txnImportCommit() {
+  if (!_txnImportRows.length) return;
+  const market = document.getElementById('ti-market').value;
+  const code = document.getElementById('ti-code').value.trim();
+  const sec = mktFindSec(code, market);
+  if (!sec) { toast('銘柄が見つかりません'); return; }
+  const ledgerOnly = document.getElementById('ti-ledger').checked;
+  let n = 0;
+  for (const t of _txnImportRows) {
+    store.addTransaction({
+      securityId: sec.id, type: t.type, price: t.price, quantity: t.quantity,
+      broker: t.broker, accountType: t.accountType, tradedAt: t.tradedAt,
+      ...(ledgerOnly ? { ledgerOnly: true } : {}),
+      ...(t.settleJpy != null ? { settleJpy: t.settleJpy } : {}),
+    });
+    n++;
+  }
+  _txnImportRows = [];
+  closeModal();
+  toast(`${n}件の取引を取り込みました`);
+  render();
 }
 
 // Google連携（実験的・任意）。クライアントID未設定なら休眠＝現行アプリに影響しない。
@@ -4523,7 +4639,7 @@ function openSecurityDetail(secId) {
     ? kv('元本売却', `${sec.principalSold ? '売却済み' : '—'}${sec.principalSoldAmount != null ? '　/　' + m(sec.principalSoldAmount) : ''}`) : '';
   // 購入・取引履歴
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
-  const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
+  const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
   // 分析メタ
   const meta = [
     kv('銘柄格付 / 総合 / 買い時', `${esc(sec.rating || '—')} / ${esc(sec.overallGrade || '—')} / ${esc(sec.buyGrade || '—')}`),
@@ -4697,7 +4813,205 @@ function detailSvgChart(points, overlays, costPts) {
   </svg>`;
 }
 
-function openTxnForm(secId, presetType) {
+// ---------- 銘柄カルテ（市場+コードで1銘柄の全情報を集約＋取引/編集を1画面で） ----------
+let karteMarket = 'JP';
+let karteCode = '';
+try { const _k = JSON.parse(sessionStorage.getItem('sm_karte') || '{}'); if (_k.market) karteMarket = _k.market; if (typeof _k.code === 'string') karteCode = _k.code; } catch (_) {}
+function saveKarteState() { try { sessionStorage.setItem('sm_karte', JSON.stringify({ market: karteMarket, code: karteCode })); } catch (_) {} }
+function setKarteMarket(m) { karteMarket = m; saveKarteState(); renderTradeEntry(); }
+function karteLookup() {
+  const sel = document.getElementById('karte-market'); if (sel) karteMarket = sel.value;
+  const inp = document.getElementById('karte-code'); if (inp) karteCode = inp.value.trim();
+  saveKarteState(); renderTradeEntry();
+}
+function karteOpen(market, code) { karteMarket = market; karteCode = code; saveKarteState(); go('trade'); }
+function renderTradeEntry() {
+  const sec = karteCode ? mktFindSec(karteCode, karteMarket) : null;
+  const mktOpts = [['JP', '日本株'], ['US', '米国株']]
+    .map(([v, l]) => `<option value="${v}" ${karteMarket === v ? 'selected' : ''}>${l}</option>`).join('');
+  const searchBar = `
+    <div class="page-intro"><h2>銘柄カルテ</h2>
+      <p>市場と証券コード（ティッカー）を入れて「表示」。保有・指標・チャート・買い増し判定・取引履歴を1画面で確認し、取引の記録や編集ができます。</p></div>
+    <div class="row" style="align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <div class="field" style="max-width:150px"><label>市場</label><select id="karte-market">${mktOpts}</select></div>
+      <div class="field" style="max-width:200px"><label>証券コード / ティッカー</label>
+        <input id="karte-code" type="text" value="${esc(karteCode)}" placeholder="例: 7203 / AAPL" autocomplete="off"></div>
+      <div class="field" style="flex:0 0 auto"><button class="btn btn-primary" onclick="karteLookup()">${svgIcon('search', '')} 表示</button></div>
+    </div>`;
+
+  let body;
+  if (!karteCode) {
+    body = '<div class="empty">市場と証券コードを入力して「表示」を押してください。</div>';
+  } else if (!sec) {
+    body = `<div class="notice">「${esc(MARKET_LABEL[karteMarket] || karteMarket)} / ${esc(karteCode)}」は未登録です。
+      <div style="margin-top:10px"><button class="btn btn-primary" onclick="openSecurityForm(null, '${esc(karteMarket)}')">＋ 銘柄として新規登録</button></div></div>`;
+  } else {
+    body = karteCardHtml(sec);
+  }
+  app.innerHTML = searchBar + body;
+
+  // Enter キーで表示
+  const inp = document.getElementById('karte-code');
+  if (inp) inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); karteLookup(); } };
+
+  if (sec) {
+    // 取引入力フォームの送信配線
+    const form = document.getElementById('karte-txn-form');
+    if (form) form.onsubmit = (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const settleJpy = f.settleJpy ? parseFloat(f.settleJpy.value) : NaN;
+      if (isNaN(parseFloat(f.price.value)) || isNaN(parseFloat(f.quantity.value))) { toast('約定単価と数量を入力してください'); return; }
+      store.addTransaction({
+        securityId: sec.id, type: f.type.value,
+        price: parseFloat(f.price.value), quantity: parseFloat(f.quantity.value),
+        broker: f.broker.value, accountType: f.accountType.value, tradedAt: f.tradedAt.value,
+        ...(f.ledgerOnly && f.ledgerOnly.checked ? { ledgerOnly: true } : {}),
+        ...(isNaN(settleJpy) ? {} : { settleJpy }),
+      });
+      toast('取引を記録しました');
+      renderTradeEntry(); // 同じ画面を再描画して即反映
+    };
+    // チャート描画（詳細ドロワーと同じ仕組みを流用）
+    const ev = calc.evaluate(sec), price = calc.price(sec), lb = calc.lastBuyInfo(sec);
+    _detailChartCtx = { sec, ev, price, lb };
+    loadDetailChart(sec, ev, price, lb, detailChartRange);
+  }
+  scheduleFit();
+}
+// カルテ本体のHTML（1銘柄の集約表示＋取引入力フォーム）
+function karteCardHtml(sec) {
+  const ccy = MARKET_CCY[sec.market];
+  const m = v => v == null ? '<span class="muted">—</span>' : ccy + num(v);
+  const ev = calc.evaluate(sec);
+  const th = calc.totalHolding(sec.id);
+  const price = calc.price(sec);
+  const rule = store.rule(sec.ruleId);
+  const lb = calc.lastBuyInfo(sec);
+  const kv = (l, v) => `<div class="ai-row"><span class="muted">${l}</span><span>${v}</span></div>`;
+  const held = th.qty > 0;
+  const valJpy = calc.toJpy(sec.market, calc.valueOrCostNative(sec));
+  const costJpyV = calc.toJpy(sec.market, calc.costNative(sec));
+  const pnlJpyV = (valJpy != null && costJpyV != null) ? valJpy - costJpyV : null;
+  const pnlPctN = calc.pnlPctNative(sec);
+  const pr = store.data.prices[priceKey(sec)] || {};
+  const dayPct = (pr.price != null && pr.prevClose) ? (pr.price - pr.prevClose) / pr.prevClose * 100 : null;
+  const qtyDisp = th.qty != null ? Number(th.qty).toLocaleString('ja-JP', { maximumFractionDigits: 8 }) : '—';
+  const gradeTag = g => { if (!g) return '<span class="muted">—</span>'; const gm = (store.data.grades || []).find(x => x.grade === String(g).toUpperCase()); const st = gm && gm.color ? labelColorStyle(gm.color) : ''; return `<span class="grade grade-${esc(String(g).toLowerCase())}"${st ? ` style="${st}"` : ''}>${esc(g)}</span>`; };
+  const starsFmt = n => n == null ? '<span class="muted">—</span>' : `<span style="color:var(--brass);letter-spacing:1px">${'★'.repeat(n)}<span style="color:var(--border-strong)">${'☆'.repeat(Math.max(0, 5 - n))}</span></span>`;
+  // 判定
+  const bhMode = (sec.baseHighMode || (rule && rule.baseHighMode) || '5y');
+  const ruleInfo = rule ? kv('適用ルール', `${esc(rule.name)}<br><span class="muted">初回 −${rule.initialDropPct}% ／ 買い増し −${rule.addonDropPct}% ／ 基準高値 ${esc(BASE_HIGH_LABEL[bhMode] || bhMode)}</span>`) : '';
+  const typeLabel = ev ? (ev.baseSource === '固定' ? '買い増し（買増固定値）'
+    : ev.baseSource === '高値更新' ? '買い増し（高値更新→初回ルールで判定）'
+    : ev.type === 'initial' ? '初回購入' : '買い増し') : '';
+  const judge = ruleInfo + (ev ? [
+    kv('種別', typeLabel),
+    kv('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
+    kv('次回購入（買い増しライン）', (ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.trigger)),
+    kv('現在値', m(price)),
+    kv('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%</span>` + (ev.reached ? '（到達）' : '') : '—'),
+  ].join('') : '<div class="muted">判定対象外（無効/価格未取得）</div>');
+  const buyStatus = ev && ev.reached
+    ? '<span class="tag" style="background:var(--green);color:#fff">買い増しOK（トリガー到達）</span>'
+    : ev ? '<span class="tag">様子見（未到達）</span>' : '';
+  // 保有
+  const hs = store.data.holdings.filter(h => h.securityId === sec.id);
+  const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}</span></div>`).join('') : '<div class="muted">保有なし</div>';
+  // 取引履歴
+  const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
+  const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
+  // ファンダ
+  const fund = [
+    kv('セクター / 業種', `${esc(calc.field(sec, 'sector') || '—')} / ${esc(calc.field(sec, 'industry') || '—')}`),
+    kv('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
+    kv('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
+    kv('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
+  ].join('');
+  // 評価・メタ
+  const evalBox = [
+    kv('銘柄格付', gradeTag(sec.rating)),
+    sec.starValuation != null ? kv('バリュエーション', starsFmt(sec.starValuation)) : '',
+    sec.starStrength != null ? kv('事業の強さ', starsFmt(sec.starStrength)) : '',
+    sec.starRisk != null ? kv('リスク', starsFmt(sec.starRisk)) : '',
+    kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
+    kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
+    sec.analysisNote ? kv('分析メモ', esc(sec.analysisNote)) : '',
+    kv('前回購入 / 購入回数', `${lb.price != null ? m(lb.price) + (lb.date ? `（${esc(lb.date)}）` : '') : '—'} / ${calc.buyCount(sec)}回`),
+  ].join('');
+  const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}`;
+  const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
+  // 取引入力フォーム（インライン）
+  const txnForm = `
+    <fieldset class="form-group"><legend>取引を記録</legend>
+    <form id="karte-txn-form">
+      <div class="row">
+        <div class="field"><label>種別</label><select name="type"><option value="buy">買い</option><option value="sell">売り</option></select></div>
+        <div class="field"><label>日付</label><input name="tradedAt" type="date" value="${today()}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>約定単価 (${ccy})</label><input name="price" type="number" step="any" required></div>
+        <div class="field"><label>数量（端株可）</label><input name="quantity" type="number" step="any" required></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>証券会社</label><select name="broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+        <div class="field"><label>口座種別</label><select name="accountType">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+      </div>
+      ${sec.market === 'US' ? `<div class="row"><div class="field"><label>受渡金額(円)（手数料・税込／取得円用・任意）</label><input name="settleJpy" type="number" step="any" placeholder="取引報告書の国内受渡金額"></div></div>` : ''}
+      <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0 2px;cursor:pointer">
+        <input name="ledgerOnly" type="checkbox" style="margin-top:3px">
+        <span>保有数量・平均取得単価に反映しない（過去の購入履歴の記録用）<br>
+          <span class="muted" style="font-size:12px">※ チェックすると保有・取得原価は変えず、前回購入日・購入回数・高値更新判定・取引サマリーには反映します。</span></span>
+      </label>
+      <div class="form-actions" style="justify-content:flex-start">
+        <button type="submit" class="btn btn-primary">${svgIcon('trade', '')} 記録</button>
+      </div>
+    </form></fieldset>`;
+
+  return `
+    <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:8px">
+      <div><div style="font-family:var(--serif);font-size:22px;font-weight:600">${esc(calc.displayName(sec))}</div><div style="margin-top:4px">${subHtml}</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${buyStatus}
+        <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">${svgIcon('external', '')} 詳細</button>
+        <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">${svgIcon('edit', '')} 銘柄編集</button>
+        <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有編集</button>
+      </div>
+    </div>
+    ${held ? `<div style="display:flex;gap:24px;align-items:flex-end;flex-wrap:wrap;margin:6px 0 4px">
+      <div><div class="muted" style="font-size:12px">評価額（円換算）</div><div class="num" style="font-family:var(--serif);font-size:26px;font-weight:600;line-height:1.15">${yen(valJpy)}</div></div>
+      <div style="padding-bottom:3px"><div class="muted" style="font-size:12px">評価損益</div><div class="num ${cls(pnlJpyV)}" style="font-size:17px;font-weight:700;white-space:nowrap">${yen(pnlJpyV)}${pnlPctN != null ? ` <span style="font-size:13px">（${signed(pnlPctN)}%）</span>` : ''}</div></div>
+    </div>` : `<div class="notice" style="margin-top:0">この銘柄は現在保有していません（ウォッチ対象）。</div>`}
+    <div class="kv" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+      <div class="cell"><div class="k">現在値</div><div class="v">${m(price)}</div></div>
+      <div class="cell"><div class="k">前日比</div><div class="v ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}</div></div>
+      <div class="cell"><div class="k">5年高値 / 52週高値</div><div class="v">${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}</div></div>
+      <div class="cell"><div class="k">1年安値 / 3年安値</div><div class="v">${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}</div></div>
+      <div class="cell"><div class="k">平均取得単価</div><div class="v">${held ? m(th.avgCost) : '—'}</div></div>
+      <div class="cell"><div class="k">保有数量</div><div class="v">${qtyDisp}</div></div>
+      <div class="cell"><div class="k">取得原価（円）</div><div class="v">${held ? yen(costJpyV) : '—'}</div></div>
+    </div>
+    <fieldset class="form-group"><legend>価格チャート（週足終値）</legend>
+      <div class="seg" id="chart-range-seg" style="margin:0 0 8px;width:fit-content">
+        <button data-r="1y" class="${detailChartRange === '1y' ? 'active' : ''}" onclick="setDetailChartRange('1y')">1年</button>
+        <button data-r="3y" class="${detailChartRange === '3y' ? 'active' : ''}" onclick="setDetailChartRange('3y')">3年</button>
+        <button data-r="5y" class="${detailChartRange === '5y' ? 'active' : ''}" onclick="setDetailChartRange('5y')">5年</button>
+      </div>
+      <div id="detail-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center;cursor:zoom-in" title="クリックで拡大" onclick="enlargeDetailChart()">読み込み中…</div>
+      <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入（買い増しライン） / 緑破線=現在値 / 橙破線=前回購入（クリックで拡大）</p>
+    </fieldset>
+    <div class="karte-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:0 16px">
+      ${sectionBox('買い増し判定', judge)}
+      ${sectionBox('保有（口座別）', holdRows)}
+      ${sectionBox('評価・分析', evalBox)}
+      ${sectionBox('ファンダ', fund)}
+      ${sectionBox('取引履歴', txnRows)}
+    </div>
+    ${txnForm}`;
+}
+
+function openTxnForm(secId, presetType, opts = {}) {
+  const { ledgerOnly: presetLedgerOnly = false, onDone = null } = opts;
   const sec = store.data.securities.find(s => s.id === secId);
   const ccy = MARKET_CCY[sec.market];
   showModal(`取引を記録 — ${esc(sec.name || sec.ticker)}`, `
@@ -4722,6 +5036,11 @@ function openTxnForm(secId, presetType) {
       </div>
       <p class="muted">受渡金額(円)を入れると「取得円」に反映（買い=加算・売り=減算）。取得円エクスポート用で、買い増し判定には未使用。</p>` : ''}
       <p class="muted">買い=数量加算＆平均取得単価を更新 / 売り=数量のみ減算（単価は不変）</p>
+      <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0 2px;cursor:pointer">
+        <input name="ledgerOnly" type="checkbox" ${presetLedgerOnly ? 'checked' : ''} style="margin-top:3px">
+        <span>保有数量・平均取得単価に反映しない（過去の購入履歴の記録用）<br>
+          <span class="muted" style="font-size:12px">※ チェックすると保有・取得原価は変えず、前回購入日・購入回数・高値更新判定・取引サマリーには反映します。</span></span>
+      </label>
       <div class="form-actions">
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="submit" class="btn btn-primary">記録</button>
@@ -4735,9 +5054,10 @@ function openTxnForm(secId, presetType) {
       securityId: secId, type: f.type.value,
       price: parseFloat(f.price.value), quantity: parseFloat(f.quantity.value),
       broker: f.broker.value, accountType: f.accountType.value, tradedAt: f.tradedAt.value,
+      ...(f.ledgerOnly && f.ledgerOnly.checked ? { ledgerOnly: true } : {}),
       ...(isNaN(settleJpy) ? {} : { settleJpy }),
     });
-    closeModal(); render();
+    closeModal(); if (typeof onDone === 'function') onDone(); else render();
   };
 }
 
