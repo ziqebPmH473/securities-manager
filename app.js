@@ -483,7 +483,7 @@ async function loadServerConfig() {
 // OAuthスコープ: Drive(アプリ作成ファイルのみ)＋本人確認。spreadsheets は廃止。
 const GSCOPE = 'https://www.googleapis.com/auth/drive.file openid email';
 const gsync = {
-  _token: null, _email: null, _scope: '', _refreshExpMs: 0,
+  _token: null, _email: null, _scope: '', _refreshExpMs: 0, _refreshing: null,
   hasDrive() { return !!(this._scope && this._scope.indexOf('drive.file') >= 0); },
   // === アクセストークンの永続化（リロードでログインを保つ） ===
   // GISの無音再取得(prompt:'')はサードパーティCookieブロックで失敗しやすいため、トークン自体を
@@ -558,8 +558,11 @@ const gsync = {
   // トークンは約1時間で失効するため、401時や同期前に呼んで「セッションが生きていれば無音で延長」する。
   // GIS未読込/clientId未設定/セッション無効なら false（その場合のみ手動再ログインが要る）。
   refresh() {
+    // 進行中の再取得があれば同じPromiseを共有する。起動時に restoreSession・dsync(_driveFetch/afterSignIn)
+    // など複数経路から同時に呼ばれると、各回 requestAccessToken でログイン画面が二重に開く不具合の対策。
+    if (this._refreshing) return this._refreshing;
     const cfg = this.cfg();
-    return new Promise((resolve) => {
+    this._refreshing = new Promise((resolve) => {
       if (!cfg.clientId || !(window.google && google.accounts && google.accounts.oauth2)) return resolve(false);
       try {
         const tc = google.accounts.oauth2.initTokenClient({
@@ -570,7 +573,8 @@ const gsync = {
         });
         tc.requestAccessToken({ prompt: '' });   // 無音更新（同意画面を出さない）
       } catch (_) { resolve(false); }
-    });
+    }).finally(() => { this._refreshing = null; });
+    return this._refreshing;
   },
   // リロード後のログイン復元: ①保存済みトークンが生きていれば無通信で即復帰（サードパーティCookie
   // 不要・これが主役）。②保存が無い/失効していれば、Googleの生きたセッションから無音再取得を試す
