@@ -1810,7 +1810,7 @@ const COL_RENDERERS = {
   // p.prevClose は日足の「最後から2番目」で前々日終値になりプレで1日ズレるため使わない。
   extPrice:  (s,c) => { const p = store.data.prices[priceKey(s)] || {}; if (p.extPrice == null) return `<td>${muted}</td>`; const lbl = p.extType === 'pre' ? 'プレ' : p.extType === 'post' ? 'アフター' : ''; const base = p.price != null ? p.price : p.prevClose; const d = (base && p.extPrice) ? (p.extPrice - base) / base * 100 : null; return `<td class="${d != null ? cls(d) : ''}">${fmtAmt(p.extPrice, c.market)}${d != null ? ` <span style="font-size:11px">${signed(d)}%</span>` : ''} <span class="muted" style="font-size:10px">${lbl}</span></td>`; },
   // 前日比: 株探チャートへの外部リンク。条件付き背景・文字色(緑/赤)は維持。
-  day:       (s,c) => { const v = c.dayChg; const pm = c.dayIsPrev ? '<span class="muted" style="font-size:9px" title="寄り付き前のため前営業日の値動きを表示">前</span>' : ''; return `<td class="${cls(v)}"><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a>${pm}</td>`; },
+  day:       (s,c) => { const v = c.dayChg; return `<td class="${cls(v)}"><a href="${kabutanUrl(s)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a></td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
   // 適用区分: 次回購入・残り下落率がどのルール分岐で算出されたか（初=初回 / 増=買い増し / 高=高値更新 / 固=買増固定値 / —=判定外）
   trigBasis: (s,c) => {
@@ -2668,9 +2668,8 @@ function marketRow(sec, visibleCols, opts = {}) {
     noPriceMark: (price == null && th.qty > 0) ? ' <span class="muted" title="価格未取得・取得原価で表示">*</span>' : '',
     valN: calc.valueOrCostNative(sec),
     pnlPct: calc.pnlPctNative(sec),
-    // 前日比: 通常は現在値−前日終値。寄り付き前(現在値==前日終値で0%)は「前営業日の値動き」を表示（dayIsPrev）。
-    dayChg: (() => { if (price == null || !p.prevClose) return null; const live = (price - p.prevClose) / p.prevClose * 100; return (live === 0 && p.prevDayPct != null) ? p.prevDayPct : live; })(),
-    dayIsPrev: (price != null && p.prevClose && (price - p.prevClose) === 0 && p.prevDayPct != null),
+    // 前日比: 現在値−前日終値（常にライブ値）。寄り付き前や同値引けは 0% と表示する（旧「前」マーカーは廃止）。
+    dayChg: (price == null || !p.prevClose) ? null : (price - p.prevClose) / p.prevClose * 100,
     buyAmt: calc.buyAmount(sec),
     buyCnt: calc.buyCount(sec),
     recoAmt: store.categoryAmountFor(sec.category, market),
