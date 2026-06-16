@@ -319,6 +319,43 @@ const store = {
       if (h.quantity === 0) h.avgCost = 0;
     }
   },
+  // applyTransaction の逆操作（取引の削除・編集時に保有への影響を取り消す）。
+  // 買い=数量と取得原価を差し引き／売り=数量を戻す。ledgerOnly は買い回数のみ戻す。
+  reverseTransaction(t) {
+    if (t.ledgerOnly) {
+      if (t.type === 'buy') { const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) sec.buyCount = Math.max(0, sec.buyCount - 1); }
+      return;
+    }
+    const h = this.data.holdings.find(x => x.securityId === t.securityId && x.broker === t.broker && x.accountType === t.accountType);
+    if (!h) return;
+    if (t.type === 'buy') {
+      const totalCost = h.avgCost * h.quantity - t.price * t.quantity;
+      h.quantity = Math.max(0, h.quantity - t.quantity);
+      h.avgCost = h.quantity > 0 ? Math.max(0, totalCost) / h.quantity : 0;
+      if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) - t.settleJpy;
+      const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) sec.buyCount = Math.max(0, sec.buyCount - 1);
+    } else {
+      h.quantity += t.quantity;
+      if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) + t.settleJpy;
+    }
+  },
+  // 取引の削除（保有への影響を取り消してから除去）
+  removeTransaction(id) {
+    const t = this.data.transactions.find(x => x.id === id); if (!t) return;
+    this.reverseTransaction(t);
+    this.data.transactions = this.data.transactions.filter(x => x.id !== id);
+    this.save();
+  },
+  // 取引の編集（旧効果を取り消し→値を更新→新効果を適用）。patch は type/price/quantity/broker/accountType/tradedAt/settleJpy/ledgerOnly
+  updateTransaction(id, patch) {
+    const t = this.data.transactions.find(x => x.id === id); if (!t) return;
+    this.reverseTransaction(t);
+    // settleJpy/ledgerOnly は未指定なら消す（フォーム送信値で完全上書き）
+    delete t.settleJpy; delete t.ledgerOnly;
+    Object.assign(t, patch);
+    this.applyTransaction(t);
+    this.save();
+  },
 
   // rules
   rule(id) { return this.data.rules.find(r => r.id === id) || this.defaultRule(); },
@@ -4937,7 +4974,11 @@ function karteCardHtml(sec) {
   ].join('');
   // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
-  const txnBox = txns.length ? txns.map(t => row(`${esc(t.tradedAt || '—')} ${t.type === 'buy' ? '買' : t.type === 'sell' ? '売' : esc(t.type || '')}${t.ledgerOnly ? ' <span class="tag" title="保有に未反映">記録のみ</span>' : ''}`, `${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}`)).join('') : '<div class="muted" style="font-size:12.5px">取引履歴なし</div>';
+  const txnBox = txns.length ? txns.map(t => `<div class="kt-txn-row">
+      <span class="d">${esc(t.tradedAt || '—')} ${t.type === 'buy' ? '買' : t.type === 'sell' ? '売' : esc(t.type || '')}${t.ledgerOnly ? ' <span class="tag" title="保有に未反映">記録のみ</span>' : ''}</span>
+      <span class="q">${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span>
+      <span class="acts"><button class="kt-ico" title="編集" onclick="editTxn(${t.id})">${svgIcon('edit', '')}</button><button class="kt-ico" title="削除" onclick="delTxn(${t.id})">&times;</button></span>
+    </div>`).join('') : '<div class="muted" style="font-size:12.5px">取引履歴なし</div>';
 
   return `
     <div class="kt-head">
@@ -4990,54 +5031,84 @@ function karteCardHtml(sec) {
 }
 
 function openTxnForm(secId, presetType, opts = {}) {
-  const { ledgerOnly: presetLedgerOnly = false, onDone = null } = opts;
+  const { ledgerOnly: presetLedgerOnly = false, onDone = null, editTxn = null } = opts;
   const sec = store.data.securities.find(s => s.id === secId);
   const ccy = MARKET_CCY[sec.market];
-  showModal(`取引を記録 — ${esc(sec.name || sec.ticker)}`, `
+  const e = editTxn || {};
+  // 証券会社／口座の既定値: 編集時はその取引／新規時は実際の保有（数量が多いロット優先）に合わせる。
+  // ＝売りの既定が保有と食い違って「数量が減らない」のを防ぐ。
+  const hs = store.data.holdings.filter(h => h.securityId === secId);
+  const primary = hs.filter(h => h.quantity > 0).sort((a, b) => b.quantity - a.quantity)[0] || hs[0] || null;
+  const defBroker = editTxn ? e.broker : (primary ? primary.broker : (calc.lastBroker(sec) || BROKERS[0]));
+  const defAcct = editTxn ? e.accountType : (primary ? primary.accountType : ACCOUNTS[0]);
+  const typeSel = editTxn ? e.type : (presetType === 'sell' ? 'sell' : 'buy');
+  const ledgerChecked = editTxn ? !!e.ledgerOnly : presetLedgerOnly;
+  const brokerOpts = BROKERS.map(b => `<option ${b === defBroker ? 'selected' : ''}>${b}</option>`).join('');
+  const acctOpts = ACCOUNTS.map(a => `<option ${a === defAcct ? 'selected' : ''}>${a}</option>`).join('');
+  showModal(`${editTxn ? '取引を編集' : '取引を記録'} — ${esc(sec.name || sec.ticker)}`, `
     <form id="txn-form">
       <div class="row">
         <div class="field"><label>種別</label>
-          <select name="type"><option value="buy" ${presetType !== 'sell' ? 'selected' : ''}>買い</option><option value="sell" ${presetType === 'sell' ? 'selected' : ''}>売り</option></select></div>
-        <div class="field"><label>日付</label><input name="tradedAt" type="date" value="${today()}"></div>
+          <select name="type"><option value="buy" ${typeSel !== 'sell' ? 'selected' : ''}>買い</option><option value="sell" ${typeSel === 'sell' ? 'selected' : ''}>売り</option></select></div>
+        <div class="field"><label>日付</label><input name="tradedAt" type="date" value="${e.tradedAt || today()}"></div>
       </div>
       <div class="row">
-        <div class="field"><label>約定単価 (${ccy})</label><input name="price" type="number" step="any" required></div>
-        <div class="field"><label>数量（端株可）</label><input name="quantity" type="number" step="any" required></div>
+        <div class="field"><label>約定単価 (${ccy})</label><input name="price" type="number" step="any" value="${e.price ?? ''}" required></div>
+        <div class="field"><label>数量（端株可）</label><input name="quantity" type="number" step="any" value="${e.quantity ?? ''}" required></div>
       </div>
       <div class="row">
-        <div class="field"><label>証券会社</label><select name="broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
-        <div class="field"><label>口座種別</label><select name="accountType">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+        <div class="field"><label>証券会社</label><select name="broker">${brokerOpts}</select></div>
+        <div class="field"><label>口座種別</label><select name="accountType">${acctOpts}</select></div>
       </div>
       ${sec.market === 'US' ? `
       <div class="row">
         <div class="field"><label>受渡金額(円)（手数料・税込／取得円用・任意）</label>
-          <input name="settleJpy" type="number" step="any" placeholder="取引報告書の国内受渡金額"></div>
+          <input name="settleJpy" type="number" step="any" value="${e.settleJpy ?? ''}" placeholder="取引報告書の国内受渡金額"></div>
       </div>
       <p class="muted">受渡金額(円)を入れると「取得円」に反映（買い=加算・売り=減算）。取得円エクスポート用で、買い増し判定には未使用。</p>` : ''}
-      <p class="muted">買い=数量加算＆平均取得単価を更新 / 売り=数量のみ減算（単価は不変）</p>
-      <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0 2px;cursor:pointer">
-        <input name="ledgerOnly" type="checkbox" ${presetLedgerOnly ? 'checked' : ''} style="margin-top:3px">
+      <p class="muted">買い=数量加算＆平均取得単価を更新 / 売り=数量のみ減算（単価は不変）。証券会社・口座は保有ロットに合わせて選んでください。</p>
+      <label class="chk-row">
+        <input name="ledgerOnly" type="checkbox" ${ledgerChecked ? 'checked' : ''}>
         <span>保有数量・平均取得単価に反映しない（過去の購入履歴の記録用）<br>
           <span class="muted" style="font-size:12px">※ チェックすると保有・取得原価は変えず、前回購入日・購入回数・高値更新判定・取引サマリーには反映します。</span></span>
       </label>
       <div class="form-actions">
+        ${editTxn ? `<button type="button" class="btn btn-danger" id="txn-del" style="margin-right:auto">削除</button>` : ''}
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
-        <button type="submit" class="btn btn-primary">記録</button>
+        <button type="submit" class="btn btn-primary">${editTxn ? '更新' : '記録'}</button>
       </div>
     </form>`);
-  document.getElementById('txn-form').onsubmit = (e) => {
-    e.preventDefault();
-    const f = e.target;
+  const done = () => { closeModal(); if (typeof onDone === 'function') onDone(); else render(); };
+  document.getElementById('txn-form').onsubmit = (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
     const settleJpy = f.settleJpy ? parseFloat(f.settleJpy.value) : NaN;
-    store.addTransaction({
+    const data = {
       securityId: secId, type: f.type.value,
       price: parseFloat(f.price.value), quantity: parseFloat(f.quantity.value),
       broker: f.broker.value, accountType: f.accountType.value, tradedAt: f.tradedAt.value,
       ...(f.ledgerOnly && f.ledgerOnly.checked ? { ledgerOnly: true } : {}),
       ...(isNaN(settleJpy) ? {} : { settleJpy }),
-    });
-    closeModal(); if (typeof onDone === 'function') onDone(); else render();
+    };
+    if (editTxn) { store.updateTransaction(editTxn.id, data); toast('取引を更新しました'); }
+    else store.addTransaction(data);
+    done();
   };
+  if (editTxn) {
+    const del = document.getElementById('txn-del');
+    if (del) del.onclick = () => { if (confirm('この取引を削除します。保有数量・平均取得単価も取り消されます。よろしいですか？')) { store.removeTransaction(editTxn.id); toast('取引を削除しました'); done(); } };
+  }
+}
+// 取引履歴の編集・削除（銘柄カルテの履歴行から）
+function editTxn(id) {
+  const t = store.data.transactions.find(x => x.id === id); if (!t) return;
+  openTxnForm(t.securityId, t.type, { editTxn: t, onDone: () => { if (currentView === 'trade') renderTradeEntry(); else render(); } });
+}
+function delTxn(id) {
+  const t = store.data.transactions.find(x => x.id === id); if (!t) return;
+  if (!confirm('この取引を削除します。保有数量・平均取得単価も取り消されます。よろしいですか？')) return;
+  store.removeTransaction(id); toast('取引を削除しました');
+  if (currentView === 'trade') renderTradeEntry(); else render();
 }
 
 function openPriceInput(secId) {

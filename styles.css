@@ -770,6 +770,21 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-scroll { max-height: 150px; overflow-y: auto; }
 .kt-scroll > h3 { position: sticky; top: 0; background: var(--panel); padding-bottom: var(--sp-1); z-index: 1; }
 
+/* 取引履歴の行（編集・削除つき） */
+.kt-txn-row { display: flex; align-items: center; gap: 8px; font-size: var(--fs-body); padding: var(--sp-1) 0; }
+.kt-txn-row + .kt-txn-row { border-top: 1px solid var(--hair); }
+.kt-txn-row .d { color: var(--muted); white-space: nowrap; }
+.kt-txn-row .q { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.kt-txn-row .acts { display: flex; gap: 2px; flex: none; }
+.kt-ico { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; }
+.kt-ico:hover { background: var(--bg); color: var(--text); border-color: var(--border-strong); }
+.kt-ico .ico { width: 13px; height: 13px; }
+
+/* チェックボックス行（form input{width:100%} でチェックボックスが伸びるのを防ぐ） */
+.chk-row { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0 2px; cursor: pointer; }
+.chk-row input[type="checkbox"] { width: auto; flex: none; margin: 2px 0 0; }
+.chk-row > span { font-size: 13px; color: var(--text); line-height: 1.45; }
+
 /* モーダル */
 .modal-overlay { position: fixed; inset: 0; background: rgba(15,24,40,.5); display: grid; place-items: center; z-index: 100; padding: 18px; }
 .modal { background: var(--panel); border-radius: 14px; width: 100%; max-width: 540px; max-height: 90vh; overflow: auto; box-shadow: var(--shadow-lg); }
