@@ -4830,13 +4830,11 @@ function renderTradeEntry() {
   const mktOpts = [['JP', '日本株'], ['US', '米国株']]
     .map(([v, l]) => `<option value="${v}" ${karteMarket === v ? 'selected' : ''}>${l}</option>`).join('');
   const searchBar = `
-    <div class="page-intro"><h2>銘柄カルテ</h2>
-      <p>市場と証券コード（ティッカー）を入れて「表示」。保有・指標・チャート・買い増し判定・取引履歴を1画面で確認し、取引の記録や編集ができます。</p></div>
-    <div class="row" style="align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-      <div class="field" style="max-width:150px"><label>市場</label><select id="karte-market">${mktOpts}</select></div>
-      <div class="field" style="max-width:200px"><label>証券コード / ティッカー</label>
-        <input id="karte-code" type="text" value="${esc(karteCode)}" placeholder="例: 7203 / AAPL" autocomplete="off"></div>
-      <div class="field" style="flex:0 0 auto"><button class="btn btn-primary" onclick="karteLookup()">${svgIcon('search', '')} 表示</button></div>
+    <div class="kt-search">
+      <div class="field"><label>市場</label><select id="karte-market">${mktOpts}</select></div>
+      <div class="field"><label>コード / ティッカー</label>
+        <input id="karte-code" class="kt-code" type="text" value="${esc(karteCode)}" placeholder="例: 7203 / AAPL" autocomplete="off"></div>
+      <div class="field"><button class="btn btn-primary btn-sm" onclick="karteLookup()">${svgIcon('search', '')} 表示</button></div>
     </div>`;
 
   let body;
@@ -4888,7 +4886,6 @@ function karteCardHtml(sec) {
   const price = calc.price(sec);
   const rule = store.rule(sec.ruleId);
   const lb = calc.lastBuyInfo(sec);
-  const kv = (l, v) => `<div class="ai-row"><span class="muted">${l}</span><span>${v}</span></div>`;
   const held = th.qty > 0;
   const valJpy = calc.toJpy(sec.market, calc.valueOrCostNative(sec));
   const costJpyV = calc.toJpy(sec.market, calc.costNative(sec));
@@ -4901,113 +4898,122 @@ function karteCardHtml(sec) {
   const starsFmt = n => n == null ? '<span class="muted">—</span>' : `<span style="color:var(--brass);letter-spacing:1px">${'★'.repeat(n)}<span style="color:var(--border-strong)">${'☆'.repeat(Math.max(0, 5 - n))}</span></span>`;
   // 判定
   const bhMode = (sec.baseHighMode || (rule && rule.baseHighMode) || '5y');
-  const ruleInfo = rule ? kv('適用ルール', `${esc(rule.name)}<br><span class="muted">初回 −${rule.initialDropPct}% ／ 買い増し −${rule.addonDropPct}% ／ 基準高値 ${esc(BASE_HIGH_LABEL[bhMode] || bhMode)}</span>`) : '';
   const typeLabel = ev ? (ev.baseSource === '固定' ? '買い増し（買増固定値）'
     : ev.baseSource === '高値更新' ? '買い増し（高値更新→初回ルールで判定）'
     : ev.type === 'initial' ? '初回購入' : '買い増し') : '';
-  const judge = ruleInfo + (ev ? [
-    kv('種別', typeLabel),
-    kv('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
-    kv('次回購入（買い増しライン）', (ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.trigger)),
-    kv('現在値', m(price)),
-    kv('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%</span>` + (ev.reached ? '（到達）' : '') : '—'),
-  ].join('') : '<div class="muted">判定対象外（無効/価格未取得）</div>');
   const buyStatus = ev && ev.reached
-    ? '<span class="tag" style="background:var(--green);color:#fff">買い増しOK（トリガー到達）</span>'
-    : ev ? '<span class="tag">様子見（未到達）</span>' : '';
-  // 保有
+    ? '<span class="tag" style="background:var(--green);color:#fff">買い増しOK</span>'
+    : ev ? '<span class="tag">様子見</span>' : '';
+  const row = (k, v, cls2) => `<div class="kt-row${cls2 ? ' ' + cls2 : ''}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  const mcell = (k, v) => `<div class="cell"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  // 買い増し判定ボックス
+  const judgeBox = ev ? [
+    row('種別', typeLabel),
+    row('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
+    row('買い増しライン', (ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.trigger), 'kt-hl'),
+    row('現在値', m(price)),
+    row('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%${ev.reached ? ' 到達' : ''}</span>` : '—'),
+    rule ? row('適用ルール', `${esc(rule.name)} <span class="muted">(−${rule.initialDropPct}/−${rule.addonDropPct}%・${esc(BASE_HIGH_LABEL[bhMode] || bhMode)})</span>`) : '',
+  ].join('') : '<div class="muted" style="font-size:12.5px">判定対象外（無効/価格未取得）</div>';
+  // 保有ボックス
   const hs = store.data.holdings.filter(h => h.securityId === sec.id);
-  const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}</span></div>`).join('') : '<div class="muted">保有なし</div>';
-  // 取引履歴
+  const holdAccRows = hs.length ? hs.map(h => row(`${esc(h.broker || '—')}/${esc(h.accountType || '—')}`, `${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}`)).join('') : '';
+  const holdBox = [
+    row('平均取得単価', held ? m(th.avgCost) : '—'),
+    row('保有数量', qtyDisp),
+    row('評価額(円)', held ? yen(valJpy) : '—'),
+    row('取得原価(円)', held ? yen(costJpyV) : '—'),
+    row('評価損益', held && pnlJpyV != null ? `<span class="${cls(pnlJpyV)}">${yen(pnlJpyV)}${pnlPctN != null ? `（${signed(pnlPctN)}%）` : ''}</span>` : '—'),
+    holdAccRows,
+  ].join('');
+  // 評価・分析ボックス
+  const analysisBox = [
+    row('銘柄格付', gradeTag(sec.rating)),
+    sec.starValuation != null ? row('バリュエーション', starsFmt(sec.starValuation)) : '',
+    sec.starStrength != null ? row('事業の強さ', starsFmt(sec.starStrength)) : '',
+    sec.starRisk != null ? row('リスク', starsFmt(sec.starRisk)) : '',
+    row('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
+    row('優先順位/評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
+    row('前回購入/購入回数', `${lb.price != null ? m(lb.price) + (lb.date ? `(${esc(lb.date)})` : '') : '—'} / ${calc.buyCount(sec)}回`),
+    sec.analysisNote ? row('分析メモ', esc(sec.analysisNote)) : '',
+  ].join('');
+  // ファンダボックス
+  const fundBox = [
+    row('セクター/業種', `${esc(calc.field(sec, 'sector') || '—')} / ${esc(calc.field(sec, 'industry') || '—')}`),
+    row('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
+    row('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
+    row('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
+  ].join('');
+  // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
-  const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
-  // ファンダ
-  const fund = [
-    kv('セクター / 業種', `${esc(calc.field(sec, 'sector') || '—')} / ${esc(calc.field(sec, 'industry') || '—')}`),
-    kv('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
-    kv('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
-    kv('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
-  ].join('');
-  // 評価・メタ
-  const evalBox = [
-    kv('銘柄格付', gradeTag(sec.rating)),
-    sec.starValuation != null ? kv('バリュエーション', starsFmt(sec.starValuation)) : '',
-    sec.starStrength != null ? kv('事業の強さ', starsFmt(sec.starStrength)) : '',
-    sec.starRisk != null ? kv('リスク', starsFmt(sec.starRisk)) : '',
-    kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
-    kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
-    sec.analysisNote ? kv('分析メモ', esc(sec.analysisNote)) : '',
-    kv('前回購入 / 購入回数', `${lb.price != null ? m(lb.price) + (lb.date ? `（${esc(lb.date)}）` : '') : '—'} / ${calc.buyCount(sec)}回`),
-  ].join('');
-  const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}`;
-  const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
-  // 取引入力フォーム（インライン）
+  const txnBox = txns.length ? txns.map(t => row(`${esc(t.tradedAt || '—')} ${t.type === 'buy' ? '買' : t.type === 'sell' ? '売' : esc(t.type || '')}${t.ledgerOnly ? ' <span class="tag" title="保有に未反映">記録のみ</span>' : ''}`, `${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}`)).join('') : '<div class="muted" style="font-size:12.5px">取引履歴なし</div>';
+  // 取引入力フォーム（コンパクト・インライン）
   const txnForm = `
-    <fieldset class="form-group"><legend>取引を記録</legend>
-    <form id="karte-txn-form">
-      <div class="row">
+    <form id="karte-txn-form" class="kt-txn">
+      <div class="kt-txn-grid">
         <div class="field"><label>種別</label><select name="type"><option value="buy">買い</option><option value="sell">売り</option></select></div>
         <div class="field"><label>日付</label><input name="tradedAt" type="date" value="${today()}"></div>
-      </div>
-      <div class="row">
-        <div class="field"><label>約定単価 (${ccy})</label><input name="price" type="number" step="any" required></div>
-        <div class="field"><label>数量（端株可）</label><input name="quantity" type="number" step="any" required></div>
-      </div>
-      <div class="row">
+        <div class="field"><label>単価(${ccy})</label><input name="price" type="number" step="any" required></div>
+        <div class="field"><label>数量</label><input name="quantity" type="number" step="any" required></div>
         <div class="field"><label>証券会社</label><select name="broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
-        <div class="field"><label>口座種別</label><select name="accountType">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+        <div class="field"><label>口座</label><select name="accountType">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+        ${sec.market === 'US' ? `<div class="field"><label>受渡金額(円)</label><input name="settleJpy" type="number" step="any" placeholder="任意"></div>` : ''}
       </div>
-      ${sec.market === 'US' ? `<div class="row"><div class="field"><label>受渡金額(円)（手数料・税込／取得円用・任意）</label><input name="settleJpy" type="number" step="any" placeholder="取引報告書の国内受渡金額"></div></div>` : ''}
-      <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0 2px;cursor:pointer">
-        <input name="ledgerOnly" type="checkbox" style="margin-top:3px">
-        <span>保有数量・平均取得単価に反映しない（過去の購入履歴の記録用）<br>
-          <span class="muted" style="font-size:12px">※ チェックすると保有・取得原価は変えず、前回購入日・購入回数・高値更新判定・取引サマリーには反映します。</span></span>
-      </label>
-      <div class="form-actions" style="justify-content:flex-start">
-        <button type="submit" class="btn btn-primary">${svgIcon('trade', '')} 記録</button>
+      <div class="kt-txn-foot">
+        <label class="chk-row"><input name="ledgerOnly" type="checkbox"> <span>保有数量・平均取得単価に反映しない（過去履歴の記録用 ※前回購入日・購入回数・判定には反映）</span></label>
+        <button type="submit" class="btn btn-primary btn-sm">${svgIcon('trade', '')} 記録</button>
       </div>
-    </form></fieldset>`;
+    </form>`;
 
   return `
-    <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:8px">
-      <div><div style="font-family:var(--serif);font-size:22px;font-weight:600">${esc(calc.displayName(sec))}</div><div style="margin-top:4px">${subHtml}</div></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${buyStatus}
+    <div class="kt-head">
+      <div class="kt-id">
+        <div class="kt-name">${esc(calc.displayName(sec))}</div>
+        <div class="kt-sub"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}${buyStatus}</div>
+      </div>
+      <div class="kt-price-block">
+        <div class="kt-price">${m(price)}</div>
+        <div class="kt-chg ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></div>
+      </div>
+      <div class="kt-actions">
         <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">${svgIcon('external', '')} 詳細</button>
-        <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">${svgIcon('edit', '')} 銘柄編集</button>
-        <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有編集</button>
+        <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">${svgIcon('edit', '')} 編集</button>
+        <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
       </div>
     </div>
-    ${held ? `<div style="display:flex;gap:24px;align-items:flex-end;flex-wrap:wrap;margin:6px 0 4px">
-      <div><div class="muted" style="font-size:12px">評価額（円換算）</div><div class="num" style="font-family:var(--serif);font-size:26px;font-weight:600;line-height:1.15">${yen(valJpy)}</div></div>
-      <div style="padding-bottom:3px"><div class="muted" style="font-size:12px">評価損益</div><div class="num ${cls(pnlJpyV)}" style="font-size:17px;font-weight:700;white-space:nowrap">${yen(pnlJpyV)}${pnlPctN != null ? ` <span style="font-size:13px">（${signed(pnlPctN)}%）</span>` : ''}</div></div>
-    </div>` : `<div class="notice" style="margin-top:0">この銘柄は現在保有していません（ウォッチ対象）。</div>`}
-    <div class="kv" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
-      <div class="cell"><div class="k">現在値</div><div class="v">${m(price)}</div></div>
-      <div class="cell"><div class="k">前日比</div><div class="v ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}</div></div>
-      <div class="cell"><div class="k">5年高値 / 52週高値</div><div class="v">${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}</div></div>
-      <div class="cell"><div class="k">1年安値 / 3年安値</div><div class="v">${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}</div></div>
-      <div class="cell"><div class="k">平均取得単価</div><div class="v">${held ? m(th.avgCost) : '—'}</div></div>
-      <div class="cell"><div class="k">保有数量</div><div class="v">${qtyDisp}</div></div>
-      <div class="cell"><div class="k">取得原価（円）</div><div class="v">${held ? yen(costJpyV) : '—'}</div></div>
+    <div class="kt-metrics">
+      ${mcell('5年高値', m(calc.high5y(sec)))}
+      ${mcell('52週高値', m(calc.high52w(sec)))}
+      ${mcell('1年安値', m(calc.low1y(sec)))}
+      ${mcell('3年安値', m(calc.low3y(sec)))}
+      ${mcell('PER', calc.per(sec) != null ? num(calc.per(sec)) : '—')}
+      ${mcell('配当利回り', calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—')}
+      ${mcell('時価総額', calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—')}
+      ${mcell('購入回数', calc.buyCount(sec) + '回')}
     </div>
-    <fieldset class="form-group"><legend>価格チャート（週足終値）</legend>
-      <div class="seg" id="chart-range-seg" style="margin:0 0 8px;width:fit-content">
-        <button data-r="1y" class="${detailChartRange === '1y' ? 'active' : ''}" onclick="setDetailChartRange('1y')">1年</button>
-        <button data-r="3y" class="${detailChartRange === '3y' ? 'active' : ''}" onclick="setDetailChartRange('3y')">3年</button>
-        <button data-r="5y" class="${detailChartRange === '5y' ? 'active' : ''}" onclick="setDetailChartRange('5y')">5年</button>
+    <div class="kt-main">
+      <div class="kt-box">
+        <div class="kt-box-head"><h3>価格チャート（週足終値）</h3>
+          <div class="seg" id="chart-range-seg">
+            <button data-r="1y" class="${detailChartRange === '1y' ? 'active' : ''}" onclick="setDetailChartRange('1y')">1年</button>
+            <button data-r="3y" class="${detailChartRange === '3y' ? 'active' : ''}" onclick="setDetailChartRange('3y')">3年</button>
+            <button data-r="5y" class="${detailChartRange === '5y' ? 'active' : ''}" onclick="setDetailChartRange('5y')">5年</button>
+          </div>
+        </div>
+        <div id="detail-chart" class="kt-chart muted" title="クリックで拡大" onclick="enlargeDetailChart()">読み込み中…</div>
+        <p class="muted kt-chart-legend">青=終値 / 赤破線=買い増しライン / 緑破線=現在値 / 橙破線=前回購入（クリックで拡大）</p>
       </div>
-      <div id="detail-chart" class="muted" style="min-height:160px;display:flex;align-items:center;justify-content:center;cursor:zoom-in" title="クリックで拡大" onclick="enlargeDetailChart()">読み込み中…</div>
-      <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入（買い増しライン） / 緑破線=現在値 / 橙破線=前回購入（クリックで拡大）</p>
-    </fieldset>
-    <div class="karte-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:0 16px">
-      ${sectionBox('買い増し判定', judge)}
-      ${sectionBox('保有（口座別）', holdRows)}
-      ${sectionBox('評価・分析', evalBox)}
-      ${sectionBox('ファンダ', fund)}
-      ${sectionBox('取引履歴', txnRows)}
+      <div class="kt-col">
+        <div class="kt-box"><h3>買い増し判定</h3>${judgeBox}</div>
+        <div class="kt-box"><h3>保有</h3>${holdBox}</div>
+      </div>
     </div>
-    ${txnForm}`;
+    <div class="kt-tables">
+      <div class="kt-box"><h3>評価・分析</h3>${analysisBox}</div>
+      <div class="kt-box"><h3>ファンダ</h3>${fundBox}</div>
+      <div class="kt-box kt-scroll"><h3>取引履歴</h3>${txnBox}</div>
+    </div>
+    <div class="kt-box"><h3>取引を記録</h3>${txnForm}</div>`;
 }
 
 function openTxnForm(secId, presetType, opts = {}) {
