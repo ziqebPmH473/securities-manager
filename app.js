@@ -4846,7 +4846,7 @@ function renderTradeEntry() {
   } else {
     body = karteCardHtml(sec);
   }
-  app.innerHTML = searchBar + body;
+  app.innerHTML = `<div class="kt">${searchBar}${body}</div>`;
 
   // Enter キーで表示
   const inp = document.getElementById('karte-code');
