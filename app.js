@@ -1244,7 +1244,10 @@ const api = {
         const prev = store.data.prices[priceKey(sec)] || {}; // 高値は通常更新では返らない→既存値を保持
         store.data.prices[priceKey(sec)] = {
           ...prev,
-          price: q.price, prevClose: q.prevClose,
+          price: q.price,
+          // 前日終値: 通常ティックの米株(Finnhub)は prevClose=null（pc が一部ETFで不正確なため返さない）。
+          // その場合は日次 Yahoo 取得で確定済みの既存値を保持する（high5y 等と同じ扱い）。日本株/指数(Yahoo)は毎回返る。
+          prevClose: q.prevClose != null ? q.prevClose : (prev.prevClose ?? null),
           prevDayPct: q.prevDayPct != null ? q.prevDayPct : (prev.prevDayPct ?? null), // 前営業日の値動き%（寄り付き前表示用）
           high5y: q.high5y != null ? q.high5y : (prev.high5y ?? null),
           high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),

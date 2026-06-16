@@ -82,8 +82,14 @@ async function fetchFinnhub(symbol, token, withHighs) {
     } catch (_) { /* 失敗時は高値なし（クライアントが既存値を保持） */ }
   }
 
+  // 前日終値: Finnhub の pc は一部銘柄（3倍レバETF SOXL、特殊ETF SPCX 等）で「前々日終値」を返す等、
+  // 信頼できない（前日比が2日前比較になる不具合）。そこで pc は使わず、Yahoo 日足の営業日ギャップ考慮ロジック
+  // (fetchYahooChart の prevClose) を唯一の正とする。
+  //  - withHighs（日次取得）・フォールバックで Yahoo を引いた時のみ prevClose を確定して返す
+  //  - 通常ティックでは null を返し、クライアントが直近の Yahoo 由来 prevClose を保持する（high5y 等と同じ扱い）
   // 価格: Finnhub が値を返さない銘柄（例: LDOS で c=0/null）は Yahoo にフォールバック（1呼び出し）
-  let price = num(q.c), prevClose = num(q.pc), source = 'finnhub';
+  let price = num(q.c), source = 'finnhub';
+  let prevClose = (yq && yq.prevClose != null) ? yq.prevClose : null;
   if (price == null || price === 0) {
     if (yq && yq.price != null) { price = yq.price; prevClose = yq.prevClose ?? prevClose; source = 'yahoo(fallback)'; }
     else {
@@ -198,9 +204,18 @@ async function fetchYahooChart(symbol, range, interval) {
     const d = dayOf(ts[i]);
     if (curDay == null || d == null || d < curDay) { prevCloseArr = closeArr[i]; break; }
   }
-  const prevClose = prevCloseArr != null
-    ? prevCloseArr
-    : num(meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose);
+  // 直前営業日の日足が null のケース対策（Yahoo のデータ遅延で頻発。SOXL/SPCX/^N225 等で実際に発生）。
+  // 上の「配列を遡って最後の有効終値」だけだと、直前営業日が null だと2営業日前を拾い前日比が「2日前比較」になる。
+  // 日足配列は連続する営業日のみ（土日祝は不在）なので、当日足の1つ前のスロットが null＝直前営業日の終値が欠損。
+  // その時は Yahoo 公式の前日終値 meta.regularMarketPreviousClose（1営業日前を正しく指す）を採用する。
+  // 正常時（直前営業日の足あり）は従来どおり配列値を使い、挙動を変えない（回帰防止）。
+  let idxCur = ts.length - 1;
+  for (let i = ts.length - 1; i >= 0; i--) { if (dayOf(ts[i]) === curDay) { idxCur = i; break; } }
+  const prevSlotNull = idxCur > 0 && typeof closeArr[idxCur - 1] !== 'number';
+  const metaPrev = num(meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose);
+  const prevClose = (prevSlotNull && metaPrev != null)
+    ? metaPrev
+    : (prevCloseArr != null ? prevCloseArr : metaPrev);
 
   // 52週高値（直近52週の最大値）。高値が付いた日付も記録（高値更新判定で「前回購入後に高値更新したか」を見るため）
   const now = Date.now() / 1000;
