@@ -4853,24 +4853,7 @@ function renderTradeEntry() {
   if (inp) inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); karteLookup(); } };
 
   if (sec) {
-    // 取引入力フォームの送信配線
-    const form = document.getElementById('karte-txn-form');
-    if (form) form.onsubmit = (e) => {
-      e.preventDefault();
-      const f = e.target;
-      const settleJpy = f.settleJpy ? parseFloat(f.settleJpy.value) : NaN;
-      if (isNaN(parseFloat(f.price.value)) || isNaN(parseFloat(f.quantity.value))) { toast('約定単価と数量を入力してください'); return; }
-      store.addTransaction({
-        securityId: sec.id, type: f.type.value,
-        price: parseFloat(f.price.value), quantity: parseFloat(f.quantity.value),
-        broker: f.broker.value, accountType: f.accountType.value, tradedAt: f.tradedAt.value,
-        ...(f.ledgerOnly && f.ledgerOnly.checked ? { ledgerOnly: true } : {}),
-        ...(isNaN(settleJpy) ? {} : { settleJpy }),
-      });
-      toast('取引を記録しました');
-      renderTradeEntry(); // 同じ画面を再描画して即反映
-    };
-    // チャート描画（詳細ドロワーと同じ仕組みを流用）
+    // チャート描画（詳細ドロワーと同じ仕組みを流用）。取引記録は上部ボタン→openTxnForm（onDoneで再描画）
     const ev = calc.evaluate(sec), price = calc.price(sec), lb = calc.lastBuyInfo(sec);
     _detailChartCtx = { sec, ev, price, lb };
     loadDetailChart(sec, ev, price, lb, detailChartRange);
@@ -4924,6 +4907,8 @@ function karteCardHtml(sec) {
     row('評価額(円)', held ? yen(valJpy) : '—'),
     row('取得原価(円)', held ? yen(costJpyV) : '—'),
     row('評価損益', held && pnlJpyV != null ? `<span class="${cls(pnlJpyV)}">${yen(pnlJpyV)}${pnlPctN != null ? `（${signed(pnlPctN)}%）` : ''}</span>` : '—'),
+    row('前回購入', lb.price != null ? m(lb.price) + (lb.date ? ` <span class="muted">(${esc(lb.date)})</span>` : '') : '—'),
+    row('購入回数', `${calc.buyCount(sec)}回`),
     holdAccRows,
   ].join('');
   // 評価・分析ボックス
@@ -4934,7 +4919,6 @@ function karteCardHtml(sec) {
     sec.starRisk != null ? row('リスク', starsFmt(sec.starRisk)) : '',
     row('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
     row('優先順位/評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
-    row('前回購入/購入回数', `${lb.price != null ? m(lb.price) + (lb.date ? `(${esc(lb.date)})` : '') : '—'} / ${calc.buyCount(sec)}回`),
     sec.analysisNote ? row('分析メモ', esc(sec.analysisNote)) : '',
   ].join('');
   // ファンダボックス
@@ -4947,23 +4931,6 @@ function karteCardHtml(sec) {
   // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
   const txnBox = txns.length ? txns.map(t => row(`${esc(t.tradedAt || '—')} ${t.type === 'buy' ? '買' : t.type === 'sell' ? '売' : esc(t.type || '')}${t.ledgerOnly ? ' <span class="tag" title="保有に未反映">記録のみ</span>' : ''}`, `${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}`)).join('') : '<div class="muted" style="font-size:12.5px">取引履歴なし</div>';
-  // 取引入力フォーム（コンパクト・インライン）
-  const txnForm = `
-    <form id="karte-txn-form" class="kt-txn">
-      <div class="kt-txn-grid">
-        <div class="field"><label>種別</label><select name="type"><option value="buy">買い</option><option value="sell">売り</option></select></div>
-        <div class="field"><label>日付</label><input name="tradedAt" type="date" value="${today()}"></div>
-        <div class="field"><label>単価(${ccy})</label><input name="price" type="number" step="any" required></div>
-        <div class="field"><label>数量</label><input name="quantity" type="number" step="any" required></div>
-        <div class="field"><label>証券会社</label><select name="broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
-        <div class="field"><label>口座</label><select name="accountType">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
-        ${sec.market === 'US' ? `<div class="field"><label>受渡金額(円)</label><input name="settleJpy" type="number" step="any" placeholder="任意"></div>` : ''}
-      </div>
-      <div class="kt-txn-foot">
-        <label class="chk-row"><input name="ledgerOnly" type="checkbox"> <span>保有数量・平均取得単価に反映しない（過去履歴の記録用 ※前回購入日・購入回数・判定には反映）</span></label>
-        <button type="submit" class="btn btn-primary btn-sm">${svgIcon('trade', '')} 記録</button>
-      </div>
-    </form>`;
 
   return `
     <div class="kt-head">
@@ -4976,6 +4943,7 @@ function karteCardHtml(sec) {
         <div class="kt-chg ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></div>
       </div>
       <div class="kt-actions">
+        <button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id}, undefined, { onDone: renderTradeEntry })">${svgIcon('trade', '')} 取引を記録</button>
         <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">${svgIcon('external', '')} 詳細</button>
         <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">${svgIcon('edit', '')} 編集</button>
         <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
@@ -4989,7 +4957,6 @@ function karteCardHtml(sec) {
       ${mcell('PER', calc.per(sec) != null ? num(calc.per(sec)) : '—')}
       ${mcell('配当利回り', calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—')}
       ${mcell('時価総額', calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—')}
-      ${mcell('購入回数', calc.buyCount(sec) + '回')}
     </div>
     <div class="kt-main">
       <div class="kt-box">
@@ -5004,16 +4971,15 @@ function karteCardHtml(sec) {
         <p class="muted kt-chart-legend">青=終値 / 赤破線=買い増しライン / 緑破線=現在値 / 橙破線=前回購入（クリックで拡大）</p>
       </div>
       <div class="kt-col">
-        <div class="kt-box"><h3>買い増し判定</h3>${judgeBox}</div>
-        <div class="kt-box"><h3>保有</h3>${holdBox}</div>
+        <div class="kt-box"><h3>評価・分析</h3>${analysisBox}</div>
+        <div class="kt-box"><h3>ファンダ</h3>${fundBox}</div>
       </div>
     </div>
     <div class="kt-tables">
-      <div class="kt-box"><h3>評価・分析</h3>${analysisBox}</div>
-      <div class="kt-box"><h3>ファンダ</h3>${fundBox}</div>
+      <div class="kt-box"><h3>買い増し判定</h3>${judgeBox}</div>
+      <div class="kt-box"><h3>保有</h3>${holdBox}</div>
       <div class="kt-box kt-scroll"><h3>取引履歴</h3>${txnBox}</div>
-    </div>
-    <div class="kt-box"><h3>取引を記録</h3>${txnForm}</div>`;
+    </div>`;
 }
 
 function openTxnForm(secId, presetType, opts = {}) {
