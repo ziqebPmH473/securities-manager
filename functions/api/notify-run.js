@@ -46,7 +46,8 @@ export async function onRequestGet(context) {
     // 件名の日付は JST（UTC+9）の M/D
     const jst = new Date(Date.now() + 9 * 3600 * 1000);
     const dateLabel = `${jst.getUTCMonth() + 1}/${jst.getUTCDate()}`;
-    const email = buildSignalEmail(signals, dateLabel, MARKET_LABEL[market] || '');
+    const notifyCfg = (bundle.settings && bundle.settings.notify) || null;
+    const email = buildSignalEmail(signals, dateLabel, MARKET_LABEL[market] || '', notifyCfg, market);
 
     let sent = null, skipped = null;
     if (doSend) {

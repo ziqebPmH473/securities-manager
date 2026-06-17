@@ -3873,6 +3873,7 @@ const MASTER_LAUNCH = [
   { v: 'fund',     label: '投資信託 コードマスタ', open: () => openFundCodeMaster(), note: '取り込んだ投信のコード（協会コード）編集・名称取得・統合。' },
   { v: 'alias',    label: '取込変換マスタ',         open: () => openImportAliasMaster(), note: '取込時の「マスタに無い値」の変換対応（カテゴリ/格付/詳細種別/ルール）。' },
   { v: 'cf',       label: '列の背景色ルール',       open: () => openCfRulesMaster(),  note: '数値列の値の範囲ごとの背景色。適用画面（保有/サイン/マスタ/マーケット）を複数選択可。' },
+  { v: 'notify',   label: '通知メール設定',         open: () => openNotifyMaster(),   note: '買い増しサイン通知メールの件名・本文をテンプレート（差し込み記号）で自由に編集。日本株/米国株・到達/接近で別々に設定可。' },
 ];
 function openMasterPick() {
   const el = document.getElementById('master-pick'); if (!el) return;
@@ -3882,6 +3883,165 @@ function masterPickNote() {
   const el = document.getElementById('master-pick'); const m = el && MASTER_LAUNCH.find(x => x.v === el.value);
   const n = document.getElementById('master-pick-note'); if (n && m) n.textContent = m.note;
 }
+// ---------- 通知メール設定（テンプレート編集） ----------
+// ★サーバー側 functions/lib/notify.js と同一仕様の二重実装（ビルド無し構成のため）。
+//   プレースホルダの意味・既定文面を変える時は notify.js と必ずそろえること。
+const NOTIFY_DEFAULT_TPL = {
+  subject: '【{market}】{date} 購入基準価格通知',
+  reached: { header: '〇到達', line: '[{kind}] {ticker} {name}  現在値 {price}({dayChange}) 前回から{dropFromPrev} → 買増ライン {trigger} ／購入額 {buyAmount}', empty: '（なし）' },
+  near:    { header: '〇接近', line: '[{kind}] {ticker} {name}  現在値 {price}({dayChange}) 前回から{dropFromPrev} → 買増ライン {trigger} 残り {remaining} ／購入額 {buyAmount}', empty: '（なし）' },
+};
+const NOTIFY_PH_LINE = [
+  ['kind', '初回/買増'], ['ticker', '銘柄コード'], ['name', '銘柄名'], ['price', '現在値'], ['dayChange', '前日比'],
+  ['dropFromPrev', '前回から'], ['trigger', '買増ライン'], ['remaining', '残り下落%'], ['buyAmount', '購入額'], ['market', '市場'],
+];
+const NOTIFY_PH_SUBJECT = [
+  ['market', '市場名'], ['date', '日付'], ['reachedCount', '到達件数'], ['nearCount', '接近件数'], ['totalCount', '合計件数'],
+];
+
+let _notifyDraft = null;   // 編集中のコピー { JP:{subject,reached,near}, US:{...} }
+let _notifyMarket = 'JP';
+let _notifyFocusEl = null; // 直近フォーカスした textarea（差し込み挿入先）
+
+function notifyDraftFromStore() {
+  const src = (store.data.settings && store.data.settings.notify && store.data.settings.notify.byMarket) || {};
+  const mk = (m) => {
+    const o = src[m] || {};
+    const sec = (k) => ({ header: (o[k] && o[k].header) || '', line: (o[k] && o[k].line) || '', empty: (o[k] && o[k].empty) || '' });
+    return { subject: o.subject || '', reached: sec('reached'), near: sec('near') };
+  };
+  return { JP: mk('JP'), US: mk('US') };
+}
+function notifyResolveDraft(m) {
+  const o = _notifyDraft[m], d = NOTIFY_DEFAULT_TPL;
+  const sec = (k) => ({ header: o[k].header || d[k].header, line: o[k].line || d[k].line, empty: o[k].empty || d[k].empty });
+  return { subject: o.subject || d.subject, reached: sec('reached'), near: sec('near') };
+}
+function notifyApply(tpl, vars) { return String(tpl).replace(/\{(\w+)\}/g, (mm, k) => (k in vars ? String(vars[k] ?? '') : mm)); }
+function notifyVars(s) {
+  const sym = s.market === 'US' ? '$' : '¥';
+  const n = (v) => (v == null ? null : v.toLocaleString('en-US', { maximumFractionDigits: 2 }));
+  const cur = (v) => (v == null ? '—' : sym + n(v));
+  const spct = (v) => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%');
+  const dpct = (v) => (v == null ? '—' : v.toFixed(1) + '%');
+  return {
+    kind: s.type === 'initial' ? '初回' : '買増', ticker: s.ticker ?? '', name: s.name ?? '', market: s.market ?? '',
+    price: cur(s.price), priceRaw: n(s.price) ?? '—', dayChange: spct(s.dayChangePct), dropFromPrev: dpct(s.dropFromPrev),
+    trigger: cur(s.trigger), remaining: dpct(s.remainingDropPct), buyAmount: s.buyAmount == null ? '—' : sym + n(s.buyAmount),
+  };
+}
+function notifySample(market) {
+  const us = market === 'US';
+  return [
+    { reached: true, type: 'buy', ticker: us ? 'AAPL' : '7203', name: us ? 'アップル' : 'トヨタ自動車', market, price: us ? 188.4 : 2750, dayChangePct: -1.23, dropFromPrev: -5.2, trigger: us ? 185 : 2700, remainingDropPct: 0, buyAmount: us ? 500 : 50000 },
+    { reached: false, type: 'initial', ticker: us ? 'MSFT' : '6758', name: us ? 'マイクロソフト' : 'ソニーG', market, price: us ? 410 : 13200, dayChangePct: 0.45, dropFromPrev: -2.1, trigger: us ? 400 : 12800, remainingDropPct: 2.4, buyAmount: us ? 500 : 50000 },
+  ];
+}
+function notifyRenderPreview() {
+  const m = _notifyMarket, tpl = notifyResolveDraft(m), sig = notifySample(m);
+  const reached = sig.filter(s => s.reached), near = sig.filter(s => !s.reached);
+  const lines = (list, lt, et) => (list.length ? list.map(s => notifyApply(lt, notifyVars(s))).join('\n') : et);
+  const body = [tpl.reached.header, lines(reached, tpl.reached.line, tpl.reached.empty), '', tpl.near.header, lines(near, tpl.near.line, tpl.near.empty)].join('\n');
+  const ml = m === 'JP' ? '日本株' : '米国株';
+  const subject = notifyApply(tpl.subject, { market: ml, date: '6/18', reachedCount: reached.length, nearCount: near.length, totalCount: sig.length });
+  return { subject, body };
+}
+function notifyTa(id, name, val, ph, rows) {
+  return `<textarea id="${id}" name="${name}" rows="${rows || 2}" oninput="notifyEdit(this)" onfocus="_notifyFocusEl=this" placeholder="${esc(ph)}" style="width:100%;box-sizing:border-box;font:12px/1.6 ui-monospace,monospace;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel);resize:vertical">${esc(val)}</textarea>`;
+}
+function notifySectionHtml(key, d) {
+  return `
+    <div style="margin:0 0 6px"><label class="muted" style="font-size:11px">見出し</label>${notifyTa('nf_' + key + '_header', key + '.header', d[key].header, NOTIFY_DEFAULT_TPL[key].header, 1)}</div>
+    <div style="margin:0 0 6px"><label class="muted" style="font-size:11px">明細行（銘柄ごとに繰り返し）</label>${notifyTa('nf_' + key + '_line', key + '.line', d[key].line, NOTIFY_DEFAULT_TPL[key].line, 2)}</div>
+    <div style="margin:0 0 6px"><label class="muted" style="font-size:11px">該当なしの表示</label>${notifyTa('nf_' + key + '_empty', key + '.empty', d[key].empty, NOTIFY_DEFAULT_TPL[key].empty, 1)}</div>`;
+}
+function notifyBodyHtml() {
+  const m = _notifyMarket, d = _notifyDraft[m];
+  const chips = (arr) => arr.map(([k, l]) => `<button type="button" class="btn" style="padding:2px 8px;font-size:11px" onclick="notifyInsert('${k}')" title="${esc(l)}">{${k}}</button>`).join(' ');
+  const prev = notifyRenderPreview();
+  return `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <button class="btn ${m === 'JP' ? 'btn-primary' : ''}" onclick="notifySwitchMarket('JP')">日本株</button>
+      <button class="btn ${m === 'US' ? 'btn-primary' : ''}" onclick="notifySwitchMarket('US')">米国株</button>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="notifyCopyMarket()">${m === 'JP' ? '日本株→米国株へコピー' : '米国株→日本株へコピー'}</button>
+      <button class="btn" onclick="notifyResetMarket()">この市場を既定に戻す</button>
+    </div>
+    <p class="muted" style="margin:0 0 10px">空欄の項目は既定の文面が使われます。記号ボタンを押すと、直前に選んだ入力欄のカーソル位置に差し込み記号を挿入します。</p>
+
+    <div class="grp-label">件名</div>
+    ${notifyTa('nf_subject', 'subject', d.subject, NOTIFY_DEFAULT_TPL.subject, 2)}
+    <div style="margin:4px 0 14px;line-height:2">件名で使える記号: ${chips(NOTIFY_PH_SUBJECT)}</div>
+
+    <div class="grp-label">到達セクション</div>
+    ${notifySectionHtml('reached', d)}
+    <div class="grp-label" style="margin-top:12px">接近セクション</div>
+    ${notifySectionHtml('near', d)}
+    <div style="margin:6px 0 4px;line-height:2">明細行で使える記号: ${chips(NOTIFY_PH_LINE)}</div>
+    <div style="display:flex;gap:8px;margin:6px 0 0;flex-wrap:wrap">
+      <button class="btn" onclick="notifyCopySection('reached','near')">到達→接近へコピー</button>
+      <button class="btn" onclick="notifyCopySection('near','reached')">接近→到達へコピー</button>
+    </div>
+
+    <div class="grp-label" style="margin-top:16px">プレビュー（サンプルデータ）</div>
+    <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px">
+      <div style="font-weight:600;margin-bottom:6px">件名: <span id="notify-prev-subj">${esc(prev.subject)}</span></div>
+      <pre id="notify-prev-body" style="font:12px/1.7 ui-monospace,monospace;white-space:pre-wrap;margin:0">${esc(prev.body)}</pre>
+    </div>
+    <div class="form-actions" style="margin-top:16px">
+      <button class="btn" onclick="closeModal()">閉じる</button>
+      <button class="btn btn-primary" onclick="notifySave()">保存</button>
+    </div>`;
+}
+function notifyRender() { const b = document.getElementById('modal-body'); if (b) b.innerHTML = notifyBodyHtml(); }
+function notifyUpdatePreview() {
+  const prev = notifyRenderPreview();
+  const a = document.getElementById('notify-prev-subj'); if (a) a.textContent = prev.subject;
+  const c = document.getElementById('notify-prev-body'); if (c) c.textContent = prev.body;
+}
+function notifyEdit(el) {
+  const p = el.name.split('.'), d = _notifyDraft[_notifyMarket];
+  if (p.length === 1) d[p[0]] = el.value; else d[p[0]][p[1]] = el.value;
+  notifyUpdatePreview();
+}
+function notifyInsert(k) {
+  const el = _notifyFocusEl, tok = '{' + k + '}';
+  if (!el) { toast('先に入力欄を選んでください'); return; }
+  const s = el.selectionStart ?? el.value.length, e = el.selectionEnd ?? el.value.length;
+  el.value = el.value.slice(0, s) + tok + el.value.slice(e);
+  el.focus(); el.selectionStart = el.selectionEnd = s + tok.length;
+  notifyEdit(el);
+}
+function notifySwitchMarket(m) { _notifyMarket = m; _notifyFocusEl = null; notifyRender(); }
+function notifyCopyMarket() {
+  const from = _notifyMarket, to = from === 'JP' ? 'US' : 'JP';
+  _notifyDraft[to] = JSON.parse(JSON.stringify(_notifyDraft[from]));
+  toast((from === 'JP' ? '日本株' : '米国株') + 'の設定を' + (to === 'JP' ? '日本株' : '米国株') + 'へコピーしました');
+}
+function notifyCopySection(from, to) {
+  const d = _notifyDraft[_notifyMarket];
+  d[to] = JSON.parse(JSON.stringify(d[from]));
+  _notifyFocusEl = null; notifyRender();
+}
+function notifyResetMarket() {
+  _notifyDraft[_notifyMarket] = { subject: '', reached: { header: '', line: '', empty: '' }, near: { header: '', line: '', empty: '' } };
+  _notifyFocusEl = null; notifyRender();
+}
+function notifySave() {
+  store.data.settings = store.data.settings || {};
+  store.data.settings.notify = { byMarket: JSON.parse(JSON.stringify(_notifyDraft)) };
+  store.data.settings._updatedAt = store._now(); // 同期マージで両端末変更時に新しい方を採るため
+  store.save();
+  toast('通知メール設定を保存しました');
+  closeModal();
+}
+function openNotifyMaster() {
+  _notifyDraft = notifyDraftFromStore();
+  _notifyMarket = 'JP';
+  _notifyFocusEl = null;
+  showModal('通知メール設定', notifyBodyHtml(), { wide: true });
+}
+
 function renderMaster() {
   app.innerHTML = `
     <div class="section">
