@@ -5012,22 +5012,30 @@ function karteCardHtml(sec) {
   const hs = store.data.holdings.filter(h => h.securityId === sec.id);
   const holdAccRows = hs.length ? hs.map(h => row(`${esc(h.broker || '—')}/${esc(h.accountType || '—')}`, `${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}`)).join('') : '';
   const us = sec.market === 'US';
-  // 原通貨（ドル）建ての評価額・取得額・評価損益（米国株のみ表示。円建ては両市場で表示）
+  // 原通貨（ドル）建ての評価額・取得額・評価損益（米国株のみ。円建ては両市場で表示）
   const valNative = calc.valueOrCostNative(sec);
   const costNativeV = calc.costNative(sec);
   const pnlNativeV = (valNative != null && costNativeV != null) ? valNative - costNativeV : null;
   const pctTxt = pnlPctN != null ? `（${signed(pnlPctN)}%）` : '';
+  // 米国株は「ドル / 円」を列で横並び表示
+  const row2 = (k, a, b) => `<div class="kt-row kt-2"><span class="k">${k}</span><span class="v">${a}</span><span class="v">${b}</span></div>`;
+  const pnlCell = (v, fmt) => v != null ? `<span class="${cls(v)}">${fmt(v)}</span>` : '—';
+  const usValueRows = [
+    `<div class="kt-row kt-2 kt-2head"><span class="k"></span><span class="v">ドル</span><span class="v">円</span></div>`,
+    row2('評価額', held ? m(valNative) : '—', held ? yen(valJpy) : '—'),
+    row2('取得額', held ? m(costNativeV) : '—', held ? yen(costJpyV) : '—'),
+    row2('評価損益', held ? pnlCell(pnlNativeV, m) : '—', held ? pnlCell(pnlJpyV, yen) : '—'),
+    row('損益率', pnlPctN != null ? `<span class="${cls(pnlPctN)}">${signed(pnlPctN)}%</span>` : '—'),
+  ];
+  const jpValueRows = [
+    row('評価額(円)', held ? yen(valJpy) : '—'),
+    row('取得原価(円)', held ? yen(costJpyV) : '—'),
+    row('評価損益(円)', held && pnlJpyV != null ? `<span class="${cls(pnlJpyV)}">${yen(pnlJpyV)}${pctTxt}</span>` : '—'),
+  ];
   const holdBox = [
     row('平均取得単価', held ? m(th.avgCost) : '—'),
     row('保有数量', qtyDisp),
-    ...(us ? [
-      row('評価額($)', held ? m(valNative) : '—'),
-      row('取得額($)', held ? m(costNativeV) : '—'),
-      row('評価損益($)', held && pnlNativeV != null ? `<span class="${cls(pnlNativeV)}">${m(pnlNativeV)}${pctTxt}</span>` : '—'),
-    ] : []),
-    row('評価額(円)', held ? yen(valJpy) : '—'),
-    row('取得原価(円)', held ? yen(costJpyV) : '—'),
-    row('評価損益(円)', held && pnlJpyV != null ? `<span class="${cls(pnlJpyV)}">${yen(pnlJpyV)}${us ? '' : pctTxt}</span>` : '—'),
+    ...(us ? usValueRows : jpValueRows),
     row('前回購入', lb.price != null ? m(lb.price) + (lb.date ? ` <span class="muted">(${esc(lb.date)})</span>` : '') : '—'),
     row('購入回数', `${calc.buyCount(sec)}回`),
     holdAccRows,

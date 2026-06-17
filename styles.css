@@ -762,6 +762,10 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-row .v { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
 .kt-row.kt-hl { background: var(--bg); margin: var(--sp-1) calc(-1 * var(--sp-3)); padding: var(--sp-1) var(--sp-3); border-top: none; }
 .kt-row.kt-hl .v { font-size: var(--fs-strong); color: var(--accent); }
+/* 米国株: ラベル＋ドル列＋円列の3カラム（ドル/円を横並び） */
+.kt-row.kt-2 { display: grid; grid-template-columns: auto 1fr 1fr; gap: 8px; align-items: baseline; }
+.kt-row.kt-2 .v { text-align: right; }
+.kt-row.kt-2head .v { color: var(--muted); font-weight: 400; font-size: var(--fs-cap); }
 
 .kt-chart { min-height: 150px; display: flex; align-items: center; justify-content: center; cursor: zoom-in; }
 .kt-chart-legend { margin: 6px 0 0; font-size: var(--fs-cap); }
