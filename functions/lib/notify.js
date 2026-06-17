@@ -48,24 +48,44 @@ function applyTpl(tpl, vars) {
 }
 
 // サイン1件 → プレースホルダ変数（整形済み・記号/単位つき）。
+// ★app.js notifyVars と同一仕様。プレースホルダを足す時は両方そろえること。
 function signalVars(s) {
   const sym = (s.market === 'US') ? '$' : '¥';
+  const us = s.market === 'US';
   const n = (v) => (v == null ? null : v.toLocaleString('en-US', { maximumFractionDigits: 2 }));
   const cur = (v) => (v == null ? '—' : sym + n(v));
+  const curS = (v) => (v == null ? '—' : (v >= 0 ? '+' : '−') + sym + n(Math.abs(v))); // 符号つき金額
   const spct = (v) => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%');
   const dpct = (v) => (v == null ? '—' : v.toFixed(1) + '%');
+  const p2 = (v) => (v == null ? '—' : v.toFixed(2) + '%');
+  const numv = (v) => (v == null ? '—' : n(v));
+  const txt = (v) => (v == null || v === '' ? '—' : String(v));
+  // 時価総額（百万→兆/億/万 or $T/B/M）。app.js fmtTurnover(v*1e6) と同等。
+  const cap = (v) => {
+    if (v == null) return '—';
+    const a = Math.abs(v) * 1e6, sign = v < 0 ? '-' : '';
+    if (us) { if (a >= 1e12) return sign + (a / 1e12).toFixed(2) + 'T'; if (a >= 1e9) return sign + (a / 1e9).toFixed(2) + 'B'; if (a >= 1e6) return sign + (a / 1e6).toFixed(1) + 'M'; return sign + Math.round(a).toLocaleString('en-US'); }
+    if (a >= 1e12) { const cho = Math.floor(a / 1e12), oku = Math.round((a % 1e12) / 1e8); return sign + cho + '兆' + (oku ? oku + '億' : ''); }
+    if (a >= 1e10) return sign + Math.round(a / 1e8) + '億';
+    if (a >= 1e8) { const oku = Math.floor(a / 1e8), man = Math.round((a % 1e8) / 1e4); return sign + oku + '億' + (man ? man + '万' : ''); }
+    if (a >= 1e4) return sign + Math.round(a / 1e4) + '万';
+    return sign + Math.round(a).toLocaleString('en-US');
+  };
   return {
     kind: s.type === 'initial' ? '初回' : '買増',
-    ticker: s.ticker ?? '',
-    name: s.name ?? '',
-    market: s.market ?? '',
-    price: cur(s.price),
-    priceRaw: n(s.price) ?? '—',
-    dayChange: spct(s.dayChangePct),
-    dropFromPrev: dpct(s.dropFromPrev),
-    trigger: cur(s.trigger),
-    remaining: dpct(s.remainingDropPct),
-    buyAmount: s.buyAmount == null ? '—' : sym + n(s.buyAmount),
+    ticker: s.ticker ?? '', name: s.name ?? '', market: s.market ?? '',
+    broker: txt(s.broker), category: txt(s.category), ruleName: txt(s.ruleName), rating: txt(s.rating),
+    price: cur(s.price), priceRaw: n(s.price) ?? '—',
+    dayChange: spct(s.dayChangePct), dayAmt: curS(s.dayAmt), prevClose: cur(s.prevClose),
+    trigger: cur(s.trigger), trigBasis: txt(s.trigBasis), base: cur(s.base),
+    remaining: dpct(s.remainingDropPct), fixedBuyPrice: cur(s.fixedBuyPrice),
+    prevBuyPrice: cur(s.prevBuyPrice), prevBuyDate: txt(s.prevBuyDate), dropFromPrev: dpct(s.dropFromPrev),
+    high5y: cur(s.high5y), high52w: cur(s.high52w), low1y: cur(s.low1y), low3y: cur(s.low3y),
+    dropFrom5y: dpct(s.dropFrom5y), dropFrom52w: dpct(s.dropFrom52w), riseFrom1y: dpct(s.riseFrom1y), riseFrom3y: dpct(s.riseFrom3y),
+    qty: numv(s.qty), avgCost: cur(s.avgCost), value: cur(s.value), cost: cur(s.cost), pnl: dpct(s.pnl),
+    buyCount: numv(s.buyCount), buyAmount: s.buyAmount == null ? '—' : sym + n(s.buyAmount),
+    marketCap: cap(s.marketCap), per: numv(s.per), pbr: numv(s.pbr), eps: cur(s.eps),
+    dividend: cur(s.dividend), divYield: p2(s.divYield), yieldOnCost: p2(s.yieldOnCost), marginRatio: numv(s.marginRatio),
   };
 }
 

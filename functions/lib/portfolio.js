@@ -51,6 +51,24 @@ function displayName(bundle, sec) {
 }
 const round1 = (v) => v == null ? null : Math.round(v * 10) / 10;
 const round2 = (v) => v == null ? null : Math.round(v * 100) / 100;
+const numOrNull = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
+const pctFromBase = (price, base) => (price != null && base) ? (price - base) / base * 100 : null;
+
+// 最後に購入した証券会社（買い取引の最新→無ければ保有の最新更新）。app.js calc.lastBroker と同等。
+function lastBroker(bundle, sec) {
+  const buys = (bundle.transactions || [])
+    .filter(t => t.securityId === sec.id && t.type === 'buy' && t.broker)
+    .sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
+  if (buys.length) return buys[0].broker;
+  const hs = (bundle.holdings || []).filter(h => h.securityId === sec.id && h.broker);
+  if (!hs.length) return null;
+  hs.sort((a, b) => {
+    const aq = h => (h.quantity > 0 ? 1 : 0);
+    if (aq(a) !== aq(b)) return aq(b) - aq(a);
+    return (a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1;
+  });
+  return hs[0].broker || null;
+}
 
 // 買い増しサイン（到達 or 残り下落率 <= nearPct）の銘柄一覧。到達→残り少ない順。
 export function computeSignals(bundle, opts = {}) {
@@ -62,15 +80,52 @@ export function computeSignals(bundle, opts = {}) {
     const hit = ev.reached || ev.remainingDropPct <= nearPct;
     if (!hit) continue;
     const p = (bundle.prices || {})[priceKey(sec)] || {};
-    const dayChangePct = (ev.price != null && p.prevClose) ? (ev.price - p.prevClose) / p.prevClose * 100 : null;
-    const dropFromPrev = (ev.price != null && ev.lastBuyPrice) ? (ev.price - ev.lastBuyPrice) / ev.lastBuyPrice * 100 : null;
+    const meta = (bundle.meta || {})[priceKey(sec)] || {};
+    const rule = ruleFor(bundle, sec);
+    const th = totalHolding(bundle, sec.id);
+    const price = ev.price;
+    const dayChangePct = (price != null && p.prevClose) ? (price - p.prevClose) / p.prevClose * 100 : null;
+    const dropFromPrev = (price != null && ev.lastBuyPrice) ? (price - ev.lastBuyPrice) / ev.lastBuyPrice * 100 : null;
+    // 保有・損益
+    const valueN = (th.qty > 0 && price != null) ? th.qty * price : null;
+    const costN = (th.qty > 0) ? th.qty * th.avgCost : null;
+    const pnl = (th.qty > 0 && th.avgCost > 0 && price != null) ? (price - th.avgCost) / th.avgCost * 100 : null;
+    const buyCount = (bundle.transactions || []).filter(t => t.securityId === sec.id && t.type === 'buy').length;
+    // ファンダ（meta。app.js calc.* と同等の随時算出つき）
+    const eps = numOrNull(meta.eps);
+    const per = (eps && eps > 0 && price != null) ? price / eps : numOrNull(meta.per);
+    const dividend = meta.dividend != null ? meta.dividend : ((meta.divYield != null && price != null) ? meta.divYield / 100 * price : null);
+    const divYield = meta.divYield != null ? meta.divYield : ((meta.dividend != null && price) ? meta.dividend / price * 100 : null);
+    const yieldOnCost = (dividend != null && th.avgCost) ? dividend / th.avgCost * 100 : null;
+    const marketCap = (meta.sharesOut && price != null) ? price * meta.sharesOut / 1e6 : numOrNull(meta.marketCap); // 単位:百万
+    // 適用区分（初/増/高/固）
+    const trigBasis = ev.baseSource === '固定' ? '固' : ev.baseSource === '高値更新' ? '高' : ev.type === 'initial' ? '初' : '増';
     out.push({
       ticker: sec.ticker, market: sec.market, name: displayName(bundle, sec),
       type: ev.type, baseSource: ev.baseSource,
-      price: ev.price, dayChangePct: round2(dayChangePct), dropFromPrev: round1(dropFromPrev),
+      price, dayChangePct: round2(dayChangePct), dropFromPrev: round1(dropFromPrev),
       trigger: ev.trigger, remainingDropPct: round1(ev.remainingDropPct),
       reached: ev.reached,
       buyAmount: ev.recoAmount, ccy: ev.recoCcy,
+      // ▼追加: 表（サイン一覧）に出せる項目すべて
+      base: ev.base, trigBasis,
+      prevBuyPrice: ev.lastBuyPrice, prevBuyDate: ev.lastBuyDate,
+      prevClose: numOrNull(p.prevClose),
+      dayAmt: (price != null && p.prevClose != null) ? round2(price - p.prevClose) : null,
+      high5y: numOrNull(p.high5y), high52w: numOrNull(p.high52w), low1y: numOrNull(p.low1y), low3y: numOrNull(p.low3y),
+      dropFrom5y: round1(pctFromBase(price, p.high5y)), dropFrom52w: round1(pctFromBase(price, p.high52w)),
+      riseFrom1y: round1(pctFromBase(price, p.low1y)), riseFrom3y: round1(pctFromBase(price, p.low3y)),
+      qty: th.qty || null, avgCost: th.qty > 0 ? th.avgCost : null,
+      value: valueN != null ? Math.round(valueN) : null, cost: costN != null ? Math.round(costN) : null,
+      pnl: round1(pnl), buyCount: buyCount || null,
+      category: sec.category || null, ruleName: rule.name || null,
+      rating: sec.rating || sec.overallGrade || null,
+      fixedBuyPrice: typeof sec.fixedBuyPrice === 'number' ? sec.fixedBuyPrice : null,
+      broker: lastBroker(bundle, sec),
+      sector: meta.sector || null, industry: meta.industry || null,
+      marketCap, dividend, divYield: round2(divYield), yieldOnCost: round2(yieldOnCost),
+      per: round2(per), pbr: numOrNull(meta.pbr), eps,
+      marginRatio: numOrNull(meta.marginRatio),
     });
   }
   out.sort((a, b) => (a.reached === b.reached ? a.remainingDropPct - b.remainingDropPct : (a.reached ? -1 : 1)));

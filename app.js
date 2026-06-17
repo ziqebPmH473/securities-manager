@@ -3891,9 +3891,16 @@ const NOTIFY_DEFAULT_TPL = {
   reached: { header: '〇到達', line: '[{kind}] {ticker} {name}  現在値 {price}({dayChange}) 前回から{dropFromPrev} → 買増ライン {trigger} ／購入額 {buyAmount}', empty: '（なし）' },
   near:    { header: '〇接近', line: '[{kind}] {ticker} {name}  現在値 {price}({dayChange}) 前回から{dropFromPrev} → 買増ライン {trigger} 残り {remaining} ／購入額 {buyAmount}', empty: '（なし）' },
 };
+// 明細行で使える差し込み項目（グループ別）。サイン一覧（表）に出せる項目をすべて網羅。
+// ★サーバー側 computeSignals の出力＋notify.js signalVars と対応。増やす時は3箇所そろえること。
 const NOTIFY_PH_LINE = [
-  ['kind', '初回/買増'], ['ticker', '銘柄コード'], ['name', '銘柄名'], ['price', '現在値'], ['dayChange', '前日比'],
-  ['dropFromPrev', '前回から'], ['trigger', '買増ライン'], ['remaining', '残り下落%'], ['buyAmount', '購入額'], ['market', '市場'],
+  { g: '基本', items: [['kind', '初回/買増'], ['ticker', 'コード'], ['name', '銘柄名'], ['market', '市場'], ['broker', '証券会社'], ['category', 'カテゴリ'], ['ruleName', '買い増しルール'], ['rating', '銘柄格付']] },
+  { g: '価格', items: [['price', '現在値'], ['dayChange', '前日比'], ['dayAmt', '前日比値幅'], ['prevClose', '前日終値']] },
+  { g: '判定', items: [['trigger', '次回購入'], ['trigBasis', '適用区分'], ['base', '基準値'], ['remaining', '残り下落率'], ['fixedBuyPrice', '買増固定値']] },
+  { g: '前回購入', items: [['prevBuyPrice', '前回購入単価'], ['prevBuyDate', '前回購入日'], ['dropFromPrev', '前回からの下落率']] },
+  { g: '高値・安値', items: [['high5y', '5年高値'], ['high52w', '52週高値'], ['dropFrom5y', '5年高値からの下落率'], ['dropFrom52w', '52週高値からの下落率'], ['low1y', '1年安値'], ['low3y', '3年安値'], ['riseFrom1y', '1年安値からの上昇率'], ['riseFrom3y', '3年安値からの上昇率']] },
+  { g: '保有・損益', items: [['qty', '数量'], ['avgCost', '取得単価'], ['value', '評価額'], ['cost', '取得価額'], ['pnl', '損益率'], ['buyCount', '購入回数'], ['buyAmount', '購入額']] },
+  { g: 'ファンダ', items: [['marketCap', '時価総額'], ['per', 'PER'], ['pbr', 'PBR'], ['eps', 'EPS'], ['dividend', '配当/株'], ['divYield', '配当利回り'], ['yieldOnCost', '取得利回り'], ['marginRatio', '信用倍率']] },
 ];
 const NOTIFY_PH_SUBJECT = [
   ['market', '市場名'], ['date', '日付'], ['reachedCount', '到達件数'], ['nearCount', '接近件数'], ['totalCount', '合計件数'],
@@ -3903,12 +3910,18 @@ let _notifyDraft = null;   // 編集中のコピー { JP:{subject,reached,near},
 let _notifyMarket = 'JP';
 let _notifyFocusEl = null; // 直近フォーカスした textarea（差し込み挿入先）
 
+// 編集用ドラフト。保存値が無い項目は既定文面を「実値として」埋める（薄いプレースホルダではなく登録値として表示）。
 function notifyDraftFromStore() {
   const src = (store.data.settings && store.data.settings.notify && store.data.settings.notify.byMarket) || {};
+  const d = NOTIFY_DEFAULT_TPL;
   const mk = (m) => {
     const o = src[m] || {};
-    const sec = (k) => ({ header: (o[k] && o[k].header) || '', line: (o[k] && o[k].line) || '', empty: (o[k] && o[k].empty) || '' });
-    return { subject: o.subject || '', reached: sec('reached'), near: sec('near') };
+    const sec = (k) => ({
+      header: (o[k] && o[k].header) || d[k].header,
+      line: (o[k] && o[k].line) || d[k].line,
+      empty: (o[k] && o[k].empty) || d[k].empty,
+    });
+    return { subject: o.subject || d.subject, reached: sec('reached'), near: sec('near') };
   };
   return { JP: mk('JP'), US: mk('US') };
 }
@@ -3918,23 +3931,60 @@ function notifyResolveDraft(m) {
   return { subject: o.subject || d.subject, reached: sec('reached'), near: sec('near') };
 }
 function notifyApply(tpl, vars) { return String(tpl).replace(/\{(\w+)\}/g, (mm, k) => (k in vars ? String(vars[k] ?? '') : mm)); }
+// ★サーバー側 notify.js signalVars と同一仕様。プレースホルダを足す時は両方そろえること。
 function notifyVars(s) {
   const sym = s.market === 'US' ? '$' : '¥';
+  const us = s.market === 'US';
   const n = (v) => (v == null ? null : v.toLocaleString('en-US', { maximumFractionDigits: 2 }));
   const cur = (v) => (v == null ? '—' : sym + n(v));
+  const curS = (v) => (v == null ? '—' : (v >= 0 ? '+' : '−') + sym + n(Math.abs(v)));
   const spct = (v) => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%');
   const dpct = (v) => (v == null ? '—' : v.toFixed(1) + '%');
+  const p2 = (v) => (v == null ? '—' : v.toFixed(2) + '%');
+  const numv = (v) => (v == null ? '—' : n(v));
+  const txt = (v) => (v == null || v === '' ? '—' : String(v));
+  const cap = (v) => {
+    if (v == null) return '—';
+    const a = Math.abs(v) * 1e6, sign = v < 0 ? '-' : '';
+    if (us) { if (a >= 1e12) return sign + (a / 1e12).toFixed(2) + 'T'; if (a >= 1e9) return sign + (a / 1e9).toFixed(2) + 'B'; if (a >= 1e6) return sign + (a / 1e6).toFixed(1) + 'M'; return sign + Math.round(a).toLocaleString('en-US'); }
+    if (a >= 1e12) { const cho = Math.floor(a / 1e12), oku = Math.round((a % 1e12) / 1e8); return sign + cho + '兆' + (oku ? oku + '億' : ''); }
+    if (a >= 1e10) return sign + Math.round(a / 1e8) + '億';
+    if (a >= 1e8) { const oku = Math.floor(a / 1e8), man = Math.round((a % 1e8) / 1e4); return sign + oku + '億' + (man ? man + '万' : ''); }
+    if (a >= 1e4) return sign + Math.round(a / 1e4) + '万';
+    return sign + Math.round(a).toLocaleString('en-US');
+  };
   return {
-    kind: s.type === 'initial' ? '初回' : '買増', ticker: s.ticker ?? '', name: s.name ?? '', market: s.market ?? '',
-    price: cur(s.price), priceRaw: n(s.price) ?? '—', dayChange: spct(s.dayChangePct), dropFromPrev: dpct(s.dropFromPrev),
-    trigger: cur(s.trigger), remaining: dpct(s.remainingDropPct), buyAmount: s.buyAmount == null ? '—' : sym + n(s.buyAmount),
+    kind: s.type === 'initial' ? '初回' : '買増',
+    ticker: s.ticker ?? '', name: s.name ?? '', market: s.market ?? '',
+    broker: txt(s.broker), category: txt(s.category), ruleName: txt(s.ruleName), rating: txt(s.rating),
+    price: cur(s.price), priceRaw: n(s.price) ?? '—',
+    dayChange: spct(s.dayChangePct), dayAmt: curS(s.dayAmt), prevClose: cur(s.prevClose),
+    trigger: cur(s.trigger), trigBasis: txt(s.trigBasis), base: cur(s.base),
+    remaining: dpct(s.remainingDropPct), fixedBuyPrice: cur(s.fixedBuyPrice),
+    prevBuyPrice: cur(s.prevBuyPrice), prevBuyDate: txt(s.prevBuyDate), dropFromPrev: dpct(s.dropFromPrev),
+    high5y: cur(s.high5y), high52w: cur(s.high52w), low1y: cur(s.low1y), low3y: cur(s.low3y),
+    dropFrom5y: dpct(s.dropFrom5y), dropFrom52w: dpct(s.dropFrom52w), riseFrom1y: dpct(s.riseFrom1y), riseFrom3y: dpct(s.riseFrom3y),
+    qty: numv(s.qty), avgCost: cur(s.avgCost), value: cur(s.value), cost: cur(s.cost), pnl: dpct(s.pnl),
+    buyCount: numv(s.buyCount), buyAmount: s.buyAmount == null ? '—' : sym + n(s.buyAmount),
+    marketCap: cap(s.marketCap), per: numv(s.per), pbr: numv(s.pbr), eps: cur(s.eps),
+    dividend: cur(s.dividend), divYield: p2(s.divYield), yieldOnCost: p2(s.yieldOnCost), marginRatio: numv(s.marginRatio),
   };
 }
 function notifySample(market) {
   const us = market === 'US';
+  const base = (over) => Object.assign({
+    market,
+    broker: us ? 'マネックス' : 'SBI証券', category: us ? 'コア' : '高配当', ruleName: '標準ルール', rating: 'A',
+    prevClose: us ? 190.6 : 2800, base: us ? 200 : 2900, trigBasis: '増',
+    high5y: us ? 210 : 3100, high52w: us ? 205 : 3050, low1y: us ? 160 : 2400, low3y: us ? 140 : 2100,
+    dropFrom5y: -10.3, dropFrom52w: -8.1, riseFrom1y: 17.8, riseFrom3y: 31.0,
+    qty: us ? 12 : 300, avgCost: us ? 175 : 2600, value: us ? 2260 : 825000, cost: us ? 2100 : 780000, pnl: 5.8, buyCount: us ? 4 : 3,
+    marketCap: us ? 2950000 : 42000000, per: 18.3, pbr: 1.4, eps: us ? 10.3 : 180, dividend: us ? 1.0 : 90, divYield: 2.4, yieldOnCost: 3.1, marginRatio: us ? null : 1.8,
+    prevBuyDate: '2026-04-10',
+  }, over);
   return [
-    { reached: true, type: 'buy', ticker: us ? 'AAPL' : '7203', name: us ? 'アップル' : 'トヨタ自動車', market, price: us ? 188.4 : 2750, dayChangePct: -1.23, dropFromPrev: -5.2, trigger: us ? 185 : 2700, remainingDropPct: 0, buyAmount: us ? 500 : 50000 },
-    { reached: false, type: 'initial', ticker: us ? 'MSFT' : '6758', name: us ? 'マイクロソフト' : 'ソニーG', market, price: us ? 410 : 13200, dayChangePct: 0.45, dropFromPrev: -2.1, trigger: us ? 400 : 12800, remainingDropPct: 2.4, buyAmount: us ? 500 : 50000 },
+    base({ reached: true, type: 'addon', ticker: us ? 'AAPL' : '7203', name: us ? 'アップル' : 'トヨタ自動車', price: us ? 188.4 : 2750, dayChangePct: -1.23, dayAmt: us ? -2.2 : -50, dropFromPrev: -5.2, prevBuyPrice: us ? 198 : 2900, trigger: us ? 185 : 2700, remainingDropPct: 0, fixedBuyPrice: null, buyAmount: us ? 500 : 50000 }),
+    base({ reached: false, type: 'initial', ticker: us ? 'MSFT' : '6758', name: us ? 'マイクロソフト' : 'ソニーG', price: us ? 410 : 13200, dayChangePct: 0.45, dayAmt: us ? 1.8 : 60, dropFromPrev: -2.1, prevBuyPrice: us ? 419 : 13480, trigger: us ? 400 : 12800, remainingDropPct: 2.4, fixedBuyPrice: null, buyAmount: us ? 500 : 50000 }),
   ];
 }
 function notifyRenderPreview() {
@@ -3957,7 +4007,11 @@ function notifySectionHtml(key, d) {
 }
 function notifyBodyHtml() {
   const m = _notifyMarket, d = _notifyDraft[m];
-  const chips = (arr) => arr.map(([k, l]) => `<button type="button" class="btn" style="padding:2px 8px;font-size:11px" onclick="notifyInsert('${k}')" title="${esc(l)}">{${k}}</button>`).join(' ');
+  // 項目名をクリックすると対応する差し込み記号がカーソル位置に入る（記号名は出さず項目名で表示）
+  const chip = ([k, l]) => `<button type="button" class="btn" style="padding:2px 8px;font-size:11px" onclick="notifyInsert('${k}')" title="差し込み: {${k}}">${esc(l)}</button>`;
+  const chipsFlat = (arr) => arr.map(chip).join(' ');
+  const chipsGrouped = (groups) => groups.map(grp =>
+    `<div style="margin:4px 0"><span class="muted" style="font-size:11px;display:inline-block;min-width:70px">${esc(grp.g)}</span> ${grp.items.map(chip).join(' ')}</div>`).join('');
   const prev = notifyRenderPreview();
   return `
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
@@ -3971,13 +4025,14 @@ function notifyBodyHtml() {
 
     <div class="grp-label">件名</div>
     ${notifyTa('nf_subject', 'subject', d.subject, NOTIFY_DEFAULT_TPL.subject, 2)}
-    <div style="margin:4px 0 14px;line-height:2">件名で使える記号: ${chips(NOTIFY_PH_SUBJECT)}</div>
+    <div style="margin:4px 0 14px;line-height:2"><span class="muted" style="font-size:11px">件名に入れる項目（クリックで挿入）:</span><br>${chipsFlat(NOTIFY_PH_SUBJECT)}</div>
 
     <div class="grp-label">到達セクション</div>
     ${notifySectionHtml('reached', d)}
     <div class="grp-label" style="margin-top:12px">接近セクション</div>
     ${notifySectionHtml('near', d)}
-    <div style="margin:6px 0 4px;line-height:2">明細行で使える記号: ${chips(NOTIFY_PH_LINE)}</div>
+    <div style="margin:8px 0 4px"><span class="muted" style="font-size:11px">明細行に入れる項目（入力欄を選んでからクリックで挿入）:</span></div>
+    ${chipsGrouped(NOTIFY_PH_LINE)}
     <div style="display:flex;gap:8px;margin:6px 0 0;flex-wrap:wrap">
       <button class="btn" onclick="notifyCopySection('reached','near')">到達→接近へコピー</button>
       <button class="btn" onclick="notifyCopySection('near','reached')">接近→到達へコピー</button>
@@ -4024,7 +4079,12 @@ function notifyCopySection(from, to) {
   _notifyFocusEl = null; notifyRender();
 }
 function notifyResetMarket() {
-  _notifyDraft[_notifyMarket] = { subject: '', reached: { header: '', line: '', empty: '' }, near: { header: '', line: '', empty: '' } };
+  const d = NOTIFY_DEFAULT_TPL;
+  _notifyDraft[_notifyMarket] = {
+    subject: d.subject,
+    reached: { header: d.reached.header, line: d.reached.line, empty: d.reached.empty },
+    near: { header: d.near.header, line: d.near.line, empty: d.near.empty },
+  };
   _notifyFocusEl = null; notifyRender();
 }
 function notifySave() {
