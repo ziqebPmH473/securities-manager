@@ -77,7 +77,7 @@ function signalVars(s) {
     broker: txt(s.broker), category: txt(s.category), ruleName: txt(s.ruleName), rating: txt(s.rating),
     price: cur(s.price), priceRaw: n(s.price) ?? '—',
     dayChange: spct(s.dayChangePct), dayAmt: curS(s.dayAmt), prevClose: cur(s.prevClose),
-    trigger: cur(s.trigger), trigBasis: txt(s.trigBasis), base: cur(s.base),
+    trigger: cur(s.trigger), trigBasis: txt(s.trigBasis), reachKind: txt(s.reachKind), base: cur(s.base),
     remaining: dpct(s.remainingDropPct), fixedBuyPrice: cur(s.fixedBuyPrice),
     prevBuyPrice: cur(s.prevBuyPrice), prevBuyDate: txt(s.prevBuyDate), dropFromPrev: dpct(s.dropFromPrev),
     high5y: cur(s.high5y), high52w: cur(s.high52w), low1y: cur(s.low1y), low3y: cur(s.low3y),

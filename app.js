@@ -82,6 +82,7 @@ const MASTER_COLS = [
   { key: 'extPrice',    label: '時間外',           left: false, markets: ['US', 'SIGNAL'], noSort: false },
   { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: false },
   { key: 'trigBasis',   label: '適用区分',         left: true,  markets: STKM, noSort: true, narrow: true },
+  { key: 'reachKind',   label: '到達区分',         left: true,  markets: STKM, noSort: false, narrow: true },
   { key: 'base',        label: '基準値',           left: false, markets: ['SIGNAL'], noSort: false },
   { key: 'drop',        label: '残り下落率',       left: false, markets: STKM, noSort: false },
   { key: 'dropPrev',    label: '残り下落率(前日)', left: false, markets: STKM, noSort: false },
@@ -137,7 +138,7 @@ const DEFAULT_VISIBLE = {
   US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -989,6 +990,14 @@ const calc = {
   },
   dropFrom5y(sec) { return this.dropFrom(sec, this.high5y(sec)); },
   dropFrom52w(sec) { return this.dropFrom(sec, this.high52w(sec)); },
+  // 到達区分: 本日=到達 かつ 前営業日(前日終値)で未到達→'新'、両日とも到達→'続'、未到達→null。
+  // 前営業日の到達は「前日終値 ≤ 次回購入(トリガー)」で判定（残り下落率(前日)と同じ前日終値ベース）。
+  reachKind(sec) {
+    const ev = this.evaluate(sec); if (!ev || !ev.reached || ev.trigger == null) return null;
+    const pc = (store.data.prices[priceKey(sec)] || {}).prevClose;
+    const prevReached = pc != null ? pc <= ev.trigger : false;
+    return prevReached ? '続' : '新';
+  },
 
   // 銘柄の合計保有（全口座合算）
   totalHolding(secId) {
@@ -1885,7 +1894,13 @@ const COL_RENDERERS = {
     else { code = '増'; title = '買い増し（前回購入単価から買い増し下落率）'; }
     return `<td class="l"><span class="tag basis-${code === '初' ? 'init' : code === '増' ? 'addon' : code === '高' ? 'high' : 'fixed'}" title="${title}">${code}</span></td>`;
   },
-  base:      (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : '') + c.m(c.ev.base) : muted}</td>`,
+  // 到達区分: 新=本日新たに到達 / 続=前日に続き到達。前日終値ベース（残り下落率(前日)と同基準）。
+  reachKind: (s,c) => {
+    const k = calc.reachKind(s);
+    if (!k) return `<td class="l">${muted}</td>`;
+    const title = k === '新' ? '本日あらたに買い増しラインへ到達（前日終値では未到達）' : '前営業日に続き到達中';
+    return `<td class="l"><span class="tag basis-${k === '新' ? 'init' : 'addon'}" title="${title}">${k}</span></td>`;
+  },
   // 残り下落率: 到達後はマイナス値（超過幅）も表示（SEC-38）。到達=赤(reached)、残り5%以内=near。
   drop:      (s,c) => !c.ev ? `<td>${muted}</td>`
                     : `<td class="drop ${c.ev.reached ? 'reached' : (c.ev.remainingDropPct <= 5 ? 'near' : 'far')}" title="${c.ev.reached ? 'トリガー超過（到達）' : 'あとこれだけ下落で到達'}">${c.ev.remainingDropPct.toFixed(1)}%</td>`,
@@ -2527,6 +2542,7 @@ function sortValue(sec, key) {
     case 'base': { const ev = calc.evaluate(sec); return ev ? ev.base : -Infinity; }
     case 'drop': { const ev = calc.evaluate(sec); return ev ? ev.remainingDropPct : Infinity; }
     case 'dropPrev': return calc.remainingDropPrev(sec) ?? Infinity;
+    case 'reachKind': { const k = calc.reachKind(sec); return k === '新' ? 0 : k === '続' ? 1 : 2; }
     case 'rating': return GRADE_RANK[sec.rating || sec.overallGrade] ?? 99;
     case 'priority': return sec.priority ?? Infinity;
     case 'principalSold': return sec.principalSold ? 0 : 1; // 売却済みを先頭に
@@ -3896,7 +3912,7 @@ const NOTIFY_DEFAULT_TPL = {
 const NOTIFY_PH_LINE = [
   { g: '基本', items: [['kind', '初回/買増'], ['ticker', 'コード'], ['name', '銘柄名'], ['market', '市場'], ['broker', '証券会社'], ['category', 'カテゴリ'], ['ruleName', '買い増しルール'], ['rating', '銘柄格付']] },
   { g: '価格', items: [['price', '現在値'], ['dayChange', '前日比'], ['dayAmt', '前日比値幅'], ['prevClose', '前日終値']] },
-  { g: '判定', items: [['trigger', '次回購入'], ['trigBasis', '適用区分'], ['base', '基準値'], ['remaining', '残り下落率'], ['fixedBuyPrice', '買増固定値']] },
+  { g: '判定', items: [['trigger', '次回購入'], ['trigBasis', '適用区分'], ['reachKind', '到達区分(新/続)'], ['base', '基準値'], ['remaining', '残り下落率'], ['fixedBuyPrice', '買増固定値']] },
   { g: '前回購入', items: [['prevBuyPrice', '前回購入単価'], ['prevBuyDate', '前回購入日'], ['dropFromPrev', '前回からの下落率']] },
   { g: '高値・安値', items: [['high5y', '5年高値'], ['high52w', '52週高値'], ['dropFrom5y', '5年高値からの下落率'], ['dropFrom52w', '52週高値からの下落率'], ['low1y', '1年安値'], ['low3y', '3年安値'], ['riseFrom1y', '1年安値からの上昇率'], ['riseFrom3y', '3年安値からの上昇率']] },
   { g: '保有・損益', items: [['qty', '数量'], ['avgCost', '取得単価'], ['value', '評価額'], ['cost', '取得価額'], ['pnl', '損益率'], ['buyCount', '購入回数'], ['buyAmount', '購入額']] },
@@ -3959,7 +3975,7 @@ function notifyVars(s) {
     broker: txt(s.broker), category: txt(s.category), ruleName: txt(s.ruleName), rating: txt(s.rating),
     price: cur(s.price), priceRaw: n(s.price) ?? '—',
     dayChange: spct(s.dayChangePct), dayAmt: curS(s.dayAmt), prevClose: cur(s.prevClose),
-    trigger: cur(s.trigger), trigBasis: txt(s.trigBasis), base: cur(s.base),
+    trigger: cur(s.trigger), trigBasis: txt(s.trigBasis), reachKind: txt(s.reachKind), base: cur(s.base),
     remaining: dpct(s.remainingDropPct), fixedBuyPrice: cur(s.fixedBuyPrice),
     prevBuyPrice: cur(s.prevBuyPrice), prevBuyDate: txt(s.prevBuyDate), dropFromPrev: dpct(s.dropFromPrev),
     high5y: cur(s.high5y), high52w: cur(s.high52w), low1y: cur(s.low1y), low3y: cur(s.low3y),
@@ -3983,8 +3999,8 @@ function notifySample(market) {
     prevBuyDate: '2026-04-10',
   }, over);
   return [
-    base({ reached: true, type: 'addon', ticker: us ? 'AAPL' : '7203', name: us ? 'アップル' : 'トヨタ自動車', price: us ? 188.4 : 2750, dayChangePct: -1.23, dayAmt: us ? -2.2 : -50, dropFromPrev: -5.2, prevBuyPrice: us ? 198 : 2900, trigger: us ? 185 : 2700, remainingDropPct: 0, fixedBuyPrice: null, buyAmount: us ? 500 : 50000 }),
-    base({ reached: false, type: 'initial', ticker: us ? 'MSFT' : '6758', name: us ? 'マイクロソフト' : 'ソニーG', price: us ? 410 : 13200, dayChangePct: 0.45, dayAmt: us ? 1.8 : 60, dropFromPrev: -2.1, prevBuyPrice: us ? 419 : 13480, trigger: us ? 400 : 12800, remainingDropPct: 2.4, fixedBuyPrice: null, buyAmount: us ? 500 : 50000 }),
+    base({ reached: true, type: 'addon', reachKind: '新', ticker: us ? 'AAPL' : '7203', name: us ? 'アップル' : 'トヨタ自動車', price: us ? 188.4 : 2750, dayChangePct: -1.23, dayAmt: us ? -2.2 : -50, dropFromPrev: -5.2, prevBuyPrice: us ? 198 : 2900, trigger: us ? 185 : 2700, remainingDropPct: 0, fixedBuyPrice: null, buyAmount: us ? 500 : 50000 }),
+    base({ reached: false, type: 'initial', reachKind: null, ticker: us ? 'MSFT' : '6758', name: us ? 'マイクロソフト' : 'ソニーG', price: us ? 410 : 13200, dayChangePct: 0.45, dayAmt: us ? 1.8 : 60, dropFromPrev: -2.1, prevBuyPrice: us ? 419 : 13480, trigger: us ? 400 : 12800, remainingDropPct: 2.4, fixedBuyPrice: null, buyAmount: us ? 500 : 50000 }),
   ];
 }
 function notifyRenderPreview() {
