@@ -144,13 +144,23 @@ const COL_PREFS_KEY = 'sm_colprefs_v2';
 
 // 分析メタの取込列マッピング（Excel「銘柄分析結果」のヘッダ名 → 内部キー）
 const ANALYSIS_COLMAP = {
-  '評価日': 'analysisDate', '銘柄名': 'ticker', 'ティッカー': 'ticker',
-  '総合評価': 'overallGrade', '銘柄格付': 'rating', '買い時評価': 'buyGrade',
+  '評価日': 'analysisDate', '銘柄名': 'ticker', 'ティッカー': 'ticker', 'コード': 'ticker',
+  '総合評価': 'overallGrade', '総合ランク': 'overallGrade', '総合': 'overallGrade',
+  '銘柄格付': 'rating', '銘柄格付け': 'rating', '格付': 'rating', '格付け': 'rating',
+  '買い時評価': 'buyGrade', '買い時': 'buyGrade',
   '推奨投資額': 'recoAmount', 'カテゴリ': 'category', '推奨カテゴリ': 'category',
   'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
   '備考': 'analysisNote', '評価時点_購入優先順位': 'priority', '購入優先順位': 'priority',
   'セクター': 'sector', '業種': 'industry', '時価総額(百万)': 'marketCap',
   'PER': 'per', 'EPS': 'eps', '年間配当/株': 'dividend',
+};
+// 取込内部キー → 日本語ラベル（プレビューで「どの列がどの項目に入るか」を見せる用）
+const IMPORT_FIELD_LABELS = {
+  ticker: 'コード', analysisDate: '評価日', overallGrade: '総合評価', rating: '銘柄格付', buyGrade: '買い時評価',
+  recoAmount: '推奨投資額', category: 'カテゴリ', starValuation: 'バリュエーション', starStrength: '独自の強み',
+  starRisk: 'リスク', analysisNote: '備考', priority: '購入優先順位', sector: 'セクター', industry: '業種',
+  marketCap: '時価総額', per: 'PER', eps: 'EPS', dividend: '年間配当/株',
+  broker: '証券会社', accountType: '口座種別', avgCost: '取得単価', quantity: '数量', acquiredCost: '取得価額',
 };
 // 分析履歴(analyses)に持たせる評価項目。銘柄レコードの平置きは「最新分析のミラー」で、
 // 実体はこの項目群を securityId×評価日(analysisDate)ごとに analyses へ積む（履歴）。
@@ -5657,13 +5667,23 @@ function openPasteImport(kind) {
     const market = form.market.value;
     let bad = 0;
     for (let i = 1; i < rows.length; i++) { if (!validTicker((rows[i][tIdx] || '').trim(), market)) bad++; }
+    // 取込対象の列（マッピングできた列）と、未対応の見出し（取込まれない列）を明示する。
+    const mappedCols = idx.map((key, j) => ({ key, j, header: (rows[0][j] || '').trim() })).filter(c => c.key);
+    const unmapped = rows[0].map((h, j) => ({ h: (h || '').trim(), j })).filter(c => !idx[c.j] && c.h !== '');
+    // 取込まれる全列を表示（コード→形式は先頭固定、以降はマッピング順）
+    const cols = [{ key: 'ticker', j: tIdx, header: IMPORT_FIELD_LABELS.ticker }, ...mappedCols.filter(c => c.key !== 'ticker')];
+    const head = '<th class="l">形式</th>' + cols.map(c => `<th class="l">${esc(IMPORT_FIELD_LABELS[c.key] || c.key)}</th>`).join('');
     const body = rows.slice(1, 11).map(r => {
       const tk = (r[tIdx] || '').trim(); const ok = validTicker(tk, market);
-      const others = r.filter((_, j) => j !== tIdx).slice(0, 4).join(' / ');
-      return `<tr><td class="l">${ok ? '<span class="pos">✓</span>' : '<span class="neg" title="形式NG（取込まれません）">⚠</span>'}</td><td class="l">${esc(tk)}</td><td class="l muted">${esc(others)}</td></tr>`;
+      const cells = cols.map(c => `<td class="l ${c.key === 'ticker' ? '' : 'muted'}">${esc((r[c.j] || '').trim())}</td>`).join('');
+      return `<tr><td class="l">${ok ? '<span class="pos">✓</span>' : '<span class="neg" title="形式NG（取込まれません）">⚠</span>'}</td>${cells}</tr>`;
     }).join('');
+    const unmappedNote = unmapped.length
+      ? `<div class="neg" style="margin:4px 0">未対応の列（取込まれません）: ${unmapped.map(c => esc(c.h)).join(' / ')}</div>`
+      : '';
     preview.innerHTML = `<div style="margin:4px 0">取込予定 ${rows.length - 1}件${bad ? ` ／ <span class="neg">形式NG ${bad}件（取込まれません）</span>` : ''}（先頭${Math.min(10, rows.length - 1)}行プレビュー）</div>
-      <div class="table-wrap" style="max-height:220px"><table><thead><tr><th class="l">形式</th><th class="l">コード</th><th class="l">他の列</th></tr></thead><tbody>${body}</tbody></table></div>`;
+      ${unmappedNote}
+      <div class="table-wrap" style="max-height:240px;overflow:auto"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   };
   form.data.addEventListener('input', renderPv);
   form.market.addEventListener('change', renderPv);
