@@ -1899,7 +1899,7 @@ const COL_RENDERERS = {
     const k = calc.reachKind(s);
     if (!k) return `<td class="l">${muted}</td>`;
     const title = k === '新' ? '本日あらたに買い増しラインへ到達（前日終値では未到達）' : '前営業日に続き到達中';
-    return `<td class="l"><span class="tag basis-${k === '新' ? 'init' : 'addon'}" title="${title}">${k}</span></td>`;
+    return `<td class="l"><span class="tag reach-${k === '新' ? 'new' : 'cont'}" title="${title}">${k}</span></td>`;
   },
   // 残り下落率: 到達後はマイナス値（超過幅）も表示（SEC-38）。到達=赤(reached)、残り5%以内=near。
   drop:      (s,c) => !c.ev ? `<td>${muted}</td>`

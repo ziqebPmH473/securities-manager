@@ -112,6 +112,9 @@ table.fixed-cols th, table.fixed-cols td { overflow: hidden; text-overflow: elli
 .tag.basis-addon { color: #0891b2; border-color: #0891b2; }
 .tag.basis-high  { color: #dc2626; border-color: #dc2626; }
 .tag.basis-fixed { color: #7c3aed; border-color: #7c3aed; }
+/* 到達区分: 新=オレンジ / 続=グレー */
+.tag.reach-new  { color: #ea580c; border-color: #ea580c; }
+.tag.reach-cont { color: #6b7280; border-color: #6b7280; }
 
 /* 残り下落率バッジ */
 .drop { font-weight: 600; }
