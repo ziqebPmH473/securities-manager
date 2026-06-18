@@ -6660,7 +6660,9 @@ function giParseValue(field, raw) {
     case 'quantity': case 'avgCost': case 'acqValue': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount': case 'principalSoldAmount':
       return numClean(v);
     case 'principalSold': return /売却|済|^1$|true|yes|○|有/i.test(v);
-    case 'buyCount': case 'priority': case 'starValuation': case 'starStrength': case 'starRisk': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
+    case 'buyCount': case 'priority': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
+    // ★評価は分析取込と同じ parseStars で「5」「★5」「★★★★★」いずれも数値化
+    case 'starValuation': case 'starStrength': case 'starRisk': return parseStars(v);
     case 'enabled': return /有効|^1$|true|yes|○|有/i.test(v);
     case 'watch': return /注意|^1$|true|yes|○/i.test(v);
     case 'baseHighMode': return normBaseHighMode(v);
