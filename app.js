@@ -103,6 +103,7 @@ const MASTER_COLS = [
   { key: 'turnover',    label: '売買代金',          left: false, markets: STKM, noSort: false },
   { key: 'value',       label: '評価額',           left: false, markets: ALLM, noSort: false },
   { key: 'cost',        label: '取得価額',         left: false, markets: ALLM, noSort: false },
+  { key: 'origCost',    label: '購入額（本来）',    left: false, markets: ALLM, noSort: false },
   { key: 'acqJpy',      label: '取得円(円)',       left: false, markets: STKM, noSort: false },
   { key: 'pnl',         label: '損益率',           left: false, markets: ALLM, noSort: false },
   { key: 'avgCost',     label: '取得単価',         left: false, markets: ALLM, noSort: false },
@@ -129,14 +130,15 @@ const MASTER_COLS = [
   { key: 'stars',        label: '★(ﾊﾞﾘｭ/強/ﾘｽｸ)', left: true,  markets: STKM, noSort: true },
   { key: 'analysisDate', label: '評価日',          left: true,  markets: STKM, noSort: false },
   { key: 'analysisNote', label: '分析メモ',        left: true,  markets: STKM, noSort: true },
+  { key: 'memo',        label: 'メモ',             left: true,  markets: ALLM, noSort: true },
   // 元本売却（情報管理のみ・既定非表示）
   { key: 'principalSold',       label: '元本売却済み',   left: true,  markets: ALLM, noSort: false },
   { key: 'principalSoldAmount', label: '売却済み元本額', left: false, markets: ALLM, noSort: false },
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
 };
@@ -1169,6 +1171,13 @@ const calc = {
   },
   // 取得原価（原通貨）。価格に依存せず常に分かる
   costNative(sec) { return this.totalHolding(sec.id).acquiredCost; },
+  // 購入額（本来・原通貨）。一旦売却→他社で買い直し（損出し）等で「最初の購入額」を残したい用途。
+  // 保有レコードごとに、売却前購入額(origBuyAmount)が入っていればそれ、無ければ取得価額(取得単価×数量)を採用して合算する。
+  originalCostNative(sec) {
+    return store.data.holdings
+      .filter(h => h.securityId === sec.id)
+      .reduce((a, h) => a + (h.origBuyAmount != null ? h.origBuyAmount : h.avgCost * h.quantity), 0);
+  },
   // 評価額（原通貨）。価格未取得時は取得原価で代替（合計に含めるため）
   valueOrCostNative(sec) {
     const v = this.valueNative(sec);
@@ -1683,7 +1692,8 @@ function colDefaultWidth(key) {
   if (key === 'prevBuyDate') return 100; // YYYY-MM-DD
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
-  if (key === 'analysisNote') return 160;
+  if (key === 'analysisNote' || key === 'memo') return 160;
+  if (key === 'origCost') return 96; // 金額（本来の購入額）
   return mc.left ? 110 : 84; // 左寄せ(テキスト系)は広め・数値は狭め
 }
 function colWidthPx(item) { return Math.max(40, item.width || colDefaultWidth(item.key)); }
@@ -1762,7 +1772,7 @@ const CF_SCREENS = [
   { id: 'market',   label: 'マーケット' },
 ];
 // 背景色ルールを設定できる数値列（設定UIの選択肢）。
-const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount'];
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount'];
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
@@ -1852,6 +1862,7 @@ function cfCellValue(key, sec, ctx) {
     case 'turnover': return calc.turnover(sec);
     case 'value': return ctx.th.qty ? ctx.valN : null;
     case 'cost': return ctx.th.qty ? ctx.th.acquiredCost : null;
+    case 'origCost': return calc.originalCostNative(sec) || null;
     case 'acqJpy': { if (sec.market === 'US') { const hs = store.data.holdings.filter(h => h.securityId === sec.id); return hs.some(h => h.acqJpy != null) ? hs.reduce((a, h) => a + (h.acqJpy || 0), 0) : null; } return ctx.th.qty ? ctx.th.avgCost * ctx.th.qty : null; }
     case 'pnl': return ctx.pnlPct;
     case 'avgCost': return ctx.th.qty ? ctx.th.avgCost : null;
@@ -1934,6 +1945,8 @@ const COL_RENDERERS = {
   turnover:  (s,c) => { const v = calc.turnover(s); return `<td title="現在値×当日出来高">${v != null ? fmtTurnover(v, c.market) : muted}</td>`; },
   value:     (s,c) => `<td>${c.th.qty ? fmtAmt(c.valN, c.market) + c.noPriceMark : muted}</td>`,
   cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : muted}</td>`,
+  // 購入額（本来）: 保有レコードごとに 売却前購入額(あれば) or 取得価額 を合算。損出しで売却後も最初の購入額を残す用途
+  origCost:  (s,c) => { const v = calc.originalCostNative(s); return `<td title="売却前購入額があればそれ・無ければ取得価額を保有ごとに合算">${v ? c.m(v) : muted}</td>`; },
   // 取得円(円): 米株=保有のacqJpy(取得円)合計（取込/手入力したもの）、日本株=取得単価×数量
   acqJpy:    (s,c) => {
     let v = null;
@@ -1974,6 +1987,7 @@ const COL_RENDERERS = {
   stars:     (s,c) => { const a = [s.starValuation, s.starStrength, s.starRisk]; return `<td class="l">${a.some(x => x != null) ? a.map(x => x ?? '—').join('/') : muted}</td>`; },
   analysisDate: (s,c) => `<td class="l">${s.analysisDate ? esc(s.analysisDate) : muted}</td>`,
   analysisNote: (s,c) => `<td class="l" title="${esc(s.analysisNote || '')}">${s.analysisNote ? esc(String(s.analysisNote).slice(0, 24)) + (s.analysisNote.length > 24 ? '…' : '') : muted}</td>`,
+  memo:      (s,c) => `<td class="l" title="${esc(s.memo || '')}">${s.memo ? esc(String(s.memo).slice(0, 24)) + (s.memo.length > 24 ? '…' : '') : muted}</td>`,
   // 元本売却（情報管理のみ）。金額は銘柄の原通貨
   principalSold:       (s,c) => `<td class="l">${s.principalSold ? '<span class="tag">売却済</span>' : muted}</td>`,
   principalSoldAmount: (s,c) => `<td>${s.principalSoldAmount != null ? fmtAmt(s.principalSoldAmount, c.market) : muted}</td>`,
@@ -2509,6 +2523,7 @@ function sortValue(sec, key) {
     case 'qty': return th.qty;
     case 'avgCost': return th.avgCost;
     case 'cost': return th.acquiredCost;
+    case 'origCost': return calc.originalCostNative(sec) || -Infinity;
     case 'acqJpy': {
       if (sec.market === 'US') { const hs = store.data.holdings.filter(h => h.securityId === sec.id); return hs.some(h => h.acqJpy != null) ? hs.reduce((a, h) => a + (h.acqJpy || 0), 0) : -Infinity; }
       return th.qty ? th.avgCost * th.qty : -Infinity;
@@ -4627,6 +4642,9 @@ function openSecurityForm(id, presetMarket) {
           <input name="principalSoldAmount" type="number" step="any" value="${sec && sec.principalSoldAmount != null ? sec.principalSoldAmount : ''}" placeholder="任意・原通貨"></div>
       </div>
 
+      <div class="field"><label>メモ（自由記述・任意）</label>
+        <textarea name="memo" rows="2" placeholder="この銘柄に関する覚書（損出しの経緯・方針など）">${sec ? esc(sec.memo || '') : ''}</textarea></div>
+
       <fieldset class="form-group"><legend>表示の手動上書き（任意・自動取得では上書きされません）</legend>
         <div class="field"><label>銘柄名（上書き）</label>
           <input name="nameOverride" value="${sec && sec.nameOverride ? esc(sec.nameOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).name || sec.ticker) : '空欄で自動取得名を使用'}"></div>
@@ -4719,6 +4737,7 @@ function openSecurityForm(id, presetMarket) {
       detailType: (f.detailType && f.detailType.value) || null, // 詳細種別マスタ（空=自動判定）
       principalSold: f.principalSold && f.principalSold.value === '1', // 元本売却済みフラグ（情報管理のみ）
       principalSoldAmount: numOrNull(f.principalSoldAmount && f.principalSoldAmount.value), // 売却済み元本額（原通貨・情報管理のみ）
+      memo: (f.memo && f.memo.value.trim()) || null, // 銘柄メモ（自由記述・判定には影響しない）
 
       buyAmount: numOrNull(f.buyAmount.value), buyCount: intOrNull(f.buyCount.value),
       overallGrade: f.overallGrade.value || null, rating: f.rating.value || null, buyGrade: f.buyGrade.value || null,
@@ -4862,12 +4881,13 @@ function openHoldingsForm(secId) {
       <td><input type="number" step="any" class="h-qty" value="${h.quantity}"></td>
       <td><input type="number" step="any" class="h-cost" value="${h.avgCost}"></td>
       ${us ? `<td><input type="number" step="any" class="h-acq" value="${h.acqJpy ?? ''}" placeholder="取得円"></td>` : ''}
+      <td><input type="number" step="any" class="h-orig" value="${h.origBuyAmount ?? ''}" placeholder="任意"></td>
       <td class="l"><button type="button" class="btn btn-sm btn-danger" onclick="removeHolding(${h.id},${secId})">削除</button></td>
     </tr>`).join('');
 
   showModal(`保有を直接編集 — ${esc(sec.name || sec.ticker)}`, `
     <form id="holdings-form">
-      <p class="muted">取引履歴を介さず、数量・平均取得単価を直接修正できます（単価 ${ccy}）。${us ? '「取得円(円)」は米国株の取得円（転記・取得円列に使用）。空欄＝未設定。' : ''}</p>
+      <p class="muted">取引履歴を介さず、数量・平均取得単価を直接修正できます（単価 ${ccy}）。${us ? '「取得円(円)」は米国株の取得円（転記・取得円列に使用）。空欄＝未設定。' : ''}<br>「売却前購入額」は一旦売却→他社で買い直し（損出し）等で<strong>最初の購入額</strong>を残したい時に入力。空欄なら取得価額(単価×数量)を使用し、合算が「購入額（本来）」列に出ます。</p>
 
       <fieldset class="form-group"><legend>元本売却（銘柄単位・情報管理のみ）</legend>
         <div class="row">
@@ -4878,7 +4898,7 @@ function openHoldingsForm(secId) {
         </div>
       </fieldset>
       <div class="table-wrap"><table>
-        <thead><tr><th class="l">証券会社</th><th class="l">口座</th><th>数量</th><th>平均取得単価(${ccy})</th>${us ? '<th>取得円(円)</th>' : ''}<th></th></tr></thead>
+        <thead><tr><th class="l">証券会社</th><th class="l">口座</th><th>数量</th><th>平均取得単価(${ccy})</th>${us ? '<th>取得円(円)</th>' : ''}<th title="一旦売却→他社で買い直し（損出し）等で、最初の購入額を残したい時に入力。空欄なら取得価額(単価×数量)を使用">売却前購入額(${ccy})</th><th></th></tr></thead>
         <tbody id="holdings-rows">${rowsHtml || ''}</tbody>
       </table></div>
       ${hs.length === 0 ? '<div class="empty">保有がありません。下のフォームから追加してください。</div>' : ''}
@@ -4893,6 +4913,7 @@ function openHoldingsForm(secId) {
           <div class="field"><label>平均取得単価(${ccy})</label><input name="newCost" type="number" step="any" placeholder="0"></div>
         </div>
         ${us ? `<div class="row"><div class="field"><label>取得円(円)（任意・取得円用）</label><input name="newAcq" type="number" step="any" placeholder="空欄可"></div></div>` : ''}
+        <div class="row"><div class="field"><label>売却前購入額(${ccy})（任意・損出し時の最初の購入額）</label><input name="newOrig" type="number" step="any" placeholder="空欄可"></div></div>
       </fieldset>
 
       <div class="form-actions">
@@ -4919,16 +4940,18 @@ function openHoldingsForm(secId) {
         // 取得円(円)の直接編集（米国株）。空欄なら未設定に戻す
         const acqEl = tr.querySelector('.h-acq');
         if (acqEl) { const v = acqEl.value.trim(); h.acqJpy = v === '' ? undefined : (parseFloat(v) || 0); }
+        // 売却前購入額（損出し用・原通貨）。空欄なら未設定（取得価額を採用）に戻す
+        const origEl = tr.querySelector('.h-orig');
+        if (origEl) { const v = origEl.value.trim(); h.origBuyAmount = v === '' ? undefined : (parseFloat(v) || 0); }
       }
     });
     // 新規追加
     if (f.newQty.value || f.newCost.value) {
       store.setHolding(secId, f.broker.value, f.accountType.value,
         parseFloat(f.newQty.value) || 0, parseFloat(f.newCost.value) || 0);
-      if (f.newAcq && f.newAcq.value.trim() !== '') {
-        const nh = store.data.holdings.find(x => x.securityId === secId && x.broker === f.broker.value && x.accountType === f.accountType.value);
-        if (nh) nh.acqJpy = parseFloat(f.newAcq.value) || 0;
-      }
+      const nh = store.data.holdings.find(x => x.securityId === secId && x.broker === f.broker.value && x.accountType === f.accountType.value);
+      if (nh && f.newAcq && f.newAcq.value.trim() !== '') nh.acqJpy = parseFloat(f.newAcq.value) || 0;
+      if (nh && f.newOrig && f.newOrig.value.trim() !== '') nh.origBuyAmount = parseFloat(f.newOrig.value) || 0;
     }
     // 銘柄単位の元本売却情報（情報管理のみ）
     store.updateSecurity(secId, {
@@ -4987,9 +5010,12 @@ function openSecurityDetail(secId) {
   ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>');
   // 保有（口座別）
   const hs = store.data.holdings.filter(h => h.securityId === sec.id);
-  const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}</span></div>`).join('') : '<div class="muted">保有なし</div>';
+  const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}${h.origBuyAmount != null ? ` <span class="muted" title="売却前購入額（本来）">(本来 ${m(h.origBuyAmount)})</span>` : ''}</span></div>`).join('') : '<div class="muted">保有なし</div>';
   const holdSummary = th.qty ? kv('合計 / 評価額 / 損益率',
     `${fmtQty(th.qty, sec.market)}　/　${m(calc.valueOrCostNative(sec))}　/　<span class="${cls(calc.pnlPctNative(sec))}">${calc.pnlPctNative(sec) != null ? signed(calc.pnlPctNative(sec)) + '%' : '—'}</span>`) : '';
+  // 購入額（本来）: 売却前購入額があればそれ・無ければ取得価額を保有ごとに合算（損出し時の最初の購入額）
+  const origCostN = calc.originalCostNative(sec);
+  const origCostRow = origCostN ? kv('購入額（本来）', m(origCostN)) : '';
   // 元本売却（情報管理のみ）。フラグまたは金額があれば表示
   const principalSoldRow = (sec.principalSold || sec.principalSoldAmount != null)
     ? kv('元本売却', `${sec.principalSold ? '売却済み' : '—'}${sec.principalSoldAmount != null ? '　/　' + m(sec.principalSoldAmount) : ''}`) : '';
@@ -5068,7 +5094,8 @@ function openSecurityDetail(secId) {
     ${sectionBox('ファンダ', fund)}
     ${sectionBox('評価', evalBox)}
     ${sectionBox('判定', judge)}
-    ${sectionBox('保有', holdRows + (holdSummary || '') + (principalSoldRow || ''))}
+    ${sectionBox('保有', holdRows + (holdSummary || '') + (origCostRow || '') + (principalSoldRow || ''))}
+    ${sec.memo ? sectionBox('メモ', `<div style="white-space:pre-wrap;word-break:break-word">${esc(sec.memo)}</div>`) : ''}
     ${sectionBox('購入・取引履歴', txnRows)}
     ${sectionBox('分析メタ', metaBox)}`, `
     <button type="button" class="btn btn-brass" style="flex:1" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引を記録</button>
