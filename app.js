@@ -4577,6 +4577,21 @@ function closeDrawer() {
   setTimeout(() => { ov.hidden = true; }, 200);
 }
 
+// 1銘柄の各画面（詳細/取引/保有/編集）を横断するナビ。current=今いる画面を除いたボタンを並べる。
+// 詳細はドロワー、他はモーダル。遷移時は対象でない器だけ閉じる（詳細へ行く時はドロワーを閉じない＝再表示の競合回避）。
+function secNavBar(secId, current) {
+  const btn = (key, label, onclick) => current === key ? '' :
+    `<button type="button" class="btn btn-sm" onclick="${onclick}">${label}</button>`;
+  const items = [
+    btn('detail', '詳細', `closeModal();openSecurityDetail(${secId})`),
+    btn('txn',    '取引', `closeDrawer();openTxnForm(${secId})`),
+    btn('hold',   '保有', `closeDrawer();openHoldingsForm(${secId})`),
+    btn('edit',   '編集', `closeDrawer();openSecurityForm(${secId})`),
+  ].join('');
+  return `<div class="sec-nav" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 12px">
+    <span class="muted" style="font-size:11px">表示切替</span>${items}</div>`;
+}
+
 function openSecurityForm(id, presetMarket) {
   const sec = id ? store.data.securities.find(s => s.id === id) : null;
   const m = sec ? sec.market : (presetMarket || 'US');
@@ -4593,6 +4608,7 @@ function openSecurityForm(id, presetMarket) {
 
   showModal(id ? '銘柄を編集' : '銘柄を追加', `
     <form id="sec-form">
+      ${id ? secNavBar(id, 'edit') : ''}
       <div class="row">
         <div class="field"><label>市場</label>
           <select name="market">${['US', 'JP'].map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${MARKET_LABEL[x]}</option>`).join('')}</select></div>
@@ -4710,8 +4726,8 @@ function openSecurityForm(id, presetMarket) {
 
       <div class="form-actions">
         ${id ? `<button type="button" class="btn btn-danger" onclick="deleteSecurity(${id})">削除</button>
-        <button type="button" class="btn" onclick="openAmountHistory(${id})">適用金額履歴</button>
-        <button type="button" class="btn" onclick="openAnalysisHistory(${id})">分析履歴</button>` : ''}
+        <button type="button" class="btn" onclick="openAmountHistory(${id})">適用金額</button>
+        <button type="button" class="btn" onclick="openAnalysisHistory(${id})">分析</button>` : ''}
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
@@ -4887,6 +4903,7 @@ function openHoldingsForm(secId) {
 
   showModal(`保有を直接編集 — ${esc(sec.name || sec.ticker)}`, `
     <form id="holdings-form">
+      ${secNavBar(secId, 'hold')}
       <p class="muted">取引履歴を介さず、数量・平均取得単価を直接修正できます（単価 ${ccy}）。${us ? '「取得円(円)」は米国株の取得円（転記・取得円列に使用）。空欄＝未設定。' : ''}<br>「売却前購入額」は一旦売却→他社で買い直し（損出し）等で<strong>最初の購入額</strong>を残したい時に入力。空欄なら取得価額(単価×数量)を使用し、合算が「購入額（本来）」列に出ます。</p>
 
       <fieldset class="form-group"><legend>元本売却（銘柄単位・情報管理のみ）</legend>
@@ -5098,7 +5115,8 @@ function openSecurityDetail(secId) {
     ${sec.memo ? sectionBox('メモ', `<div style="white-space:pre-wrap;word-break:break-word">${esc(sec.memo)}</div>`) : ''}
     ${sectionBox('購入・取引履歴', txnRows)}
     ${sectionBox('分析メタ', metaBox)}`, `
-    <button type="button" class="btn btn-brass" style="flex:1" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引を記録</button>
+    <button type="button" class="btn btn-brass" style="flex:1" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引</button>
+    <button type="button" class="btn" onclick="closeDrawer();openHoldingsForm(${sec.id})">保有</button>
     <button type="button" class="btn" onclick="closeDrawer();openSecurityForm(${sec.id})">${svgIcon('edit', '')} 編集</button>`, subHtml);
   _detailChartCtx = { sec, ev, price, lb };
   loadDetailChart(sec, ev, price, lb, detailChartRange);
@@ -5405,6 +5423,7 @@ function openTxnForm(secId, presetType, opts = {}) {
   const acctOpts = ACCOUNTS.map(a => `<option ${a === defAcct ? 'selected' : ''}>${a}</option>`).join('');
   showModal(`${editTxn ? '取引を編集' : '取引を記録'} — ${esc(sec.name || sec.ticker)}`, `
     <form id="txn-form">
+      ${editTxn ? '' : secNavBar(secId, 'txn')}
       <div class="row">
         <div class="field"><label>種別</label>
           <select name="type"><option value="buy" ${typeSel !== 'sell' ? 'selected' : ''}>買い</option><option value="sell" ${typeSel === 'sell' ? 'selected' : ''}>売り</option></select></div>
