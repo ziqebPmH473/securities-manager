@@ -4404,7 +4404,7 @@ function renderImport() {
           <button class="btn btn-primary" onclick="openGenericImport()">汎用取込（列を選んで取込）</button>
           <button class="btn" onclick="exportGeneric()">汎用出力（CSV）</button>
         </div>
-        <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます。</p>
+        <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有・メモ・売却前購入額まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます（管理項目をすべて往復）。</p>
       </div>
     </div>`;
 }
@@ -6175,8 +6175,9 @@ const GENERIC_MAP = {
   'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category', '詳細種別': 'detailType',
   '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount',
+  '売却前購入額': 'origBuyAmount', 'メモ': 'memo',
 };
-const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額'];
+const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -6216,8 +6217,11 @@ function parseGeneric(text) {
     if ('watch' in rec) sec.watch = /注意|^1$|true|yes/i.test(rec.watch);
     if ('principalSold' in rec) sec.principalSold = /売却|済|^1$|true|yes|○/i.test(rec.principalSold);
     if ('principalSoldAmount' in rec) sec.principalSoldAmount = numClean(rec.principalSoldAmount);
+    if ('memo' in rec) sec.memo = rec.memo || null;
+    // 売却前購入額は保有(holding)単位。row 直下に持たせる（_sec＝銘柄属性ではない）
+    if ('origBuyAmount' in rec) row.origBuyAmount = numClean(rec.origBuyAmount);
     if (Object.keys(sec).length) row._sec = sec;
-    if (qty == null && !row._sec) continue; // 数量も属性も無い行はスキップ
+    if (qty == null && !row._sec && row.origBuyAmount == null) continue; // 数量も属性も無い行はスキップ
     out.push(row);
   }
   return out;
@@ -6518,10 +6522,11 @@ function exportGeneric() {
     const base = [s.ticker, s.market, '', '', '', '',
       s.prevBuyPrice ?? '', s.prevBuyDate || '', s.baseHighMode || '', s.baseHighManual ?? '', s.fixedBuyPrice ?? '', ruleName, s.category || '',
       s.buyAmount ?? '', s.buyCount ?? '', s.enabled === false ? '無効' : '有効', s.watch ? '注意' : '通常', detailTypeOf(s),
-      s.principalSold ? '売却済' : '', s.principalSoldAmount ?? ''];
+      s.principalSold ? '売却済' : '', s.principalSoldAmount ?? '',
+      '', s.memo || '']; // [20]=売却前購入額(保有ごと) / [21]=メモ(銘柄)
     const hs = store.data.holdings.filter(h => h.securityId === s.id);
     if (hs.length) {
-      for (const h of hs) { const r = base.slice(); r[2] = h.broker; r[3] = h.accountType; r[4] = h.quantity; r[5] = h.avgCost; lines.push(r.map(csvCell).join(',')); }
+      for (const h of hs) { const r = base.slice(); r[2] = h.broker; r[3] = h.accountType; r[4] = h.quantity; r[5] = h.avgCost; r[20] = h.origBuyAmount ?? ''; lines.push(r.map(csvCell).join(',')); }
     } else {
       lines.push(base.map(csvCell).join(','));
     }
@@ -6571,14 +6576,16 @@ const GI_FIELDS = [
   { key: 'starRisk',      label: '★リスク' },
   { key: 'principalSold',       label: '元本売却済み' },
   { key: 'principalSoldAmount', label: '売却済み元本額' },
+  { key: 'origBuyAmount', label: '売却前購入額' },
+  { key: 'memo',          label: 'メモ' },
 ];
-const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount']);
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo']);
 // 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
-  { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy'] },
+  { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy', 'origBuyAmount'] },
   { g: '判定・属性', keys: ['category', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
-  { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride'] },
+  { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride', 'memo'] },
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
 ];
 const GI_FIXED_KEYS = ['market', 'broker', 'account', 'detailType', 'category', 'ruleName'];
@@ -6684,7 +6691,7 @@ function giRenderPreview() {
 function giParseValue(field, raw) {
   const v = raw == null ? '' : String(raw).trim();
   switch (field) {
-    case 'quantity': case 'avgCost': case 'acqValue': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount': case 'principalSoldAmount':
+    case 'quantity': case 'avgCost': case 'acqValue': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount': case 'principalSoldAmount': case 'origBuyAmount':
       return numClean(v);
     case 'principalSold': return /売却|済|^1$|true|yes|○|有/i.test(v);
     case 'buyCount': case 'priority': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
@@ -6749,10 +6756,11 @@ async function runGenericImport() {
       if (GI_SEC_FIELDS.has(k)) { const cv = convMaster(k, rec[k]); if (cv !== SKIP) patch[k] = cv; }
     }
     if (Object.keys(patch).length) store.updateSecurity(sec.id, patch);
-    // 保有・取得円
+    // 保有・取得円・売却前購入額
     const hasQty = ('quantity' in rec) && rec.quantity != null;
     const hasAcq = ('acqJpy' in rec) && rec.acqJpy != null;
-    if (hasQty || hasAcq) {
+    const hasOrig = ('origBuyAmount' in rec) && rec.origBuyAmount != null;
+    if (hasQty || hasAcq || hasOrig) {
       const broker = rec.broker || null, account = rec.account || '特定';
       if (broker) {
         const ex = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
@@ -6762,7 +6770,10 @@ async function runGenericImport() {
             const ac = rec.avgCost != null ? rec.avgCost : (ex ? ex.avgCost : 0);
             store.setHolding(sec.id, broker, account, rec.quantity, ac, 'import'); holdingSet++;
           }
-          if (hasAcq) { const h = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account); if (h) h.acqJpy = rec.acqJpy; }
+          const h = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
+          if (hasAcq && h) h.acqJpy = rec.acqJpy;
+          // 売却前購入額（保有単位）。数量が無くても保有レコードがあれば付与（損出しの本来額の記録）
+          if (hasOrig && h) h.origBuyAmount = rec.origBuyAmount;
         }
       } else if (hasAcq) {
         const hs = store.data.holdings.filter(x => x.securityId === sec.id && x.quantity > 0);
