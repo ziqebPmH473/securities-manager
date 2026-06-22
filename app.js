@@ -2517,7 +2517,7 @@ function sortValue(sec, key) {
     case 'updatedAt': return sec.updatedAt || '';
     case 'broker': return (calc.lastBroker(sec) || '').toLowerCase();
     case 'sigType': { const ev = calc.evaluate(sec); return ev ? ev.type : 'z'; }
-    case 'category': return sec.category || '';
+    case 'category': { const c = store.data.categories.find(x => x.category === sec.category); return c ? (c.sortOrder ?? 9998) : (sec.category ? 9999 : 10000); }
     case 'ruleName': { const r = store.rule(sec.ruleId); return r ? (r.name || '').toLowerCase() : ''; }
     case 'fixedBuyPrice': return sec.fixedBuyPrice ?? -Infinity;
     case 'qty': return th.qty;
