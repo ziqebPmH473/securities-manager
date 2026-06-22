@@ -2241,27 +2241,26 @@ function scheduleFit() {
   _fitRaf = requestAnimationFrame(() => requestAnimationFrame(() => { _fitRaf = null; fitListTables(); }));
   setTimeout(fitListTables, 80);
 }
+// 一覧テーブルを「枠内スクロール」にする。実際のスクロール領域は body ではなく main.content（overflow-y:auto）。
+// なので“あふれ”は main.content の scrollHeight−clientHeight で測り、その分だけ表の枠(.table-wrap)を縮めて
+// main.content が一切スクロールしないようにする（＝外側スクロールなし・表の枠の中だけスクロール）。
+// 収まっている時は何もしない（自然高さ。余白で引き伸ばさない）。
 function fitListTables() {
-  const wraps = [...document.querySelectorAll('main .section .table-wrap')];
-  wraps.forEach(wrap => {
-    wrap.style.maxHeight = ''; wrap.style.minHeight = '';     // 一旦解除して自然な高さを測る
-    const top = wrap.getBoundingClientRect().top;            // ビューポート上端からの位置
-    // 画面下端まで（最低240px）。枠下の余白は暫定で引く（次段でページ溢れを実測補正するので決め打ちでよい）
-    const avail = Math.max(240, window.innerHeight - top - 14);
-    if (wrap.scrollHeight > avail) wrap.style.maxHeight = avail + 'px'; // はみ出す時だけ枠内スクロール化
-  });
-  // 単一テーブルのビューでページがまだ縦に溢れる場合は、溢れた分だけ枠を縮めてページ内に収める（枠内スクロール化）。
-  // section-body の下padding等で枠下の余白が画面ごとに違うため、実測の溢れ量で補正する。
-  // ※ 以前は逆に「行が少ない時に枠を画面下端まで min-height で伸ばす」処理を入れていたが、
-  //   小さな表が無駄に引き伸ばされて余白が増え、複数セクションのある画面（転記用等）を下に押し出して
-  //   ページ全体スクロールが必要になっていた。余白は出さず自然高さにするため撤去。
-  if (wraps.length === 1) {
-    const w = wraps[0];
-    const overflow = document.documentElement.scrollHeight - window.innerHeight;
-    if (overflow > 1) {
-      const target = Math.max(200, w.offsetHeight - overflow - 2);
-      w.style.maxHeight = target + 'px';
-    }
+  const main = document.querySelector('main.content');
+  if (!main) return;
+  const wraps = [...main.querySelectorAll('.section .table-wrap')];
+  wraps.forEach(w => { w.style.maxHeight = ''; w.style.minHeight = ''; }); // 一旦解除して自然高さを測る
+  if (!wraps.length) return;
+  // main.content の縦あふれ量（>0 なら外側スクロールが出る状態）
+  const overflow = main.scrollHeight - main.clientHeight;
+  if (overflow <= 1) return; // 収まっている＝枠制限不要（保有銘柄が収まっている時はここで終わり）
+  // 一番背の高い表の枠を、あふれた分だけ縮めて枠内スクロール化。
+  // ただし「その枠を縮めれば収まる」場合だけ実施する（＝表が溢れの主因の単一テーブル系ビュー）。
+  // 転記用のようにフォーム等の非テーブルが主因の時は、小さな表を縮めても二重スクロールになるだけなので
+  // 何もしない（実コンテンツとしてページ＝main.content をスクロールさせる）。
+  const w = wraps.reduce((a, b) => (b.offsetHeight > a.offsetHeight ? b : a), wraps[0]);
+  if (w.offsetHeight - overflow >= 160) {
+    w.style.maxHeight = (w.offsetHeight - overflow - 2) + 'px';
   }
 }
 // 指数マーキー: 指数がマーキー窓に収まるなら流さない（is-scrolling 無し＝静止）。あふれる時だけ
@@ -7926,12 +7925,15 @@ function renderAssetChart() {
 // 幅は SVG が width:100% で容器幅に追従するので、容器幅(=凡例132+gap10を除く)を W に渡してアスペクト比＝高さを決める。
 function assetChartBox(el) {
   const cont = el.closest('.content') || document.documentElement;
-  const bottom = cont.getBoundingClientRect().bottom;
-  const top = el.getBoundingClientRect().top;
+  const bottom = cont.getBoundingClientRect().bottom;   // スクロール領域(main.content)の見える下端
+  const top = el.getBoundingClientRect().top;            // グラフ上端
   const tableEl = document.getElementById('asset-table');
   const tableH = tableEl ? (parseFloat(tableEl.style.minHeight) || tableEl.getBoundingClientRect().height || 0) : 0;
-  const avail = bottom - top - tableH - 16; // 表のmargin-top(12)＋わずかな余白
-  const h = Math.max(220, Math.min(720, Math.round(avail)));
+  // グラフの下にある「過去データの取込」details も差し引く（これを忘れると合計行が窓からはみ出てページがスクロールする）
+  const details = el.parentElement ? el.parentElement.querySelector('details') : null;
+  const detailsH = details ? details.getBoundingClientRect().height : 0;
+  const avail = bottom - top - tableH - detailsH - 26; // 表margin-top(12)＋details上余白＋section下padding(16)
+  const h = Math.max(180, Math.min(720, Math.round(avail)));
   const w = Math.max(240, Math.round((el.clientWidth || 600) - 142)); // 凡例132＋gap10
   return { w, h };
 }
