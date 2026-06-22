@@ -58,6 +58,34 @@ const DEFAULT_RULE = {
   id: 1, name: '標準ルール', initialDropPct: 40, addonDropPct: 20, baseHighMode: '5y', isDefault: true,
 };
 
+// マトリックスの取得価額レンジ（円換算・1銘柄あたり）。max未満で区分・最後はmax=nullで「それ以上」。色はソリッドなhex。
+const DEFAULT_MATRIX_BANDS = [
+  { max: 100000,  label: '〜10万',    color: '#eef3fb' },
+  { max: 300000,  label: '10〜30万',  color: '#c9dcf4' },
+  { max: 500000,  label: '30〜50万',  color: '#8fb4e8' },
+  { max: 1000000, label: '50〜100万', color: '#4f82cf' },
+  { max: null,    label: '100万〜',   color: '#274b87' },
+];
+// マトリックス レンジ設定の色パレット（ソリッド。青ランプ＋アクセント色）
+const MATRIX_BAND_COLORS = ['#eef3fb', '#c9dcf4', '#8fb4e8', '#4f82cf', '#274b87', '#eef7f1', '#9ccbb0', '#3a7d44', '#fbf3e0', '#d6ad5b', '#fbeeee', '#e3a9a5', '#c0392b', '#f1edf8', '#9b7cc8', '#6a4ca8', '#f4f4f6', '#c8ccd4', '#6b7280'];
+// 背景色(hex)に対する文字色（明度で白/濃紺を出し分け）。hex以外（旧データ）は濃紺。
+function mxText(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return '#15233c';
+  const n = parseInt(m[1], 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) < 140 ? '#fff' : '#15233c';
+}
+function mxChipStyle(color) { return `background:${color};color:${mxText(color)};border:1px solid rgba(0,0,0,.08)`; }
+// ソリッド色のスウォッチ選択UI（colorSwatchPicker と同じ .color-pick 構造。pickColor が hidden input に hex を格納）
+function solidSwatchPicker(name, selected) {
+  return `<div class="color-pick" data-name="${esc(name)}">${MATRIX_BAND_COLORS.map(c => `
+    <button type="button" class="cswatch${c === selected ? ' on' : ''}" data-key="${c}" title="${c}" style="background:${c};color:${mxText(c)};border-color:rgba(0,0,0,.15)" onclick="pickColor(this)">A</button>`).join('')}
+    <input type="hidden" name="${esc(name)}" value="${esc(selected || '')}"></div>`;
+}
+const DEFAULT_MATRIX_USDJPY = 100; // 「全部」表示・米国株取得額の円換算レート（初期値。マスタで変更可）
+// 前日終値の取得ロジック版。上げると当日でも refreshPrevCloses を一度だけ再計算（取引所TZ今日基準の修正を即反映）。
+const PREVCLOSE_VER = 2;
+
 const MARKET_LABEL = { US: '米国株', JP: '日本株', FUND: '投信' };
 const MARKET_CCY = { US: '$', JP: '¥', FUND: '¥' };
 const BASE_HIGH_LABEL = { '5y': '5年高値', '52w': '52週高値', 'all': '上場来高値', 'manual': '手動指定' };
@@ -192,6 +220,9 @@ const store = {
     if (!Array.isArray(this.data.rules) || this.data.rules.length === 0) this.data.rules = [structuredClone(DEFAULT_RULE)];
     this.data.categories ||= structuredClone(DEFAULT_CATEGORIES);
     this.data.grades ||= structuredClone(DEFAULT_GRADES); // 格付け色マスタ（S/A/B/C/D の表示色）
+    this.data.matrixBands ||= structuredClone(DEFAULT_MATRIX_BANDS); // 分布マトリックスの取得額レンジ（色・しきい値）
+    this.data.matrixSettings ||= {};
+    if (this.data.matrixSettings.usdJpy == null) this.data.matrixSettings.usdJpy = DEFAULT_MATRIX_USDJPY; // 全部表示の円換算レート
     this.data.prices ||= {};
     this.data.fx ||= { USDJPY: null };
     this.data.meta ||= {}; // 銘柄情報マスタ（名前・セクター・ファンダ）priceKeyでキャッシュ
@@ -1356,9 +1387,10 @@ const api = {
     }
     store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
-    // 前日終値を日次で確実取得（信頼できる light=range=1d の chartPreviousClose）。1日1回で足りる。
-    if (store.data.lastPrevCloseDate !== today()) {
-      try { await this.refreshPrevCloses(allSecs); store.data.lastPrevCloseDate = today(); store.save(); } catch (_) {}
+    // 前日終値を日次で確実取得（light=range=5d を取引所TZの今日基準で選別＝プレ前/休場でも1日ズレない）。
+    // 通常は1日1回。ただし前日終値ロジックを更新した時は当日でも一度だけ再計算する（PREVCLOSE_VER）。
+    if (store.data.lastPrevCloseDate !== today() || store.data.prevCloseVer !== PREVCLOSE_VER) {
+      try { await this.refreshPrevCloses(allSecs); store.data.lastPrevCloseDate = today(); store.data.prevCloseVer = PREVCLOSE_VER; store.save(); } catch (_) {}
     }
     // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
     await this.refreshExtended(allSecs);
@@ -1407,13 +1439,13 @@ const api = {
   },
 
   // 前日終値を信頼できる方法で取得してキャッシュ（1日1回でよい）。
-  // Finnhub の pc・Yahoo 長期配列は一部銘柄（レバETF等で昨日の日足が欠損する等）で前々日終値になり
-  // 不正確なため、mode=light(range=1d) の chartPreviousClose（＝本当の前営業日終値）を唯一の正とする。
-  // 取れた銘柄だけ prevClose とその引け日(prevCloseDate)を保存。取れない時は既存値を壊さず保持。
+  // mode=light&range=5d で日足を数本取り、API側で「取引所TZの“今日”より前の最後の有効終値」を前日終値として
+  // 選ぶ（プレ前・休場日でも1日ズレない）。引け日(prevCloseDate)もAPIの実値を使う（休場を正しく反映）。
+  // 取れた銘柄だけ prevClose とその引け日を保存。取れない時は既存値を壊さず保持。
   async refreshPrevCloses(secs) {
     secs = (secs || []).filter(s => s && s.ticker);
     if (!secs.length) return;
-    const pd = prevBizDate();
+    const pd = prevBizDate(); // APIが引け日を返さない時のフォールバック（近似）
     const syms = [...new Set(secs.map(yahooSymbol))];
     const BATCH = 40;
     const batches = [];
@@ -1421,7 +1453,7 @@ const api = {
     let quotes = {};
     try {
       const results = await Promise.all(batches.map(b =>
-        fetch(`/api/price?mode=light&symbols=${encodeURIComponent(b.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({}))));
+        fetch(`/api/price?mode=light&range=5d&symbols=${encodeURIComponent(b.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({}))));
       quotes = Object.assign({}, ...results);
     } catch (_) { return; }
     for (const sec of secs) {
@@ -1430,7 +1462,7 @@ const api = {
       const key = priceKey(sec);
       const p = store.data.prices[key] || (store.data.prices[key] = {});
       p.prevClose = q.prevClose;
-      p.prevCloseDate = pd;
+      p.prevCloseDate = q.prevCloseDate || pd; // APIの実引け日を優先（休場反映）。無ければ近似
     }
     store.save();
   },
@@ -2408,6 +2440,7 @@ function renderDashboard() {
   const dayJpy = dayAll.amount || 0;
   const dayPct = dayAll.pct;
   const { reached: reachedSecs, near: nearSecs } = signalRows();
+  const newReached = reachedSecs.filter(s => calc.reachKind(s) === '新'); // ダッシュボードの表は「新規到達(新)」のみ
 
   // 本日の値上がり / 値下がり Top5（全株式/米国株/日本株で切替）
   const heldSecs = store.data.securities.filter(s => calc.totalHolding(s.id).qty > 0);
@@ -2435,9 +2468,9 @@ function renderDashboard() {
   const luStr = store.data.lastPriceUpdate ? fmtDateTime(store.data.lastPriceUpdate) : '未取得';
 
   app.innerHTML = `
+    <div class="dashboard-view">
     <div class="page-intro">
-      <h2>ダッシュボード</h2>
-      <p>ポートフォリオ全体のサマリーと本日の動き。${esc(luStr)} 時点・USD/JPY ${fxNow}。</p>
+      <h2>ダッシュボード <span class="dash-meta">${esc(luStr)} 時点・USD/JPY ${fxNow}</span></h2>
     </div>
     ${notes.map(n => `<div class="notice">${esc(n)}</div>`).join('')}
     <div class="cards">
@@ -2494,11 +2527,12 @@ function renderDashboard() {
       </div>
     </div>
 
-    <div class="section" style="margin-top:20px">
-      <div class="section-head"><h2>買い増しサイン（到達済み）</h2>
-        <span class="muted" style="margin-left:8px;font-size:12px">${reachedSecs.length} 件</span>
+    <div class="section" style="margin-top:14px">
+      <div class="section-head"><h2>買い増しサイン（本日 新規到達）</h2>
+        <span class="muted" style="margin-left:8px;font-size:12px">新 ${newReached.length} 件 / 到達計 ${reachedSecs.length} 件</span>
         <button class="btn btn-sm" style="margin-left:auto" onclick="go('signals')">一覧へ</button></div>
       <div class="section-body">${dashSignalsTable()}</div>
+    </div>
     </div>`;
 }
 
@@ -3034,14 +3068,15 @@ function renderSignals() {
   scheduleFit(); // 市場フィルタ切替で renderSignals() を直接呼ばれた時も枠内スクロール化（render() を経由しないため自前で）
 }
 
-// ダッシュボード用の簡易サイン表（到達のみ・上位）
+// ダッシュボード用の簡易サイン表（本日「新規到達(新)」のみ。継続(続)は除外）
 function dashSignalsTable() {
   const { reached } = signalRows();
-  if (reached.length === 0) return `<div class="empty">現在、買い増しサインに到達している銘柄はありません。</div>`;
+  const newReached = reached.filter(s => calc.reachKind(s) === '新');
+  if (newReached.length === 0) return `<div class="empty">本日新しく買い増しサインに到達した銘柄はありません。</div>`;
   const cols = ['ticker', 'name', 'market', 'price', 'drop', 'trigger', 'buyAmount']
     .map(k => MASTER_COLS.find(m => m.key === k));
   const head = cols.map(c => `<th class="${c.left ? 'l' : ''}">${c.label}</th>`).join('');
-  const sorted = sortSecurities(reached, 'SIGNAL');
+  const sorted = sortSecurities(newReached, 'SIGNAL');
   return `<div class="table-wrap"><table class="holdings dense">
     <thead><tr>${head}</tr></thead>
     <tbody>${sorted.map(sec => marketRow(sec, cols, { actions: 'none' })).join('')}</tbody>
@@ -3183,6 +3218,22 @@ function importStatusHtml() {
 // ---------- レポート（SEC-17） ----------
 let reportPeriod = 'all'; // 'all' | 'ytd'
 function setReportPeriod(p) { reportPeriod = p; const el = document.getElementById('txn-section'); if (el) el.innerHTML = txnSummaryHtml(); else renderReport(); }
+// レポート内タブ: 'assets'=資産集計 / 'txn'=取引サマリー / 'matrix'=分布マトリックス
+let reportTab = 'assets';
+function setReportTab(t) { reportTab = t; renderReport(); }
+// マトリックスの縦軸・横軸は「列にある区分」から選択。市場フィルタ（全部/米国株/日本株）も切替。
+const MATRIX_AXES = [
+  ['category', 'カテゴリ'], ['rating', '格付'], ['overallGrade', '総合'], ['buyGrade', '買い時'],
+  ['market', '市場'], ['detailType', '詳細種別'], ['broker', '証券会社'], ['ruleName', 'ルール'],
+  ['sector', 'セクター'], ['priority', '優先順位'],
+];
+let reportMatrixRow = 'rating';   // 縦軸
+let reportMatrixCol = 'category'; // 横軸
+let matrixMarket = 'ALL';         // 'ALL' | 'US' | 'JP'
+function setReportMatrixRow(f) { reportMatrixRow = f; renderReport(); }
+function setReportMatrixCol(f) { reportMatrixCol = f; renderReport(); }
+function setMatrixMarket(m) { matrixMarket = m; renderReport(); }
+function matrixAxisName(f) { const a = MATRIX_AXES.find(x => x[0] === f); return a ? a[1] : f; }
 // ============ マーケット（ランキング）タブ ============
 let mktState = { market: 'US', sub: 'all', kind: 'turnover' };
 // ランキングキャッシュは store.data.mktRanking に永続化（localStorage保存＋Google同期）。key -> { items(5年高値込), at }
@@ -3461,7 +3512,10 @@ function renderReport() {
       <span class="muted" style="font-size:10px">※日本株・米国株のみ（投資信託は除外）</span>
     </div>
     ${fxMissing ? '<div class="notice">USD/JPY 為替が未取得のため、円換算に米国株を含めていません。「価格更新」で取得できます。</div>' : ''}
-    <div class="section"><div class="section-head" style="flex-wrap:wrap;gap:8px"><h2>資産推移・現在の集計</h2>
+    <div class="seg report-tabs" role="tablist">${[['assets', '資産集計'], ['txn', '取引サマリー'], ['matrix', '格付×カテゴリ']].map(([k, l]) => `<button class="${reportTab === k ? 'active' : ''}" onclick="setReportTab('${k}')">${l}</button>`).join('')}</div>
+    ${reportTab === 'txn' ? `<div class="section" id="txn-section">${txnSummaryHtml()}</div>`
+      : reportTab === 'matrix' ? matrixSectionHtml()
+      : `<div class="section"><div class="section-head" style="flex-wrap:wrap;gap:8px"><h2>資産推移・現在の集計</h2>
         <div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap">
           <div class="seg" id="asset-axis-seg">${[['market', '市場別'], ['markettype', '市場+種別'], ['category', 'カテゴリ別']].map(([k, l]) => `<button class="${assetAxis === k ? 'active' : ''}" onclick="setAssetAxis('${k}')">${l}</button>`).join('')}</div>
           <button class="btn btn-sm ${assetTableBroker ? 'btn-primary' : ''}" onclick="toggleAssetBroker()" title="証券会社別に展開">証券会社別</button>
@@ -3475,10 +3529,11 @@ function renderReport() {
           <textarea id="asset-import-text" rows="5" style="width:100%;font-family:monospace;font-size:12px" placeholder="日付  …  種別  詳細種別 … 評価額 … 取得額 …（ヘッダ行ごと貼り付け）"></textarea>
           <div class="form-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn btn-primary" onclick="importAssetHistory()">取込んで統合</button><span id="asset-import-msg" class="muted" style="align-self:center"></span></div>
         </details>
-      </div></div>
-    <div class="section" id="txn-section">${txnSummaryHtml()}</div>`;
-  renderAssetTable();  // 先に表を確定（min-height）＝グラフの利用可能高さが安定し、表が後から動かない
-  loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画（領域の高さは先に確保）
+      </div></div>`}`;
+  if (reportTab === 'assets') {
+    renderAssetTable();  // 先に表を確定（min-height）＝グラフの利用可能高さが安定し、表が後から動かない
+    loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画（領域の高さは先に確保）
+  }
 }
 // 取引サマリー（期間: 全期間/今年）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
 function txnSummaryHtml() {
@@ -3501,6 +3556,142 @@ function txnSummaryHtml() {
         <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
       </tbody></table></div>
     <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
+}
+// 取得価額（円換算）→ レンジ(band) のインデックス。マスタ store.data.matrixBands を参照（max未満で区分・最後はmax=null）。
+function mxBandOf(cost) {
+  const bands = store.data.matrixBands || [];
+  for (let i = 0; i < bands.length; i++) { const m = bands[i].max; if (m == null || cost < m) return i; }
+  return Math.max(0, bands.length - 1);
+}
+// 軸（区分）ごとの値・並び順・表示ラベル。軸は MATRIX_AXES から選択（縦横とも）。
+function matrixAxisVal(sec, field) {
+  switch (field) {
+    case 'category': return sec.category || '未分類';
+    case 'rating': case 'overallGrade': case 'buyGrade': { const v = sec[field]; return ['S', 'A', 'B', 'C', 'D'].includes(v) ? v : '未設定'; }
+    case 'market': return sec.market;
+    case 'detailType': return detailTypeOf(sec);
+    case 'broker': return calc.lastBroker(sec) || '(不明)';
+    case 'ruleName': { const r = store.rule(sec.ruleId); return r ? r.name : '(未割当)'; }
+    case 'sector': return calc.field(sec, 'sector') || '(不明)';
+    case 'priority': return sec.priority != null ? String(sec.priority) : '未設定';
+    default: return '(不明)';
+  }
+}
+function matrixAxisSort(field, keys) {
+  const GR = ['S', 'A', 'B', 'C', 'D', '未設定'];
+  const ai = (arr, k) => { const i = arr.indexOf(k); return i < 0 ? 9999 : i; };
+  if (field === 'category') { const ord = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder).map(c => c.category); return keys.slice().sort((a, b) => (ai(ord, a) - ai(ord, b)) || (a < b ? -1 : 1)); }
+  if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return keys.slice().sort((a, b) => ai(GR, a) - ai(GR, b));
+  if (field === 'market') return keys.slice().sort((a, b) => ai(['US', 'JP'], a) - ai(['US', 'JP'], b));
+  if (field === 'priority') return keys.slice().sort((a, b) => (a === '未設定' ? Infinity : +a) - (b === '未設定' ? Infinity : +b));
+  return keys.slice().sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+}
+function matrixAxisLabel(field, key) {
+  if (field === 'category') return key === '未分類' ? '<span class="muted">未分類</span>' : categoryTag(key);
+  if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return key === '未設定' ? '<span class="muted">未設定</span>' : gradeBadge({ rating: key });
+  if (field === 'market') return `<span class="tag ${String(key).toLowerCase()}">${MARKET_LABEL[key] || esc(key)}</span>`;
+  return esc(key);
+}
+// 区分×区分 の分布マトリックス。縦横の軸・市場・取得額レンジ（マスタ）を切替可能。各セルは該当銘柄を取得価額レンジ色のチップで表示（合計は出さない）。
+function matrixSectionHtml() {
+  const rowF = reportMatrixRow, colF = reportMatrixCol;
+  const rate = (store.data.matrixSettings && store.data.matrixSettings.usdJpy) || DEFAULT_MATRIX_USDJPY;
+  const bands = store.data.matrixBands || [];
+  const cell = {};                 // 'rowKey|colKey' -> [{sec, cost}]
+  const rowSet = new Set(), colSet = new Set();
+  let n = 0;
+  for (const sec of store.data.securities) {
+    if (sec.market !== 'JP' && sec.market !== 'US') continue;
+    if (matrixMarket !== 'ALL' && sec.market !== matrixMarket) continue;
+    const th = calc.totalHolding(sec.id); if (!(th.qty > 0)) continue;
+    const cost = sec.market === 'US' ? th.acquiredCost * rate : th.acquiredCost; // 円換算（米株は設定レート）
+    const rk = matrixAxisVal(sec, rowF), ck = matrixAxisVal(sec, colF);
+    (cell[rk + '|' + ck] ||= []).push({ sec, cost });
+    rowSet.add(rk); colSet.add(ck); n++;
+  }
+  const mseg = `<div class="seg">${[['ALL', '全部'], ['US', '米国株'], ['JP', '日本株']].map(([m, l]) => `<button class="${matrixMarket === m ? 'active' : ''}" onclick="setMatrixMarket('${m}')">${l}</button>`).join('')}</div>`;
+  const axisSel = (val, on) => `<select class="mx-axis-sel" onchange="${on}(this.value)">${MATRIX_AXES.map(([k, l]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  const toolbar = `<div class="mx-toolbar">
+    <span class="mx-tb-lab">縦軸</span>${axisSel(rowF, 'setReportMatrixRow')}
+    <span class="mx-tb-lab">横軸</span>${axisSel(colF, 'setReportMatrixCol')}
+    ${mseg}
+    <button class="btn btn-sm" style="margin-left:auto" onclick="openMatrixBandMaster()">⚙ レンジ設定</button>
+  </div>`;
+  const title = `${esc(matrixAxisName(rowF))} × ${esc(matrixAxisName(colF))} マトリックス`;
+  const legend = `<div class="mx-legend">取得価額レンジ：${bands.map(b => `<span class="mx-chip" style="${mxChipStyle(b.color)};cursor:default">${esc(b.label)}</span>`).join('')}</div>`;
+  const note = `<p class="muted" style="margin:6px 0 10px;font-size:11.5px">各セルは該当銘柄を取得価額レンジ色のチップで表示（クリックで詳細）。${matrixMarket !== 'JP' ? `米国株は1ドル＝${num(rate)}円で円換算。` : ''}</p>`;
+  if (n === 0) return `<div class="section"><div class="section-head"><h2>${title}</h2></div>
+    <div class="section-body" style="padding:12px 16px 16px">${toolbar}<div class="empty">該当する保有銘柄がありません。</div></div></div>`;
+  const rows = matrixAxisSort(rowF, [...rowSet]);
+  const cols = matrixAxisSort(colF, [...colSet]);
+  const tk = (s) => esc(s.market === 'JP' ? s.ticker : (s.ticker || '').slice(0, 6));
+  const chip = (item) => {
+    const i = mxBandOf(item.cost); const b = bands[i] || {};
+    return `<span class="mx-chip" style="${mxChipStyle(b.color)}" title="${esc(calc.displayName(item.sec))}　取得 ${yen(item.cost)}（${esc(b.label || '')}）" onclick="openSecurityDetail(${item.sec.id})">${tk(item.sec)}</span>`;
+  };
+  const head = `<tr><th class="mx-corner">${esc(matrixAxisName(rowF))} ＼ ${esc(matrixAxisName(colF))}</th>${cols.map(c => `<th class="mx-colh">${matrixAxisLabel(colF, c)}</th>`).join('')}</tr>`;
+  const bodyRows = rows.map(r => {
+    const tds = cols.map(c => {
+      const list = (cell[r + '|' + c] || []).slice().sort((a, b) => b.cost - a.cost);
+      if (!list.length) return '<td class="mx-cell mx-empty">—</td>';
+      return `<td class="mx-cell"><div class="mx-chips">${list.map(chip).join('')}</div></td>`;
+    }).join('');
+    return `<tr><th class="mx-rowh">${matrixAxisLabel(rowF, r)}</th>${tds}</tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-head"><h2>${title}</h2></div>
+    <div class="section-body" style="padding:12px 16px 16px">
+      ${toolbar}
+      ${legend}
+      ${note}
+      <div class="table-wrap"><table class="mx-table">
+        <thead>${head}</thead>
+        <tbody>${bodyRows}</tbody>
+      </table></div>
+    </div></div>`;
+}
+// マトリックス取得額レンジのマスタ（色・しきい値・米株換算レート）。
+function openMatrixBandMaster() {
+  const bands = store.data.matrixBands || [];
+  const rate = (store.data.matrixSettings && store.data.matrixSettings.usdJpy) || DEFAULT_MATRIX_USDJPY;
+  const rows = bands.map((b, i) => `<tr data-idx="${i}">
+    <td class="l"><input class="mxb-label" value="${esc(b.label || '')}" style="width:120px"></td>
+    <td><input class="mxb-max" type="number" step="any" value="${b.max == null ? '' : b.max}" placeholder="上限なし" style="width:130px"></td>
+    <td class="l">${solidSwatchPicker('mxband-' + i, b.color || '#6b7280')}</td>
+    <td class="l"><button type="button" class="btn btn-sm btn-danger" onclick="mxbDeleteBand(${i})">削除</button></td>
+  </tr>`).join('');
+  showModal('マトリックス 取得額レンジ設定', `
+    <div class="field"><label>米国株の円換算レート（1ドル＝？円・「全部」/米国株表示の取得額換算に使用）</label>
+      <input id="mxb-rate" type="number" step="any" value="${rate}" style="width:140px"></div>
+    <div style="display:flex;justify-content:flex-end;margin:10px 0 8px"><button type="button" class="btn btn-sm btn-primary" onclick="mxbAddBand()">＋ レンジを追加</button></div>
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr><th class="l">ラベル</th><th>上限（円・未満）</th><th class="l">色</th><th class="l"></th></tr></thead>
+      <tbody id="mxb-rows">${rows}</tbody>
+    </table></div>
+    <p class="muted" style="margin:8px 0 0">取得額（円換算）が小さい順に「上限（円）未満」で区分します。最後の行は上限を空欄にすると「それ以上」になります。色は各銘柄チップに反映。保存で取得額の小さい順に並べ替えます。</p>
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">キャンセル</button><button type="button" class="btn btn-primary" onclick="mxbSave()">保存</button></div>`, { wide: true });
+}
+// 現在のモーダル入力を読み取る（追加・削除・保存で共通）
+function mxbReadForm() {
+  const rows = [...document.querySelectorAll('#mxb-rows tr')];
+  const bands = rows.map(tr => {
+    const label = tr.querySelector('.mxb-label').value.trim();
+    const maxRaw = tr.querySelector('.mxb-max').value;
+    const max = maxRaw === '' ? null : parseFloat(maxRaw);
+    const color = (tr.querySelector('.color-pick input[type=hidden]') || {}).value || '#6b7280';
+    return { label, max: (max != null && isNaN(max)) ? null : max, color };
+  });
+  const rate = parseFloat(document.getElementById('mxb-rate').value) || DEFAULT_MATRIX_USDJPY;
+  return { bands, rate };
+}
+function mxbApply(bands, rate) { store.data.matrixBands = bands; store.data.matrixSettings = { ...(store.data.matrixSettings || {}), usdJpy: rate }; store.save(); }
+function mxbAddBand() { const { bands, rate } = mxbReadForm(); bands.push({ max: null, label: '新レンジ', color: '#6b7280' }); mxbApply(bands, rate); openMatrixBandMaster(); }
+function mxbDeleteBand(i) { const { bands, rate } = mxbReadForm(); bands.splice(i, 1); mxbApply(bands, rate); openMatrixBandMaster(); }
+function mxbSave() {
+  let { bands, rate } = mxbReadForm();
+  if (!bands.length) bands = structuredClone(DEFAULT_MATRIX_BANDS);
+  bands.sort((a, b) => (a.max == null ? Infinity : a.max) - (b.max == null ? Infinity : b.max)); // 取得額の小さい順
+  mxbApply(bands, rate); closeModal(); if (currentView === 'report') renderReport(); else toast('レンジ設定を保存しました');
 }
 // トグル連動の「現在の集計」表。assetTableBroker=false: 分類ごとの集計のみ／true: 証券会社×分類のクロス表。
 let assetTableBroker = false;
@@ -3911,6 +4102,7 @@ const MASTER_LAUNCH = [
   { v: 'category', label: 'カテゴリ別 金額マスタ', open: () => openCategoryMaster(), note: '銘柄カテゴリごとの1回購入額（日本株円・米国株$）と変更履歴。' },
   { v: 'rule',     label: '買い増しルールマスタ', open: () => openRuleMaster(),     note: '初回/買い増しの下落率・基準高値のルール。銘柄ごとの割当は各銘柄の編集から。' },
   { v: 'grade',    label: '銘柄格付けマスタ',     open: () => openGradeMaster(),    note: '銘柄格付け（S/A/B/C/D）の一覧・詳細での表示色を設定。' },
+  { v: 'matrix',   label: 'マトリックス レンジ設定', open: () => openMatrixBandMaster(), note: 'レポートの分布マトリックスの取得額レンジ（色・しきい値）と米株円換算レート。' },
   { v: 'fund',     label: '投資信託 コードマスタ', open: () => openFundCodeMaster(), note: '取り込んだ投信のコード（協会コード）編集・名称取得・統合。' },
   { v: 'alias',    label: '取込変換マスタ',         open: () => openImportAliasMaster(), note: '取込時の「マスタに無い値」の変換対応（カテゴリ/格付/詳細種別/ルール）。' },
   { v: 'cf',       label: '列の背景色ルール',       open: () => openCfRulesMaster(),  note: '数値列の値の範囲ごとの背景色。適用画面（保有/サイン/マスタ/マーケット）を複数選択可。' },

@@ -146,6 +146,7 @@ async function fetchYahoo(symbol, type, rangeOverride, withHighs) {
   return {
     price:    q.price,
     prevClose: q.prevClose,
+    prevCloseDate: q.prevCloseDate,  // 前日終値が付いた実際の引け日（休場反映）。range>=2dで取得時のみ
     prevDayPct: q.prevDayPct,   // 前営業日の値動き%（寄り付き前の前日比表示用）
     high5y:   wantHighs ? q.high5y : null,   // 通常更新では高値を返さない（クライアントが既存値を保持）
     high52w:  wantHighs ? q.high52w : null,
@@ -186,21 +187,30 @@ async function fetchYahooChart(symbol, range, interval) {
   const ts = r.timestamp || [];
   const closeArr = (quotes && quotes.close) || [];
   const closes = closeArr.filter(c => typeof c === 'number');
-  const dayOf = (t) => (typeof t === 'number') ? Math.floor(t / 86400) : null;
-  // 現在値の営業日: meta.regularMarketTime 優先。無ければ最後の有効終値の日。
+  // 日付は取引所TZの暦日に正規化（UTCのままだと米株の夜間で日付がズレる）。gmtoffset(秒)を使う。
+  const tzoff = (typeof meta.gmtoffset === 'number') ? meta.gmtoffset : 0;
+  const dayOf = (t) => (typeof t === 'number') ? Math.floor((t + tzoff) / 86400) : null;
+  const toDateTz = (t) => (typeof t === 'number') ? new Date((t + tzoff) * 1000).toISOString().slice(0, 10) : null;
+  // 前日終値＝「取引所TZの“今日(暦日)”より前の、最後に存在する有効終値」。
+  // 基準を regularMarketTime（＝データ最終セッション）ではなく現在の暦日にするのが要点。
+  // でないと米株のプレ前・休場日に取得した時、最終バーが前営業日になり chartPreviousClose が2営業日前を
+  // 指して前日終値が1日ズレる（例: Juneteenth(6/19)翌営業日に SPCX が6/17値=191.82になる事故。正は6/18=185）。
+  const todayDay = Math.floor((Date.now() / 1000 + tzoff) / 86400);
   let curDay = dayOf(meta.regularMarketTime);
   if (curDay == null) {
     for (let i = closeArr.length - 1; i >= 0; i--) if (typeof closeArr[i] === 'number') { curDay = dayOf(ts[i]); break; }
   }
-  let prevCloseArr = null;
+  if (curDay == null || todayDay > curDay) curDay = todayDay; // 現在の暦日を優先（プレ/休場で最終バーが前営業日でも今日基準にする）
+  let prevCloseArr = null, prevCloseTs = null;
   for (let i = closeArr.length - 1; i >= 0; i--) {
     if (typeof closeArr[i] !== 'number') continue;
     const d = dayOf(ts[i]);
-    if (curDay == null || d == null || d < curDay) { prevCloseArr = closeArr[i]; break; }
+    if (curDay == null || d == null || d < curDay) { prevCloseArr = closeArr[i]; prevCloseTs = ts[i] || null; break; }
   }
   const prevClose = prevCloseArr != null
     ? prevCloseArr
     : num(meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose);
+  const prevCloseDate = toDateTz(prevCloseTs); // 前日終値が付いた実際の引け日（休場を正しく反映）。配列から取れた時のみ
 
   // 52週高値（直近52週の最大値）。高値が付いた日付も記録（高値更新判定で「前回購入後に高値更新したか」を見るため）
   const now = Date.now() / 1000;
@@ -232,6 +242,7 @@ async function fetchYahooChart(symbol, range, interval) {
   return {
     price,
     prevClose: num(prevClose),
+    prevCloseDate,
     prevDayPct,
     high5y:   high5y || num(meta.fiftyTwoWeekHigh),
     high52w:  high52w || num(meta.fiftyTwoWeekHigh),
