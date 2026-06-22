@@ -2285,7 +2285,7 @@ function layoutTickerMarquee() {
   }
 }
 let _fitTimer = null;
-window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { if (document.querySelector('#app .mx-table')) sizeMatrixChips(); fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); }, 120); });
+window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { if (document.querySelector('#app .mx-table')) { fitMatrix(); sizeMatrixChips(); } fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); }, 120); });
 
 // 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート等で左端に戻らないように）
 function preserveTableScroll(fn) {
@@ -3542,9 +3542,11 @@ function renderReport() {
   if (reportTab === 'assets') {
     renderAssetTable();  // 先に表を確定（min-height）＝グラフの利用可能高さが安定し、表が後から動かない
     loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画（領域の高さは先に確保）
+  } else if (reportTab === 'matrix') {
+    sizeMatrixChips();  // チップ文字を枠にぴったり収まる最大サイズに（先に文字を確定）
+    fitMatrix();        // 表枠を画面下端まで伸ばす（高さいっぱい・下余白なし）
   } else {
-    if (reportTab === 'matrix') sizeMatrixChips(); // チップ文字を N個/行で切れない最大サイズに（枠サイズ確定後）
-    scheduleFit(); // マトリックス/取引サマリーの表を枠内スクロール＆画面いっぱいに（保有銘柄と同じ収まり）
+    scheduleFit();      // 取引サマリー等の表を枠内スクロール
   }
 }
 // 取引サマリー（期間: 全期間/今年）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
@@ -3649,8 +3651,8 @@ function matrixSectionHtml() {
     <div class="section-body" style="padding:12px 16px 16px">${toolbar}<div class="empty">該当する保有銘柄がありません。</div></div></div>`;
   const rows = matrixAxisSort(rowF, [...rowSet]);
   const cols = matrixAxisSort(colF, [...colSet]);
-  // チップ表示: 日本株＝銘柄名（略記して8文字に固定）／米国株＝ティッカー
-  const chipLabel = (s) => s.market === 'JP' ? esc(displayNameAbbr(s).slice(0, 8)) : esc((s.ticker || '').slice(0, 6));
+  // チップ表示: 日本株＝銘柄名（略記して6文字に固定）／米国株＝ティッカー
+  const chipLabel = (s) => s.market === 'JP' ? esc(displayNameAbbr(s).slice(0, 6)) : esc((s.ticker || '').slice(0, 6));
   // ツールチップの取得額: 米国株はドル建て、日本株は円建て（レンジ表記は出さない）
   const costTip = (it) => it.sec.market === 'US' ? '$' + num(it.costNative) : yen(it.costNative);
   const chip = (item) => {
@@ -3671,9 +3673,9 @@ function matrixSectionHtml() {
     }).join('');
     return `<tr><th class="mx-rowh">${matrixAxisLabel(rowF, r)}</th>${tds}</tr>`;
   }).join('');
-  return `<div class="section">
+  return `<div class="section" style="margin-bottom:0">
     <div class="section-head"><h2>${title}</h2></div>
-    <div class="section-body" style="padding:12px 16px 16px">
+    <div class="section-body" style="padding:12px 16px 8px">
       ${toolbar}
       ${legend}
       ${note}
@@ -3684,23 +3686,38 @@ function matrixSectionHtml() {
       </table></div>
     </div></div>`;
 }
-// マトリックスのチップ文字サイズを、セル幅から逆算して「N個/行でラベルが切れない」最大サイズに合わせる。
-// 列数(カテゴリ数)や画面幅でセル幅が変わるので、描画後に実測して動的に決める（固定フォントだと幅次第で切れるため）。
+// マトリックスのチップ文字サイズを、実測で「チップ枠にぴったり収まる最大サイズ」に合わせる。
+// 列数(カテゴリ数)や画面幅でチップ幅が変わるので、実際のラベル幅を測って文字が切れない範囲で最大化する
+// （固定/推定フォントだと余白が出たり切れたりするため、実測スケールで詰める）。
 function sizeMatrixChips() {
   const table = document.querySelector('#app .mx-table'); if (!table) return;
-  const cell = table.querySelector('tbody td.mx-cell:not(.mx-empty)'); if (!cell) return;
-  const isUS = matrixMarket === 'US';
-  const N = (matrixMarket === 'JP') ? 4 : 6;            // 1行あたりのチップ数
-  const maxChars = isUS ? 6 : 8;                        // 収めたい最大文字数（米株=ティッカー / 日本株=略記名8）
-  const emPerChar = isUS ? 0.62 : 1.0;                  // 半角ラテンは約0.62em、全角は約1em
-  const cs = getComputedStyle(cell);
-  const cellInner = cell.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  const gap = 4 * (N - 1);
-  const chipOuter = (cellInner - gap) / N;             // チップ1個の外幅
-  const chipInner = chipOuter - 8;                     // チップ左右padding(約4*2)を除いた文字領域
-  let font = (chipInner / (maxChars * emPerChar)) * 0.96; // 安全率
-  font = Math.max(6, Math.min(12, font));              // 6〜12px（密度のため小さめ許容）
+  const chips = [...table.querySelectorAll('.mx-chips .mx-chip')]; if (!chips.length) return;
+  const REF = 12; // 基準フォントで一度測ってから線形スケール
+  table.querySelectorAll('.mx-chips').forEach(c => { c.style.fontSize = REF + 'px'; });
+  const chip0 = chips[0], ccs = getComputedStyle(chip0);
+  const innerW = chip0.clientWidth - parseFloat(ccs.paddingLeft) - parseFloat(ccs.paddingRight); // チップ内の文字領域幅（全チップ均一）
+  // 同じフォント設定の隠しspanで各ラベルの実描画幅を測り、最大を取る
+  const meas = document.createElement('span');
+  meas.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font-weight:${ccs.fontWeight};font-family:${ccs.fontFamily};font-size:${REF}px;`;
+  document.body.appendChild(meas);
+  let maxText = 1;
+  for (const c of chips) { meas.textContent = c.textContent; if (meas.offsetWidth > maxText) maxText = meas.offsetWidth; }
+  meas.remove();
+  let font = REF * (innerW / maxText) * 0.98;           // 最も長いラベルがちょうど収まる最大フォント
+  font = Math.max(6, Math.min(14, font));               // 6〜14px
   table.querySelectorAll('.mx-chips').forEach(c => { c.style.fontSize = font.toFixed(1) + 'px'; });
+}
+// マトリックスの表枠を画面下端まで伸ばして高さいっぱいに表示（下に余白を作らない）。あふれる時は枠内スクロール。
+// 自己補正方式: いったん main いっぱいに広げて、はみ出した分だけ縮める＝paddingやmarginを実測せずぴったり収める。
+// （fitListTables が付けた max-height が残っていると縮むので必ず解除）
+function fitMatrix() {
+  const wrap = document.querySelector('#app .mx-wrap'); if (!wrap) return;
+  const main = wrap.closest('.content'); if (!main) return;
+  wrap.style.maxHeight = '';
+  wrap.style.height = main.clientHeight + 'px';          // いったん十分大きく（main があふれる）
+  const overflow = main.scrollHeight - main.clientHeight; // そのはみ出し量
+  const cur = wrap.offsetHeight;
+  wrap.style.height = Math.max(200, cur - overflow) + 'px'; // はみ出した分だけ縮める＝main がちょうど収まる
 }
 // マトリックス取得額レンジのマスタ（色・しきい値・米株換算レート）。
 function openMatrixBandMaster() {
