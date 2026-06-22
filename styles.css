@@ -892,8 +892,8 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .mx-empty { text-align: center; color: var(--faint); background: var(--panel); }
 /* チップは均一幅グリッド（N個/行はJS指定）。文字サイズは sizeMatrixChips() がセル幅から逆算し、
    ラベルが切れない最大サイズに合わせる（フォントを縮めて収める）。1個=1枠なので幅は完全に揃う。 */
-.mx-chips { display: grid; gap: 4px; align-content: flex-start; font-size: 12px; } /* font-size は sizeMatrixChips() が上書き（チップは継承）*/
-.mx-chip { display: flex; align-items: center; justify-content: center; min-width: 0; padding: 3px 4px; border-radius: 6px; font-weight: 600; font-family: var(--sans); cursor: pointer; line-height: 1.55; white-space: nowrap; overflow: hidden; }
+.mx-chips { display: grid; gap: 3px; align-content: flex-start; font-size: 12px; } /* gap=チップ間の隙間。font-size は sizeMatrixChips() が上書き（チップは継承）*/
+.mx-chip { display: flex; align-items: center; justify-content: center; min-width: 0; padding: 2px 3px; border-radius: 6px; font-weight: 600; font-family: var(--sans); cursor: pointer; line-height: 1.5; white-space: nowrap; overflow: hidden; } /* padding を小さくすると文字を大きくできる */
 /* 凡例のチップは内容幅（グリッド外・通常サイズ） */
 .mx-legend .mx-chip { display: inline-flex; overflow: visible; font-size: 12px; }
 /* 列見出しの付帯情報（カテゴリの投資額・ルールの下落率） */

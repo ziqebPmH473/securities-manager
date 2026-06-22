@@ -3651,17 +3651,17 @@ function matrixSectionHtml() {
     <div class="section-body" style="padding:12px 16px 16px">${toolbar}<div class="empty">該当する保有銘柄がありません。</div></div></div>`;
   const rows = matrixAxisSort(rowF, [...rowSet]);
   const cols = matrixAxisSort(colF, [...colSet]);
-  // チップ表示: 日本株＝銘柄名（略記して6文字に固定）／米国株＝ティッカー
-  const chipLabel = (s) => s.market === 'JP' ? esc(displayNameAbbr(s).slice(0, 6)) : esc((s.ticker || '').slice(0, 6));
+  // チップ表示: 日本株＝銘柄名（略記して6文字）／米国株＝ティッカー（4文字）。★文字数を変えるならここの slice(0, N)。
+  const chipLabel = (s) => s.market === 'JP' ? esc(displayNameAbbr(s).slice(0, 6)) : esc((s.ticker || '').slice(0, 4));
   // ツールチップの取得額: 米国株はドル建て、日本株は円建て（レンジ表記は出さない）
   const costTip = (it) => it.sec.market === 'US' ? '$' + num(it.costNative) : yen(it.costNative);
   const chip = (item) => {
     const i = mxBandOf(item.cost); const b = bands[i] || {};
     return `<span class="mx-chip" style="${mxChipStyle(b.color)}" title="${esc(calc.displayName(item.sec))}　取得 ${costTip(item)}" onclick="openSecurityDetail(${item.sec.id})">${chipLabel(item.sec)}</span>`;
   };
-  // 1行あたりのチップ数を市場で固定（均一幅）: 日本株=4 / 米国株=6 / 全部=6。
-  // フォントは sizeMatrixChips() がセル幅から逆算して縮め、ラベル（日本株8文字・ティッカー）が切れないようにする。
-  const chipCols = matrixMarket === 'JP' ? 4 : 6;
+  // ★1行あたりのチップ数（均一幅）: 米国株=6 / それ以外(日本株・全部)=4。ここを変えると1行の個数が変わる。
+  // 全部(ALL)は日本株が見えるよう4個。フォントは sizeMatrixChips() がラベルが切れない最大サイズに自動調整。
+  const chipCols = matrixMarket === 'US' ? 6 : 4;
   // 列幅は均等固定（table-layout:fixed）。先頭の行見出し列だけ専用幅、残りを cols 等分。
   const colgroup = `<colgroup><col class="mx-rowh-col">${cols.map(() => '<col>').join('')}</colgroup>`;
   const head = `<tr><th class="mx-corner">${esc(matrixAxisName(rowF))} ＼ ${esc(matrixAxisName(colF))}</th>${cols.map(c => `<th class="mx-colh">${matrixAxisLabel(colF, c)}</th>`).join('')}</tr>`;
@@ -3703,8 +3703,9 @@ function sizeMatrixChips() {
   let maxText = 1;
   for (const c of chips) { meas.textContent = c.textContent; if (meas.offsetWidth > maxText) maxText = meas.offsetWidth; }
   meas.remove();
-  let font = REF * (innerW / maxText) * 0.98;           // 最も長いラベルがちょうど収まる最大フォント
-  font = Math.max(6, Math.min(14, font));               // 6〜14px
+  // ★最も長いラベルがチップ幅にちょうど収まる最大フォント。0.99=安全率（小さくすると詰める/大きくすると切れやすい）、Math.min(18,…)=上限。
+  let font = REF * (innerW / maxText) * 0.99;
+  font = Math.max(6, Math.min(18, font));               // 6〜18px
   table.querySelectorAll('.mx-chips').forEach(c => { c.style.fontSize = font.toFixed(1) + 'px'; });
 }
 // マトリックスの表枠を画面下端まで伸ばして高さいっぱいに表示（下に余白を作らない）。あふれる時は枠内スクロール。
