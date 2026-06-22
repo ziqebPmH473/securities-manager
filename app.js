@@ -1916,9 +1916,22 @@ function cfCellValue(key, sec, ctx) {
     default: return null;
   }
 }
+// 銘柄名の表記正規化＋略記（表のラベルに情報を詰めるため）。
+// 全角英数・スペースを半角化し、冗長な社名語を略記（ホールディングス→HD / フィナンシャルグループ→FG / グループ→G）。
+function nameAbbr(name) {
+  let s = String(name || '');
+  s = s.replace(/[Ａ-Ｚａ-ｚ０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)); // 全角英数→半角
+  s = s.replace(/[　\s]+/g, ' ').trim();                                                  // 全角/連続スペース→半角1つ
+  s = s.replace(/ホールディングス|ホールディング/g, 'HD');
+  s = s.replace(/フィナンシャル・?グループ/g, 'FG');
+  s = s.replace(/グループ/g, 'G');
+  return s;
+}
+// 表ラベル用の略記名（保有・サイン等の名称列で使用）
+function displayNameAbbr(sec) { return nameAbbr(calc.displayName(sec)); }
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
-  name:      (s,c) => `<td class="l">${rankBadgeHtml(s)}<strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
+  name:      (s,c) => `<td class="l">${rankBadgeHtml(s)}<strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`,
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
@@ -3398,7 +3411,7 @@ function renderMarketTab() {
         <td>${i + 1}</td>
         <td class="l"><span class="tag ${market.toLowerCase()}">${esc(mktMarketLabel(it, market))}</span></td>
         <td class="l col-code"><span class="tk ${market.toLowerCase()}" style="cursor:pointer" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.code)}</span></td>
-        <td class="l"><strong class="lnk-ext nm-strong" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.name || it.code)}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
+        <td class="l"><strong class="lnk-ext nm-strong mkt-name" onclick="mktClickName('${esc(it.code)}','${market}')" title="${esc(it.name || it.code)}">${esc(nameAbbr(it.name || it.code))}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
         <td${cfStyle('price', it.price, 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
         <td class="${cls(dc)}"${cfStyle('day', dc, 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
         <td${cfStyle('high5y', high5y, 'market')}>${high5y != null ? fmtAmt(high5y, market) : '—'}</td>
@@ -3533,6 +3546,8 @@ function renderReport() {
   if (reportTab === 'assets') {
     renderAssetTable();  // 先に表を確定（min-height）＝グラフの利用可能高さが安定し、表が後から動かない
     loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画（領域の高さは先に確保）
+  } else {
+    scheduleFit(); // マトリックス/取引サマリーの表を枠内スクロール＆画面いっぱいに（保有銘柄と同じ収まり）
   }
 }
 // 取引サマリー（期間: 全期間/今年）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
@@ -3604,9 +3619,10 @@ function matrixSectionHtml() {
     if (sec.market !== 'JP' && sec.market !== 'US') continue;
     if (matrixMarket !== 'ALL' && sec.market !== matrixMarket) continue;
     const th = calc.totalHolding(sec.id); if (!(th.qty > 0)) continue;
-    const cost = sec.market === 'US' ? th.acquiredCost * rate : th.acquiredCost; // 円換算（米株は設定レート）
+    const costNative = th.acquiredCost;                                          // 原通貨の取得額（米株=$ / 日本株=円）
+    const cost = sec.market === 'US' ? costNative * rate : costNative;            // レンジ判定用の円換算（米株は設定レート）
     const rk = matrixAxisVal(sec, rowF), ck = matrixAxisVal(sec, colF);
-    (cell[rk + '|' + ck] ||= []).push({ sec, cost });
+    (cell[rk + '|' + ck] ||= []).push({ sec, cost, costNative });
     rowSet.add(rk); colSet.add(ck); n++;
   }
   const mseg = `<div class="seg">${[['ALL', '全部'], ['US', '米国株'], ['JP', '日本株']].map(([m, l]) => `<button class="${matrixMarket === m ? 'active' : ''}" onclick="setMatrixMarket('${m}')">${l}</button>`).join('')}</div>`;
@@ -3624,11 +3640,16 @@ function matrixSectionHtml() {
     <div class="section-body" style="padding:12px 16px 16px">${toolbar}<div class="empty">該当する保有銘柄がありません。</div></div></div>`;
   const rows = matrixAxisSort(rowF, [...rowSet]);
   const cols = matrixAxisSort(colF, [...colSet]);
-  const tk = (s) => esc(s.market === 'JP' ? s.ticker : (s.ticker || '').slice(0, 6));
+  // チップ表示: 日本株＝銘柄名（略記して8文字に固定）／米国株＝ティッカー
+  const chipLabel = (s) => s.market === 'JP' ? esc(displayNameAbbr(s).slice(0, 8)) : esc((s.ticker || '').slice(0, 6));
+  // ツールチップの取得額: 米国株はドル建て、日本株は円建て（レンジ表記は出さない）
+  const costTip = (it) => it.sec.market === 'US' ? '$' + num(it.costNative) : yen(it.costNative);
   const chip = (item) => {
     const i = mxBandOf(item.cost); const b = bands[i] || {};
-    return `<span class="mx-chip" style="${mxChipStyle(b.color)}" title="${esc(calc.displayName(item.sec))}　取得 ${yen(item.cost)}（${esc(b.label || '')}）" onclick="openSecurityDetail(${item.sec.id})">${tk(item.sec)}</span>`;
+    return `<span class="mx-chip" style="${mxChipStyle(b.color)}" title="${esc(calc.displayName(item.sec))}　取得 ${costTip(item)}" onclick="openSecurityDetail(${item.sec.id})">${chipLabel(item.sec)}</span>`;
   };
+  // 列幅は均等固定（table-layout:fixed）。先頭の行見出し列だけ専用幅、残りを cols 等分。
+  const colgroup = `<colgroup><col class="mx-rowh-col">${cols.map(() => '<col>').join('')}</colgroup>`;
   const head = `<tr><th class="mx-corner">${esc(matrixAxisName(rowF))} ＼ ${esc(matrixAxisName(colF))}</th>${cols.map(c => `<th class="mx-colh">${matrixAxisLabel(colF, c)}</th>`).join('')}</tr>`;
   const bodyRows = rows.map(r => {
     const tds = cols.map(c => {
@@ -3644,7 +3665,8 @@ function matrixSectionHtml() {
       ${toolbar}
       ${legend}
       ${note}
-      <div class="table-wrap"><table class="mx-table">
+      <div class="table-wrap mx-wrap"><table class="mx-table">
+        ${colgroup}
         <thead>${head}</thead>
         <tbody>${bodyRows}</tbody>
       </table></div>
