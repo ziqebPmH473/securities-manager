@@ -3656,8 +3656,6 @@ function matrixSectionHtml() {
     const i = mxBandOf(item.cost); const b = bands[i] || {};
     return `<span class="mx-chip" style="${mxChipStyle(b.color)}" title="${esc(calc.displayName(item.sec))}　取得 ${costTip(item)}" onclick="openSecurityDetail(${item.sec.id})">${chipLabel(item.sec)}</span>`;
   };
-  // 1行あたりのチップ数を市場で固定: 日本株=4（名前が長い）／米国株=6（ティッカーは短い）。全部は6。
-  const chipCols = matrixMarket === 'JP' ? 4 : 6;
   // 列幅は均等固定（table-layout:fixed）。先頭の行見出し列だけ専用幅、残りを cols 等分。
   const colgroup = `<colgroup><col class="mx-rowh-col">${cols.map(() => '<col>').join('')}</colgroup>`;
   const head = `<tr><th class="mx-corner">${esc(matrixAxisName(rowF))} ＼ ${esc(matrixAxisName(colF))}</th>${cols.map(c => `<th class="mx-colh">${matrixAxisLabel(colF, c)}</th>`).join('')}</tr>`;
@@ -3665,7 +3663,8 @@ function matrixSectionHtml() {
     const tds = cols.map(c => {
       const list = (cell[r + '|' + c] || []).slice().sort((a, b) => b.cost - a.cost);
       if (!list.length) return '<td class="mx-cell mx-empty">—</td>';
-      return `<td class="mx-cell"><div class="mx-chips" style="grid-template-columns:repeat(${chipCols},minmax(0,1fr))">${list.map(chip).join('')}</div></td>`;
+      // チップはラベルが切れない幅で、入るだけ折り返す（N個/行を強制すると文字が切れるため）。
+      return `<td class="mx-cell"><div class="mx-chips">${list.map(chip).join('')}</div></td>`;
     }).join('');
     return `<tr><th class="mx-rowh">${matrixAxisLabel(rowF, r)}</th>${tds}</tr>`;
   }).join('');
