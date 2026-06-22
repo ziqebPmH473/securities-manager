@@ -886,11 +886,13 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .mx-rowh { background: var(--panel-2); padding: 8px 8px; font-weight: 700; text-align: center; }
 .mx-cell { padding: 7px 8px; }
 .mx-empty { text-align: center; color: var(--faint); background: var(--panel); }
-/* チップは均一幅のグリッドに整列（ラベル幅が銘柄ごとに変わらず、レイアウトが安定）。1行あたり列数はセル幅で自動。 */
-.mx-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(74px, 1fr)); gap: 4px; align-content: flex-start; }
-.mx-chip { display: flex; align-items: center; justify-content: center; padding: 3px 6px; border-radius: 6px; font-size: 12px; font-weight: 600; font-family: var(--sans); cursor: pointer; line-height: 1.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* チップは均一幅グリッドに整列（ラベル幅が銘柄ごとに変わらず安定）。1行あたりの数は市場でJS指定（日本株4/米国株6）。 */
+.mx-chips { display: grid; gap: 4px; align-content: flex-start; }
+.mx-chip { display: flex; align-items: center; justify-content: center; min-width: 0; padding: 3px 5px; border-radius: 6px; font-size: 12px; font-weight: 600; font-family: var(--sans); cursor: pointer; line-height: 1.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 凡例のチップだけは内容幅で（グリッドに乗らない） */
 .mx-legend .mx-chip { display: inline-flex; }
+/* 列見出しの付帯情報（カテゴリの投資額・ルールの下落率） */
+.mx-axsub { font-size: 10.5px; font-weight: 400; color: var(--muted); margin-top: 2px; }
 
 /* ===== P3微調整: 一覧の行をすっきり（チップ縮小・行間タイト） ===== */
 table.fixed-cols.holdings.dense tbody td { padding: 4px 12px; line-height: 1.3; }

@@ -3598,9 +3598,21 @@ function matrixAxisSort(field, keys) {
   return keys.slice().sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
 }
 function matrixAxisLabel(field, key) {
-  if (field === 'category') return key === '未分類' ? '<span class="muted">未分類</span>' : categoryTag(key);
+  if (field === 'category') {
+    if (key === '未分類') return '<span class="muted">未分類</span>';
+    const c = (store.data.categories || []).find(x => x.category === key);
+    // カテゴリ軸は見出しに1回購入額（投資額）を併記。米国株表示は$、それ以外は円。
+    const amt = c ? `<div class="mx-axsub">${matrixMarket === 'US' ? '$' + num(c.amountUsd) : '¥' + num(c.amountJpy)}</div>` : '';
+    return categoryTag(key) + amt;
+  }
   if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return key === '未設定' ? '<span class="muted">未設定</span>' : gradeBadge({ rating: key });
   if (field === 'market') return `<span class="tag ${String(key).toLowerCase()}">${MARKET_LABEL[key] || esc(key)}</span>`;
+  if (field === 'ruleName') {
+    // ルール軸は見出しに初回/買い増しの下落率を併記。
+    const r = (store.data.rules || []).find(x => x.name === key);
+    const sub = r ? `<div class="mx-axsub">初-${r.initialDropPct}% / 増-${r.addonDropPct}%</div>` : '';
+    return esc(key) + sub;
+  }
   return esc(key);
 }
 // 区分×区分 の分布マトリックス。縦横の軸・市場・取得額レンジ（マスタ）を切替可能。各セルは該当銘柄を取得価額レンジ色のチップで表示（合計は出さない）。
@@ -3644,6 +3656,8 @@ function matrixSectionHtml() {
     const i = mxBandOf(item.cost); const b = bands[i] || {};
     return `<span class="mx-chip" style="${mxChipStyle(b.color)}" title="${esc(calc.displayName(item.sec))}　取得 ${costTip(item)}" onclick="openSecurityDetail(${item.sec.id})">${chipLabel(item.sec)}</span>`;
   };
+  // 1行あたりのチップ数を市場で固定: 日本株=4（名前が長い）／米国株=6（ティッカーは短い）。全部は6。
+  const chipCols = matrixMarket === 'JP' ? 4 : 6;
   // 列幅は均等固定（table-layout:fixed）。先頭の行見出し列だけ専用幅、残りを cols 等分。
   const colgroup = `<colgroup><col class="mx-rowh-col">${cols.map(() => '<col>').join('')}</colgroup>`;
   const head = `<tr><th class="mx-corner">${esc(matrixAxisName(rowF))} ＼ ${esc(matrixAxisName(colF))}</th>${cols.map(c => `<th class="mx-colh">${matrixAxisLabel(colF, c)}</th>`).join('')}</tr>`;
@@ -3651,7 +3665,7 @@ function matrixSectionHtml() {
     const tds = cols.map(c => {
       const list = (cell[r + '|' + c] || []).slice().sort((a, b) => b.cost - a.cost);
       if (!list.length) return '<td class="mx-cell mx-empty">—</td>';
-      return `<td class="mx-cell"><div class="mx-chips">${list.map(chip).join('')}</div></td>`;
+      return `<td class="mx-cell"><div class="mx-chips" style="grid-template-columns:repeat(${chipCols},minmax(0,1fr))">${list.map(chip).join('')}</div></td>`;
     }).join('');
     return `<tr><th class="mx-rowh">${matrixAxisLabel(rowF, r)}</th>${tds}</tr>`;
   }).join('');
@@ -7919,7 +7933,24 @@ function renderAssetChart() {
   el.style.height = h + 'px'; // 高さを固定＝期間/軸トグルやグラフ更新でも下の表が動かない
   el.innerHTML = assetStackChart(snaps, assetAxis, w, h);
   attachChartHover(el); // カーソルで日付・分類別評価額・合計を表示
+  // 収まり補正: assetChartBox の余白見積りが甘いと main.content がはみ出す（＝下に余白が出てスクロール要に）。
+  // 実測のはみ出し量だけグラフを縮めて1回だけ再描画し、ぴったり窓に収める（窓が小さく180pxを切る時はスクロール許容）。
+  if (!_assetChartFitting) {
+    const main = el.closest('.content');
+    if (main) {
+      const overflow = main.scrollHeight - main.clientHeight;
+      if (overflow > 2 && h - overflow >= 180) {
+        _assetChartFitting = true;
+        const h2 = h - overflow;
+        el.style.height = h2 + 'px';
+        el.innerHTML = assetStackChart(snaps, assetAxis, w, h2);
+        attachChartHover(el);
+        _assetChartFitting = false;
+      }
+    }
+  }
 }
+let _assetChartFitting = false;
 // グラフを「上部サマリ＋トグル＋グラフ＋表」がスクロールせず収まる範囲で最大サイズにする。
 // 高さ＝スクロール領域の下端 − グラフ上端 − 表の高さ（最も行数の多いカテゴリ別に固定済み）− 余白。
 // 幅は SVG が width:100% で容器幅に追従するので、容器幅(=凡例132+gap10を除く)を W に渡してアスペクト比＝高さを決める。
