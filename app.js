@@ -2250,20 +2250,17 @@ function fitListTables() {
     const avail = Math.max(240, window.innerHeight - top - 14);
     if (wrap.scrollHeight > avail) wrap.style.maxHeight = avail + 'px'; // はみ出す時だけ枠内スクロール化
   });
-  // 一覧（単一テーブル）ビューでページがまだ縦に溢れる場合、その溢れ量だけ枠を縮めてページ内に収める。
-  // section-body の下padding等で枠下の余白が画面ごとに違う（マーケットは大きい）ため、決め打ち定数では
-  // 収まらない。実測補正なら画面差を吸収できる。複数テーブルのレポート/マスタは対象外。
+  // 単一テーブルのビューでページがまだ縦に溢れる場合は、溢れた分だけ枠を縮めてページ内に収める（枠内スクロール化）。
+  // section-body の下padding等で枠下の余白が画面ごとに違うため、実測の溢れ量で補正する。
+  // ※ 以前は逆に「行が少ない時に枠を画面下端まで min-height で伸ばす」処理を入れていたが、
+  //   小さな表が無駄に引き伸ばされて余白が増え、複数セクションのある画面（転記用等）を下に押し出して
+  //   ページ全体スクロールが必要になっていた。余白は出さず自然高さにするため撤去。
   if (wraps.length === 1) {
     const w = wraps[0];
     const overflow = document.documentElement.scrollHeight - window.innerHeight;
     if (overflow > 1) {
       const target = Math.max(200, w.offsetHeight - overflow - 2);
       w.style.maxHeight = target + 'px';
-    } else {
-      // 行が少なくて画面下に余白が出る時は、枠を画面下端まで伸ばし保有銘柄のように画面いっぱいに見せる（買い増しサイン等）
-      const top = w.getBoundingClientRect().top;
-      const avail = Math.max(240, window.innerHeight - top - 14);
-      if (w.scrollHeight < avail) w.style.minHeight = avail + 'px';
     }
   }
 }
