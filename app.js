@@ -2285,7 +2285,7 @@ function layoutTickerMarquee() {
   }
 }
 let _fitTimer = null;
-window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); }, 120); });
+window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { if (document.querySelector('#app .mx-table')) sizeMatrixChips(); fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); }, 120); });
 
 // 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート等で左端に戻らないように）
 function preserveTableScroll(fn) {
@@ -3543,6 +3543,7 @@ function renderReport() {
     renderAssetTable();  // 先に表を確定（min-height）＝グラフの利用可能高さが安定し、表が後から動かない
     loadPortfolioChart(); // 履歴(サーバー日次＋取込済み過去)を取得して描画（領域の高さは先に確保）
   } else {
+    if (reportTab === 'matrix') sizeMatrixChips(); // チップ文字を N個/行で切れない最大サイズに（枠サイズ確定後）
     scheduleFit(); // マトリックス/取引サマリーの表を枠内スクロール＆画面いっぱいに（保有銘柄と同じ収まり）
   }
 }
@@ -3656,6 +3657,9 @@ function matrixSectionHtml() {
     const i = mxBandOf(item.cost); const b = bands[i] || {};
     return `<span class="mx-chip" style="${mxChipStyle(b.color)}" title="${esc(calc.displayName(item.sec))}　取得 ${costTip(item)}" onclick="openSecurityDetail(${item.sec.id})">${chipLabel(item.sec)}</span>`;
   };
+  // 1行あたりのチップ数を市場で固定（均一幅）: 日本株=4 / 米国株=6 / 全部=6。
+  // フォントは sizeMatrixChips() がセル幅から逆算して縮め、ラベル（日本株8文字・ティッカー）が切れないようにする。
+  const chipCols = matrixMarket === 'JP' ? 4 : 6;
   // 列幅は均等固定（table-layout:fixed）。先頭の行見出し列だけ専用幅、残りを cols 等分。
   const colgroup = `<colgroup><col class="mx-rowh-col">${cols.map(() => '<col>').join('')}</colgroup>`;
   const head = `<tr><th class="mx-corner">${esc(matrixAxisName(rowF))} ＼ ${esc(matrixAxisName(colF))}</th>${cols.map(c => `<th class="mx-colh">${matrixAxisLabel(colF, c)}</th>`).join('')}</tr>`;
@@ -3663,8 +3667,7 @@ function matrixSectionHtml() {
     const tds = cols.map(c => {
       const list = (cell[r + '|' + c] || []).slice().sort((a, b) => b.cost - a.cost);
       if (!list.length) return '<td class="mx-cell mx-empty">—</td>';
-      // チップはラベルが切れない幅で、入るだけ折り返す（N個/行を強制すると文字が切れるため）。
-      return `<td class="mx-cell"><div class="mx-chips">${list.map(chip).join('')}</div></td>`;
+      return `<td class="mx-cell"><div class="mx-chips" style="grid-template-columns:repeat(${chipCols},minmax(0,1fr))">${list.map(chip).join('')}</div></td>`;
     }).join('');
     return `<tr><th class="mx-rowh">${matrixAxisLabel(rowF, r)}</th>${tds}</tr>`;
   }).join('');
@@ -3680,6 +3683,24 @@ function matrixSectionHtml() {
         <tbody>${bodyRows}</tbody>
       </table></div>
     </div></div>`;
+}
+// マトリックスのチップ文字サイズを、セル幅から逆算して「N個/行でラベルが切れない」最大サイズに合わせる。
+// 列数(カテゴリ数)や画面幅でセル幅が変わるので、描画後に実測して動的に決める（固定フォントだと幅次第で切れるため）。
+function sizeMatrixChips() {
+  const table = document.querySelector('#app .mx-table'); if (!table) return;
+  const cell = table.querySelector('tbody td.mx-cell:not(.mx-empty)'); if (!cell) return;
+  const isUS = matrixMarket === 'US';
+  const N = (matrixMarket === 'JP') ? 4 : 6;            // 1行あたりのチップ数
+  const maxChars = isUS ? 6 : 8;                        // 収めたい最大文字数（米株=ティッカー / 日本株=略記名8）
+  const emPerChar = isUS ? 0.62 : 1.0;                  // 半角ラテンは約0.62em、全角は約1em
+  const cs = getComputedStyle(cell);
+  const cellInner = cell.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const gap = 4 * (N - 1);
+  const chipOuter = (cellInner - gap) / N;             // チップ1個の外幅
+  const chipInner = chipOuter - 8;                     // チップ左右padding(約4*2)を除いた文字領域
+  let font = (chipInner / (maxChars * emPerChar)) * 0.96; // 安全率
+  font = Math.max(6, Math.min(12, font));              // 6〜12px（密度のため小さめ許容）
+  table.querySelectorAll('.mx-chips').forEach(c => { c.style.fontSize = font.toFixed(1) + 'px'; });
 }
 // マトリックス取得額レンジのマスタ（色・しきい値・米株換算レート）。
 function openMatrixBandMaster() {
