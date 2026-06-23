@@ -1350,8 +1350,12 @@ const api = {
     };
     const secs = allSecs.filter(needsFetch);
     const holdSymbols = secs.map(yahooSymbol);
-    // Cloudflareのサブリクエスト上限(約50)対策で小バッチに分割。withHighsは5年日足取得で応答が大きいため小さめ(10)、通常は1呼出/銘柄(40)。
-    const BATCH = withHighs ? 10 : 40;
+    // Cloudflareのサブリクエスト上限(約50/リクエスト)対策で小バッチに分割。
+    // ★重要: 米株はFinnhubが失敗/レート制限/非対応(c=0)だと1銘柄でFinnhub＋Yahooの【2サブリクエスト】を使う。
+    //   旧BATCH=40だと全フォールバック時に最大80サブリクエスト→上限超過で後半銘柄の取得がまるごと失敗し、
+    //   現在値が更新されず「前日終値のまま」固定される不具合があった。2倍を見込み20(=最大40)に下げて上限内に収める。
+    //   withHighsは5年日足も取るため小さめ(10)。
+    const BATCH = withHighs ? 10 : 20;
     const batches = [];
     for (let i = 0; i < holdSymbols.length; i += BATCH) batches.push(holdSymbols.slice(i, i + BATCH));
     let quotes = {}, lightQuotes = {};
