@@ -84,7 +84,7 @@ function solidSwatchPicker(name, selected) {
 }
 const DEFAULT_MATRIX_USDJPY = 100; // 「全部」表示・米国株取得額の円換算レート（初期値。マスタで変更可）
 // 前日終値の取得ロジック版。上げると当日でも refreshPrevCloses を一度だけ再計算（取引所TZ今日基準の修正を即反映）。
-const PREVCLOSE_VER = 2;
+const PREVCLOSE_VER = 3;
 
 const MARKET_LABEL = { US: '米国株', JP: '日本株', FUND: '投信' };
 const MARKET_CCY = { US: '$', JP: '¥', FUND: '¥' };
@@ -1368,7 +1368,7 @@ const api = {
       toast('価格取得に失敗（手入力で更新できます）');
       return;
     }
-    let usSource = null;
+    let usFinn = 0, usYah = 0; // 米株のソース内訳（finnhub=ほぼリアルタイム / yahoo=15〜20分遅延）
     for (const sec of secs) {
       const q = quotes[yahooSymbol(sec)];
       if (q && !q.error && q.price != null) {
@@ -1392,10 +1392,15 @@ const api = {
           volume: q.volume != null ? q.volume : (prev.volume ?? null), // 当日出来高（売買代金算出用・未取得時は前回値を保持）
           fetchedAt: q.fetchedAt,
         };
-        if (sec.market === 'US' && q.source && !usSource) usSource = q.source;
+        if (sec.market === 'US' && q.source) { if (/finnhub/.test(q.source)) usFinn++; else usYah++; }
       }
     }
-    if (usSource) store.data.lastPriceSource = usSource;
+    // ソース表示は「最初の1銘柄」ではなく米株全体の多数決にする（先頭銘柄がFinnhub非対応/レート制限で
+    // フォールバックすると、全体がFinnhubでも『Yahoo』表示になり誤解を生んでいた）。内訳も保存しツールチップに出す。
+    if (usFinn || usYah) {
+      store.data.lastPriceSource = usFinn >= usYah ? 'finnhub' : 'yahoo';
+      store.data.lastPriceSrcCounts = { finnhub: usFinn, yahoo: usYah };
+    }
     if (withHighs) store.data.lastHighsDate = today(); // 高値はこの取得で最新化
     const fx = lightQuotes['USDJPY=X'];
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
@@ -1406,10 +1411,12 @@ const api = {
     }
     store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
-    // 前日終値を日次で確実取得（light=range=5d を取引所TZの今日基準で選別＝プレ前/休場でも1日ズレない）。
-    // 通常は1日1回。ただし前日終値ロジックを更新した時は当日でも一度だけ再計算する（PREVCLOSE_VER）。
-    if (store.data.lastPrevCloseDate !== today() || store.data.prevCloseVer !== PREVCLOSE_VER) {
-      try { await this.refreshPrevCloses(allSecs); store.data.lastPrevCloseDate = today(); store.data.prevCloseVer = PREVCLOSE_VER; store.save(); } catch (_) {}
+    // 前日終値を確実取得（light=range=5d を取引所TZの今日基準で選別＝プレ前/休場でも1日ズレない）。
+    // キー＝JST暦日＋米国ET暦日。どちらかの市場の暦日が変わったら取り直す（米株はJST夜にET日付が変わるため、
+    // 1日1回(UTC/JST日付)ガードだとJST夜の米国オープン時に前日終値が1日古いまま固定される＝今回の不具合）。
+    // PREVCLOSE_VER 不一致時は当日でも一度だけ再計算（ロジック更新の即時反映）。
+    if (store.data.lastPrevCloseKey !== prevCloseKey() || store.data.prevCloseVer !== PREVCLOSE_VER) {
+      try { await this.refreshPrevCloses(allSecs); store.data.lastPrevCloseKey = prevCloseKey(); store.data.prevCloseVer = PREVCLOSE_VER; store.save(); } catch (_) {}
     }
     // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
     await this.refreshExtended(allSecs);
@@ -2429,9 +2436,14 @@ function updateHeader() {
   const um = document.getElementById('update-meta');
   if (um) {
     const t = store.data.lastPriceUpdate ? fmtDateTime(store.data.lastPriceUpdate).replace(/^\S+\s/, '') : '—';
-    // 米株の価格ソースを併記（finnhub=ほぼリアルタイム / yahoo=15〜20分遅延）。判別・遅延の診断用
+    // 米株の価格ソースを併記（finnhub=ほぼリアルタイム / yahoo=15〜20分遅延）。判別・遅延の診断用。
+    // ラベルは米株全体の多数決。ツールチップに finnhub/yahoo の内訳を出す（一部だけYahooでも実態がわかる）。
     const src = store.data.lastPriceSource;
-    const srcLabel = src ? (/finnhub/.test(src) ? '<span style="color:var(--green,#16a34a)">Finnhub</span>' : `<span class="muted" title="米株は15〜20分遅延。リアルタイムにはFinnhubキー設定が必要">Yahoo(遅延)</span>`) : '';
+    const cnt = store.data.lastPriceSrcCounts;
+    const cntStr = cnt ? `（Finnhub ${cnt.finnhub} / Yahoo ${cnt.yahoo}）` : '';
+    const srcLabel = src ? (/finnhub/.test(src)
+      ? `<span style="color:var(--green,#16a34a)" title="米株の多数がFinnhub（ほぼリアルタイム）${cntStr}。Yahooの分は15〜20分遅延">Finnhub</span>`
+      : `<span class="muted" title="米株の多数がYahoo（15〜20分遅延）${cntStr}。Finnhubが非対応銘柄/レート制限でフォールバックしています。リアルタイムにはFinnhubの対応銘柄/上限を確認">Yahoo(遅延)</span>`) : '';
     um.innerHTML = `更新<br><b>${t}</b>${srcLabel ? ` <span style="font-size:10px">${srcLabel}</span>` : ''}`;
   }
   // 未ログイン警告: 自動同期ONなのに未ログイン＝この端末にしか保存されない（他端末と共有されない）
@@ -8252,6 +8264,11 @@ function setAssetAxis(a) {
   renderAssetChart();
 }
 function todayJst() { return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
+// 米国東部時刻(ET)の暦日(YYYY-MM-DD)。米株の「営業日」はこれで変わる。
+function todayEt() { const off = usDST(Date.now()) ? 4 : 5; return new Date(Date.now() - off * 3600 * 1000).toISOString().slice(0, 10); }
+// 前日終値の再取得キー: JSTの暦日＋米国ETの暦日。どちらかの市場の暦日が変わったら取り直す。
+// （米株はJST日中にET日付が変わる＝JST/UTC日付だけのガードだと、JST夜の米国市場オープン時に前日終値が1日古いまま固定される）
+function prevCloseKey() { return todayJst() + '|' + todayEt(); }
 async function loadPortfolioChart() {
   const el = document.getElementById('portfolio-chart'); if (!el) return;
   const note = (html) => { el.innerHTML = `<div class="notice" style="margin:0">${html}</div>`; };
