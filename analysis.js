@@ -517,6 +517,15 @@
       mk += `<circle cx="${x}" cy="${y}" r="3" fill="${col}"/>`;
       mk += `<text x="${x}" y="${(+y + (m.up ? -6 : 13)).toFixed(1)}" fill="${col}" font-size="9" text-anchor="middle">${esc(m.label || '')}</text>`;
     });
+    // 期間内の高値・安値マーカー（既定で表示。opts.showHL===false で無効化）
+    if (opts.showHL !== false) {
+      let hiI = 0, loI = 0, hiV = -Infinity, loV = Infinity;
+      bars.forEach((b, i) => { if (b.h > hiV) { hiV = b.h; hiI = i; } if (b.l < loV) { loV = b.l; loI = i; } });
+      const hx = cx(hiI).toFixed(1), hy = py(hiV);
+      const lx = cx(loI).toFixed(1), ly = py(loV);
+      mk += `<circle cx="${hx}" cy="${hy.toFixed(1)}" r="3.5" fill="#c026d3"/><text x="${hx}" y="${(hy - 6).toFixed(1)}" fill="#c026d3" font-size="10" text-anchor="middle">高値 ${fmtNum(hiV)}</text>`;
+      mk += `<circle cx="${lx}" cy="${ly.toFixed(1)}" r="3.5" fill="#0d9488"/><text x="${lx}" y="${(ly + 14).toFixed(1)}" fill="#0d9488" font-size="10" text-anchor="middle">安値 ${fmtNum(loV)}</text>`;
+    }
 
     const title = opts.title ? `<text x="${pad.l}" y="${pad.t - 1}" fill="var(--muted)" font-size="10">${esc(opts.title)}</text>` : '';
     return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">
