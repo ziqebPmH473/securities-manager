@@ -5571,6 +5571,8 @@ let anaCat = '';              // カテゴリ
 let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
 const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
+// 分析エンジンの版。パターン/指標を追加したら上げる。保存結果の ver がこれと違えば「分析」で再計算対象にする。
+const TECH_VER = 2;
 
 function anaToday() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function anaThresholds() { return TA.mergeThresholds(store.data.settings && store.data.settings.techThresholds); }
@@ -5637,6 +5639,8 @@ function renderAnalysis() {
     </div>`;
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
   applyStickyCols(document.querySelector('#app table.fixed-cols'));
+  // 直接再描画（検索/フィルタ/分析/しきい値）でも main.content 基準で表を枠内に収める（[[scroll-container-main-content]]）
+  scheduleFit();
 }
 
 function anaSetMarket(m) { anaMarket = m; renderAnalysis(); }
@@ -5657,8 +5661,9 @@ function anaTogglePanel() { anaPanelOpen = !anaPanelOpen; renderAnalysis(); }
 async function runAnalysis() {
   const targets = analysisTargets();
   const today = anaToday();
-  const todo = targets.filter(s => { const r = store.data.techAnalysis[priceKey(s)]; return !r || r.lastAnalyzed !== today; });
-  if (!todo.length) { toast('対象はすべて当日分析済みです'); return; }
+  // 当日未分析、または旧バージョンで分析済み（新パターン/指標が未計算で「-」のまま）の銘柄を再計算対象にする
+  const todo = targets.filter(s => { const r = store.data.techAnalysis[priceKey(s)]; return !r || r.lastAnalyzed !== today || r.ver !== TECH_VER; });
+  if (!todo.length) { toast('対象はすべて最新版で当日分析済みです'); return; }
   let ok = 0, fail = 0;
   busyShow(`分析中… 0/${todo.length}`);
   for (let i = 0; i < todo.length; i++) {
@@ -5688,6 +5693,7 @@ function saveTechResult(sec, result, today) {
   history.push({ date: today, best: result.best, scores }); // 1日1点
   while (history.length > 104) history.shift();             // 上限104点（週次2年相当）で剪定（§5）
   store.data.techAnalysis[key] = {
+    ver: TECH_VER,
     lastAnalyzed: today, best: result.best, warn: result.warn, patterns: result.patterns,
     metrics: result.metrics, levels: result.levels, marks: result.marks,
     evidence: result.evidence, lastClose: result.lastClose,
