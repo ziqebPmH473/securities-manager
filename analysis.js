@@ -77,6 +77,42 @@
     return n ? sum / n : null;
   }
 
+  // 指数移動平均（EMA）。配列長と同じ長さ、最初の有効値は SMA で種をまく。
+  function ema(vals, period) {
+    const out = new Array(vals.length).fill(null);
+    const k = 2 / (period + 1);
+    let prev = null, seed = 0, cnt = 0;
+    for (let i = 0; i < vals.length; i++) {
+      const v = vals[i];
+      if (!isNum(v)) { out[i] = prev; continue; }
+      if (prev == null) { seed += v; cnt++; if (cnt === period) { prev = seed / period; out[i] = prev; } }
+      else { prev = v * k + prev * (1 - k); out[i] = prev; }
+    }
+    return out;
+  }
+
+  // RSI（Wilder方式）。配列長と同じ長さ、period本たまるまで null。
+  function rsi(closes, period) {
+    const out = new Array(closes.length).fill(null);
+    let avgG = 0, avgL = 0;
+    for (let i = 1; i < closes.length; i++) {
+      const ch = closes[i] - closes[i - 1];
+      const g = ch > 0 ? ch : 0, l = ch < 0 ? -ch : 0;
+      if (i <= period) { avgG += g; avgL += l; if (i === period) { avgG /= period; avgL /= period; out[i] = 100 - 100 / (1 + (avgL === 0 ? 100 : avgG / avgL)); } }
+      else { avgG = (avgG * (period - 1) + g) / period; avgL = (avgL * (period - 1) + l) / period; out[i] = 100 - 100 / (1 + (avgL === 0 ? 100 : avgG / avgL)); }
+    }
+    return out;
+  }
+
+  // MACD（fast/slow/signal）。{macd:[], signal:[], hist:[]}
+  function macd(closes, fast, slow, sig) {
+    const ef = ema(closes, fast), es = ema(closes, slow);
+    const macdLine = closes.map((_, i) => (ef[i] != null && es[i] != null) ? ef[i] - es[i] : null);
+    const signal = ema(macdLine.map(v => v == null ? NaN : v), sig).map(v => (v != null && isFinite(v)) ? v : null);
+    const hist = macdLine.map((v, i) => (v != null && signal[i] != null) ? v - signal[i] : null);
+    return { macd: macdLine, signal, hist };
+  }
+
   // 直近 period 本の平均出来高（i を含まず i 直前まで）。
   function avgVol(bars, i, period) {
     let sum = 0, n = 0;
@@ -148,13 +184,38 @@
     const ma200Slope = (ma200[n - 1] != null && ma200[n - 21] != null) ? (ma200[n - 1] >= ma200[n - 21] ? 'up' : 'down') : null;
     res.ma200Pos = ma200Pos; res.ma200Slope = ma200Slope;
 
+    // テクニカル指標（RSI / MACD）。サブチャート用に系列も保持。
+    const rsiArr = rsi(closes, 14);
+    const mac = macd(closes, 12, 26, 9);
+    res.rsi = rsiArr[n - 1];
+    res.rsiSeries = rsiArr;
+    res.macd = { macd: mac.macd[n - 1], signal: mac.signal[n - 1], hist: mac.hist[n - 1] };
+    res.macdSeries = mac;
+    // MACDゴールデンクロス（直近でmacdがsignalを上抜け）/ RSI状態
+    let macdCross = 'none';
+    for (let i = n - 1; i >= Math.max(1, n - 6); i--) {
+      if (mac.macd[i] != null && mac.signal[i] != null && mac.macd[i - 1] != null && mac.signal[i - 1] != null) {
+        if (mac.macd[i - 1] <= mac.signal[i - 1] && mac.macd[i] > mac.signal[i]) { macdCross = 'golden'; break; }
+        if (mac.macd[i - 1] >= mac.signal[i - 1] && mac.macd[i] < mac.signal[i]) { macdCross = 'dead'; break; }
+      }
+    }
+    res.macdCross = macdCross;
+    res.rsiState = res.rsi == null ? null : res.rsi <= 30 ? 'oversold' : res.rsi >= 70 ? 'overbought' : 'neutral';
+
     const pv = pivots(closes, struct.pivotWin);
     res.pivots = pv;
+    const baseCtx = { avgVol20, lastVol, lastClose, ma200Pos, ma200Slope, ma: { ma25: ma25[n - 1], ma75: ma75[n - 1], ma200: ma200[n - 1] } };
 
-    res.byPattern.range = measureRange(bars, closes, pv, struct, { avgVol20, lastVol, lastClose });
-    res.byPattern.doubleBottom = measureDoubleBottom(bars, closes, pv, struct, { avgVol20, lastVol, lastClose, ma200Pos, ma200Slope });
-    res.byPattern.cup = measureCup(bars, closes, pv, struct, { avgVol20, lastVol, lastClose, ma200Pos, ma200Slope });
-    res.byPattern.ascTriangle = measureAscTriangle(bars, closes, pv, struct, { avgVol20, lastVol, lastClose });
+    res.byPattern.range = measureRange(bars, closes, pv, struct, baseCtx);
+    res.byPattern.doubleBottom = measureDoubleBottom(bars, closes, pv, struct, baseCtx);
+    res.byPattern.cup = measureCup(bars, closes, pv, struct, baseCtx);
+    res.byPattern.ascTriangle = measureAscTriangle(bars, closes, pv, struct, baseCtx);
+    res.byPattern.roundBottom = measureRoundBottom(bars, closes, pv, struct, baseCtx, ma25, ma75);
+    res.byPattern.invHS = measureInvHS(bars, closes, pv, struct, baseCtx);
+    res.byPattern.flag = measureFlag(bars, closes, pv, struct, baseCtx);
+    res.byPattern.baseOnBase = measureBaseOnBase(bars, closes, pv, struct, baseCtx, sma(closes, 50));
+    res.byPattern.hsTop = measureHSTop(bars, closes, pv, struct, baseCtx);
+    res.byPattern.doubleTop = measureDoubleTop(bars, closes, pv, struct, baseCtx);
     return res;
   }
 
@@ -312,25 +373,165 @@
     };
   }
 
+  // --- ラウンドボトム（長期低迷からの回復） ---
+  function measureRoundBottom(bars, closes, pv, struct, ctx, ma25, ma75) {
+    const n = bars.length;
+    if (n < 180) return null;
+    const bottom = minLow(bars, 0, n - 1);
+    const preHigh = maxHigh(bars, 0, Math.max(1, bottom.i)).v;
+    const preDropPct = pct(bottom.v, preHigh); // 負（下落率）
+    // 底値+15%以内に滞在した割合（全期間）
+    const zone = bottom.v * 1.15; let inZone = 0; for (let i = 0; i < n; i++) if (bars[i].l <= zone) inZone++;
+    const baseStayRatio = inZone / n * 100;
+    // 安値切り上げ: 直近60日の最安値 > その前120日の最安値
+    const recentLow = minLow(bars, Math.max(0, n - 60), n - 1).v;
+    const priorLow = minLow(bars, Math.max(0, n - 180), Math.max(1, n - 60)).v;
+    const lowsRising = recentLow > priorLow ? 1 : 0;
+    const maImproved = (ma25[n - 1] != null && ma75[n - 1] != null && ma25[n - 1] > ma75[n - 1]) ? 1 : 0;
+    const volRising = avgVol(bars, n, 50) > avgVol(bars, Math.max(50, n - 100), 150) ? 1 : 0;
+    const aboveMa200 = ctx.ma200Pos === 'above' ? 1 : 0;
+    const breakoutRatio = pct(ctx.lastClose, maxHigh(bars, Math.max(0, n - 60), n - 1).v);
+    return {
+      metrics: { preDropPct, baseStayRatio, lowsRising, maImproved, volRising, aboveMa200, breakoutRatio },
+      levels: { bottom: bottom.v, breakLevel: maxHigh(bars, Math.max(0, n - 60), n - 1).v, failLevel: recentLow },
+      marks: [{ t: bars[bottom.i].t, price: bottom.v, label: '底', up: false }],
+    };
+  }
+
+  // --- 逆三尊（左肩・頭・右肩の3安値） ---
+  function measureInvHS(bars, closes, pv, struct, ctx) {
+    const lows = pv.lo, highs = pv.hi;
+    if (lows.length < 3) return null;
+    const last3 = lows.slice(-3); const [lsI, hI, rsI] = last3;
+    const ls = bars[lsI].l, head = bars[hI].l, rs = bars[rsI].l;
+    const headDeepest = (head < ls && head < rs) ? 1 : 0;
+    const shoulderSym = head ? Math.abs(ls - rs) / head * 100 : 999;
+    const rsAboveHead = head ? rs / head : 0;
+    const neck1 = maxHigh(bars, lsI, hI).v, neck2 = maxHigh(bars, hI, rsI).v;
+    const neckline = Math.max(neck1, neck2);
+    const necklineSlope = neck1 ? Math.abs(neck2 - neck1) / neck1 * 100 : 999;
+    const breakoutRatio = pct(ctx.lastClose, neckline);
+    const breakoutVolRatio = ctx.avgVol20 ? ctx.lastVol / ctx.avgVol20 : 0;
+    return {
+      metrics: { headDeepest, shoulderSym, rsAboveHead, necklineSlope, breakoutRatio, breakoutVolRatio },
+      levels: { neckline, breakLevel: neckline, failLevel: head, head, leftShoulder: ls, rightShoulder: rs },
+      marks: [
+        { t: bars[lsI].t, price: ls, label: '左肩', up: false },
+        { t: bars[hI].t, price: head, label: '頭', up: false },
+        { t: bars[rsI].t, price: rs, label: '右肩', up: false },
+      ],
+    };
+  }
+
+  // --- フラッグ・ペナント（急騰→浅い短期調整→再ブレイク） ---
+  function measureFlag(bars, closes, pv, struct, ctx) {
+    const n = bars.length;
+    if (n < 40) return null;
+    // ポール: 直近30日内で最大の上昇区間（簡易: 直近35日前→直近15日前の上昇）
+    const poleA = Math.max(0, n - 35), poleEnd = Math.max(poleA + 1, n - 12);
+    const poleLow = minLow(bars, poleA, poleEnd), poleHigh = maxHigh(bars, poleLow.i, poleEnd);
+    const poleRisePct = pct(poleHigh.v, poleLow.v);
+    const poleVol = avgVol(bars, poleEnd, Math.max(3, poleEnd - poleLow.i)) ;
+    // フラッグ: ポール以降の調整
+    const flagA = poleHigh.i, flagHigh = maxHigh(bars, flagA, n - 1).v, flagLow = minLow(bars, flagA, n - 1).v;
+    const flagDepthPct = Math.abs(pct(flagLow, flagHigh));
+    const flagDays = n - 1 - flagA;
+    const flagVol = avgVol(bars, n, Math.max(3, flagDays || 5));
+    const breakoutRatio = pct(ctx.lastClose, flagHigh);
+    const breakoutVolRatio = ctx.avgVol20 ? ctx.lastVol / ctx.avgVol20 : 0;
+    return {
+      metrics: { poleRisePct, flagDepthPct, flagDays, flagVolRatio: poleVol ? flagVol / poleVol : 1, breakoutRatio, breakoutVolRatio },
+      levels: { breakLevel: flagHigh, failLevel: flagLow, poleHigh: poleHigh.v },
+      marks: [{ t: bars[poleLow.i].t, price: poleLow.v, label: 'ポール起点', up: false }, { t: bars[poleHigh.i].t, price: poleHigh.v, label: 'ポール天井', up: true }],
+    };
+  }
+
+  // --- ベース・オン・ベース（第1ベースのブレイク→浅い第2ベース→再ブレイク） ---
+  function measureBaseOnBase(bars, closes, pv, struct, ctx, ma50) {
+    const n = bars.length;
+    if (n < 80) return null;
+    // 第1ベース上限: 直近120〜40日前の最高値、その後ブレイクし第2ベースを形成と仮定
+    const firstA = Math.max(0, n - 120), firstB = Math.max(firstA + 1, n - 40);
+    const firstHigh = maxHigh(bars, firstA, firstB).v;
+    // 第2ベース: 直近40日の高安
+    const secHigh = maxHigh(bars, Math.max(0, n - 40), n - 1).v, secLow = minLow(bars, Math.max(0, n - 40), n - 1).v;
+    const firstBroke = secLow > firstHigh * 0.97 ? 1 : 0; // 第1ベース上限を概ね上抜けて推移
+    const secDepthPct = Math.abs(pct(secLow, secHigh));
+    const aboveMa50 = (ma50[n - 1] != null && ctx.lastClose > ma50[n - 1]) ? 1 : 0;
+    const breakoutRatio = pct(ctx.lastClose, secHigh);
+    const breakoutVolRatio = ctx.avgVol20 ? ctx.lastVol / ctx.avgVol20 : 0;
+    return {
+      metrics: { firstBroke, secDepthPct, aboveMa50, breakoutRatio, breakoutVolRatio },
+      levels: { firstHigh, breakLevel: secHigh, failLevel: secLow },
+      marks: [{ t: bars[Math.max(0, n - 40)] ? bars[Math.max(0, n - 40)].t : bars[0].t, price: secLow, label: '第2ベース安値', up: false }],
+    };
+  }
+
+  // --- 三尊天井（警戒）3高値・頭最高 ---
+  function measureHSTop(bars, closes, pv, struct, ctx) {
+    const highs = pv.hi;
+    if (highs.length < 3) return null;
+    const [lsI, hI, rsI] = highs.slice(-3);
+    const ls = bars[lsI].h, head = bars[hI].h, rs = bars[rsI].h;
+    const headHighest = (head > ls && head > rs) ? 1 : 0;
+    const rsBelowHead = head ? rs / head : 0;            // <0.95 が望ましい
+    const shoulderSym = ls ? Math.abs(ls - rs) / ls * 100 : 999;
+    const neckline = Math.min(minLow(bars, lsI, hI).v, minLow(bars, hI, rsI).v);
+    const breakdownRatio = pct(ctx.lastClose, neckline);  // 負=割れ
+    return {
+      metrics: { headHighest, rsBelowHead, shoulderSym, breakdownRatio },
+      levels: { neckline, failLevel: neckline, head },
+      marks: [{ t: bars[hI].t, price: head, label: '頭', up: true }, { t: bars[lsI].t, price: ls, label: '左肩', up: true }, { t: bars[rsI].t, price: rs, label: '右肩', up: true }],
+    };
+  }
+
+  // --- ダブルトップ（警戒）2高値が近い ---
+  function measureDoubleTop(bars, closes, pv, struct, ctx) {
+    const highs = pv.hi;
+    if (highs.length < 2) return null;
+    const i1 = highs[highs.length - 2], i2 = highs[highs.length - 1];
+    const h1 = bars[i1].h, h2 = bars[i2].h;
+    const highGapPct = Math.abs(pct(h2, h1));
+    const h2VsH1 = pct(h2, h1);
+    const neckline = minLow(bars, i1, i2).v;
+    const midDropPct = Math.abs(pct(neckline, h1));
+    const breakdownRatio = pct(ctx.lastClose, neckline);
+    return {
+      metrics: { highGapPct, h2VsH1, midDropPct, breakdownRatio },
+      levels: { neckline, failLevel: neckline, high1: h1, high2: h2 },
+      marks: [{ t: bars[i1].t, price: h1, label: '第1高値', up: true }, { t: bars[i2].t, price: h2, label: '第2高値', up: true }],
+    };
+  }
+
   // ===== 採点（score） =====
   // ステータス: 0=該当なし 1=形成中 2=完成間近 3=ブレイク済み 4=失敗
   function score(meas, th) {
     th = mergeThresholds(th);
-    const out = { patterns: {}, best: null };
+    const out = { patterns: {}, best: null, warn: null };
     if (!meas || !meas.byPattern) return out;
-    const fns = { cup: scoreCup, range: scoreRange, doubleBottom: scoreDoubleBottom, ascTriangle: scoreAscTriangle };
+    const fns = {
+      cup: scoreCup, range: scoreRange, doubleBottom: scoreDoubleBottom, ascTriangle: scoreAscTriangle,
+      roundBottom: scoreRoundBottom, invHS: scoreInvHS, flag: scoreFlag, baseOnBase: scoreBaseOnBase,
+      hsTop: scoreHSTop, doubleTop: scoreDoubleTop,
+    };
     for (const key of Object.keys(fns)) {
       const m = meas.byPattern[key];
       out.patterns[key] = m ? fns[key](m.metrics, th) : { score: 0, status: 0 };
     }
-    // 最有力＝スコア最大（ステータス0を除く）
+    // 総合買いシグナル＝買いパターンのスコア最大（ステータス0を除く）
     let best = null;
-    for (const key of Object.keys(out.patterns)) {
-      const p = out.patterns[key];
-      if (p.status === 0) continue;
+    for (const key of BUY_PATTERNS) {
+      const p = out.patterns[key]; if (!p || p.status === 0) continue;
       if (!best || p.score > best.score) best = { pattern: key, score: p.score, status: p.status };
     }
     out.best = best;
+    // 警戒シグナル＝警戒パターンのスコア最大
+    let warn = null;
+    for (const key of WARN_PATTERNS) {
+      const p = out.patterns[key]; if (!p || p.status === 0) continue;
+      if (!warn || p.score > warn.score) warn = { pattern: key, score: p.score, status: p.status };
+    }
+    out.warn = warn;
     return out;
   }
 
@@ -407,6 +608,88 @@
     return { score: Math.round(s), status };
   }
 
+  function scoreRoundBottom(m, th) {
+    let s = 0;
+    if (m.preDropPct <= -30) s += 15;
+    if (m.baseStayRatio >= 30) s += 15;
+    if (m.lowsRising) s += 15;
+    if (m.maImproved) s += 15;
+    if (m.volRising) s += 10;
+    if (m.aboveMa200) s += 15;
+    const broke = m.breakoutRatio >= th.common.breakPct;
+    if (broke) s += 15;
+    let status = 1;
+    if (broke) status = 3;
+    else if (m.aboveMa200 && m.maImproved) status = 2;
+    return { score: Math.round(s), status };
+  }
+
+  function scoreInvHS(m, th) {
+    const k = th.common; let s = 0;
+    if (m.headDeepest) s += 20;
+    if (m.shoulderSym <= 15) s += 15;
+    if (m.rsAboveHead >= 1.05) s += 15;
+    if (m.necklineSlope <= 15) s += 15;
+    const broke = m.breakoutRatio >= k.breakPct;
+    if (broke) s += 20;
+    if (m.breakoutVolRatio >= k.volMult) s += 15;
+    let status = m.headDeepest ? 1 : 0;
+    if (broke) status = 3; else if (m.breakoutRatio >= -2) status = 2;
+    return { score: Math.round(s), status };
+  }
+
+  function scoreFlag(m, th) {
+    const k = th.common; let s = 0;
+    if (m.poleRisePct >= 15) s += 25;
+    if (inRange(m.flagDepthPct, 5, 20)) s += 15; else if (m.flagDepthPct <= 30) s += 7;
+    if (inRange(m.flagDays, 5, 25)) s += 10;
+    if (m.flagVolRatio < 1) s += 10;
+    const broke = m.breakoutRatio >= k.breakPct;
+    if (broke) s += 25;
+    if (m.breakoutVolRatio >= k.volMultWeak) s += 15;
+    let status = m.poleRisePct >= 15 ? 1 : 0;
+    if (broke) status = 3; else if (m.breakoutRatio >= -2 && m.poleRisePct >= 15) status = 2;
+    return { score: Math.round(s), status };
+  }
+
+  function scoreBaseOnBase(m, th) {
+    const k = th.common; let s = 0;
+    if (m.firstBroke) s += 25;
+    if (m.secDepthPct <= 15) s += 25; else if (m.secDepthPct <= 20) s += 12;
+    if (m.aboveMa50) s += 20;
+    const broke = m.breakoutRatio >= k.breakPct;
+    if (broke) s += 20;
+    if (m.breakoutVolRatio >= k.volMultWeak) s += 10;
+    let status = m.firstBroke ? 1 : 0;
+    if (broke) status = 3; else if (m.firstBroke && m.breakoutRatio >= -2) status = 2;
+    return { score: Math.round(s), status };
+  }
+
+  // 警戒系: スコアが高い＝危険度が高い。ステータス 3=ネックライン割れ(発生) / 2=完成間近 / 1=形成中
+  function scoreHSTop(m, th) {
+    let s = 0;
+    if (m.headHighest) s += 25;
+    if (m.rsBelowHead <= 0.95) s += 20;
+    if (m.shoulderSym <= 15) s += 15;
+    const broke = m.breakdownRatio <= -th.common.breakPct;
+    if (broke) s += 40;
+    let status = m.headHighest ? 1 : 0;
+    if (broke) status = 3; else if (m.headHighest && m.rsBelowHead <= 0.97) status = 2;
+    return { score: Math.round(s), status };
+  }
+
+  function scoreDoubleTop(m, th) {
+    let s = 0;
+    if (m.highGapPct <= 8) s += 25;
+    if (m.h2VsH1 <= 3) s += 20;
+    if (m.midDropPct >= 8) s += 15;
+    const broke = m.breakdownRatio <= -th.common.breakPct;
+    if (broke) s += 40;
+    let status = m.highGapPct <= 8 ? 1 : 0;
+    if (broke) status = 3; else if (m.highGapPct <= 8) status = 2;
+    return { score: Math.round(s), status };
+  }
+
   // ===== まとめ =====
   function mergeThresholds(th) {
     const base = JSON.parse(JSON.stringify(DEFAULT_THRESHOLDS));
@@ -429,8 +712,9 @@
     const evidence = best ? buildEvidence(best.pattern, meas) : { ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope };
     return {
       asOf: meas.asOf, lastClose: meas.lastClose,
-      best, patterns: sc.patterns, metrics, levels, marks, evidence,
+      best, warn: sc.warn, patterns: sc.patterns, metrics, levels, marks, evidence,
       ma: meas.ma, ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope,
+      rsi: meas.rsi, rsiState: meas.rsiState, macd: meas.macd, macdCross: meas.macdCross,
     };
   }
 
@@ -547,12 +831,50 @@
   function fmtNum(v) { if (!isNum(v)) return '—'; const a = Math.abs(v); return a >= 1000 ? Math.round(v).toLocaleString() : a >= 1 ? v.toFixed(2) : v.toFixed(4); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
-  // ラベル
-  const PATTERN_LABEL = { cup: 'カップウィズハンドル', range: 'レンジブレイク', doubleBottom: 'ダブルボトム', ascTriangle: 'アセンディングトライアングル' };
+  // ===== RSI / MACD サブチャート（折れ線・ヒストグラム） =====
+  // series は表示用バー(disp)に整合した配列にして渡す。横位置は candleSVG と同じ等間隔。
+  function rsiSVG(series, opts) {
+    opts = opts || {}; const W = opts.width || 760, H = opts.height || 90, pad = { l: 56, r: 92, t: 14, b: 14 };
+    const N = series.length, plotW = W - pad.l - pad.r;
+    const cx = i => pad.l + (i + 0.5) / N * plotW;
+    const py = v => pad.t + (1 - v / 100) * (H - pad.t - pad.b);
+    let bands = '';
+    [30, 50, 70].forEach(lv => { const y = py(lv).toFixed(1); bands += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="var(--border)" stroke-width="1" stroke-dasharray="${lv === 50 ? '1 4' : '3 3'}"/><text x="${pad.l - 6}" y="${+y + 3}" fill="var(--muted)" font-size="9" text-anchor="end">${lv}</text>`; });
+    let path = '', started = false;
+    series.forEach((v, i) => { if (v == null) { started = false; return; } path += (started ? 'L' : 'M') + cx(i).toFixed(1) + ' ' + py(v).toFixed(1) + ' '; started = true; });
+    const last = series[series.length - 1];
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px">
+      <text x="${pad.l}" y="10" fill="var(--muted)" font-size="9">RSI(14)${last != null ? ' ' + last.toFixed(0) : ''}</text>
+      ${bands}<path d="${path}" fill="none" stroke="#7c3aed" stroke-width="1.3"/></svg>`;
+  }
+  function macdSVG(m, opts) {
+    opts = opts || {}; const W = opts.width || 760, H = opts.height || 90, pad = { l: 56, r: 92, t: 14, b: 14 };
+    const N = m.macd.length, plotW = W - pad.l - pad.r;
+    const vals = []; m.macd.forEach(v => { if (v != null) vals.push(v); }); m.signal.forEach(v => { if (v != null) vals.push(v); }); m.hist.forEach(v => { if (v != null) vals.push(v); });
+    let lo = Math.min(...vals, 0), hi = Math.max(...vals, 0); if (lo === hi) { lo -= 1; hi += 1; }
+    const cx = i => pad.l + (i + 0.5) / N * plotW;
+    const py = v => pad.t + (1 - (v - lo) / (hi - lo)) * (H - pad.t - pad.b);
+    const cw = Math.max(1, plotW / N * 0.6);
+    let hist = ''; m.hist.forEach((v, i) => { if (v == null) return; const y0 = py(0), y = py(v); hist += `<rect x="${(cx(i) - cw / 2).toFixed(1)}" y="${Math.min(y0, y).toFixed(1)}" width="${cw.toFixed(1)}" height="${Math.max(1, Math.abs(y - y0)).toFixed(1)}" fill="${v >= 0 ? 'rgba(22,163,74,.5)' : 'rgba(220,38,38,.5)'}"/>`; });
+    const line = (arr, col) => { let p = '', st = false; arr.forEach((v, i) => { if (v == null) { st = false; return; } p += (st ? 'L' : 'M') + cx(i).toFixed(1) + ' ' + py(v).toFixed(1) + ' '; st = true; }); return `<path d="${p}" fill="none" stroke="${col}" stroke-width="1.3"/>`; };
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px">
+      <text x="${pad.l}" y="10" fill="var(--muted)" font-size="9">MACD(12,26,9)</text>
+      <line x1="${pad.l}" y1="${py(0).toFixed(1)}" x2="${W - pad.r}" y2="${py(0).toFixed(1)}" stroke="var(--border)" stroke-width="1"/>
+      ${hist}${line(m.macd, '#0ea5e9')}${line(m.signal, '#f59e0b')}</svg>`;
+  }
+
+  // ラベル・分類
+  const PATTERN_LABEL = {
+    cup: 'カップウィズハンドル', range: 'レンジブレイク', doubleBottom: 'ダブルボトム', ascTriangle: 'アセンディングトライアングル',
+    roundBottom: 'ラウンドボトム', invHS: '逆三尊', flag: 'フラッグ/ペナント', baseOnBase: 'ベース・オン・ベース',
+    hsTop: '三尊天井(警戒)', doubleTop: 'ダブルトップ(警戒)',
+  };
+  const BUY_PATTERNS = ['cup', 'range', 'doubleBottom', 'ascTriangle', 'roundBottom', 'invHS', 'flag', 'baseOnBase'];
+  const WARN_PATTERNS = ['hsTop', 'doubleTop'];
   const STATUS_LABEL = { 0: '—', 1: '形成中', 2: '完成間近', 3: 'ブレイク済み', 4: '失敗' };
 
   globalThis.TA = {
-    DEFAULT_THRESHOLDS, DEFAULT_STRUCT, PATTERN_LABEL, STATUS_LABEL,
-    measure, score, analyze, candleSVG, toWeekly, sma, mergeThresholds,
+    DEFAULT_THRESHOLDS, DEFAULT_STRUCT, PATTERN_LABEL, BUY_PATTERNS, WARN_PATTERNS, STATUS_LABEL,
+    measure, score, analyze, candleSVG, rsiSVG, macdSVG, toWeekly, sma, rsi, macd, mergeThresholds,
   };
 })();

@@ -168,6 +168,13 @@ const MASTER_COLS = [
   { key: 'anaRange',    label: 'レンジブレイク',   left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaWbottom',  label: 'ダブルボトム',     left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaAsc',      label: 'アセンディング',   left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaRound',    label: 'ラウンドボトム',   left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaInvHS',    label: '逆三尊',           left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaFlag',     label: 'フラッグ',         left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaBase',     label: 'ベースオンベース', left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaWarn',     label: '警戒シグナル',     left: true,  markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaRSI',      label: 'RSI',              left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaMACD',     label: 'MACD',             left: true,  markets: ['ANALYSIS'], noSort: false },
   { key: 'anaStatus',   label: 'ステータス',       left: true,  markets: ['ANALYSIS'], noSort: false },
   { key: 'anaBuy',      label: '買い候補',         left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaFail',     label: '失敗ライン',       left: false, markets: ['ANALYSIS'], noSort: false },
@@ -179,7 +186,7 @@ const DEFAULT_VISIBLE = {
   JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
-  ANALYSIS: ['ticker','name','market','price','anaTotal','anaCup','anaRange','anaWbottom','anaAsc','anaStatus','anaBuy','anaFail','category','anaDate'],
+  ANALYSIS: ['ticker','name','price','anaTotal','anaCup','anaRange','anaWbottom','anaAsc','anaRound','anaWarn','anaRSI','anaMACD','anaStatus','anaBuy','anaFail','anaDate'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -1819,7 +1826,7 @@ const CF_SCREENS = [
   { id: 'analysis', label: '分析' },
 ];
 // 背景色ルールを設定できる数値列（設定UIの選択肢）。
-const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaBuy', 'anaFail'];
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail'];
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
@@ -1933,6 +1940,12 @@ function cfCellValue(key, sec, ctx) {
     case 'anaRange': return techPatScore(sec, 'range');
     case 'anaWbottom': return techPatScore(sec, 'doubleBottom');
     case 'anaAsc': return techPatScore(sec, 'ascTriangle');
+    case 'anaRound': return techPatScore(sec, 'roundBottom');
+    case 'anaInvHS': return techPatScore(sec, 'invHS');
+    case 'anaFlag': return techPatScore(sec, 'flag');
+    case 'anaBase': return techPatScore(sec, 'baseOnBase');
+    case 'anaWarn': { const r = techOf(sec); return r && r.warn ? r.warn.score : null; }
+    case 'anaRSI': { const r = techOf(sec); return r ? (r.rsi ?? null) : null; }
     case 'anaBuy': return techLevel(sec, 'buy');
     case 'anaFail': return techLevel(sec, 'fail');
     default: return null;
@@ -2064,6 +2077,13 @@ const COL_RENDERERS = {
   anaRange:    (s,c) => anaScoreCell(techPatScore(s, 'range')),
   anaWbottom:  (s,c) => anaScoreCell(techPatScore(s, 'doubleBottom')),
   anaAsc:      (s,c) => anaScoreCell(techPatScore(s, 'ascTriangle')),
+  anaRound:    (s,c) => anaScoreCell(techPatScore(s, 'roundBottom')),
+  anaInvHS:    (s,c) => anaScoreCell(techPatScore(s, 'invHS')),
+  anaFlag:     (s,c) => anaScoreCell(techPatScore(s, 'flag')),
+  anaBase:     (s,c) => anaScoreCell(techPatScore(s, 'baseOnBase')),
+  anaWarn:     (s,c) => { const r = techOf(s); const w = r && r.warn; return `<td class="l">${w ? `<span style="color:var(--red);font-weight:600">${esc(TA.PATTERN_LABEL[w.pattern] || '')} ${w.score}</span>` : muted}</td>`; },
+  anaRSI:      (s,c) => { const r = techOf(s); if (!r || r.rsi == null) return `<td>${muted}</td>`; const col = r.rsi <= 30 ? 'var(--green)' : r.rsi >= 70 ? 'var(--red)' : 'var(--text)'; return `<td style="text-align:right;color:${col};font-weight:600">${Math.round(r.rsi)}</td>`; },
+  anaMACD:     (s,c) => { const r = techOf(s); if (!r || !r.macdCross) return `<td class="l">${muted}</td>`; const map = { golden: ['GC', 'var(--green)'], dead: ['DC', 'var(--red)'], none: ['—', 'var(--muted)'] }; const [lbl, col] = map[r.macdCross] || map.none; return `<td class="l" style="color:${col}">${lbl}</td>`; },
   anaStatus:   (s,c) => { const r = techOf(s); const b = r && r.best; return `<td class="l">${b ? `<span style="color:${anaStatusColor(b.status)};font-weight:600">${esc(TA.STATUS_LABEL[b.status])}</span>` : muted}</td>`; },
   anaBuy:      (s,c) => { const v = techLevel(s, 'buy'); return `<td>${v != null ? `<span style="color:var(--green)">${fmtAmt(v, c.market)}</span>` : muted}</td>`; },
   anaFail:     (s,c) => { const v = techLevel(s, 'fail'); return `<td>${v != null ? `<span style="color:var(--red)">${fmtAmt(v, c.market)}</span>` : muted}</td>`; },
@@ -2605,6 +2625,12 @@ function sortValue(sec, key) {
     case 'anaRange': return techPatScore(sec, 'range') ?? -Infinity;
     case 'anaWbottom': return techPatScore(sec, 'doubleBottom') ?? -Infinity;
     case 'anaAsc': return techPatScore(sec, 'ascTriangle') ?? -Infinity;
+    case 'anaRound': return techPatScore(sec, 'roundBottom') ?? -Infinity;
+    case 'anaInvHS': return techPatScore(sec, 'invHS') ?? -Infinity;
+    case 'anaFlag': return techPatScore(sec, 'flag') ?? -Infinity;
+    case 'anaBase': return techPatScore(sec, 'baseOnBase') ?? -Infinity;
+    case 'anaWarn': { const r = techOf(sec); return r && r.warn ? r.warn.score : -Infinity; }
+    case 'anaRSI': { const r = techOf(sec); return r ? (r.rsi ?? -Infinity) : -Infinity; }
     case 'anaStatus': { const r = techOf(sec); return r && r.best ? r.best.status : -1; }
     case 'anaBuy': return techLevel(sec, 'buy') ?? -Infinity;
     case 'anaFail': return techLevel(sec, 'fail') ?? -Infinity;
@@ -5441,8 +5467,9 @@ function openSecurityDetail(secId) {
   loadDetailChart(sec, ev, price, lb, detailChartRange);
 }
 // 詳細チャートをクリックで拡大表示（画面いっぱいの専用オーバーレイ。viewBoxで自動スケール）
-function enlargeDetailChart() {
-  const el = document.getElementById('detail-chart'); if (!el) return;
+// elId 省略時は保有/カルテの '#detail-chart'。分析タブは 'ana-detail-chart' を渡す。
+function enlargeDetailChart(elId = 'detail-chart', title = '価格チャート') {
+  const el = document.getElementById(elId); if (!el) return;
   const svg = el.querySelector('svg'); if (!svg) return; // 読み込み中・取得失敗時は無視
   let ov = document.getElementById('chart-zoom-overlay');
   if (!ov) {
@@ -5452,10 +5479,10 @@ function enlargeDetailChart() {
     ov.onclick = () => ov.remove();
     document.body.appendChild(ov);
   }
-  // SVG を width:100% にして大きな器いっぱいに拡大（viewBox 760x300 がスケール）
-  ov.innerHTML = `<div style="background:var(--panel);border-radius:14px;padding:20px;width:min(1400px,94vw);box-shadow:var(--shadow-lg);cursor:default" onclick="event.stopPropagation()">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><strong style="font-size:15px">価格チャート</strong><button class="x-btn" onclick="document.getElementById('chart-zoom-overlay').remove()">&times;</button></div>
-      <div style="width:100%">${el.innerHTML.replace('width="100%"', 'width="100%" style="height:auto;max-height:74vh"')}</div>
+  // SVG群（candle/RSI/MACD）はすべて width:100%。大きな器に入れると viewBox がスケールして拡大表示。
+  ov.innerHTML = `<div style="background:var(--panel);border-radius:14px;padding:20px;width:min(1400px,94vw);max-height:92vh;overflow:auto;box-shadow:var(--shadow-lg);cursor:default" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><strong style="font-size:15px">${esc(title)}</strong><button class="x-btn" onclick="document.getElementById('chart-zoom-overlay').remove()">&times;</button></div>
+      <div style="width:100%">${el.innerHTML}</div>
     </div>`;
 }
 // 詳細チャートの期間（1y/3y/5y）。デフォルト5年
@@ -5661,10 +5688,11 @@ function saveTechResult(sec, result, today) {
   history.push({ date: today, best: result.best, scores }); // 1日1点
   while (history.length > 104) history.shift();             // 上限104点（週次2年相当）で剪定（§5）
   store.data.techAnalysis[key] = {
-    lastAnalyzed: today, best: result.best, patterns: result.patterns,
+    lastAnalyzed: today, best: result.best, warn: result.warn, patterns: result.patterns,
     metrics: result.metrics, levels: result.levels, marks: result.marks,
     evidence: result.evidence, lastClose: result.lastClose,
     ma200Pos: result.ma200Pos, ma200Slope: result.ma200Slope,
+    rsi: result.rsi, rsiState: result.rsiState, macd: result.macd, macdCross: result.macdCross,
     history, _updatedAt: new Date().toISOString(),
   };
 }
@@ -5678,7 +5706,7 @@ function rescoreAll() {
     const shim = { byPattern: {} };
     for (const p of Object.keys(r.metrics)) shim.byPattern[p] = { metrics: r.metrics[p] };
     const sc = TA.score(shim, th);
-    r.patterns = sc.patterns; r.best = sc.best; r._updatedAt = new Date().toISOString();
+    r.patterns = sc.patterns; r.best = sc.best; r.warn = sc.warn; r._updatedAt = new Date().toISOString();
     // 履歴の最新点も採点だけ更新（同日）
     if (r.history && r.history.length) {
       const last = r.history[r.history.length - 1];
@@ -5730,8 +5758,8 @@ async function openAnalysisDetail(market, ticker) {
   const r = store.data.techAnalysis[key];
   const rangeBtns = ['6m', '1y', '3y'].map(rg => `<button class="btn btn-sm" id="anaz-${rg}" onclick="anaSetDetailRange('${rg}')">${rg === '6m' ? '6ヶ月' : rg === '1y' ? '1年' : '3年'}</button>`).join('');
   showDrawer(calc.displayName(sec),
-    `<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center"><span class="muted" style="font-size:12px">ズーム:</span>${rangeBtns}</div>
-     <div id="ana-detail-chart" class="muted" style="min-height:240px">読み込み中…</div>
+    `<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap"><span class="muted" style="font-size:12px">期間:</span>${rangeBtns}<span class="muted" style="font-size:11px;margin-left:auto">クリックで拡大</span></div>
+     <div id="ana-detail-chart" class="muted" style="min-height:240px;cursor:zoom-in" title="クリックで拡大" onclick="enlargeDetailChart('ana-detail-chart', 'テクニカルチャート')">読み込み中…</div>
      <div id="ana-detail-evi" style="margin-top:10px"></div>`,
     '', `<span class="tag">${MARKET_LABEL[sec.market] || sec.market}</span><span class="muted">${esc(String(sec.ticker))}</span>`);
   const eviEl = document.getElementById('ana-detail-evi'); if (eviEl) eviEl.innerHTML = anaEvidenceHtml(r);
@@ -5773,23 +5801,35 @@ function anaDrawDetailChart() {
   }
   const cur = (store.data.prices[key] || {}).price;
   if (cur != null) hlines.push({ price: cur, color: 'var(--muted)', label: '現在値', dash: '2 2' });
+  // RSI / MACD サブチャート（表示中バーに整合した系列を計算）
+  const dispCloses = disp.map(b => b.c);
+  const rsiSeries = TA.rsi(dispCloses, 14);
+  const macdSeries = TA.macd(dispCloses, 12, 26, 9);
   el.classList.remove('muted');
-  el.innerHTML = TA.candleSVG(disp, { hlines, marks: mk, mas, title: best ? TA.PATTERN_LABEL[best] : '（パターン未検出）', height: 340 });
+  el.innerHTML = TA.candleSVG(disp, { hlines, marks: mk, mas, title: best ? TA.PATTERN_LABEL[best] : '（パターン未検出）', height: 340 })
+    + TA.rsiSVG(rsiSeries)
+    + TA.macdSVG(macdSeries);
 }
 
 function anaEvidenceHtml(r) {
   if (!r) return '<div class="notice" style="margin:0">未分析です。一覧の「分析」ボタンで計算します。</div>';
-  const order = ['cup', 'range', 'doubleBottom', 'ascTriangle'];
-  const rowsP = order.map(p => {
-    const x = r.patterns && r.patterns[p]; if (!x) return '';
-    const scColor = x.score >= 80 ? 'var(--green)' : x.score >= 60 ? '#0ea5e9' : x.score >= 40 ? 'var(--amber)' : 'var(--muted)';
-    return `<tr><td class="l">${esc(TA.PATTERN_LABEL[p])}</td><td style="text-align:right;color:${scColor};font-weight:700">${x.score}</td><td>${esc(TA.STATUS_LABEL[x.status])}</td></tr>`;
-  }).join('');
+  const scColor = (v) => v >= 80 ? 'var(--green)' : v >= 60 ? '#0ea5e9' : v >= 40 ? 'var(--amber)' : 'var(--muted)';
+  const row = (p) => { const x = r.patterns && r.patterns[p]; if (!x || x.status === 0) return ''; return `<tr><td class="l">${esc(TA.PATTERN_LABEL[p])}</td><td style="text-align:right;color:${scColor(x.score)};font-weight:700">${x.score}</td><td>${esc(TA.STATUS_LABEL[x.status])}</td></tr>`; };
+  const buyRows = (TA.BUY_PATTERNS || []).map(row).filter(Boolean).join('') || '<tr><td colspan="3" class="muted">該当する買いシグナルなし</td></tr>';
+  const warnRows = (TA.WARN_PATTERNS || []).map(row).filter(Boolean).join('');
+  const total = r.best ? r.best.score : null;
   const ma = `200日線との位置: <b>${r.ma200Pos === 'above' ? '上' : r.ma200Pos === 'below' ? '下' : '—'}</b> / 傾き: <b>${r.ma200Slope === 'up' ? '上向き' : r.ma200Slope === 'down' ? '下向き' : '—'}</b>`;
+  const rsiTxt = r.rsi != null ? `RSI <b style="color:${r.rsi <= 30 ? 'var(--green)' : r.rsi >= 70 ? 'var(--red)' : 'inherit'}">${Math.round(r.rsi)}</b>${r.rsiState === 'oversold' ? '（売られすぎ）' : r.rsiState === 'overbought' ? '（買われすぎ）' : ''}` : 'RSI —';
+  const macdTxt = r.macdCross === 'golden' ? 'MACD <b style="color:var(--green)">ゴールデンクロス</b>' : r.macdCross === 'dead' ? 'MACD <b style="color:var(--red)">デッドクロス</b>' : 'MACD —';
   return `<div style="font-size:13px">
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">
+      <span>総合買いシグナル: <b style="color:${total == null ? 'var(--muted)' : scColor(total)};font-size:15px">${total == null ? '—' : total}</b></span>
+      <span>${rsiTxt}</span><span>${macdTxt}</span>
+    </div>
     <div style="margin-bottom:6px">${ma}</div>
-    <table class="holdings dense" style="width:100%"><thead><tr><th class="l">パターン</th><th style="text-align:right">スコア</th><th>ステータス</th></tr></thead><tbody>${rowsP}</tbody></table>
-    <div class="muted" style="font-size:11px;margin-top:6px">分析日: ${esc(r.lastAnalyzed || '—')}｜緑線=買いトリガー（抜けたら買い）／赤線=失敗ライン（割れたら撤退）。</div>
+    <table class="holdings dense" style="width:100%"><thead><tr><th class="l">買いシグナル</th><th style="text-align:right">強さ</th><th>ステータス</th></tr></thead><tbody>${buyRows}</tbody></table>
+    ${warnRows ? `<div style="margin-top:8px;color:var(--red);font-weight:600;font-size:12px">⚠ 警戒シグナル</div><table class="holdings dense" style="width:100%"><tbody>${warnRows}</tbody></table>` : ''}
+    <div class="muted" style="font-size:11px;margin-top:6px">分析日: ${esc(r.lastAnalyzed || '—')}｜緑線=買いトリガー（抜けたら買い）／赤線=失敗ライン（割れたら撤退）。総合＝最も強い買いシグナルの強さ。</div>
   </div>`;
 }
 
