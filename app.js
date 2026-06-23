@@ -230,6 +230,7 @@ const store = {
     this.data.amountSnapshots ||= []; // 銘柄ごとの適用金額スナップショット
     this.data.analyses ||= [];        // 銘柄分析の履歴（securityId×評価日がキー。銘柄平置きは最新のミラー）
     this._migrateAnalyses();          // 後方互換: 平置きの分析を履歴へ1件起こす
+    this.data.techAnalysis ||= {};    // テクニカル分析（チャートパターン）結果: priceKey→{lastAnalyzed,best,patterns,metrics,levels,history,_updatedAt}
     this.data.importHistory ||= [];   // 取込履歴
     this.data.lastPriceUpdate ||= null; // 価格更新日時
     this.data.importMappings ||= {};  // 取込フィールド設定（列名・位置）のマスタ
@@ -261,7 +262,7 @@ const store = {
       rules: [structuredClone(DEFAULT_RULE)],
       categories: structuredClone(DEFAULT_CATEGORIES),
       grades: structuredClone(DEFAULT_GRADES),
-      prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [], analyses: [],
+      prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [], analyses: [], techAnalysis: {},
       importHistory: [], lastPriceUpdate: null, seq: 1,
     };
   },
@@ -1618,6 +1619,7 @@ const NAV_GROUPS = [
     { id: 'holdings',  label: '保有銘柄',       icon: 'holdings' },
     { id: 'trade',     label: '銘柄カルテ',     icon: 'trade' },
     { id: 'signals',   label: '買い増しサイン', icon: 'signal', badge: 'sig' },
+    { id: 'analysis',  label: '分析',           icon: 'signal' },
     { id: 'report',    label: 'レポート',       icon: 'report' },
   ] },
   { group: 'データ', items: [
@@ -1633,7 +1635,7 @@ const NAV_GROUPS = [
 const PAGE_TITLE = {
   dashboard: 'ダッシュボード', market: 'マーケット', holdings: '保有銘柄', signals: '買い増しサイン',
   report: 'レポート', import: '取込', secmaster: '銘柄マスタ', splits: '株式分割', trade: '銘柄カルテ',
-  transfer: '転記用', master: 'マスタ・設定', us: '米国株', jp: '日本株',
+  transfer: '転記用', master: 'マスタ・設定', us: '米国株', jp: '日本株', analysis: '分析（チャートパターン）',
 };
 const ICON_PATHS = {
   dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
@@ -2214,6 +2216,7 @@ function render() {
     case 'us': renderMarket('US'); break;
     case 'jp': renderMarket('JP'); break;
     case 'signals': renderSignals(); break;
+    case 'analysis': renderAnalysis(); break;
     case 'trade': renderTradeEntry(); break;
     case 'splits': renderSplitsTab(); break;
     case 'report': renderReport(); break;
@@ -5414,18 +5417,23 @@ function setDetailChartRange(r) {
 async function loadDetailChart(sec, ev, price, lb, range = '5y') {
   const el = document.getElementById('detail-chart'); if (!el) return;
   el.classList.add('muted'); el.textContent = '読み込み中…';
-  // 1年は日足、3年/5年は週足
+  // 1年は日足ローソク、3年/5年は週足ローソク（潰れ防止）
   const interval = range === '1y' ? '1d' : '1wk';
   try {
-    const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(sec))}&range=${encodeURIComponent(range)}&interval=${interval}`);
+    const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(sec))}&range=${encodeURIComponent(range)}&interval=${interval}&format=ohlcv`);
     const d = await res.json();
-    if (d.error || !d.points || !d.points.length) { el.textContent = '価格履歴を取得できませんでした（ローカルは wrangler 起動時のみ取得可）。'; return; }
-    const overlays = [];
-    if (ev && ev.trigger != null) overlays.push({ y: ev.trigger, color: 'var(--red)', label: '次回購入' });
-    if (price != null) overlays.push({ y: price, color: 'var(--green)', label: '現在値' });
-    if (lb && lb.price != null) overlays.push({ y: lb.price, color: 'var(--amber)', label: '前回購入' });
+    if (d.error || !d.bars || !d.bars.length) { el.textContent = '価格履歴を取得できませんでした（ローカルは wrangler 起動時のみ取得可）。'; return; }
+    const hlines = [];
+    if (ev && ev.trigger != null) hlines.push({ price: ev.trigger, color: 'var(--red)', label: '次回購入' });
+    if (price != null) hlines.push({ price, color: 'var(--green)', label: '現在値' });
+    if (lb && lb.price != null) hlines.push({ price: lb.price, color: 'var(--amber)', label: '前回購入' });
+    // 移動平均: 日足=25/75/200、週足=13/26/52
+    const closes = d.bars.map(b => b.c);
+    const mas = interval === '1d'
+      ? [{ values: TA.sma(closes, 25), color: '#0ea5e9', label: '25日' }, { values: TA.sma(closes, 75), color: '#a855f7', label: '75日' }, { values: TA.sma(closes, 200), color: '#f59e0b', label: '200日' }]
+      : [{ values: TA.sma(closes, 13), color: '#0ea5e9', label: '13週' }, { values: TA.sma(closes, 26), color: '#a855f7', label: '26週' }, { values: TA.sma(closes, 52), color: '#f59e0b', label: '52週' }];
     el.classList.remove('muted');
-    el.innerHTML = detailSvgChart(d.points, overlays);
+    el.innerHTML = TA.candleSVG(d.bars, { hlines, mas });
   } catch (e) { el.textContent = '価格履歴の取得に失敗しました: ' + (e && e.message || e); }
 }
 // 「切りのいい」目盛刻み幅を返す（1/2/5×10^n）。range=値域, target=目安の本数。
@@ -5474,6 +5482,267 @@ function detailSvgChart(points, overlays, costPts) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px">
     ${grid}${xlab}${cpath}<path d="${dpath}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${ov}${hl}
   </svg>`;
+}
+
+// ========================= 分析タブ（チャートパターン判定） =========================
+// 設計: ANALYSIS_PLAN.md。エンジンは analysis.js（globalThis.TA）。
+// 計測(metrics)を techAnalysis に保存し、しきい値変更時は採点のみ再実行（API再取得なし・§3.5）。
+let anaMarket = 'all';        // 'all' | 'US' | 'JP'
+let anaHoldingOnly = false;   // 保有銘柄のみ
+let anaSearch = '';           // 検索（コード/名称）
+let anaCat = '';              // カテゴリ
+let anaSort = { key: 'score', dir: -1 };
+let anaPanelOpen = false;     // しきい値パネルの開閉
+const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
+
+function anaToday() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function anaThresholds() { return TA.mergeThresholds(store.data.settings && store.data.settings.techThresholds); }
+
+// 分析対象（フィルタ適用後の銘柄）
+function analysisTargets() {
+  let secs = store.data.securities.filter(s => s.market === 'US' || s.market === 'JP');
+  if (anaMarket !== 'all') secs = secs.filter(s => s.market === anaMarket);
+  if (anaHoldingOnly) {
+    const held = new Set(store.data.holdings.filter(h => (h.quantity || 0) > 0).map(h => h.securityId));
+    secs = secs.filter(s => held.has(s.id));
+  }
+  if (anaCat) secs = secs.filter(s => (s.category || '') === anaCat);
+  if (anaSearch) {
+    const q = anaSearch.toLowerCase();
+    secs = secs.filter(s => String(s.ticker).toLowerCase().includes(q) || calc.displayName(s).toLowerCase().includes(q));
+  }
+  return secs;
+}
+
+function renderAnalysis() {
+  const cats = Array.from(new Set(store.data.securities.map(s => s.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ja'));
+  const catOpts = ['<option value="">カテゴリ：全て</option>'].concat(cats.map(c => `<option value="${esc(c)}"${anaCat === c ? ' selected' : ''}>${esc(c)}</option>`)).join('');
+  const mkBtn = (id, label) => `<button class="btn ${anaMarket === id ? 'btn-primary' : ''}" onclick="anaSetMarket('${id}')">${label}</button>`;
+  document.getElementById('app').innerHTML = `
+    <div class="section">
+      <div class="section-head" style="flex-wrap:wrap;gap:8px;align-items:center">
+        <h2 style="margin-right:8px">分析（チャートパターン）</h2>
+        <div style="display:flex;gap:4px">${mkBtn('all', '全て')}${mkBtn('US', '米国株')}${mkBtn('JP', '日本株')}</div>
+        <label class="chk" style="display:flex;gap:4px;align-items:center;font-size:13px"><input type="checkbox" ${anaHoldingOnly ? 'checked' : ''} onchange="anaToggleHolding(this.checked)">保有のみ</label>
+        <select onchange="anaSetCat(this.value)">${catOpts}</select>
+        <input type="search" placeholder="コード・名称で検索" value="${esc(anaSearch)}" oninput="anaSetSearch(this.value)" style="min-width:160px">
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn" onclick="anaTogglePanel()">しきい値${anaPanelOpen ? '▲' : '▼'}</button>
+          <button class="btn btn-primary" onclick="runAnalysis()">分析</button>
+        </div>
+      </div>
+      <div class="notice" style="margin:6px 0 0">テクニカルは「買う銘柄を選ぶ」より「買いたい銘柄をどこで買うか」を見る道具。スコア80↑=有力／60–79=候補／40–59=弱い候補。「分析」で当日未分析の対象だけ計算（3年・日足）。しきい値変更は再取得なしで即再採点。</div>
+      ${anaPanelOpen ? anaThresholdPanelHtml() : ''}
+      <div id="ana-results" style="margin-top:10px"></div>
+    </div>`;
+  anaRenderResults();
+}
+
+function anaSetMarket(m) { anaMarket = m; renderAnalysis(); }
+function anaToggleHolding(v) { anaHoldingOnly = !!v; anaRenderResults(); }
+function anaSetCat(v) { anaCat = v; anaRenderResults(); }
+function anaSetSearch(v) { anaSearch = v; anaRenderResults(); }
+function anaTogglePanel() { anaPanelOpen = !anaPanelOpen; renderAnalysis(); }
+function anaSetSort(key) { if (anaSort.key === key) anaSort.dir *= -1; else anaSort = { key, dir: -1 }; anaRenderResults(); }
+
+function anaRenderResults() {
+  const el = document.getElementById('ana-results'); if (!el) return;
+  const targets = analysisTargets();
+  const today = anaToday();
+  const rows = targets.map(s => {
+    const key = priceKey(s);
+    const r = store.data.techAnalysis[key];
+    const best = r && r.best;
+    const lv = (r && r.levels && best) ? r.levels[best.pattern] : null;
+    const score = best ? best.score : -1;
+    const cur = (store.data.prices[key] || {}).price;
+    return { s, key, r, best, lv, score, cur, fresh: r && r.lastAnalyzed === today };
+  });
+  const dir = anaSort.dir;
+  rows.sort((a, b) => {
+    let av, bv;
+    if (anaSort.key === 'name') { av = calc.displayName(a.s); bv = calc.displayName(b.s); return av.localeCompare(bv, 'ja') * dir; }
+    if (anaSort.key === 'status') { av = a.best ? a.best.status : -1; bv = b.best ? b.best.status : -1; }
+    else { av = a.score; bv = b.score; }
+    return (av - bv) * dir;
+  });
+  const arrow = (k) => anaSort.key === k ? (anaSort.dir < 0 ? ' ▼' : ' ▲') : '';
+  const body = rows.map(o => {
+    const { s, best, lv, cur } = o;
+    const patLabel = best ? (TA.PATTERN_LABEL[best.pattern] || best.pattern) : '—';
+    const stLabel = best ? TA.STATUS_LABEL[best.status] : '—';
+    const stColor = best ? ({ 3: 'var(--green)', 2: '#0ea5e9', 1: 'var(--muted)', 4: 'var(--red)' }[best.status] || 'var(--muted)') : 'var(--muted)';
+    const sc = best ? best.score : null;
+    const scColor = sc == null ? 'var(--muted)' : sc >= 80 ? 'var(--green)' : sc >= 60 ? '#0ea5e9' : sc >= 40 ? 'var(--amber)' : 'var(--muted)';
+    const buy = lv ? (lv.breakLevel ?? lv.neckline ?? lv.resistance) : null;
+    const fail = lv ? lv.failLevel : null;
+    return `<tr style="cursor:pointer" onclick="openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')">
+      <td class="l"><strong>${esc(nameAbbr(calc.displayName(s)))}</strong> <span class="muted" style="font-size:11px">${esc(String(s.ticker))}</span></td>
+      <td class="l">${MARKET_LABEL[s.market] || s.market}</td>
+      <td class="l">${esc(patLabel)}</td>
+      <td style="color:${stColor};font-weight:600">${esc(stLabel)}</td>
+      <td style="color:${scColor};font-weight:700;text-align:right">${sc == null ? '—' : sc}</td>
+      <td style="text-align:right">${cur == null ? '—' : num(cur)}</td>
+      <td style="text-align:right;color:var(--green)">${buy == null ? '—' : num(buy)}</td>
+      <td style="text-align:right;color:var(--red)">${fail == null ? '—' : num(fail)}</td>
+      <td class="l muted" style="font-size:11px">${o.r ? esc(o.r.lastAnalyzed || '') : '<span style="color:var(--amber)">未分析</span>'}</td>
+    </tr>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="muted" style="font-size:12px;margin-bottom:4px">対象 ${targets.length} 銘柄</div>
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr>
+        <th class="l" onclick="anaSetSort('name')" style="cursor:pointer">名称${arrow('name')}</th>
+        <th class="l">市場</th><th class="l">最有力パターン</th>
+        <th onclick="anaSetSort('status')" style="cursor:pointer">ステータス${arrow('status')}</th>
+        <th onclick="anaSetSort('score')" style="cursor:pointer;text-align:right">スコア${arrow('score')}</th>
+        <th style="text-align:right">現在値</th><th style="text-align:right">買い候補</th><th style="text-align:right">失敗</th><th class="l">分析日</th>
+      </tr></thead>
+      <tbody>${body || '<tr><td colspan="9" class="muted" style="text-align:center;padding:16px">対象銘柄がありません</td></tr>'}</tbody>
+    </table></div>`;
+}
+
+// 「分析」: フィルタ後の当日未分析だけ取得→計測→採点→保存（§6）
+async function runAnalysis() {
+  const targets = analysisTargets();
+  const today = anaToday();
+  const todo = targets.filter(s => { const r = store.data.techAnalysis[priceKey(s)]; return !r || r.lastAnalyzed !== today; });
+  if (!todo.length) { toast('対象はすべて当日分析済みです'); return; }
+  let ok = 0, fail = 0;
+  busyShow(`分析中… 0/${todo.length}`);
+  for (let i = 0; i < todo.length; i++) {
+    const s = todo[i];
+    busyShow(`分析中… ${i + 1}/${todo.length}`);
+    try {
+      const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(s))}&range=3y&interval=1d&format=ohlcv`);
+      const d = await res.json();
+      if (d.error || !d.bars || d.bars.length < 60) { fail++; continue; }
+      _anaBars[priceKey(s)] = d.bars;
+      const result = TA.analyze(d.bars, anaThresholds());
+      saveTechResult(s, result, today);
+      ok++;
+    } catch (_) { fail++; }
+  }
+  store.save();
+  busyHide();
+  toast(`分析完了：成功 ${ok} / 失敗 ${fail}`);
+  anaRenderResults();
+}
+
+function saveTechResult(sec, result, today) {
+  const key = priceKey(sec);
+  const prev = store.data.techAnalysis[key] || {};
+  const history = Array.isArray(prev.history) ? prev.history.filter(h => h.date !== today) : [];
+  const scores = {}; for (const p of Object.keys(result.patterns)) scores[p] = result.patterns[p].score;
+  history.push({ date: today, best: result.best, scores }); // 1日1点
+  while (history.length > 104) history.shift();             // 上限104点（週次2年相当）で剪定（§5）
+  store.data.techAnalysis[key] = {
+    lastAnalyzed: today, best: result.best, patterns: result.patterns,
+    metrics: result.metrics, levels: result.levels, marks: result.marks,
+    evidence: result.evidence, lastClose: result.lastClose,
+    ma200Pos: result.ma200Pos, ma200Slope: result.ma200Slope,
+    history, _updatedAt: new Date().toISOString(),
+  };
+}
+
+// しきい値変更時: 保存済み metrics から採点のみ再実行（API再取得なし・§3.5）
+function rescoreAll() {
+  const th = anaThresholds();
+  for (const key of Object.keys(store.data.techAnalysis)) {
+    const r = store.data.techAnalysis[key];
+    if (!r || !r.metrics) continue;
+    const shim = { byPattern: {} };
+    for (const p of Object.keys(r.metrics)) shim.byPattern[p] = { metrics: r.metrics[p] };
+    const sc = TA.score(shim, th);
+    r.patterns = sc.patterns; r.best = sc.best; r._updatedAt = new Date().toISOString();
+    // 履歴の最新点も採点だけ更新（同日）
+    if (r.history && r.history.length) {
+      const last = r.history[r.history.length - 1];
+      if (last && last.date === r.lastAnalyzed) { last.best = sc.best; for (const p of Object.keys(sc.patterns)) last.scores[p] = sc.patterns[p].score; }
+    }
+  }
+  store.save();
+  anaRenderResults();
+}
+
+// しきい値パネル（値比較系。変更は即・再取得なし再採点）
+function anaThresholdPanelHtml() {
+  const th = anaThresholds();
+  const fld = (grp, key, label, step) => `<label style="display:flex;flex-direction:column;font-size:11px;color:var(--muted);gap:2px">${esc(label)}<input type="number" step="${step || 1}" value="${th[grp][key]}" onchange="anaSetTh('${grp}','${key}',this.value)" style="width:84px"></label>`;
+  return `<div class="panel" style="margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <strong style="font-size:13px">しきい値（変更すると再取得なしで即再採点）</strong>
+      <button class="btn" onclick="anaResetTh()">既定に戻す</button>
+    </div>
+    <div style="font-size:12px;font-weight:600;margin:4px 0">共通</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">${fld('common', 'breakPct', 'ブレイク%', 0.5)}${fld('common', 'volMult', '出来高倍率', 0.1)}</div>
+    <div style="font-size:12px;font-weight:600;margin:8px 0 4px">カップウィズハンドル</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">${fld('cup', 'priorRisePct', '事前上昇%', 5)}${fld('cup', 'cupDepthMin', 'カップ深さ下限%', 1)}${fld('cup', 'cupDepthMax', 'カップ深さ上限%', 1)}${fld('cup', 'rightLeftRatio', '右/左高値', 0.01)}${fld('cup', 'handleDepthMin', 'ハンドル下限%', 1)}${fld('cup', 'handleDepthMax', 'ハンドル上限%', 1)}</div>
+    <div style="font-size:12px;font-weight:600;margin:8px 0 4px">レンジブレイク</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">${fld('range', 'widthMin', '幅下限%', 1)}${fld('range', 'widthMax', '幅上限%', 1)}${fld('range', 'touchHigh', '上限接触回数', 1)}${fld('range', 'touchLow', '下限反発回数', 1)}${fld('range', 'inRangeRatio', '滞在率%', 1)}</div>
+    <div style="font-size:12px;font-weight:600;margin:8px 0 4px">ダブルボトム</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">${fld('doubleBottom', 'priorDropPct', '事前下落%', 1)}${fld('doubleBottom', 'lowGapPct', '2安値の近さ%', 1)}${fld('doubleBottom', 'reboundPct', '中間反発%', 1)}</div>
+    <div style="font-size:12px;font-weight:600;margin:8px 0 4px">アセンディングトライアングル</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">${fld('ascTriangle', 'flatTopPct', '上値水平%', 1)}${fld('ascTriangle', 'narrowing', '値幅縮小比', 0.05)}</div>
+  </div>`;
+}
+function anaSetTh(grp, key, val) {
+  const v = parseFloat(val); if (!isFinite(v)) return;
+  store.data.settings ||= {}; store.data.settings.techThresholds ||= {};
+  store.data.settings.techThresholds[grp] ||= {};
+  store.data.settings.techThresholds[grp][key] = v;
+  rescoreAll();
+}
+function anaResetTh() { if (store.data.settings) delete store.data.settings.techThresholds; rescoreAll(); }
+
+// 銘柄詳細: ローソク足＋パターン基準（買いトリガー/失敗/ネックライン/抵抗・支持/MA/ピボット）を描画
+async function openAnalysisDetail(market, ticker) {
+  const sec = store.data.securities.find(s => s.market === market && String(s.ticker) === String(ticker));
+  if (!sec) return;
+  const key = priceKey(sec);
+  const r = store.data.techAnalysis[key];
+  showDrawer(calc.displayName(sec), `<div id="ana-detail-chart" class="muted" style="min-height:200px">読み込み中…</div><div id="ana-detail-evi" style="margin-top:10px"></div>`, '', `<span class="tag">${MARKET_LABEL[sec.market] || sec.market}</span><span class="muted">${esc(String(sec.ticker))}</span>`);
+  const eviEl = document.getElementById('ana-detail-evi'); if (eviEl) eviEl.innerHTML = anaEvidenceHtml(r);
+  let bars = _anaBars[key];
+  if (!bars) {
+    try { const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(sec))}&range=3y&interval=1d&format=ohlcv`); const d = await res.json(); if (d.bars && d.bars.length) { bars = d.bars; _anaBars[key] = bars; } } catch (_) {}
+  }
+  const el = document.getElementById('ana-detail-chart'); if (!el) return;
+  if (!bars) { el.textContent = '価格履歴を取得できませんでした（ローカルは wrangler 起動時のみ取得可）。'; return; }
+  const wk = TA.toWeekly(bars);
+  const closes = wk.map(b => b.c);
+  const best = r && r.best ? r.best.pattern : null;
+  const lv = (r && r.levels && best) ? r.levels[best] : null;
+  const mk = (r && r.marks && best) ? r.marks[best] : [];
+  const hlines = [];
+  if (lv) {
+    if (lv.breakLevel != null) hlines.push({ price: lv.breakLevel, color: 'var(--green)', label: '買いトリガー' });
+    if (lv.failLevel != null) hlines.push({ price: lv.failLevel, color: 'var(--red)', label: '失敗ライン' });
+    if (lv.neckline != null) hlines.push({ price: lv.neckline, color: '#a855f7', label: 'ネックライン' });
+    if (lv.resistance != null && lv.breakLevel == null) hlines.push({ price: lv.resistance, color: '#f59e0b', label: '抵抗' });
+    if (lv.support != null) hlines.push({ price: lv.support, color: '#0ea5e9', label: '支持' });
+  }
+  const cur = (store.data.prices[key] || {}).price;
+  if (cur != null) hlines.push({ price: cur, color: 'var(--muted)', label: '現在値', dash: '2 2' });
+  const mas = [{ values: TA.sma(closes, 13), color: '#0ea5e9', label: '13週' }, { values: TA.sma(closes, 26), color: '#a855f7', label: '26週' }, { values: TA.sma(closes, 52), color: '#f59e0b', label: '52週' }];
+  el.classList.remove('muted');
+  el.innerHTML = TA.candleSVG(wk, { hlines, marks: mk, mas, title: best ? TA.PATTERN_LABEL[best] : '（パターン未検出）', height: 340 });
+}
+
+function anaEvidenceHtml(r) {
+  if (!r) return '<div class="notice" style="margin:0">未分析です。一覧の「分析」ボタンで計算します。</div>';
+  const order = ['cup', 'range', 'doubleBottom', 'ascTriangle'];
+  const rowsP = order.map(p => {
+    const x = r.patterns && r.patterns[p]; if (!x) return '';
+    const scColor = x.score >= 80 ? 'var(--green)' : x.score >= 60 ? '#0ea5e9' : x.score >= 40 ? 'var(--amber)' : 'var(--muted)';
+    return `<tr><td class="l">${esc(TA.PATTERN_LABEL[p])}</td><td style="text-align:right;color:${scColor};font-weight:700">${x.score}</td><td>${esc(TA.STATUS_LABEL[x.status])}</td></tr>`;
+  }).join('');
+  const ma = `200日線との位置: <b>${r.ma200Pos === 'above' ? '上' : r.ma200Pos === 'below' ? '下' : '—'}</b> / 傾き: <b>${r.ma200Slope === 'up' ? '上向き' : r.ma200Slope === 'down' ? '下向き' : '—'}</b>`;
+  return `<div style="font-size:13px">
+    <div style="margin-bottom:6px">${ma}</div>
+    <table class="holdings dense" style="width:100%"><thead><tr><th class="l">パターン</th><th style="text-align:right">スコア</th><th>ステータス</th></tr></thead><tbody>${rowsP}</tbody></table>
+    <div class="muted" style="font-size:11px;margin-top:6px">分析日: ${esc(r.lastAnalyzed || '—')}｜緑線=買いトリガー（抜けたら買い）／赤線=失敗ライン（割れたら撤退）。</div>
+  </div>`;
 }
 
 // ---------- 銘柄カルテ（市場+コードで1銘柄の全情報を集約＋取引/編集を1画面で） ----------

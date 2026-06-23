@@ -28,6 +28,7 @@
     importFormats:   ['records', (f) => f && f.name != null ? `if:n:${f.name}` : `if:${JSON.stringify(f)}`],
     prices:          ['map', byFetchedAt],
     meta:            ['map', byUpdatedAt],
+    techAnalysis:    ['map', byUpdatedAt],   // テクニカル分析結果。priceKey単位で3-way（_updatedAtの新しい方）
     indices:         ['map', null],
     importMappings:  ['map', null],
     importAliases:   ['map', null],
