@@ -673,11 +673,15 @@
       out.patterns[key] = m ? fns[key](m.metrics, th) : { score: 0, status: 0 };
     }
     // 総合＝そのサイドのパターンのスコア最大（ステータス0を除く）。順張り/逆張りを別算出＋全体best。
-    const bestOf = (list) => { let b = null; for (const key of list) { const p = out.patterns[key]; if (!p || p.status === 0) continue; if (!b || p.score > b.score) b = { pattern: key, score: p.score, status: p.status }; } return b; };
-    out.bestTrend = bestOf(TREND_PATTERNS);
+    const bestOf = (list) => { let b = null; for (const key of list) { const p = out.patterns[key]; if (!p || p.status === 0 || p.status === 4) continue; if (!b || p.score > b.score) b = { pattern: key, score: p.score, status: p.status }; } return b; };
+    out.bestTrend = bestOf(TREND_PATTERNS);   // そのサイドで最強の「単独パターン名＋強さ」（情報表示用）
     out.bestContra = bestOf(CONTRA_PATTERNS);
     out.best = bestOf(BUY_PATTERNS);
-    out.contraScore = contraCompositeScore(meas, out.patterns); // 逆張り候補スコア（複数条件の加点。組み合わせ重視）
+    // 総合＝確認ゲート方式（単独はキャップ、独立した確認が増えるほど高得点）。max方式の「1つ100で総合100」を回避。
+    out.trendTotal = sideTotal(out.patterns, TREND_PATTERNS, 'trend', meas);
+    out.contraTotal = sideTotal(out.patterns, CONTRA_PATTERNS, 'contra', meas);
+    out.totalScore = Math.max(out.trendTotal, out.contraTotal);
+    out.contraScore = out.contraTotal; // 後方互換（既存の列/ドロワーが参照）＝逆張り総合（確認ゲート）
     // 警戒シグナル＝警戒パターンのスコア最大
     let warn = null;
     for (const key of WARN_PATTERNS) {
@@ -780,23 +784,24 @@
     else if (falling) status = 1;
     return { score: Math.min(100, Math.round(s)), status };
   }
-  // 逆張り候補スコア（複数条件の加点。単独でなく組み合わせを重視＝80点で有力候補）。
-  function contraCompositeScore(meas, patterns) {
-    let cs = 0;
-    if (meas.dev52w != null && meas.dev52w <= -30) cs += 15;            // 52週高値から30%以上下落
-    if (meas.maDev200 != null && meas.maDev200 <= -25) cs += 10;        // 200日線-25%乖離
-    if (meas.rsi != null && meas.rsi < 30) cs += 10;                    // RSI 30未満
-    const ucM = meas.byPattern.undercutRally && meas.byPattern.undercutRally.metrics;
-    const scM = meas.byPattern.sellingClimax && meas.byPattern.sellingClimax.metrics;
-    if ((ucM && ucM.volRatio >= 1.5) || (scM && scM.volRatio >= 2)) cs += 10; // 出来高急増を伴う急落
-    if (meas.lastLowerWick != null && meas.lastLowerWick >= 0.5) cs += 10;    // 長い下ヒゲ
-    if (ucM && ucM.undercut && ucM.recovered) cs += 15;                // 前回安値を一時割って回復
-    const dbP = patterns.doubleBottom; if (dbP && dbP.status >= 1) cs += 20;  // 二番底形成
-    const dbM = meas.byPattern.doubleBottom && meas.byPattern.doubleBottom.metrics;
-    if (dbM && dbM.vol2OverVol1 != null && dbM.vol2OverVol1 <= 1) cs += 10;   // 第2安値の出来高が第1安値以下
-    if (meas.above5 || meas.above25) cs += 10;                         // 5日/25日線を回復
-    if (scM && scM.heldLow) cs += 15;                                  // 急落後に安値を更新しない
-    return Math.min(100, Math.round(cs));
+  // 総合＝確認ゲート方式。単独シグナルはキャップ(60)、独立した確認(他の status≥2 のシグナル＋文脈)が
+  // 増えるほど高得点。「1つだけ点灯したら買い」を避け、複数の根拠が一致したものを高く評価する。
+  // base*0.6+25+confirms*8: 単独60→確認1で〜80→確認2-3で90+。weight/上限はここで調整可。
+  function sideTotal(patterns, list, side, meas) {
+    let bestScore = 0, strong = 0;
+    // status 4（失敗/下抜け継続）は否定材料なので加点に含めない。1〜3のみ評価。
+    for (const p of list) { const x = patterns[p]; if (!x || x.status === 0 || x.status === 4) continue; if (x.score > bestScore) bestScore = x.score; if (x.status === 2 || x.status === 3) strong++; }
+    if (bestScore === 0) return 0;
+    let confirms = Math.max(0, strong - 1); // 最強以外で「完成間近/下げ止まり候補」以上の確認シグナル数
+    if (side === 'trend') {
+      if (meas.ma200Pos === 'above' && meas.ma200Slope === 'up') confirms++; // トレンド一致
+      if (meas.macdCross === 'golden') confirms++;
+    } else {
+      if (meas.rsiState === 'oversold' || (meas.dev52w != null && meas.dev52w <= -25)) confirms++; // 売られすぎ文脈
+      if (meas.macdCross === 'golden' || meas.above5) confirms++;          // モメンタム反転の兆し
+    }
+    if (confirms <= 0) return Math.min(bestScore, 60);                     // 単独＝候補止まり（最大60）
+    return Math.min(100, Math.round(bestScore * 0.6 + 25 + confirms * 8)); // 確認があるほど高得点
   }
 
   function scoreCup(m, th) {
@@ -974,7 +979,7 @@
     const evidence = best ? buildEvidence(best.pattern, meas) : { ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope };
     return {
       asOf: meas.asOf, lastClose: meas.lastClose,
-      best, bestTrend: sc.bestTrend, bestContra: sc.bestContra, contraScore: sc.contraScore, warn: sc.warn, patterns: sc.patterns, metrics, levels, marks, evidence,
+      best, bestTrend: sc.bestTrend, bestContra: sc.bestContra, trendTotal: sc.trendTotal, contraTotal: sc.contraTotal, totalScore: sc.totalScore, contraScore: sc.contraScore, warn: sc.warn, patterns: sc.patterns, metrics, levels, marks, evidence,
       ma: meas.ma, ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope,
       rsi: meas.rsi, rsiState: meas.rsiState, macd: meas.macd, macdCross: meas.macdCross,
     };

@@ -196,7 +196,7 @@ const DEFAULT_VISIBLE = {
   JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
-  ANALYSIS: ['ticker','name','price','anaContraScore','anaContra','anaTrend','anaWbottom','anaUndercut','anaClimax','anaRsiDiv','anaMaDev','anaRound','anaWarn','anaRSI','anaStatus','anaDate'],
+  ANALYSIS: ['ticker','name','price','anaContra','anaTrend','anaTotal','anaWbottom','anaUndercut','anaClimax','anaRsiDiv','anaMaDev','anaRound','anaWarn','anaRSI','anaStatus','anaDate'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -1730,7 +1730,7 @@ const listState = {
   JP:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
   FUND:   { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
   SIGNAL: { sortKey: 'drop',   sortDir: 1, broker: '', account: '', category: '', detailType: '' },
-  ANALYSIS: { sortKey: 'anaContraScore', sortDir: -1, broker: '', account: '', category: '', detailType: '' },
+  ANALYSIS: { sortKey: 'anaContra', sortDir: -1, broker: '', account: '', category: '', detailType: '' },
 };
 // カラム設定: 市場ごとに [{key, visible}] の配列
 let colPrefs = {};
@@ -2135,9 +2135,12 @@ const COL_RENDERERS = {
 
 // ----- テクニカル分析の値ヘルパ（COL_RENDERERS／sortValue／cfCellValue から共用） -----
 function techOf(sec) { return store.data.techAnalysis[priceKey(sec)] || null; }
-function techComposite(sec) { const r = techOf(sec); return r && r.best ? r.best.score : null; } // 総合＝最強シグナルのスコア
-function techSideScore(sec, side) { const r = techOf(sec); const b = r && (side === 'trend' ? r.bestTrend : r.bestContra); return b ? b.score : null; } // 順張り/逆張りの総合
-function techContraScore(sec) { const r = techOf(sec); return r && r.contraScore != null ? r.contraScore : null; } // 逆張り候補スコア（複数条件の加点）
+// 総合＝確認ゲート方式（単独はキャップ・確認が増えるほど高得点）。旧データ(totalScore無し)は best.score にフォールバック。
+function techComposite(sec) { const r = techOf(sec); if (!r) return null; return r.totalScore != null ? r.totalScore : (r.best ? r.best.score : null); }
+function techSideScore(sec, side) { const r = techOf(sec); if (!r) return null; const t = side === 'trend' ? r.trendTotal : r.contraTotal; if (t != null) return t; const b = side === 'trend' ? r.bestTrend : r.bestContra; return b ? b.score : null; }
+function techContraScore(sec) { const r = techOf(sec); return r && r.contraScore != null ? r.contraScore : techSideScore(sec, 'contra'); }
+// そのサイドで最強の「単独パターン」（名前＋強さ）。総合とは別に“何が点灯しているか”を示す情報用。
+function techBestPattern(sec, side) { const r = techOf(sec); return r ? (side === 'trend' ? r.bestTrend : r.bestContra) : null; }
 function techPatScore(sec, pat) { const r = techOf(sec); return r && r.patterns && r.patterns[pat] && r.patterns[pat].status !== 0 ? r.patterns[pat].score : null; }
 function techLevel(sec, kind) {
   const r = techOf(sec); if (!r || !r.best || !r.levels) return null;
@@ -5640,7 +5643,7 @@ let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
 const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
 // 分析エンジンの版。パターン/指標を追加したら上げる。保存結果の ver がこれと違えば「分析」で再計算対象にする。
-const TECH_VER = 4;
+const TECH_VER = 5;
 
 function anaToday() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function anaThresholds() { return TA.mergeThresholds(store.data.settings && store.data.settings.techThresholds); }
@@ -5694,7 +5697,7 @@ function renderAnalysis() {
         <div class="ss"><span class="ss-k">対象</span><span class="ss-v num">${secs.length} 銘柄</span></div>
         <div class="ss"><span class="ss-k">分析済み</span><span class="ss-v num">${done} 銘柄</span></div>
         <div class="tb-spacer"></div>
-        <div class="ss"><span class="ss-k muted" style="font-weight:400">総合買いシグナル＝最も強いシグナルの強さ(0-100)。各列＝そのパターンの強さ。銘柄名クリックで内訳＋チャート。</span></div>
+        <div class="ss"><span class="ss-k muted" style="font-weight:400">順張り/逆張り総合＝確認ゲート方式(0-100)：単独シグナルは最大60、独立した確認が増えるほど高得点（複数の一致を評価）。各パターン列＝そのシグナルの強さ。行クリックで内訳＋チャート。</span></div>
       </div>
       ${anaPanelOpen ? anaThresholdPanelHtml() : ''}
       <div class="section-body">
@@ -5762,7 +5765,7 @@ function saveTechResult(sec, result, today) {
   while (history.length > 104) history.shift();             // 上限104点（週次2年相当）で剪定（§5）
   store.data.techAnalysis[key] = {
     ver: TECH_VER,
-    lastAnalyzed: today, best: result.best, bestTrend: result.bestTrend, bestContra: result.bestContra, contraScore: result.contraScore, warn: result.warn, patterns: result.patterns,
+    lastAnalyzed: today, best: result.best, bestTrend: result.bestTrend, bestContra: result.bestContra, trendTotal: result.trendTotal, contraTotal: result.contraTotal, totalScore: result.totalScore, contraScore: result.contraScore, warn: result.warn, patterns: result.patterns,
     metrics: result.metrics, levels: result.levels, marks: result.marks,
     evidence: result.evidence, lastClose: result.lastClose,
     ma200Pos: result.ma200Pos, ma200Slope: result.ma200Slope,
@@ -5780,7 +5783,7 @@ function rescoreAll() {
     const shim = { byPattern: {} };
     for (const p of Object.keys(r.metrics)) shim.byPattern[p] = { metrics: r.metrics[p] };
     const sc = TA.score(shim, th);
-    r.patterns = sc.patterns; r.best = sc.best; r.bestTrend = sc.bestTrend; r.bestContra = sc.bestContra; r.contraScore = sc.contraScore; r.warn = sc.warn; r._updatedAt = new Date().toISOString();
+    r.patterns = sc.patterns; r.best = sc.best; r.bestTrend = sc.bestTrend; r.bestContra = sc.bestContra; r.trendTotal = sc.trendTotal; r.contraTotal = sc.contraTotal; r.totalScore = sc.totalScore; r.contraScore = sc.contraScore; r.warn = sc.warn; r._updatedAt = new Date().toISOString();
     // 履歴の最新点も採点だけ更新（同日）
     if (r.history && r.history.length) {
       const last = r.history[r.history.length - 1];
@@ -5906,18 +5909,19 @@ function anaEvidenceHtml(r) {
   const mkRow = (p, lab, col) => { const x = r.patterns && r.patterns[p]; if (!x || x.status === 0) return ''; return `<tr class="ana-sig" data-pat="${p}" onmouseenter="anaTip(this)" onmouseleave="anaTipHide()" onclick="anaShowSignalChart('${p}')" style="cursor:pointer"><td class="l">${esc(TA.PATTERN_LABEL[p])} <span class="ana-sig-i">ⓘ</span></td><td style="text-align:right;color:${col || scColor(x.score)};font-weight:700">${x.score}</td><td>${esc((lab || stLabel)[x.status] || '')}</td></tr>`; };
   const sigRows = pats.map(p => mkRow(p)).filter(Boolean).join('') || `<tr><td colspan="3" class="muted">該当する${isContra ? '逆張り' : '順張り'}シグナルなし</td></tr>`;
   const warnRows = (TA.WARN_PATTERNS || []).map(p => mkRow(p, TA.STATUS_LABEL, 'var(--red)')).filter(Boolean).join('');
-  const b = isContra ? r.bestContra : r.bestTrend;
-  const total = b ? b.score : null;
+  const b = isContra ? r.bestContra : r.bestTrend;                 // 最強の単独パターン（名前表示用）
+  const total = isContra ? (r.contraTotal != null ? r.contraTotal : (b ? b.score : null)) : (r.trendTotal != null ? r.trendTotal : (b ? b.score : null)); // 確認ゲート総合
+  const strongTxt = b ? `最強シグナル: <b>${esc(TA.PATTERN_LABEL[b.pattern] || '')}</b> ${b.score}` : '最強シグナル: —';
   const ma = `200日線との位置: <b>${r.ma200Pos === 'above' ? '上' : r.ma200Pos === 'below' ? '下' : '—'}</b> / 傾き: <b>${r.ma200Slope === 'up' ? '上向き' : r.ma200Slope === 'down' ? '下向き' : '—'}</b>`;
   const rsiTxt = r.rsi != null ? `RSI <b style="color:${r.rsi <= 30 ? 'var(--green)' : r.rsi >= 70 ? 'var(--red)' : 'inherit'}">${Math.round(r.rsi)}</b>${r.rsiState === 'oversold' ? '（売られすぎ）' : r.rsiState === 'overbought' ? '（買われすぎ）' : ''}` : 'RSI —';
   const macdTxt = r.macdCross === 'golden' ? 'MACD <b style="color:var(--green)">ゴールデンクロス</b>' : r.macdCross === 'dead' ? 'MACD <b style="color:var(--red)">デッドクロス</b>' : 'MACD —';
   return `<div style="font-size:13px">
     ${seg}
-    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">
-      ${isContra ? `<span>逆張りスコア: <b style="color:${r.contraScore == null ? 'var(--muted)' : scColor(r.contraScore)};font-size:16px" title="複数条件の加点。80点以上＝有力候補">${r.contraScore == null ? '—' : r.contraScore}</b></span>` : ''}
-      <span>${isContra ? '逆張り総合' : '順張り総合'}: <b style="color:${total == null ? 'var(--muted)' : scColor(total)};font-size:15px">${total == null ? '—' : total}</b></span>
-      <span>${rsiTxt}</span><span>${macdTxt}</span>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px;align-items:baseline">
+      <span>${isContra ? '逆張り総合' : '順張り総合'}: <b style="color:${total == null ? 'var(--muted)' : scColor(total)};font-size:17px" title="確認ゲート方式。単独シグナルは最大60、独立した確認が増えるほど高得点">${total == null ? '—' : total}</b></span>
+      <span class="muted" style="font-size:12px">${strongTxt}</span>
     </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px"><span>${rsiTxt}</span><span>${macdTxt}</span></div>
     <div style="margin-bottom:6px">${ma}</div>
     <table class="holdings dense" style="width:100%"><thead><tr><th class="l">${isContra ? '逆張りシグナル' : '順張りシグナル'}</th><th style="text-align:right">強さ</th><th>ステータス</th></tr></thead><tbody>${sigRows}</tbody></table>
     ${warnRows ? `<div style="margin-top:8px;color:var(--red);font-weight:600;font-size:12px">⚠ 警戒シグナル</div><table class="holdings dense" style="width:100%"><tbody>${warnRows}</tbody></table>` : ''}
