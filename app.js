@@ -3093,8 +3093,40 @@ function copyDisplayedTable() {
     </div>`, { wide: true });
 }
 
+// 分析の列キー → パターンキー（どのシグナルか）。列ピッカーで順張り/逆張りの根拠を示すのに使う。
+const ANA_PAT_COL = {
+  anaCup: 'cup', anaRange: 'range', anaAsc: 'ascTriangle', anaFlag: 'flag', anaBase: 'baseOnBase',
+  anaWbottom: 'doubleBottom', anaInvHS: 'invHS', anaRound: 'roundBottom', anaUndercut: 'undercutRally',
+  anaClimax: 'sellingClimax', anaRsiDiv: 'rsiDivergence', anaBoll: 'bollingerRecover', anaMaDev: 'maDeviation',
+  anaGap: 'gapFill', anaVolDry: 'volDryUp',
+};
+// 列キー → 役割タグ {t:表示, c:色}。null＝タグなし。
+function anaColTag(key) {
+  if (key === 'anaContra') return { t: '逆張り総合', c: 'var(--amber)' };
+  if (key === 'anaTrend') return { t: '順張り総合', c: '#0ea5e9' };
+  if (key === 'anaTotal') return { t: '総合', c: 'var(--muted)' };
+  if (key === 'anaWarn') return { t: '警戒', c: 'var(--red)' };
+  if (key === 'anaMACD') return { t: '共通', c: '#a855f7' };   // ゴールデンクロスは順張り・逆張り両方の確認に使う
+  if (key === 'anaRSI') return { t: '指標', c: 'var(--muted)' };
+  if (key === 'anaStatus') return { t: '状態', c: 'var(--muted)' };
+  if (key === 'anaBuy' || key === 'anaFail') return { t: '水準', c: 'var(--muted)' };
+  const pat = ANA_PAT_COL[key];
+  if (pat && window.TA && TA.PATTERN_SIDE) {
+    const side = TA.PATTERN_SIDE(pat);
+    if (side === 'trend') return { t: '順張り', c: '#0ea5e9' };
+    if (side === 'contra') return { t: '逆張り', c: 'var(--amber)' };
+    return { t: '警戒', c: 'var(--red)' };
+  }
+  return null;
+}
+function anaColTagHtml(key) {
+  const tg = anaColTag(key); if (!tg) return '';
+  return `<span class="cp-side" style="color:${tg.c};border-color:${tg.c}">${tg.t}</span>`;
+}
+
 function openColPicker(market) {
   _colPickerMarket = market;
+  const isAna = market === 'ANALYSIS' || market === 'ANALYSIS_T';
   // 設定変更で再描画しても一覧のスクロール位置を維持する
   const _prevScroll = (document.querySelector('.cp-wrapper') || {}).scrollTop || 0;
   const order = getColOrder(market);
@@ -3105,6 +3137,7 @@ function openColPicker(market) {
         ondragstart="cpDragStart(event,${i})" ondragover="cpDragOver(event,${i})" ondrop="cpDrop(event,${i})" ondragend="cpDragEnd()">
       <span class="cp-handle">⠿</span>
       <input type="checkbox" onchange="cpToggle('${c.key}',this.checked)" ${c.visible ? 'checked' : ''} title="表示/非表示" style="width:auto">
+      ${isAna ? anaColTagHtml(c.key) : ''}
       <input type="text" value="${esc(c.labelOverride || '')}" placeholder="${esc(mc.label)}" onchange="cpSetLabel('${c.key}', this.value)" title="列名（空欄＝既定: ${esc(mc.label)}）" style="flex:1;min-width:140px">
       <label class="muted" style="display:flex;align-items:center;gap:3px;font-size:11px;white-space:nowrap" title="データの最大幅に自動調整（列名は無視）"><input type="checkbox" ${c.auto ? 'checked' : ''} onchange="cpSetAuto('${c.key}',this.checked)" style="width:auto">自動</label>
       <input type="number" min="40" step="2" value="${colWidthPx(c)}" ${c.auto ? 'disabled' : ''} onfocus="this.select()" onchange="cpSetWidth('${c.key}', this.value)" title="列幅(px)" style="width:74px;text-align:right${c.auto ? ';opacity:.4' : ''}"><span class="muted" style="font-size:11px">px</span>
@@ -3115,6 +3148,7 @@ function openColPicker(market) {
   const copyBtn = other ? `<button type="button" class="btn btn-sm" onclick="copyColLayout('${market}','${other}')">この列設定を${colMarketLabel(other)}ビューにもコピー</button>` : '';
   showModal('列の表示・並び替え・幅・列名', `
     <p class="muted" style="margin:0 0 8px">チェック=表示/非表示、ハンドル(⠿)ドラッグで並び替え、テキスト=列名（空欄で既定）、数値=列幅(px)。</p>
+    ${isAna ? `<p class="muted" style="margin:-4px 0 8px;font-size:11px">タグ＝判断の根拠: <span class="cp-side" style="color:var(--amber);border-color:var(--amber)">逆張り</span> 逆張りの材料 / <span class="cp-side" style="color:#0ea5e9;border-color:#0ea5e9">順張り</span> 順張りの材料 / <span class="cp-side" style="color:#a855f7;border-color:#a855f7">共通</span> 両方の確認(MACD GC) / <span class="cp-side" style="color:var(--red);border-color:var(--red)">警戒</span> 売り材料（総合を減点）/ 指標・状態・水準は補助表示。</p>` : ''}
     <div class="btn-row" style="align-items:center;margin:0 0 8px">
       <span class="muted">全列幅を</span>
       <input type="number" id="cp-all-width" min="40" step="2" value="90" onfocus="this.select()" style="width:74px;text-align:right">
