@@ -181,8 +181,13 @@ const MASTER_COLS = [
   { key: 'anaVolDry',   label: '出来高減少下落',   left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaFlag',     label: 'フラッグ',         left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaBase',     label: 'ベースオンベース', left: false, markets: ['ANALYSIS'], noSort: false },
-  { key: 'anaWarn',     label: '警戒シグナル',     left: true,  markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaWarn',     label: '順張り警戒',       left: true,  markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaWarnC',    label: '逆張り警戒',       left: true,  markets: ['ANALYSIS'], noSort: false },
+  // 確認に効く文脈指標（総合の加点条件）。200日線=順張りの確認 / RSI・5日線・52週乖離=逆張りの確認 / MACD=共通
+  { key: 'anaMa200',    label: '200日線',          left: true,  markets: ['ANALYSIS'], noSort: false },
   { key: 'anaRSI',      label: 'RSI',              left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'ana5d',       label: '5日線',            left: true,  markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaDev52w',   label: '52週乖離',         left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaMACD',     label: 'MACD',             left: true,  markets: ['ANALYSIS'], noSort: false },
   { key: 'anaStatus',   label: 'ステータス',       left: true,  markets: ['ANALYSIS'], noSort: false },
   { key: 'anaBuy',      label: '買い候補',         left: false, markets: ['ANALYSIS'], noSort: false },
@@ -195,8 +200,8 @@ const DEFAULT_VISIBLE = {
   JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
-  ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarn','anaRSI','anaStatus','anaDate'],
-  ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaRSI','anaMACD','anaStatus','anaDate'],
+  ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
+  ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -1772,6 +1777,10 @@ function colDefaultWidth(key) {
   if (key === 'stars') return 120;
   if (key === 'analysisNote' || key === 'memo') return 160;
   if (key === 'origCost') return 96; // 金額（本来の購入額）
+  if (key === 'anaWarn' || key === 'anaWarnC') return 150; // パターン名＋スコア
+  if (key === 'anaMa200') return 72;
+  if (key === 'ana5d') return 58;
+  if (key === 'anaDev52w') return 80;
   return mc.left ? 110 : 84; // 左寄せ(テキスト系)は広め・数値は狭め
 }
 function colWidthPx(item) { return Math.max(40, item.width || colDefaultWidth(item.key)); }
@@ -1983,7 +1992,11 @@ function cfCellValue(key, sec, ctx) {
     case 'anaClimax': return techPatScore(sec, 'sellingClimax');
     case 'anaFlag': return techPatScore(sec, 'flag');
     case 'anaBase': return techPatScore(sec, 'baseOnBase');
-    case 'anaWarn': { const r = techOf(sec); return r && r.warn ? r.warn.score : null; }
+    case 'anaWarn': { const w = techWarnSide(sec, 'trend'); return w ? w.score : null; }
+    case 'anaWarnC': { const w = techWarnSide(sec, 'contra'); return w ? w.score : null; }
+    case 'anaMa200': { const r = techOf(sec); return r && r.ma200Pos ? r.ma200Pos : null; }
+    case 'ana5d': { const r = techOf(sec); return r && r.above5 != null ? (r.above5 ? '上' : '下') : null; }
+    case 'anaDev52w': { const r = techOf(sec); return r && r.dev52w != null ? r.dev52w : null; }
     case 'anaRSI': { const r = techOf(sec); return r ? (r.rsi ?? null) : null; }
     case 'anaBuy': return techLevel(sec, 'buy');
     case 'anaFail': return techLevel(sec, 'fail');
@@ -2129,7 +2142,11 @@ const COL_RENDERERS = {
   anaInvHS:    (s,c) => anaPatCell(s, 'invHS'),
   anaFlag:     (s,c) => anaPatCell(s, 'flag'),
   anaBase:     (s,c) => anaPatCell(s, 'baseOnBase'),
-  anaWarn:     (s,c) => { const r = techOf(s); const w = r && r.warn; return `<td class="l">${w ? `<span style="color:var(--red);font-weight:600">${esc(TA.PATTERN_LABEL[w.pattern] || '')} ${w.score}</span>` : muted}</td>`; },
+  anaWarn:     (s,c) => anaWarnCell(techWarnSide(s, 'trend')),
+  anaWarnC:    (s,c) => anaWarnCell(techWarnSide(s, 'contra')),
+  anaMa200:    (s,c) => { const r = techOf(s); if (!r || !r.ma200Pos) return `<td class="l">${muted}</td>`; const pos = r.ma200Pos === 'above' ? '上' : r.ma200Pos === 'below' ? '下' : '—'; const sl = r.ma200Slope === 'up' ? '↗' : r.ma200Slope === 'down' ? '↘' : ''; const ok = r.ma200Pos === 'above' && r.ma200Slope === 'up'; return `<td class="l" style="color:${ok ? 'var(--green)' : 'var(--muted)'};font-weight:600" title="順張りの確認＝株価が200日線の上＆上向き">${pos}${sl}</td>`; },
+  ana5d:       (s,c) => { const r = techOf(s); if (!r || r.above5 == null) return `<td class="l">${muted}</td>`; return `<td class="l" style="color:${r.above5 ? 'var(--green)' : 'var(--muted)'};font-weight:600" title="逆張りの確認＝終値が5日線の上（短期反転の兆し）">${r.above5 ? '上' : '下'}</td>`; },
+  anaDev52w:   (s,c) => { const r = techOf(s); if (!r || r.dev52w == null) return `<td>${muted}</td>`; const v = r.dev52w; const col = v <= -25 ? 'var(--green)' : v >= -5 ? 'var(--muted)' : 'var(--amber)'; return `<td style="text-align:right;color:${col};font-weight:600" title="52週高値からの乖離。-25%以下で逆張りの売られすぎ確認">${v > 0 ? '+' : ''}${Math.round(v)}%</td>`; },
   anaRSI:      (s,c) => { const r = techOf(s); if (!r || r.rsi == null) return `<td>${muted}</td>`; const col = r.rsi <= 30 ? 'var(--green)' : r.rsi >= 70 ? 'var(--red)' : 'var(--text)'; return `<td style="text-align:right;color:${col};font-weight:600">${Math.round(r.rsi)}</td>`; },
   anaMACD:     (s,c) => { const r = techOf(s); if (!r || !r.macdCross) return `<td class="l">${muted}</td>`; const map = { golden: ['GC', 'var(--green)'], dead: ['DC', 'var(--red)'], none: ['—', 'var(--muted)'] }; const [lbl, col] = map[r.macdCross] || map.none; return `<td class="l" style="color:${col}">${lbl}</td>`; },
   anaStatus:   (s,c) => { const r = techOf(s); const b = r && r.best; return `<td class="l">${b ? `<span style="color:${anaStatusColor(b.status)};font-weight:600">${esc(TA.STATUS_LABEL[b.status])}</span>` : muted}</td>`; },
@@ -2160,6 +2177,15 @@ function anaPatCell(sec, pat) {
   if (p.status === 4) return `<td style="text-align:right" title="失敗・崩れ（このパターンは否定材料）"><span style="color:var(--red);font-weight:700">${v}<span style="font-size:9px;vertical-align:1px">✕</span></span></td>`;
   return `<td style="text-align:right"><span style="color:${anaScoreColor(v)};font-weight:700">${v}</span></td>`;
 }
+// 警戒シグナルをサイド別に取得。trend=天井(三尊/ダブルトップ) / contra=底抜け継続(安値更新+出来高/ベアフラッグ/下降三角)。
+function techWarnSide(sec, side) {
+  const r = techOf(sec); if (!r || !r.patterns) return null;
+  const list = side === 'trend' ? (TA.WARN_PATTERNS || []) : (TA.CONTRA_WARN_PATTERNS || []);
+  let best = null;
+  for (const p of list) { const x = r.patterns[p]; if (!x || x.status === 0) continue; if (!best || x.score > best.score) best = { pattern: p, score: x.score, status: x.status }; }
+  return best;
+}
+function anaWarnCell(w) { return `<td class="l">${w ? `<span style="color:var(--red);font-weight:600">${esc(TA.PATTERN_LABEL[w.pattern] || '')} ${w.score}</span>` : muted}</td>`; }
 function techLevel(sec, kind) {
   const r = techOf(sec); if (!r || !r.best || !r.levels) return null;
   const lv = r.levels[r.best.pattern]; if (!lv) return null;
@@ -2709,7 +2735,11 @@ function sortValue(sec, key) {
     case 'anaClimax': return techPatScore(sec, 'sellingClimax') ?? -Infinity;
     case 'anaFlag': return techPatScore(sec, 'flag') ?? -Infinity;
     case 'anaBase': return techPatScore(sec, 'baseOnBase') ?? -Infinity;
-    case 'anaWarn': { const r = techOf(sec); return r && r.warn ? r.warn.score : -Infinity; }
+    case 'anaWarn': { const w = techWarnSide(sec, 'trend'); return w ? w.score : -Infinity; }
+    case 'anaWarnC': { const w = techWarnSide(sec, 'contra'); return w ? w.score : -Infinity; }
+    case 'anaMa200': { const r = techOf(sec); if (!r || !r.ma200Pos) return -Infinity; return (r.ma200Pos === 'above' ? 1 : 0) + (r.ma200Slope === 'up' ? 0.5 : 0); }
+    case 'ana5d': { const r = techOf(sec); return r && r.above5 != null ? (r.above5 ? 1 : 0) : -Infinity; }
+    case 'anaDev52w': { const r = techOf(sec); return r && r.dev52w != null ? r.dev52w : -Infinity; }
     case 'anaRSI': { const r = techOf(sec); return r ? (r.rsi ?? -Infinity) : -Infinity; }
     case 'anaStatus': { const r = techOf(sec); return r && r.best ? r.best.status : -1; }
     case 'anaBuy': return techLevel(sec, 'buy') ?? -Infinity;
@@ -3105,9 +3135,11 @@ function anaColTag(key) {
   if (key === 'anaContra') return { t: '逆張り総合', c: 'var(--amber)' };
   if (key === 'anaTrend') return { t: '順張り総合', c: '#0ea5e9' };
   if (key === 'anaTotal') return { t: '総合', c: 'var(--muted)' };
-  if (key === 'anaWarn') return { t: '警戒', c: 'var(--red)' };
+  if (key === 'anaWarn') return { t: '順張り警戒', c: 'var(--red)' };
+  if (key === 'anaWarnC') return { t: '逆張り警戒', c: 'var(--red)' };
   if (key === 'anaMACD') return { t: '共通', c: '#a855f7' };   // ゴールデンクロスは順張り・逆張り両方の確認に使う
-  if (key === 'anaRSI') return { t: '指標', c: 'var(--muted)' };
+  if (key === 'anaMa200') return { t: '順張り', c: '#0ea5e9' }; // 200日線上＋上向き＝順張りの確認
+  if (key === 'anaRSI' || key === 'ana5d' || key === 'anaDev52w') return { t: '逆張り', c: 'var(--amber)' }; // 売られすぎ/5日線回復＝逆張りの確認
   if (key === 'anaStatus') return { t: '状態', c: 'var(--muted)' };
   if (key === 'anaBuy' || key === 'anaFail') return { t: '水準', c: 'var(--muted)' };
   const pat = ANA_PAT_COL[key];
@@ -3148,7 +3180,7 @@ function openColPicker(market) {
   const copyBtn = other ? `<button type="button" class="btn btn-sm" onclick="copyColLayout('${market}','${other}')">この列設定を${colMarketLabel(other)}ビューにもコピー</button>` : '';
   showModal('列の表示・並び替え・幅・列名', `
     <p class="muted" style="margin:0 0 8px">チェック=表示/非表示、ハンドル(⠿)ドラッグで並び替え、テキスト=列名（空欄で既定）、数値=列幅(px)。</p>
-    ${isAna ? `<p class="muted" style="margin:-4px 0 8px;font-size:11px">タグ＝判断の根拠: <span class="cp-side" style="color:var(--amber);border-color:var(--amber)">逆張り</span> 逆張りの材料 / <span class="cp-side" style="color:#0ea5e9;border-color:#0ea5e9">順張り</span> 順張りの材料 / <span class="cp-side" style="color:#a855f7;border-color:#a855f7">共通</span> 両方の確認(MACD GC) / <span class="cp-side" style="color:var(--red);border-color:var(--red)">警戒</span> 売り材料（総合を減点）/ 指標・状態・水準は補助表示。</p>` : ''}
+    ${isAna ? `<p class="muted" style="margin:-4px 0 8px;font-size:11px">タグ＝判断の根拠: <span class="cp-side" style="color:var(--amber);border-color:var(--amber)">逆張り</span> 逆張りの材料 / <span class="cp-side" style="color:#0ea5e9;border-color:#0ea5e9">順張り</span> 順張りの材料 / <span class="cp-side" style="color:#a855f7;border-color:#a855f7">共通</span> 両方の確認(MACD GC) / <span class="cp-side" style="color:var(--red);border-color:var(--red)">警戒</span> 売り材料（順張り＝天井／逆張り＝底抜けで別列）/ 指標・状態・水準は補助。</p>` : ''}
     <div class="btn-row" style="align-items:center;margin:0 0 8px">
       <span class="muted">全列幅を</span>
       <input type="number" id="cp-all-width" min="40" step="2" value="90" onfocus="this.select()" style="width:74px;text-align:right">
@@ -5705,7 +5737,7 @@ const _anaBars = {};          // priceKey→OHLCV日足（セッション中キ�
 // 分析エンジンの版を2層に分離（「今日データ取得済みなら再取得せず再採点」を実現するため）。
 //  MEASURE_VER: 計測・パターン集合の版。変えたら metrics が足りないのでバー再取得が必要。
 //  SCORE_VER:   採点・集計の版。保存済み metrics から再採点でOK（API再取得不要）。
-const MEASURE_VER = 7;
+const MEASURE_VER = 8; // 8: 確認文脈(above5/dev52w)を列表示するため再取得で再計測が必要
 const SCORE_VER = 1;
 const TECH_VER = MEASURE_VER; // 後方互換（保存結果の ver = MEASURE_VER）
 
@@ -5772,6 +5804,8 @@ function anaSelectSpec(key) {
     case 'principalSold': return { opts: [['1', '売却済み'], ['0', '未売却']], val: s => s.principalSold ? '1' : '0' };
     case 'anaMACD': return { opts: [['golden', 'GC'], ['dead', 'DC'], ['none', '—']], val: s => { const r = techOf(s); return r ? (r.macdCross || 'none') : ''; } };
     case 'anaStatus': return { opts: [['1', '形成中'], ['2', '完成間近'], ['3', 'ブレイク済み'], ['4', '失敗']], val: s => { const r = techOf(s); return r && r.best ? String(r.best.status) : ''; } };
+    case 'anaMa200': return { opts: [['above', '上'], ['below', '下']], val: s => { const r = techOf(s); return r ? (r.ma200Pos || '') : ''; } };
+    case 'ana5d': return { opts: [['1', '上'], ['0', '下']], val: s => { const r = techOf(s); return r && r.above5 != null ? (r.above5 ? '1' : '0') : ''; } };
     case 'anaDate': return { opts: [['done', '分析済み'], ['none', '未分析']], val: s => techOf(s) ? 'done' : 'none' };
     default: return null;
   }
