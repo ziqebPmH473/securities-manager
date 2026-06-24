@@ -245,6 +245,9 @@
     res.byPattern.volDryUp = measureVolDryUp(bars, closes, pv, struct, baseCtx);
     res.byPattern.hsTop = measureHSTop(bars, closes, pv, struct, baseCtx);
     res.byPattern.doubleTop = measureDoubleTop(bars, closes, pv, struct, baseCtx);
+    res.byPattern.newLowHighVol = measureNewLowHighVol(bars, closes, pv, struct, baseCtx);
+    res.byPattern.bearFlag = measureBearFlag(bars, closes, pv, struct, baseCtx);
+    res.byPattern.descTriangle = measureDescTriangle(bars, closes, pv, struct, baseCtx);
     return res;
   }
 
@@ -655,6 +658,53 @@
     };
   }
 
+  // ===== 逆張りの警戒パターン（底抜け継続/底打ち失敗。点灯したら逆張り総合を減点） =====
+  // --- 安値更新＋出来高増加（売りが枯れず新規売り。逆張りで最も避けたい） ---
+  function measureNewLowHighVol(bars, closes, pv, struct, ctx) {
+    const n = bars.length; if (n < 25) return null;
+    const a = Math.max(0, n - 60), b = n - 2;
+    if (b <= a) return null;
+    const pl = minLow(bars, a, b); const recentLow = pl.v;
+    const c = ctx.lastClose;
+    return {
+      metrics: { belowLow: c < recentLow ? 1 : 0, breakPct: pct(c, recentLow), volRatio: ctx.avgVol20 ? (ctx.lastVol || 0) / ctx.avgVol20 : 0 },
+      levels: { support: recentLow, failLevel: recentLow },
+      marks: [{ t: bars[pl.i].t, price: recentLow, label: '直近安値', up: false }],
+    };
+  }
+  // --- ベアフラッグ（急落→小反発→再下落。自律反発後の二段下げ） ---
+  function measureBearFlag(bars, closes, pv, struct, ctx) {
+    const n = bars.length; if (n < 40) return null;
+    const a = Math.max(0, n - 40);
+    const hi = maxHigh(bars, a, n - 15);
+    const lo = minLow(bars, hi.i, n - 1);
+    const dropPct = pct(lo.v, hi.v);
+    if (dropPct > -15) return null;
+    const rb = maxHigh(bars, lo.i, n - 1);
+    const flagLow = minLow(bars, rb.i, n - 1).v;
+    const c = ctx.lastClose;
+    let dV = 0, dN = 0; for (let i = hi.i; i <= lo.i; i++) { dV += bars[i].v || 0; dN++; }
+    let rV = 0, rN = 0; for (let i = lo.i; i <= rb.i; i++) { rV += bars[i].v || 0; rN++; }
+    return {
+      metrics: { dropPct, reboundPct: pct(rb.v, lo.v), volDecline: ((rN ? rV / rN : 0) < (dN ? dV / dN : 0)) ? 1 : 0, breakBelow: (c < flagLow * 0.98 || c < lo.v) ? 1 : 0, breakPct: pct(c, flagLow) },
+      levels: { support: flagLow, failLevel: lo.v },
+      marks: [{ t: bars[hi.i].t, price: hi.v, label: '急落前高値', up: true }, { t: bars[lo.i].t, price: lo.v, label: '急落安値', up: false }],
+    };
+  }
+  // --- 下降三角持ち合いの下抜け（支持は水平・高値切り下げ→支持割れ） ---
+  function measureDescTriangle(bars, closes, pv, struct, ctx) {
+    const highs = pv.hi, lows = pv.lo; if (highs.length < 2 || lows.length < 2) return null;
+    const h1 = bars[highs[highs.length - 2]].h, h2 = bars[highs[highs.length - 1]].h;
+    const lo1 = bars[lows[lows.length - 2]].l, lo2 = bars[lows[lows.length - 1]].l;
+    const support = Math.min(lo1, lo2);
+    const c = ctx.lastClose;
+    return {
+      metrics: { highsFalling: h2 < h1 ? 1 : 0, flatSupport: Math.abs(pct(lo2, lo1)) <= 5 ? 1 : 0, breakdown: c < support * 0.98 ? 1 : 0, breakPct: pct(c, support), volRatio: ctx.avgVol20 ? (ctx.lastVol || 0) / ctx.avgVol20 : 0 },
+      levels: { support, failLevel: support, resistance: h2 },
+      marks: [{ t: bars[highs[highs.length - 2]].t, price: h1, label: '高値1', up: true }, { t: bars[highs[highs.length - 1]].t, price: h2, label: '高値2(切下げ)', up: true }, { t: bars[lows[lows.length - 1]].t, price: support, label: '支持線', up: false }],
+    };
+  }
+
   // ===== 採点（score） =====
   // ステータス: 0=該当なし 1=形成中 2=完成間近 3=ブレイク済み 4=失敗（逆張りは CONTRA_STATUS_LABEL で語彙差し替え）
   function score(meas, th) {
@@ -667,6 +717,7 @@
       undercutRally: scoreUndercutRally, sellingClimax: scoreSellingClimax,
       rsiDivergence: scoreRsiDivergence, bollingerRecover: scoreBollinger, maDeviation: scoreMaDeviation, gapFill: scoreGapFill, volDryUp: scoreVolDryUp,
       hsTop: scoreHSTop, doubleTop: scoreDoubleTop,
+      newLowHighVol: scoreNewLowHighVol, bearFlag: scoreBearFlag, descTriangle: scoreDescTriangle,
     };
     for (const key of Object.keys(fns)) {
       const m = meas.byPattern[key];
@@ -800,8 +851,18 @@
       if (meas.rsiState === 'oversold' || (meas.dev52w != null && meas.dev52w <= -25)) confirms++; // 売られすぎ文脈
       if (meas.macdCross === 'golden' || meas.above5) confirms++;          // モメンタム反転の兆し
     }
-    if (confirms <= 0) return Math.min(bestScore, 60);                     // 単独＝候補止まり（最大60）
-    return Math.min(100, Math.round(bestScore * 0.6 + 25 + confirms * 8)); // 確認があるほど高得点
+    let total = confirms <= 0 ? Math.min(bestScore, 60) : Math.min(100, Math.round(bestScore * 0.6 + 25 + confirms * 8));
+    // 逆張りは「底抜け継続/底打ち失敗」の警戒が点灯したら減点（まだ早い）。安値更新+出来高増は買い見送り級。
+    if (side === 'contra') {
+      const nlv = patterns.newLowHighVol;
+      const strongDanger = nlv && nlv.status >= 2;                         // 安値更新＋出来高増
+      const otherWarn = ['bearFlag', 'descTriangle'].some(p => patterns[p] && patterns[p].status >= 2)
+        || (patterns.doubleBottom && patterns.doubleBottom.status === 4)    // 二番底失敗
+        || (patterns.gapFill && patterns.gapFill.status === 4);             // ギャップ後の安値更新
+      if (strongDanger) total = Math.min(total, 35);
+      else if (otherWarn) total = Math.max(0, total - 20);
+    }
+    return total;
   }
 
   function scoreCup(m, th) {
@@ -943,6 +1004,38 @@
     let status = m.headHighest ? 1 : 0;
     if (broke) status = 3; else if (m.headHighest && m.rsBelowHead <= 0.97) status = 2;
     return { score: Math.round(s), status };
+  }
+
+  // 逆張り警戒: 安値更新＋出来高増加（高いほど危険）
+  function scoreNewLowHighVol(m) {
+    let s = 0; const broke = m.belowLow && m.breakPct <= -0.5;
+    if (broke) s += 40;
+    if (m.volRatio >= 1.5) s += 40; if (m.volRatio >= 2) s += 10;
+    let status = 0;
+    if (broke && m.volRatio >= 1.5) status = 3; else if (broke) status = 2; else if (m.breakPct <= 2) status = 1;
+    return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り警戒: ベアフラッグ
+  function scoreBearFlag(m) {
+    let s = 0;
+    if (m.dropPct <= -20) s += 20;
+    if (m.reboundPct > 0 && m.reboundPct <= 15) s += 20;
+    if (m.volDecline) s += 20;
+    if (m.breakBelow) s += 40;
+    let status = 0;
+    if (m.dropPct <= -15 && m.reboundPct <= 20) status = m.breakBelow ? 3 : 1;
+    return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り警戒: 下降三角持ち合いの下抜け
+  function scoreDescTriangle(m) {
+    let s = 0;
+    if (m.highsFalling) s += 25;
+    if (m.flatSupport) s += 20;
+    if (m.breakdown) s += 35;
+    if (m.volRatio >= 1.5) s += 20;
+    let status = 0;
+    if (m.highsFalling && m.flatSupport) status = m.breakdown ? 3 : (m.breakPct <= 2 ? 2 : 1);
+    return { score: Math.min(100, Math.round(s)), status };
   }
 
   function scoreDoubleTop(m, th) {
@@ -1137,12 +1230,14 @@
     undercutRally: 'アンダーカット&ラリー', sellingClimax: 'セリングクライマックス',
     rsiDivergence: 'RSIダイバージェンス', bollingerRecover: 'ボリンジャー-2σ回復', maDeviation: 'MA大幅下方乖離', gapFill: '窓開け急落の下げ止まり', volDryUp: '出来高減少下落',
     hsTop: '三尊天井(警戒)', doubleTop: 'ダブルトップ(警戒)',
+    newLowHighVol: '安値更新＋出来高増(警戒)', bearFlag: 'ベアフラッグ(警戒)', descTriangle: '下降三角の下抜け(警戒)',
   };
   // 順張り（上に抜けたら買い）と 逆張り（下げ止まり/反転を拾う）でシグナルを分類。総合スコアは各サイドで別算出。
   const TREND_PATTERNS = ['cup', 'range', 'ascTriangle', 'flag', 'baseOnBase'];
   const CONTRA_PATTERNS = ['doubleBottom', 'invHS', 'roundBottom', 'undercutRally', 'sellingClimax', 'rsiDivergence', 'bollingerRecover', 'maDeviation', 'gapFill', 'volDryUp'];
   const BUY_PATTERNS = [...TREND_PATTERNS, ...CONTRA_PATTERNS];
-  const WARN_PATTERNS = ['hsTop', 'doubleTop'];
+  const WARN_PATTERNS = ['hsTop', 'doubleTop'];                       // 順張り(高値圏の天井)系の警戒
+  const CONTRA_WARN_PATTERNS = ['newLowHighVol', 'bearFlag', 'descTriangle']; // 逆張り(底抜け継続)系の警戒
   const PATTERN_SIDE = (p) => CONTRA_PATTERNS.includes(p) ? 'contra' : TREND_PATTERNS.includes(p) ? 'trend' : 'warn';
   const STATUS_LABEL = { 0: '—', 1: '形成中', 2: '完成間近', 3: 'ブレイク済み', 4: '失敗' };
   // 逆張り用のステータス語彙（売られすぎ→下げ止まり→反転確認→下抜け継続）。状態intは共通(0-4)で意味だけ差し替え。
@@ -1150,7 +1245,7 @@
 
   globalThis.TA = {
     DEFAULT_THRESHOLDS, DEFAULT_STRUCT, PATTERN_LABEL, BUY_PATTERNS, WARN_PATTERNS, STATUS_LABEL,
-    TREND_PATTERNS, CONTRA_PATTERNS, PATTERN_SIDE, CONTRA_STATUS_LABEL,
-    measure, score, analyze, candleSVG, rsiSVG, macdSVG, toWeekly, sma, rsi, macd, mergeThresholds,
+    TREND_PATTERNS, CONTRA_PATTERNS, CONTRA_WARN_PATTERNS, PATTERN_SIDE, CONTRA_STATUS_LABEL,
+    measure, score, analyze, candleSVG, rsiSVG, macdSVG, toWeekly, sma, rsi, macd, bollinger, mergeThresholds,
   };
 })();

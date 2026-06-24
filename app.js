@@ -5643,7 +5643,7 @@ let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
 const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
 // 分析エンジンの版。パターン/指標を追加したら上げる。保存結果の ver がこれと違えば「分析」で再計算対象にする。
-const TECH_VER = 5;
+const TECH_VER = 6;
 
 function anaToday() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function anaThresholds() { return TA.mergeThresholds(store.data.settings && store.data.settings.techThresholds); }
@@ -5908,7 +5908,9 @@ function anaEvidenceHtml(r) {
   // 各シグナル行: ホバーで説明（吞き出し）／クリックでそのシグナルだけのチャート拡大
   const mkRow = (p, lab, col) => { const x = r.patterns && r.patterns[p]; if (!x || x.status === 0) return ''; return `<tr class="ana-sig" data-pat="${p}" onmouseenter="anaTip(this)" onmouseleave="anaTipHide()" onclick="anaShowSignalChart('${p}')" style="cursor:pointer"><td class="l">${esc(TA.PATTERN_LABEL[p])} <span class="ana-sig-i">ⓘ</span></td><td style="text-align:right;color:${col || scColor(x.score)};font-weight:700">${x.score}</td><td>${esc((lab || stLabel)[x.status] || '')}</td></tr>`; };
   const sigRows = pats.map(p => mkRow(p)).filter(Boolean).join('') || `<tr><td colspan="3" class="muted">該当する${isContra ? '逆張り' : '順張り'}シグナルなし</td></tr>`;
-  const warnRows = (TA.WARN_PATTERNS || []).map(p => mkRow(p, TA.STATUS_LABEL, 'var(--red)')).filter(Boolean).join('');
+  // 警戒: 逆張り側は「底抜け継続/底打ち失敗」系を主に、天井系(三尊/ダブルトップ)は副次で表示
+  const warnList = isContra ? [...(TA.CONTRA_WARN_PATTERNS || []), ...(TA.WARN_PATTERNS || [])] : (TA.WARN_PATTERNS || []);
+  const warnRows = warnList.map(p => mkRow(p, TA.STATUS_LABEL, 'var(--red)')).filter(Boolean).join('');
   const b = isContra ? r.bestContra : r.bestTrend;                 // 最強の単独パターン（名前表示用）
   const total = isContra ? (r.contraTotal != null ? r.contraTotal : (b ? b.score : null)) : (r.trendTotal != null ? r.trendTotal : (b ? b.score : null)); // 確認ゲート総合
   const strongTxt = b ? `最強シグナル: <b>${esc(TA.PATTERN_LABEL[b.pattern] || '')}</b> ${b.score}` : '最強シグナル: —';
@@ -5946,8 +5948,11 @@ const PATTERN_INFO = {
   maDeviation:{ d: 'MA大幅下方乖離（逆張り候補抽出）。移動平均線から大きく下に離れた売られすぎ状態。', h: '単独では危険。下ヒゲ・出来高急増・5日線回復などの確認と組み合わせる。乖離が深いほど反発余地は大きいが落ちるナイフ注意。' },
   gapFill:{ d: '窓開け急落後の下げ止まり（逆張り）。悪材料で窓を開けて急落した後、売りが続かず安値を割らない/窓を埋める形。', h: '窓開け日の安値を割らない＋窓開け高値を回復で強い。ただし業績が構造的に悪化した場合はチャートだけで判断しない。' },
   volDryUp:{ d: '出来高減少を伴う下落（逆張りの補助）。株価は下がっているが出来高が細る＝売り圧力の鈍化。', h: '単独の買いシグナルではない。二番底・ラウンドボトムの補助条件として使う。' },
-  hsTop:      { d: '三尊天井（ヘッド&ショルダー）。高値が「肩・頭・肩」の天井転換型。', h: 'ネックライン割れで下落警戒（利益確定/撤退）。買いではなく警戒シグナル。' },
+  hsTop:      { d: '三尊天井（ヘッド&ショルダー）。高値が「肩・頭・肩」の天井転換型。', h: 'ネックライン割れで下落警戒（利益確定/撤退）。買いではなく警戒シグナル。逆張りでは高値圏から下げ始めた銘柄を“早すぎる逆張り”で買わないための注意。' },
   doubleTop:  { d: 'ダブルトップ。ほぼ同じ水準の高値を2度つけるM字型の天井。', h: '中間の安値（ネックライン）割れで下落警戒。買いではなく警戒シグナル。' },
+  newLowHighVol:{ d: '安値更新＋出来高増加（逆張り警戒）。直近安値を終値で割り、出来高が増えている＝売りが枯れず新規売りが出ている。', h: '逆張りで最も避けたい形。これが出たら買いは一旦見送り。特に決算/下方修正/悪材料後は危険。' },
+  bearFlag:   { d: 'ベアフラッグ（逆張り警戒）。急落→小さな反発→再下落。小反発を底打ちと勘違いしやすい。', h: '反発の出来高が細く、反発レンジ下限を割ると二段下げになりやすい。買いを急がない。' },
+  descTriangle:{ d: '下降三角持ち合いの下抜け（逆張り警戒）。支持線は水平だが高値が切り下がり、最後に支持線を割る形。', h: '支持で買いが入って見えても戻りが弱い＝底抜け。出来高を伴う支持割れは特に危険。買ってはいけない形。' },
 };
 // シグナル説明の吞き出し（body直下のfixed要素＝表の overflow に切られない）
 function anaTip(el) {
@@ -5986,9 +5991,23 @@ function anaShowSignalChart(pattern) {
   if (cur != null) hlines.push({ price: cur, color: 'var(--muted)', label: '現在値', dash: '2 2' });
   const x = r && r.patterns && r.patterns[pattern];
   const info = PATTERN_INFO[pattern] || { d: '', h: '' };
-  const chart = TA.candleSVG(disp, { hlines, marks: mk, title: TA.PATTERN_LABEL[pattern] + (x ? `（強さ ${x.score} / ${TA.STATUS_LABEL[x.status]}）` : ''), height: 440 });
+  // シグナルの根拠となる指標を描き分ける: ボリンジャー/MA乖離→帯やMAを重ね描き、RSIダイバージェンス→RSIサブチャート、
+  // ラウンドボトム→MA、それ以外（パターン系）はローソク＋そのパターンのライン/印のみ。
+  const dc = disp.map(b => b.c);
+  let mas = [], sub = '';
+  if (pattern === 'bollingerRecover') {
+    const bb = TA.bollinger(dc, 20, 2);
+    mas = [{ values: bb.upper, color: '#94a3b8', label: '+2σ' }, { values: bb.mid, color: '#a855f7', label: '20MA' }, { values: bb.lower, color: '#0ea5e9', label: '-2σ' }];
+  } else if (pattern === 'maDeviation') {
+    mas = [{ values: TA.sma(dc, 25), color: '#0ea5e9', label: '25日' }, { values: TA.sma(dc, 75), color: '#a855f7', label: '75日' }, { values: TA.sma(dc, 200), color: '#f59e0b', label: '200日' }];
+  } else if (pattern === 'roundBottom') {
+    mas = [{ values: TA.sma(dc, 25), color: '#0ea5e9', label: '25日' }, { values: TA.sma(dc, 75), color: '#a855f7', label: '75日' }];
+  } else if (pattern === 'rsiDivergence') {
+    sub = TA.rsiSVG(TA.rsi(dc, 14));   // 株価とRSIの安値を見比べる＝RSIサブチャートを併記
+  }
+  const chart = TA.candleSVG(disp, { hlines, marks: mk, mas, title: TA.PATTERN_LABEL[pattern] + (x ? `（強さ ${x.score} / ${TA.STATUS_LABEL[x.status]}）` : ''), height: 440 });
   const desc = `<div class="ana-sig-desc"><div>${esc(info.d)}</div><div style="margin-top:4px"><b>見方:</b> ${esc(info.h)}</div></div>`;
-  anaShowOverlay(TA.PATTERN_LABEL[pattern], chart + desc);
+  anaShowOverlay(TA.PATTERN_LABEL[pattern], chart + sub + desc);
 }
 // 汎用: 拡大オーバーレイに任意HTMLを表示（enlargeDetailChart と同じ器）
 function anaShowOverlay(title, innerHtml) {
