@@ -214,6 +214,8 @@
     res.byPattern.invHS = measureInvHS(bars, closes, pv, struct, baseCtx);
     res.byPattern.flag = measureFlag(bars, closes, pv, struct, baseCtx);
     res.byPattern.baseOnBase = measureBaseOnBase(bars, closes, pv, struct, baseCtx, sma(closes, 50));
+    res.byPattern.undercutRally = measureUndercutRally(bars, closes, pv, struct, baseCtx);
+    res.byPattern.sellingClimax = measureSellingClimax(bars, closes, pv, struct, baseCtx);
     res.byPattern.hsTop = measureHSTop(bars, closes, pv, struct, baseCtx);
     res.byPattern.doubleTop = measureDoubleTop(bars, closes, pv, struct, baseCtx);
     return res;
@@ -503,8 +505,61 @@
     };
   }
 
+  // --- アンダーカット&ラリー（前回安値を一時割って終値で回復＝売り方の失敗。逆張り） ---
+  function measureUndercutRally(bars, closes, pv, struct, ctx) {
+    const n = bars.length; if (n < 30) return null;
+    const recent = 8, W = 70;
+    const a = Math.max(0, n - 1 - W), b = n - 1 - recent;
+    if (b <= a + 3) return null;
+    const pl = minLow(bars, a, b);                 // 直近の手前の安値（＝支持となっていた前回安値）
+    const prevLow = pl.v;
+    let ucIdx = -1, ucLow = Infinity;               // 直近 recent 本での最安値（アンダーカット候補）
+    for (let i = b + 1; i <= n - 1; i++) { if (bars[i].l < ucLow) { ucLow = bars[i].l; ucIdx = i; } }
+    if (ucIdx < 0) return null;
+    const undercut = ucLow < prevLow;
+    const depthBelow = prevLow ? (prevLow - ucLow) / prevLow * 100 : 0;   // 何%割ったか（正）
+    let recovered = false, recIdx = -1;             // アンダーカット日以降の終値で prevLow を回復したか
+    for (let i = ucIdx; i <= n - 1; i++) { if (closes[i] > prevLow) { recovered = true; recIdx = i; break; } }
+    const ub = bars[ucIdx];
+    const volRatio = ctx.avgVol20 ? (ub.v || 0) / ctx.avgVol20 : 0;
+    const rng = (ub.h - ub.l) || 1e-9;
+    const lowerWick = (ub.c - ub.l) / rng;          // 終値がレンジのどこ（0.5以上＝下ヒゲ）
+    const hi = maxHigh(bars, a, n - 1);
+    const dropFromHighPct = pct(ub.l, hi.v);        // 売られすぎ文脈（負）
+    let rallyHigh = null; if (recIdx >= 0) rallyHigh = maxHigh(bars, recIdx, n - 1).v;
+    return {
+      metrics: { undercut: undercut ? 1 : 0, depthBelow, recovered: recovered ? 1 : 0, daysSince: n - 1 - ucIdx, volRatio, lowerWick, dropFromHighPct },
+      levels: { support: prevLow, failLevel: ucLow, breakLevel: rallyHigh },
+      marks: [{ t: bars[pl.i].t, price: prevLow, label: '前回安値', up: false }, { t: ub.t, price: ucLow, label: '一時割れ', up: false }],
+    };
+  }
+
+  // --- セリングクライマックス（投げ売りの最終局面。出来高急増＋値幅拡大＋下ヒゲ＋以後安値維持。逆張り・監視寄り） ---
+  function measureSellingClimax(bars, closes, pv, struct, ctx) {
+    const n = bars.length; if (n < 65) return null;
+    const c0 = closes[n - 1], c20 = closes[n - 21], c60 = closes[n - 61];
+    const drop20 = c20 ? pct(c0, c20) : 0, drop60 = c60 ? pct(c0, c60) : 0;  // 負
+    let climaxIdx = -1, maxV = -1;                  // 直近10本で出来高最大日＝クライマックス候補
+    for (let i = n - 10; i <= n - 1; i++) { if (i < 1) continue; const v = bars[i].v || 0; if (v > maxV) { maxV = v; climaxIdx = i; } }
+    if (climaxIdx < 1) return null;
+    const cb = bars[climaxIdx];
+    const av = avgVol(bars, climaxIdx, 20) || ctx.avgVol20;
+    const volRatio = av ? (cb.v || 0) / av : 0;
+    const rng = (cb.h - cb.l) || 1e-9;
+    let sumRng = 0, cnt = 0; for (let i = climaxIdx - 20; i < climaxIdx; i++) { if (i < 0) continue; sumRng += (bars[i].h - bars[i].l); cnt++; }
+    const rangeExp = cnt ? rng / (sumRng / cnt) : 0;
+    const closePos = (cb.c - cb.l) / rng;           // 終値がレンジのどこ（上半分＝下ヒゲ/反発）
+    let heldLow = true;                             // 以後クライマックス安値を終値で割らない
+    for (let i = climaxIdx + 1; i <= n - 1; i++) { if (closes[i] < cb.l) { heldLow = false; break; } }
+    return {
+      metrics: { drop20, drop60, volRatio, rangeExp, closePos, heldLow: heldLow ? 1 : 0, daysSince: n - 1 - climaxIdx },
+      levels: { support: cb.l, failLevel: cb.l },
+      marks: [{ t: cb.t, price: cb.l, label: 'クライマックス安値', up: false }],
+    };
+  }
+
   // ===== 採点（score） =====
-  // ステータス: 0=該当なし 1=形成中 2=完成間近 3=ブレイク済み 4=失敗
+  // ステータス: 0=該当なし 1=形成中 2=完成間近 3=ブレイク済み 4=失敗（逆張りは CONTRA_STATUS_LABEL で語彙差し替え）
   function score(meas, th) {
     th = mergeThresholds(th);
     const out = { patterns: {}, best: null, warn: null };
@@ -512,19 +567,18 @@
     const fns = {
       cup: scoreCup, range: scoreRange, doubleBottom: scoreDoubleBottom, ascTriangle: scoreAscTriangle,
       roundBottom: scoreRoundBottom, invHS: scoreInvHS, flag: scoreFlag, baseOnBase: scoreBaseOnBase,
+      undercutRally: scoreUndercutRally, sellingClimax: scoreSellingClimax,
       hsTop: scoreHSTop, doubleTop: scoreDoubleTop,
     };
     for (const key of Object.keys(fns)) {
       const m = meas.byPattern[key];
       out.patterns[key] = m ? fns[key](m.metrics, th) : { score: 0, status: 0 };
     }
-    // 総合買いシグナル＝買いパターンのスコア最大（ステータス0を除く）
-    let best = null;
-    for (const key of BUY_PATTERNS) {
-      const p = out.patterns[key]; if (!p || p.status === 0) continue;
-      if (!best || p.score > best.score) best = { pattern: key, score: p.score, status: p.status };
-    }
-    out.best = best;
+    // 総合＝そのサイドのパターンのスコア最大（ステータス0を除く）。順張り/逆張りを別算出＋全体best。
+    const bestOf = (list) => { let b = null; for (const key of list) { const p = out.patterns[key]; if (!p || p.status === 0) continue; if (!b || p.score > b.score) b = { pattern: key, score: p.score, status: p.status }; } return b; };
+    out.bestTrend = bestOf(TREND_PATTERNS);
+    out.bestContra = bestOf(CONTRA_PATTERNS);
+    out.best = bestOf(BUY_PATTERNS);
     // 警戒シグナル＝警戒パターンのスコア最大
     let warn = null;
     for (const key of WARN_PATTERNS) {
@@ -536,6 +590,39 @@
   }
 
   const inRange = (v, lo, hi) => v >= lo && v <= hi;
+
+  // 逆張り: アンダーカット&ラリー
+  function scoreUndercutRally(m) {
+    let s = 0;
+    if (m.undercut) s += 15;
+    if (m.recovered) s += 25;                       // 終値で回復＝最重要
+    if (m.volRatio >= 1.5) s += 15;                 // 投げ売り出来高
+    if (m.lowerWick >= 0.5) s += 15;                // 下ヒゲ
+    if (m.depthBelow > 0 && m.depthBelow <= 4) s += 10; // 浅い割れ＝だまし下げ
+    if (m.dropFromHighPct <= -15) s += 10;          // 売られすぎ文脈
+    if (m.daysSince <= 6) s += 10;
+    let status = 0;
+    if (m.undercut) status = m.recovered ? (m.daysSince <= 6 ? 3 : 2) : (m.daysSince > 6 ? 4 : 1);
+    return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り: セリングクライマックス（買いより監視寄り。安値維持で下げ止まり）
+  function scoreSellingClimax(m) {
+    let s = 0;
+    const bigDrop = m.drop20 <= -20 || m.drop60 <= -30;
+    if (bigDrop) s += 20;
+    if (m.volRatio >= 2.0) s += 20;                 // 出来高急増
+    if (m.rangeExp >= 1.5) s += 15;                 // 値幅拡大
+    if (m.closePos >= 0.5) s += 15;                 // 終値レンジ上半分＝下ヒゲ/反発
+    if (m.heldLow) s += 20;                         // 以後安値を割らない
+    if (m.daysSince >= 1 && m.daysSince <= 8) s += 10;
+    let status = 0;
+    if (bigDrop && (m.volRatio >= 2 || m.rangeExp >= 1.5)) {
+      status = 2;                                   // 投げ売り発生＝下げ止まり候補
+      if (m.heldLow && m.daysSince >= 3) status = 3; // 安値維持＝反転確認寄り
+      if (!m.heldLow) status = 4;                   // 安値割れ継続＝危険
+    } else if (m.drop20 <= -12) status = 1;         // 売られすぎ
+    return { score: Math.min(100, Math.round(s)), status };
+  }
 
   function scoreCup(m, th) {
     const c = th.cup, k = th.common; let s = 0;
@@ -712,7 +799,7 @@
     const evidence = best ? buildEvidence(best.pattern, meas) : { ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope };
     return {
       asOf: meas.asOf, lastClose: meas.lastClose,
-      best, warn: sc.warn, patterns: sc.patterns, metrics, levels, marks, evidence,
+      best, bestTrend: sc.bestTrend, bestContra: sc.bestContra, warn: sc.warn, patterns: sc.patterns, metrics, levels, marks, evidence,
       ma: meas.ma, ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope,
       rsi: meas.rsi, rsiState: meas.rsiState, macd: meas.macd, macdCross: meas.macdCross,
     };
@@ -867,14 +954,22 @@
   const PATTERN_LABEL = {
     cup: 'カップウィズハンドル', range: 'レンジブレイク', doubleBottom: 'ダブルボトム', ascTriangle: 'アセンディングトライアングル',
     roundBottom: 'ラウンドボトム', invHS: '逆三尊', flag: 'フラッグ/ペナント', baseOnBase: 'ベース・オン・ベース',
+    undercutRally: 'アンダーカット&ラリー', sellingClimax: 'セリングクライマックス',
     hsTop: '三尊天井(警戒)', doubleTop: 'ダブルトップ(警戒)',
   };
-  const BUY_PATTERNS = ['cup', 'range', 'doubleBottom', 'ascTriangle', 'roundBottom', 'invHS', 'flag', 'baseOnBase'];
+  // 順張り（上に抜けたら買い）と 逆張り（下げ止まり/反転を拾う）でシグナルを分類。総合スコアは各サイドで別算出。
+  const TREND_PATTERNS = ['cup', 'range', 'ascTriangle', 'flag', 'baseOnBase'];
+  const CONTRA_PATTERNS = ['doubleBottom', 'invHS', 'roundBottom', 'undercutRally', 'sellingClimax'];
+  const BUY_PATTERNS = [...TREND_PATTERNS, ...CONTRA_PATTERNS];
   const WARN_PATTERNS = ['hsTop', 'doubleTop'];
+  const PATTERN_SIDE = (p) => CONTRA_PATTERNS.includes(p) ? 'contra' : TREND_PATTERNS.includes(p) ? 'trend' : 'warn';
   const STATUS_LABEL = { 0: '—', 1: '形成中', 2: '完成間近', 3: 'ブレイク済み', 4: '失敗' };
+  // 逆張り用のステータス語彙（売られすぎ→下げ止まり→反転確認→下抜け継続）。状態intは共通(0-4)で意味だけ差し替え。
+  const CONTRA_STATUS_LABEL = { 0: '—', 1: '売られすぎ', 2: '下げ止まり候補', 3: '反転確認', 4: '下抜け継続' };
 
   globalThis.TA = {
     DEFAULT_THRESHOLDS, DEFAULT_STRUCT, PATTERN_LABEL, BUY_PATTERNS, WARN_PATTERNS, STATUS_LABEL,
+    TREND_PATTERNS, CONTRA_PATTERNS, PATTERN_SIDE, CONTRA_STATUS_LABEL,
     measure, score, analyze, candleSVG, rsiSVG, macdSVG, toWeekly, sma, rsi, macd, mergeThresholds,
   };
 })();
