@@ -5661,8 +5661,12 @@ let anaFilterRows = [];       // 追加済みフィルタの順序 [{key}]
 let anaFltNum = {};           // 数値列フィルタ key→{min,max}
 let anaFltSel = {};           // 選択列フィルタ key→[選択値…]（複数選択）
 const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
-// 分析エンジンの版。パターン/指標を追加したら上げる。保存結果の ver がこれと違えば「分析」で再計算対象にする。
-const TECH_VER = 7;
+// 分析エンジンの版を2層に分離（「今日データ取得済みなら再取得せず再採点」を実現するため）。
+//  MEASURE_VER: 計測・パターン集合の版。変えたら metrics が足りないのでバー再取得が必要。
+//  SCORE_VER:   採点・集計の版。保存済み metrics から再採点でOK（API再取得不要）。
+const MEASURE_VER = 7;
+const SCORE_VER = 1;
+const TECH_VER = MEASURE_VER; // 後方互換（保存結果の ver = MEASURE_VER）
 
 function anaToday() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function anaThresholds() { return TA.mergeThresholds(store.data.settings && store.data.settings.techThresholds); }
@@ -5865,32 +5869,60 @@ function anaFilterPanelHtml() {
   </div>`;
 }
 
-// 「分析」: フィルタ後の当日未分析だけ取得→計測→採点→保存（§6）
+// 「分析」: 今日データ取得済み（dataDate=今日・計測版一致）なら再取得せず再採点。未取得/計測版違いだけ取得する（§6）
 async function runAnalysis() {
   const targets = analysisTargets();
   const today = anaToday();
-  // 当日未分析、または旧バージョンで分析済み（新パターン/指標が未計算で「-」のまま）の銘柄を再計算対象にする
-  const todo = targets.filter(s => { const r = store.data.techAnalysis[priceKey(s)]; return !r || r.lastAnalyzed !== today || r.ver !== TECH_VER; });
-  if (!todo.length) { toast('対象はすべて最新版で当日分析済みです'); return; }
-  let ok = 0, fail = 0;
-  busyShow(`分析中… 0/${todo.length}`);
-  for (let i = 0; i < todo.length; i++) {
-    const s = todo[i];
-    busyShow(`分析中… ${i + 1}/${todo.length}`);
+  const th = anaThresholds();
+  const toFetch = [], toRescore = [];
+  for (const s of targets) {
+    const r = store.data.techAnalysis[priceKey(s)];
+    const measVer = r && (r.measureVer != null ? r.measureVer : r.ver);   // 後方互換（旧データは ver）
+    const dataDate = r && (r.dataDate || r.lastAnalyzed);                  // データ取得日（旧データは分析日で代用）
+    if (r && measVer === MEASURE_VER && r.scoreVer === SCORE_VER && r.lastAnalyzed === today) continue; // 既に最新
+    if (r && r.metrics && measVer === MEASURE_VER && dataDate === today) toRescore.push(s);             // 今日取得済み→採点のみ
+    else toFetch.push(s);                                                                               // 取得が必要
+  }
+  const total = toFetch.length + toRescore.length;
+  if (!total) { toast('対象はすべて最新版で当日分析済みです'); return; }
+  let ok = 0, fail = 0, done = 0;
+  busyShow(`分析中… 0/${total}`);
+  // 1) 採点のみ（API不要・今日のデータを再利用）
+  for (const s of toRescore) {
+    const r = store.data.techAnalysis[priceKey(s)];
+    if (rescoreFromMetrics(r, th)) { r.lastAnalyzed = today; r.measureVer = MEASURE_VER; r.scoreVer = SCORE_VER; r.ver = MEASURE_VER; ok++; } else fail++;
+    busyShow(`再採点中（再取得なし）… ${++done}/${total}`);
+  }
+  // 2) データ取得＋計測＋採点
+  for (const s of toFetch) {
+    busyShow(`データ取得中… ${++done}/${total}`);
     try {
       const res = await fetch(`/api/history?symbol=${encodeURIComponent(yahooSymbol(s))}&range=3y&interval=1d&format=ohlcv`);
       const d = await res.json();
       if (d.error || !d.bars || d.bars.length < 60) { fail++; continue; }
       _anaBars[priceKey(s)] = d.bars;
-      const result = TA.analyze(d.bars, anaThresholds());
-      saveTechResult(s, result, today);
+      saveTechResult(s, TA.analyze(d.bars, th), today);
       ok++;
     } catch (_) { fail++; }
   }
   store.save();
   busyHide();
-  toast(`分析完了：成功 ${ok} / 失敗 ${fail}`);
+  toast(`分析完了：成功 ${ok}（取得 ${toFetch.length} / 採点のみ ${toRescore.length}）${fail ? ` / 失敗 ${fail}` : ''}`);
   renderAnalysis();
+}
+
+// 保存済み metrics から採点のみ再実行（API不要）。総合は文脈込みで再計算。runAnalysis/rescoreAll で共用。
+function rescoreFromMetrics(r, th) {
+  if (!r || !r.metrics) return false;
+  const shim = { byPattern: {} };
+  for (const p of Object.keys(r.metrics)) shim.byPattern[p] = { metrics: r.metrics[p] };
+  const sc = TA.score(shim, th);
+  r.patterns = sc.patterns; r.best = sc.best; r.bestTrend = sc.bestTrend; r.bestContra = sc.bestContra; r.warn = sc.warn;
+  const tt = (TA.recomputeTotals && TA.recomputeTotals(r)) || sc;   // ma200Pos/rsiState等の文脈込みの正しい総合
+  r.trendTotal = tt.trendTotal; r.contraTotal = tt.contraTotal; r.totalScore = tt.totalScore; r.contraScore = tt.contraTotal;
+  r._updatedAt = new Date().toISOString();
+  if (r.history && r.history.length) { const last = r.history[r.history.length - 1]; if (last && last.date === r.lastAnalyzed) { last.best = sc.best; for (const p of Object.keys(sc.patterns)) last.scores[p] = sc.patterns[p].score; } }
+  return true;
 }
 
 function saveTechResult(sec, result, today) {
@@ -5901,7 +5933,7 @@ function saveTechResult(sec, result, today) {
   history.push({ date: today, best: result.best, scores }); // 1日1点
   while (history.length > 104) history.shift();             // 上限104点（週次2年相当）で剪定（§5）
   store.data.techAnalysis[key] = {
-    ver: TECH_VER,
+    ver: MEASURE_VER, measureVer: MEASURE_VER, scoreVer: SCORE_VER, dataDate: today,
     lastAnalyzed: today, best: result.best, bestTrend: result.bestTrend, bestContra: result.bestContra, trendTotal: result.trendTotal, contraTotal: result.contraTotal, totalScore: result.totalScore, contraScore: result.contraScore, warn: result.warn, patterns: result.patterns,
     metrics: result.metrics, levels: result.levels, marks: result.marks,
     evidence: result.evidence, lastClose: result.lastClose,
@@ -5917,16 +5949,7 @@ function rescoreAll() {
   const th = anaThresholds();
   for (const key of Object.keys(store.data.techAnalysis)) {
     const r = store.data.techAnalysis[key];
-    if (!r || !r.metrics) continue;
-    const shim = { byPattern: {} };
-    for (const p of Object.keys(r.metrics)) shim.byPattern[p] = { metrics: r.metrics[p] };
-    const sc = TA.score(shim, th);
-    r.patterns = sc.patterns; r.best = sc.best; r.bestTrend = sc.bestTrend; r.bestContra = sc.bestContra; r.trendTotal = sc.trendTotal; r.contraTotal = sc.contraTotal; r.totalScore = sc.totalScore; r.contraScore = sc.contraScore; r.warn = sc.warn; r._updatedAt = new Date().toISOString();
-    // 履歴の最新点も採点だけ更新（同日）
-    if (r.history && r.history.length) {
-      const last = r.history[r.history.length - 1];
-      if (last && last.date === r.lastAnalyzed) { last.best = sc.best; for (const p of Object.keys(sc.patterns)) last.scores[p] = sc.patterns[p].score; }
-    }
+    if (rescoreFromMetrics(r, th)) r.scoreVer = SCORE_VER;
   }
   store.save();
   renderAnalysis();
