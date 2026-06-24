@@ -495,6 +495,19 @@ button { font-family: inherit; }
 .summary-strip .ss-v { font-size: 16px; font-weight: 700; white-space: nowrap; }
 .summary-strip .ss-v small { font-size: 12px; font-weight: 600; margin-left: 4px; }
 
+/* 分析タブ 列フィルターパネル */
+.afl-panel { margin: 8px 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.afl-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+.afl-head .muted { font-size: 11px; color: var(--muted); font-weight: 400; }
+.afl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; max-height: 40vh; overflow-y: auto; }
+.afl-item { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px; font-size: 12px; }
+.afl-item.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.afl-item .afl-l { flex: 0 0 88px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.afl-item.on .afl-l { color: var(--text); font-weight: 600; }
+.afl-num { width: 60px; padding: 3px 5px; font-size: 12px; }
+.afl-tilde { color: var(--muted); }
+.afl-sel { flex: 1; min-width: 0; padding: 3px 5px; font-size: 12px; }
+
 /* ============================ テーブル（保有一覧） ============================ */
 /* 枠内スクロールを徹底：枠は親幅を超えず（横スクロールはページでなく枠側に出す）、
    端到達時のスクロール連鎖（ページが動く）を抑止。縦は JS(fitListTables) が max-height を付与。 */
