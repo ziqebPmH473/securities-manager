@@ -195,7 +195,8 @@ const DEFAULT_VISIBLE = {
   JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
-  ANALYSIS: ['ticker','name','price','anaContra','anaTrend','anaTotal','anaWbottom','anaUndercut','anaClimax','anaRsiDiv','anaMaDev','anaRound','anaWarn','anaRSI','anaStatus','anaDate'],
+  ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarn','anaRSI','anaStatus','anaDate'],
+  ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaRSI','anaMACD','anaStatus','anaDate'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -1730,7 +1731,8 @@ const listState = {
   JP:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
   FUND:   { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
   SIGNAL: { sortKey: 'drop',   sortDir: 1, broker: '', account: '', category: '', detailType: '' },
-  ANALYSIS: { sortKey: 'anaContra', sortDir: -1, broker: '', account: '', category: '', detailType: '' },
+  ANALYSIS:   { sortKey: 'anaContra', sortDir: -1, broker: '', account: '', category: '', detailType: '' },
+  ANALYSIS_T: { sortKey: 'anaTrend',  sortDir: -1, broker: '', account: '', category: '', detailType: '' },
 };
 // カラム設定: 市場ごとに [{key, visible}] の配列
 let colPrefs = {};
@@ -1778,16 +1780,21 @@ function getColOrder(market) {
   else reconcileColPrefs(market);
   return colPrefs[market];
 }
+// 列の利用可否を決める基準市場。分析の順張りビュー(ANALYSIS_T)は ANALYSIS と同じ列群を使う
+// （列レイアウトとソートだけ別プロファイルで持つ）。
+function colBaseMarket(market) { return market === 'ANALYSIS_T' ? 'ANALYSIS' : market; }
 function resetColPrefs(market) {
+  const base = colBaseMarket(market);
   const visible = new Set(DEFAULT_VISIBLE[market]);
-  colPrefs[market] = MASTER_COLS.filter(c => c.markets.includes(market)).map(c => ({
+  colPrefs[market] = MASTER_COLS.filter(c => c.markets.includes(base)).map(c => ({
     key: c.key, visible: visible.has(c.key),
   }));
   saveColPrefs();
 }
 // 保存済み設定に、新規追加カラムを補完し、廃止カラムを除去（アプリ更新対応）
 function reconcileColPrefs(market) {
-  const validKeys = MASTER_COLS.filter(c => c.markets.includes(market)).map(c => c.key);
+  const base = colBaseMarket(market);
+  const validKeys = MASTER_COLS.filter(c => c.markets.includes(base)).map(c => c.key);
   const validSet = new Set(validKeys);
   const have = new Set(colPrefs[market].map(c => c.key));
   const visible = new Set(DEFAULT_VISIBLE[market]);
@@ -1796,7 +1803,7 @@ function reconcileColPrefs(market) {
   let changed = arr.length !== colPrefs[market].length;
   for (let i = 0; i < MASTER_COLS.length; i++) {
     const mc = MASTER_COLS[i];
-    if (!mc.markets.includes(market) || have.has(mc.key)) continue;
+    if (!mc.markets.includes(base) || have.has(mc.key)) continue;
     arr.push({ key: mc.key, visible: visible.has(mc.key) });
     changed = true;
   }
@@ -5646,6 +5653,8 @@ function detailSvgChart(points, overlays, costPts) {
 // 設計: ANALYSIS_PLAN.md。エンジンは analysis.js（globalThis.TA）。
 // 計測(metrics)を techAnalysis に保存し、しきい値変更時は採点のみ再実行（API再取得なし・§3.5）。
 let anaMarket = 'all';        // 'all' | 'US' | 'JP'
+let anaSide = 'contra';       // 分析タブの表ビュー: 'contra'(逆張り) | 'trend'(順張り)。列レイアウト/ソートを別プロファイルで保持
+function anaColKey() { return anaSide === 'trend' ? 'ANALYSIS_T' : 'ANALYSIS'; }
 let anaHoldingOnly = false;   // 保有銘柄のみ
 let anaSearch = '';           // 検索（コード/名称）
 let anaCat = '';              // カテゴリ
@@ -5733,16 +5742,18 @@ function anaSelectSpec(key) {
 
 // 保有銘柄と同じ列システム（列選択・固定列・スクロール・カラールール）を 'ANALYSIS' 画面として再利用する。
 function renderAnalysis() {
-  const st = listState.ANALYSIS;
+  const AKEY = anaColKey();
+  const st = listState[AKEY];
   let secs = analysisTargets();
-  secs = sortSecurities(secs, 'ANALYSIS');
+  secs = sortSecurities(secs, AKEY);
   const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder)
     .map(c => `<option value="${esc(c.category)}" ${anaCat === c.category ? 'selected' : ''}>${esc(c.category)}</option>`).join('');
   const mkBtn = (id, label) => `<button class="${anaMarket === id ? 'active' : ''}" onclick="anaSetMarket('${id}')">${label}</button>`;
+  const sideBtn = (id, label) => `<button class="${anaSide === id ? 'active' : ''}" onclick="anaSetSide('${id}')">${label}</button>`;
   // 列（保有銘柄と同じ getColOrder/colTag/colHeadHtml/marketRow を使用）
-  const visOrder = getColOrder('ANALYSIS').filter(c => c.visible);
+  const visOrder = getColOrder(AKEY).filter(c => c.visible);
   const visibleCols = visOrder.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
-  const headHtml = colHeadHtml(visibleCols, st, 'ANALYSIS', '');
+  const headHtml = colHeadHtml(visibleCols, st, AKEY, '');
   const ACTION_W = 96;
   const colgroupHtml = `<colgroup>${visOrder.map(c => colTag(c)).join('')}<col style="width:${ACTION_W}px"></colgroup>`;
   const tableW = ACTION_W + visOrder.reduce((a, c) => a + colWidthPx(c), 0);
@@ -5750,6 +5761,7 @@ function renderAnalysis() {
   app.innerHTML = `
     <div class="section">
       <div class="toolbar">
+        <div class="seg seg-side" role="tablist" title="表示する戦略の切替（列レイアウトは戦略ごとに保存）">${sideBtn('contra', '逆張り')}${sideBtn('trend', '順張り')}</div>
         <div class="seg" role="tablist">${mkBtn('all', '全て')}${mkBtn('US', '米国株')}${mkBtn('JP', '日本株')}</div>
         <label class="chip">保有のみ<input type="checkbox" ${anaHoldingOnly ? 'checked' : ''} onchange="anaToggleHolding(this.checked)" style="margin-left:4px"></label>
         <div class="search">${svgIcon('search', '')}<input id="ana-search" placeholder="コード・銘柄名で検索" value="${esc(anaSearch)}" oninput="anaSetSearch(this.value)" autocomplete="off">${anaSearch ? `<button class="clr" onclick="anaSetSearch('')">×</button>` : ''}</div>
@@ -5757,7 +5769,7 @@ function renderAnalysis() {
         <div class="tb-spacer"></div>
         <button class="btn btn-sm${anaActiveFilterCount() ? ' active' : ''}" onclick="anaToggleFilter()" title="列フィルター">${svgIcon('filter', '')} フィルター${anaActiveFilterCount() ? ` (${anaActiveFilterCount()})` : ''} ${anaFilterOpen ? '▲' : '▼'}</button>
         <button class="btn btn-sm" onclick="anaTogglePanel()" title="しきい値設定">しきい値 ${anaPanelOpen ? '▲' : '▼'}</button>
-        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('ANALYSIS')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
+        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${AKEY}')" title="列の表示設定（${anaSide === 'trend' ? '順張り' : '逆張り'}ビュー）">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
         <button class="btn btn-sm btn-primary" onclick="runAnalysis()">分析</button>
       </div>
@@ -5784,6 +5796,7 @@ function renderAnalysis() {
 }
 
 function anaSetMarket(m) { anaMarket = m; renderAnalysis(); }
+function anaSetSide(s) { anaSide = (s === 'trend') ? 'trend' : 'contra'; renderAnalysis(); }
 function anaToggleHolding(v) { anaHoldingOnly = !!v; renderAnalysis(); }
 function anaSetCat(v) { anaCat = v; renderAnalysis(); }
 function anaSetSearch(v) {
@@ -6021,9 +6034,10 @@ function anaDrawDetailChart() {
     mas = [{ values: TA.sma(cl, 25), color: '#0ea5e9', label: '25日' }, { values: TA.sma(cl, 75), color: '#a855f7', label: '75日' }, { values: TA.sma(cl, 200), color: '#f59e0b', label: '200日' }];
   }
   const t0 = disp.length ? disp[0].t : 0, t1 = disp.length ? disp[disp.length - 1].t : 0;
-  // チャートのパターン重ね描きは、ドロワーで選択中のサイド（順張り/逆張り）の最強シグナルに合わせる
+  // チャートのパターン重ね描きは、ドロワーで選択中のサイド（順張り/逆張り）の最強シグナルに合わせる。
+  // 該当サイドにパターンが無くても反対サイド(r.best)へはフォールバックしない＝順張りの買いシグナルを逆張りに出さない。
   const sb = r && (anaDetailSide === 'contra' ? r.bestContra : r.bestTrend);
-  const best = sb ? sb.pattern : (r && r.best ? r.best.pattern : null);
+  const best = sb ? sb.pattern : null;
   const lv = (r && r.levels && best) ? r.levels[best] : null;
   const mk = ((r && r.marks && best) ? r.marks[best] : []).filter(m => m.t >= t0 && m.t <= t1); // 範囲内のピボットのみ
   const hlines = [];
@@ -6041,7 +6055,7 @@ function anaDrawDetailChart() {
   const rsiSeries = TA.rsi(dispCloses, 14);
   const macdSeries = TA.macd(dispCloses, 12, 26, 9);
   el.classList.remove('muted');
-  el.innerHTML = TA.candleSVG(disp, { hlines, marks: mk, mas, title: best ? TA.PATTERN_LABEL[best] : '（パターン未検出）', height: 340 })
+  el.innerHTML = TA.candleSVG(disp, { hlines, marks: mk, mas, title: best ? TA.PATTERN_LABEL[best] : (anaDetailSide === 'contra' ? '（逆張りパターン未検出）' : '（順張りパターン未検出）'), height: 340 })
     + TA.rsiSVG(rsiSeries)
     + TA.macdSVG(macdSeries);
 }
@@ -6076,7 +6090,7 @@ function anaEvidenceHtml(r) {
   return `<div style="font-size:13px">
     ${seg}
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px;align-items:baseline">
-      <span>${isContra ? '逆張り総合' : '順張り総合'}: <b style="color:${total == null ? 'var(--muted)' : scColor(total)};font-size:17px" title="確認ゲート方式。単独シグナルは最大60、独立した確認が増えるほど高得点">${total == null ? '—' : total}</b></span>
+      <span>${isContra ? '逆張り総合' : '順張り総合'}: <b style="color:${total == null ? 'var(--muted)' : scColor(total)};font-size:17px" title="確認ゲート方式。単独シグナルは最大55、独立した確認が増えるほど高得点（上限95）">${total == null ? '—' : total}</b></span>
       <span class="muted" style="font-size:12px">${strongTxt}</span>
     </div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px"><span>${rsiTxt}</span><span>${macdTxt}</span></div>
