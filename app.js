@@ -84,7 +84,7 @@ function solidSwatchPicker(name, selected) {
 }
 const DEFAULT_MATRIX_USDJPY = 100; // 「全部」表示・米国株取得額の円換算レート（初期値。マスタで変更可）
 // 前日終値の取得ロジック版。上げると当日でも refreshPrevCloses を一度だけ再計算（取引所TZ今日基準の修正を即反映）。
-const PREVCLOSE_VER = 3;
+const PREVCLOSE_VER = 4;
 
 const MARKET_LABEL = { US: '米国株', JP: '日本株', FUND: '投信' };
 const MARKET_CCY = { US: '$', JP: '¥', FUND: '¥' };
@@ -1415,12 +1415,14 @@ const api = {
     }
     store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
-    // 前日終値を確実取得（light=range=5d を取引所TZの今日基準で選別＝プレ前/休場でも1日ズレない）。
-    // キー＝JST暦日＋米国ET暦日。どちらかの市場の暦日が変わったら取り直す（米株はJST夜にET日付が変わるため、
-    // 1日1回(UTC/JST日付)ガードだとJST夜の米国オープン時に前日終値が1日古いまま固定される＝今回の不具合）。
-    // PREVCLOSE_VER 不一致時は当日でも一度だけ再計算（ロジック更新の即時反映）。
-    if (store.data.lastPrevCloseKey !== prevCloseKey() || store.data.prevCloseVer !== PREVCLOSE_VER) {
-      try { await this.refreshPrevCloses(allSecs); store.data.lastPrevCloseKey = prevCloseKey(); store.data.prevCloseVer = PREVCLOSE_VER; store.save(); } catch (_) {}
+    // 前日終値を取得（light=range=5d を取引所TZの今日基準で選別＝プレ前/休場/日中の市場日替わりでも常に正しい）。
+    // ガードは「最後の取得から5分以上経過 or ロジック版更新」のみ＝時間スロットル。
+    // 旧・日付キー方式(JST暦日/ET暦日)は端末時刻やセッション状態のエッジで再取得を取りこぼし、
+    // 前日終値が前々日のまま固定される不具合が出た（API側の選別は正しいのにフロントが取り直さない）。
+    // 価格更新は手動主体で頻度が低いため、毎回近い頻度で取り直しても負荷は小さく、常に最新で確実。
+    const lastPC = store.data.lastPrevCloseAt ? Date.parse(store.data.lastPrevCloseAt) : 0;
+    if (!(Date.now() - lastPC < 5 * 60 * 1000) || store.data.prevCloseVer !== PREVCLOSE_VER) {
+      try { await this.refreshPrevCloses(allSecs); store.data.lastPrevCloseAt = new Date().toISOString(); store.data.prevCloseVer = PREVCLOSE_VER; store.save(); } catch (_) {}
     }
     // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
     await this.refreshExtended(allSecs);
