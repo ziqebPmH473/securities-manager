@@ -495,18 +495,24 @@ button { font-family: inherit; }
 .summary-strip .ss-v { font-size: 16px; font-weight: 700; white-space: nowrap; }
 .summary-strip .ss-v small { font-size: 12px; font-weight: 600; margin-left: 4px; }
 
-/* 分析タブ 列フィルターパネル */
+/* 分析タブ 列フィルターパネル（①項目を追加 →②値を設定） */
 .afl-panel { margin: 8px 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
-.afl-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+.afl-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; }
 .afl-head .muted { font-size: 11px; color: var(--muted); font-weight: 400; }
-.afl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; max-height: 40vh; overflow-y: auto; }
-.afl-item { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px; font-size: 12px; }
-.afl-item.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.afl-item .afl-l { flex: 0 0 88px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.afl-item.on .afl-l { color: var(--text); font-weight: 600; }
-.afl-num { width: 60px; padding: 3px 5px; font-size: 12px; }
+.afl-add { padding: 5px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); max-width: 280px; }
+.afl-empty { font-size: 12px; color: var(--muted); padding: 4px 2px; }
+.afl-rows { display: flex; flex-direction: column; gap: 6px; max-height: 44vh; overflow-y: auto; }
+.afl-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border: 1px solid var(--hair); border-radius: 7px; background: var(--panel-2); font-size: 12px; }
+.afl-row .afl-l { flex: 0 0 130px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.afl-ctrl { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.afl-num { width: 78px; padding: 4px 6px; font-size: 12px; }
 .afl-tilde { color: var(--muted); }
-.afl-sel { flex: 1; min-width: 0; padding: 3px 5px; font-size: 12px; }
+.afl-chks { display: flex; flex-wrap: wrap; gap: 5px; }
+.afl-chk { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; cursor: pointer; user-select: none; color: var(--muted); }
+.afl-chk input { margin: 0; }
+.afl-chk.on { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); color: var(--text); font-weight: 600; }
+.afl-x { flex: 0 0 auto; width: 22px; height: 22px; line-height: 1; border: none; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; }
+.afl-x:hover { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
 
 /* ============================ テーブル（保有一覧） ============================ */
 /* 枠内スクロールを徹底：枠は親幅を超えず（横スクロールはページでなく枠側に出す）、

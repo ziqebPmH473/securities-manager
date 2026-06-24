@@ -2110,21 +2110,21 @@ const COL_RENDERERS = {
   anaContraScore: (s,c) => anaScoreCell(techContraScore(s)),
   anaTrend:    (s,c) => anaScoreCell(techSideScore(s, 'trend')),
   anaContra:   (s,c) => anaScoreCell(techSideScore(s, 'contra')),
-  anaUndercut: (s,c) => anaScoreCell(techPatScore(s, 'undercutRally')),
-  anaClimax:   (s,c) => anaScoreCell(techPatScore(s, 'sellingClimax')),
-  anaRsiDiv:   (s,c) => anaScoreCell(techPatScore(s, 'rsiDivergence')),
-  anaBoll:     (s,c) => anaScoreCell(techPatScore(s, 'bollingerRecover')),
-  anaMaDev:    (s,c) => anaScoreCell(techPatScore(s, 'maDeviation')),
-  anaGap:      (s,c) => anaScoreCell(techPatScore(s, 'gapFill')),
-  anaVolDry:   (s,c) => anaScoreCell(techPatScore(s, 'volDryUp')),
-  anaCup:      (s,c) => anaScoreCell(techPatScore(s, 'cup')),
-  anaRange:    (s,c) => anaScoreCell(techPatScore(s, 'range')),
-  anaWbottom:  (s,c) => anaScoreCell(techPatScore(s, 'doubleBottom')),
-  anaAsc:      (s,c) => anaScoreCell(techPatScore(s, 'ascTriangle')),
-  anaRound:    (s,c) => anaScoreCell(techPatScore(s, 'roundBottom')),
-  anaInvHS:    (s,c) => anaScoreCell(techPatScore(s, 'invHS')),
-  anaFlag:     (s,c) => anaScoreCell(techPatScore(s, 'flag')),
-  anaBase:     (s,c) => anaScoreCell(techPatScore(s, 'baseOnBase')),
+  anaUndercut: (s,c) => anaPatCell(s, 'undercutRally'),
+  anaClimax:   (s,c) => anaPatCell(s, 'sellingClimax'),
+  anaRsiDiv:   (s,c) => anaPatCell(s, 'rsiDivergence'),
+  anaBoll:     (s,c) => anaPatCell(s, 'bollingerRecover'),
+  anaMaDev:    (s,c) => anaPatCell(s, 'maDeviation'),
+  anaGap:      (s,c) => anaPatCell(s, 'gapFill'),
+  anaVolDry:   (s,c) => anaPatCell(s, 'volDryUp'),
+  anaCup:      (s,c) => anaPatCell(s, 'cup'),
+  anaRange:    (s,c) => anaPatCell(s, 'range'),
+  anaWbottom:  (s,c) => anaPatCell(s, 'doubleBottom'),
+  anaAsc:      (s,c) => anaPatCell(s, 'ascTriangle'),
+  anaRound:    (s,c) => anaPatCell(s, 'roundBottom'),
+  anaInvHS:    (s,c) => anaPatCell(s, 'invHS'),
+  anaFlag:     (s,c) => anaPatCell(s, 'flag'),
+  anaBase:     (s,c) => anaPatCell(s, 'baseOnBase'),
   anaWarn:     (s,c) => { const r = techOf(s); const w = r && r.warn; return `<td class="l">${w ? `<span style="color:var(--red);font-weight:600">${esc(TA.PATTERN_LABEL[w.pattern] || '')} ${w.score}</span>` : muted}</td>`; },
   anaRSI:      (s,c) => { const r = techOf(s); if (!r || r.rsi == null) return `<td>${muted}</td>`; const col = r.rsi <= 30 ? 'var(--green)' : r.rsi >= 70 ? 'var(--red)' : 'var(--text)'; return `<td style="text-align:right;color:${col};font-weight:600">${Math.round(r.rsi)}</td>`; },
   anaMACD:     (s,c) => { const r = techOf(s); if (!r || !r.macdCross) return `<td class="l">${muted}</td>`; const map = { golden: ['GC', 'var(--green)'], dead: ['DC', 'var(--red)'], none: ['—', 'var(--muted)'] }; const [lbl, col] = map[r.macdCross] || map.none; return `<td class="l" style="color:${col}">${lbl}</td>`; },
@@ -2142,7 +2142,18 @@ function techSideScore(sec, side) { const r = techOf(sec); if (!r) return null; 
 function techContraScore(sec) { const r = techOf(sec); return r && r.contraScore != null ? r.contraScore : techSideScore(sec, 'contra'); }
 // そのサイドで最強の「単独パターン」（名前＋強さ）。総合とは別に“何が点灯しているか”を示す情報用。
 function techBestPattern(sec, side) { const r = techOf(sec); return r ? (side === 'trend' ? r.bestTrend : r.bestContra) : null; }
-function techPatScore(sec, pat) { const r = techOf(sec); return r && r.patterns && r.patterns[pat] && r.patterns[pat].status !== 0 ? r.patterns[pat].score : null; }
+// パターンの素点（0-100）。分析済みなら status に関わらず常に数値を返す（未確認=部分一致でも「近さ」を出す）。未分析/未計算のみ null。
+function techPatScore(sec, pat) { const r = techOf(sec); return r && r.patterns && r.patterns[pat] ? r.patterns[pat].score : null; }
+function techPat(sec, pat) { const r = techOf(sec); return r && r.patterns && r.patterns[pat] ? r.patterns[pat] : null; }
+// パターン列セル：分析済みは常に数値。status0=未確認(灰)、status4=失敗(赤+✕)、status1-3=強さ色。未分析のみ「—」。
+function anaPatCell(sec, pat) {
+  const p = techPat(sec, pat);
+  if (!p) return `<td style="text-align:right">${muted}</td>`;
+  const v = p.score;
+  if (p.status === 0) return `<td style="text-align:right" title="未確認（条件は未成立・形だけの部分一致）"><span style="color:var(--muted);font-weight:500">${v}</span></td>`;
+  if (p.status === 4) return `<td style="text-align:right" title="失敗・崩れ（このパターンは否定材料）"><span style="color:var(--red);font-weight:700">${v}<span style="font-size:9px;vertical-align:1px">✕</span></span></td>`;
+  return `<td style="text-align:right"><span style="color:${anaScoreColor(v)};font-weight:700">${v}</span></td>`;
+}
 function techLevel(sec, kind) {
   const r = techOf(sec); if (!r || !r.best || !r.levels) return null;
   const lv = r.levels[r.best.pattern]; if (!lv) return null;
@@ -5643,8 +5654,9 @@ let anaCat = '';              // カテゴリ
 let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
 let anaFilterOpen = false;    // 列フィルターパネルの開閉
+let anaFilterRows = [];       // 追加済みフィルタの順序 [{key}]
 let anaFltNum = {};           // 数値列フィルタ key→{min,max}
-let anaFltSel = {};           // 選択列フィルタ key→選択値
+let anaFltSel = {};           // 選択列フィルタ key→[選択値…]（複数選択）
 const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
 // 分析エンジンの版。パターン/指標を追加したら上げる。保存結果の ver がこれと違えば「分析」で再計算対象にする。
 const TECH_VER = 7;
@@ -5672,11 +5684,25 @@ function analysisTargets() {
     secs = secs.filter(s => { const v = sortValue(s, key); if (typeof v !== 'number' || !isFinite(v)) return false; if (min != null && v < min) return false; if (max != null && v > max) return false; return true; });
   }
   for (const key in anaFltSel) {
-    const want = anaFltSel[key]; if (want === '' || want == null) continue;
+    const want = anaFltSel[key]; if (!Array.isArray(want) || !want.length) continue;
     const spec = anaSelectSpec(key); if (!spec) continue;
-    secs = secs.filter(s => String(spec.val(s) ?? '') === String(want));
+    const set = new Set(want.map(String));
+    secs = secs.filter(s => set.has(String(spec.val(s) ?? '')));
   }
   return secs;
+}
+
+// ANALYSIS でフィルター可能な列一覧（選択肢列＝sel / 数値列＝num）
+function anaFilterableCols() {
+  const sample = store.data.securities.find(s => s.market === 'US' || s.market === 'JP');
+  const out = [];
+  for (const c of MASTER_COLS) {
+    if (!c.markets.includes('ANALYSIS') || c.key === 'ticker' || c.key === 'name') continue;
+    const spec = anaSelectSpec(c.key);
+    if (spec) { if (spec.opts.length) out.push({ key: c.key, label: c.label, type: 'sel' }); }
+    else { const v = sample ? sortValue(sample, c.key) : null; if (typeof v === 'number') out.push({ key: c.key, label: c.label, type: 'num' }); }
+  }
+  return out;
 }
 
 // 選択肢フィルタの仕様（カテゴリカルな列）。opts=[[値,表示],…], val=銘柄→値。numなら null。
@@ -5737,7 +5763,7 @@ function renderAnalysis() {
         <div class="ss"><span class="ss-k">対象</span><span class="ss-v num">${secs.length} 銘柄</span></div>
         <div class="ss"><span class="ss-k">分析済み</span><span class="ss-v num">${done} 銘柄</span></div>
         <div class="tb-spacer"></div>
-        <div class="ss"><span class="ss-k muted" style="font-weight:400">順張り/逆張り総合＝確認ゲート方式(0-100)：単独シグナルは最大60、独立した確認が増えるほど高得点（複数の一致を評価）。各パターン列＝そのシグナルの強さ。行クリックで内訳＋チャート。</span></div>
+        <div class="ss"><span class="ss-k muted" style="font-weight:400">順張り/逆張り総合＝確認ゲート方式(0-100)：単独は最大55、確認が増えるほど高得点。各パターン列＝形の近さ(0-100)。<b style="color:var(--muted)">灰字=未確認(部分一致)</b>・<b style="color:var(--red)">赤✕=失敗(崩れ)</b>・色付き=成立。「—」は未分析。行クリックで内訳＋チャート。</span></div>
       </div>
       ${anaFilterOpen ? anaFilterPanelHtml() : ''}
       ${anaPanelOpen ? anaThresholdPanelHtml() : ''}
@@ -5772,41 +5798,67 @@ function anaToggleFilter() { anaFilterOpen = !anaFilterOpen; renderAnalysis(); }
 function anaActiveFilterCount() {
   let n = 0;
   for (const k in anaFltNum) { const r = anaFltNum[k]; if (r && (r.min != null || r.max != null)) n++; }
-  for (const k in anaFltSel) { if (anaFltSel[k] !== '' && anaFltSel[k] != null) n++; }
+  for (const k in anaFltSel) { if (Array.isArray(anaFltSel[k]) && anaFltSel[k].length) n++; }
   return n;
+}
+function anaAddFilter(key) {
+  if (!key || anaFilterRows.some(r => r.key === key)) { renderAnalysis(); return; }
+  if (!anaFilterableCols().some(c => c.key === key)) { renderAnalysis(); return; } // パネル対象列のみ
+  anaFilterRows.push({ key });
+  renderAnalysis();
+  // 追加直後に最初の入力へフォーカス
+  const el = document.querySelector(`.afl-row[data-key="${key}"] input, .afl-row[data-key="${key}"] label input`);
+  if (el && el.type === 'number') el.focus();
+}
+function anaRemoveFilter(key) {
+  anaFilterRows = anaFilterRows.filter(r => r.key !== key);
+  delete anaFltNum[key]; delete anaFltSel[key];
+  renderAnalysis();
 }
 function anaSetFltNum(key, which, v) {
   const o = (anaFltNum[key] = anaFltNum[key] || {});
   const n = (v === '' || v == null) ? null : parseFloat(v);
   o[which] = isNaN(n) ? null : n;
-  if (o.min == null && o.max == null) delete anaFltNum[key];
   renderAnalysis();
 }
-function anaSetFltSel(key, v) { if (v === '' || v == null) delete anaFltSel[key]; else anaFltSel[key] = v; renderAnalysis(); }
-function anaClearFilters() { anaFltNum = {}; anaFltSel = {}; renderAnalysis(); }
+function anaToggleSelVal(key, idx) {
+  const spec = anaSelectSpec(key); if (!spec || !spec.opts[idx]) return;
+  const val = String(spec.opts[idx][0]);
+  const arr = (anaFltSel[key] = anaFltSel[key] || []);
+  const at = arr.indexOf(val);
+  if (at >= 0) arr.splice(at, 1); else arr.push(val);
+  renderAnalysis();
+}
+function anaClearFilters() { anaFilterRows = []; anaFltNum = {}; anaFltSel = {}; renderAnalysis(); }
 
-// 列フィルターパネル：ANALYSIS で列に出せる項目すべてに、数値=範囲・選択肢=ドロップダウンを並べる
+// 列フィルターパネル：①項目を追加 →②値を設定（数値=範囲 / 選択肢=複数選択チェック）
 function anaFilterPanelHtml() {
-  const cols = MASTER_COLS.filter(c => c.markets.includes('ANALYSIS') && c.key !== 'ticker' && c.key !== 'name');
-  const sample = (analysisTargets.__sample = store.data.securities.find(s => s.market === 'US' || s.market === 'JP'));
-  const items = cols.map(c => {
-    const spec = anaSelectSpec(c.key);
-    if (spec) {
-      if (!spec.opts.length) return '';
-      const cur = anaFltSel[c.key] ?? '';
-      const opts = `<option value="">全て</option>` + spec.opts.map(([v, l]) => `<option value="${esc(String(v))}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(String(l))}</option>`).join('');
-      return `<div class="afl-item${cur !== '' ? ' on' : ''}"><span class="afl-l">${esc(c.label)}</span><select class="afl-sel" onchange="anaSetFltSel('${c.key}', this.value)">${opts}</select></div>`;
+  const cols = anaFilterableCols();
+  const colMap = Object.fromEntries(cols.map(c => [c.key, c]));
+  const addable = cols.filter(c => !anaFilterRows.some(r => r.key === c.key));
+  const addOpts = `<option value="">＋ フィルター項目を追加…</option>`
+    + addable.map(c => `<option value="${c.key}">${esc(c.label)}（${c.type === 'sel' ? '選択' : '範囲'}）</option>`).join('');
+  const rows = anaFilterRows.map(r => {
+    const c = colMap[r.key]; if (!c) return '';
+    let ctrl;
+    if (c.type === 'sel') {
+      const spec = anaSelectSpec(r.key);
+      const arr = (anaFltSel[r.key] || []).map(String);
+      ctrl = `<div class="afl-chks">` + spec.opts.map(([v, l], i) => {
+        const on = arr.includes(String(v));
+        return `<label class="afl-chk${on ? ' on' : ''}"><input type="checkbox" ${on ? 'checked' : ''} onchange="anaToggleSelVal('${r.key}',${i})">${esc(String(l))}</label>`;
+      }).join('') + `</div>`;
+    } else {
+      const rg = anaFltNum[r.key] || {};
+      ctrl = `<input type="number" class="afl-num" placeholder="最小" value="${rg.min ?? ''}" onchange="anaSetFltNum('${r.key}','min',this.value)"><span class="afl-tilde">〜</span><input type="number" class="afl-num" placeholder="最大" value="${rg.max ?? ''}" onchange="anaSetFltNum('${r.key}','max',this.value)">`;
     }
-    // 数値列のみ範囲。sortValue が数値を返す列だけ出す（日付/文字列の列は除外）。
-    const v = sample ? sortValue(sample, c.key) : null;
-    if (typeof v !== 'number') return '';
-    const r = anaFltNum[c.key] || {};
-    const on = (r.min != null || r.max != null);
-    return `<div class="afl-item${on ? ' on' : ''}"><span class="afl-l">${esc(c.label)}</span><input type="number" class="afl-num" placeholder="最小" value="${r.min ?? ''}" onchange="anaSetFltNum('${c.key}','min',this.value)"><span class="afl-tilde">〜</span><input type="number" class="afl-num" placeholder="最大" value="${r.max ?? ''}" onchange="anaSetFltNum('${c.key}','max',this.value)"></div>`;
-  }).filter(Boolean).join('');
+    return `<div class="afl-row" data-key="${r.key}"><span class="afl-l">${esc(c.label)}</span><div class="afl-ctrl">${ctrl}</div><button class="afl-x" title="削除" onclick="anaRemoveFilter('${r.key}')">×</button></div>`;
+  }).join('');
   return `<div class="ana-panel afl-panel">
-    <div class="afl-head"><b>列フィルター</b><span class="muted">数値は範囲・選択肢はドロップダウン。空欄＝条件なし。</span><div class="tb-spacer"></div>${anaActiveFilterCount() ? `<button class="btn btn-sm" onclick="anaClearFilters()">クリア</button>` : ''}</div>
-    <div class="afl-grid">${items}</div>
+    <div class="afl-head"><b>列フィルター</b><span class="muted">項目を追加して条件を設定。選択肢は複数選べます（いずれかに一致）。</span><div class="tb-spacer"></div>
+      <select class="afl-add" onchange="anaAddFilter(this.value)">${addOpts}</select>
+      ${anaActiveFilterCount() || anaFilterRows.length ? `<button class="btn btn-sm" onclick="anaClearFilters()">クリア</button>` : ''}</div>
+    ${anaFilterRows.length ? `<div class="afl-rows">${rows}</div>` : `<div class="muted afl-empty">「＋ フィルター項目を追加」から絞り込みたい項目を選んでください。</div>`}
   </div>`;
 }
 
