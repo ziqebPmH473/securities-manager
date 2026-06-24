@@ -2137,9 +2137,12 @@ const COL_RENDERERS = {
 // ----- テクニカル分析の値ヘルパ（COL_RENDERERS／sortValue／cfCellValue から共用） -----
 function techOf(sec) { return store.data.techAnalysis[priceKey(sec)] || null; }
 // 総合＝確認ゲート方式（単独はキャップ・確認が増えるほど高得点）。旧データ(totalScore無し)は best.score にフォールバック。
-function techComposite(sec) { const r = techOf(sec); if (!r) return null; return r.totalScore != null ? r.totalScore : (r.best ? r.best.score : null); }
-function techSideScore(sec, side) { const r = techOf(sec); if (!r) return null; const t = side === 'trend' ? r.trendTotal : r.contraTotal; if (t != null) return t; const b = side === 'trend' ? r.bestTrend : r.bestContra; return b ? b.score : null; }
-function techContraScore(sec) { const r = techOf(sec); return r && r.contraScore != null ? r.contraScore : techSideScore(sec, 'contra'); }
+// 総合は保存済み patterns から「その場で再計算」する（集計式を変えても再分析なしで最新値になる）。
+// 旧データ(patterns無し)のみ保存済みの値/best にフォールバック。
+function techTotals(sec) { const r = techOf(sec); if (!r) return null; if (r.patterns && TA.recomputeTotals) { const t = TA.recomputeTotals(r); if (t) return t; } return { trendTotal: r.trendTotal, contraTotal: r.contraTotal, totalScore: r.totalScore }; }
+function techComposite(sec) { const r = techOf(sec); if (!r) return null; const t = techTotals(sec); if (t && t.totalScore != null) return t.totalScore; return r.best ? r.best.score : null; }
+function techSideScore(sec, side) { const r = techOf(sec); if (!r) return null; const t = techTotals(sec); const v = t ? (side === 'trend' ? t.trendTotal : t.contraTotal) : null; if (v != null) return v; const b = side === 'trend' ? r.bestTrend : r.bestContra; return b ? b.score : null; }
+function techContraScore(sec) { return techSideScore(sec, 'contra'); }
 // そのサイドで最強の「単独パターン」（名前＋強さ）。総合とは別に“何が点灯しているか”を示す情報用。
 function techBestPattern(sec, side) { const r = techOf(sec); return r ? (side === 'trend' ? r.bestTrend : r.bestContra) : null; }
 // パターンの素点（0-100）。分析済みなら status に関わらず常に数値を返す（未確認=部分一致でも「近さ」を出す）。未分析/未計算のみ null。
@@ -5904,6 +5907,7 @@ function saveTechResult(sec, result, today) {
     evidence: result.evidence, lastClose: result.lastClose,
     ma200Pos: result.ma200Pos, ma200Slope: result.ma200Slope,
     rsi: result.rsi, rsiState: result.rsiState, macd: result.macd, macdCross: result.macdCross,
+    dev52w: result.dev52w, above5: result.above5,
     history, _updatedAt: new Date().toISOString(),
   };
 }

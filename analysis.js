@@ -1078,7 +1078,22 @@
       best, bestTrend: sc.bestTrend, bestContra: sc.bestContra, trendTotal: sc.trendTotal, contraTotal: sc.contraTotal, totalScore: sc.totalScore, contraScore: sc.contraScore, warn: sc.warn, patterns: sc.patterns, metrics, levels, marks, evidence,
       ma: meas.ma, ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope,
       rsi: meas.rsi, rsiState: meas.rsiState, macd: meas.macd, macdCross: meas.macdCross,
+      dev52w: meas.dev52w, above5: meas.above5,
     };
+  }
+
+  // 保存済み結果（patterns＋文脈）から総合を再計算する。集計式を変えても再取得なしで反映できる。
+  function recomputeTotals(stored) {
+    if (!stored || !stored.patterns) return null;
+    const meas = {
+      ma200Pos: stored.ma200Pos, ma200Slope: stored.ma200Slope,
+      macdCross: stored.macdCross, rsiState: stored.rsiState,
+      dev52w: stored.dev52w != null ? stored.dev52w : null,
+      above5: stored.above5,
+    };
+    const trendTotal = sideTotal(stored.patterns, TREND_PATTERNS, 'trend', meas);
+    const contraTotal = sideTotal(stored.patterns, CONTRA_PATTERNS, 'contra', meas);
+    return { trendTotal, contraTotal, totalScore: Math.max(trendTotal, contraTotal) };
   }
 
   function buildEvidence(pattern, meas) {
@@ -1249,6 +1264,6 @@
   globalThis.TA = {
     DEFAULT_THRESHOLDS, DEFAULT_STRUCT, PATTERN_LABEL, BUY_PATTERNS, WARN_PATTERNS, STATUS_LABEL,
     TREND_PATTERNS, CONTRA_PATTERNS, CONTRA_WARN_PATTERNS, PATTERN_SIDE, CONTRA_STATUS_LABEL,
-    measure, score, analyze, candleSVG, rsiSVG, macdSVG, toWeekly, sma, rsi, macd, bollinger, mergeThresholds,
+    measure, score, analyze, recomputeTotals, candleSVG, rsiSVG, macdSVG, toWeekly, sma, rsi, macd, bollinger, mergeThresholds,
   };
 })();
