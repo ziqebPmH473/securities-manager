@@ -164,6 +164,7 @@ const MASTER_COLS = [
   { key: 'principalSoldAmount', label: '売却済み元本額', left: false, markets: ALLM, noSort: false },
   // テクニカル分析（分析タブ専用）。各シグナルの強さ(0-100)。総合は順張り/逆張りで別評価。
   { key: 'anaTotal',    label: '総合買いシグナル', left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaContraScore', label: '逆張りスコア',  left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaTrend',    label: '順張り総合',       left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaContra',   label: '逆張り総合',       left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaCup',      label: 'カップ',           left: false, markets: ['ANALYSIS'], noSort: false },
@@ -174,6 +175,11 @@ const MASTER_COLS = [
   { key: 'anaInvHS',    label: '逆三尊',           left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaUndercut', label: 'アンダーカット&ラリー', left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaClimax',   label: 'セリングクライマックス', left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaRsiDiv',   label: 'RSIダイバージェンス', left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaBoll',     label: 'ボリンジャー-2σ回復', left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaMaDev',    label: 'MA大幅下方乖離',   left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaGap',      label: '窓開け下げ止まり', left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaVolDry',   label: '出来高減少下落',   left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaFlag',     label: 'フラッグ',         left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaBase',     label: 'ベースオンベース', left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaWarn',     label: '警戒シグナル',     left: true,  markets: ['ANALYSIS'], noSort: false },
@@ -190,7 +196,7 @@ const DEFAULT_VISIBLE = {
   JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
-  ANALYSIS: ['ticker','name','price','anaContra','anaTrend','anaWbottom','anaUndercut','anaClimax','anaRound','anaInvHS','anaCup','anaRange','anaWarn','anaRSI','anaStatus','anaBuy','anaFail','anaDate'],
+  ANALYSIS: ['ticker','name','price','anaContraScore','anaContra','anaTrend','anaWbottom','anaUndercut','anaClimax','anaRsiDiv','anaMaDev','anaRound','anaWarn','anaRSI','anaStatus','anaDate'],
 };
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
@@ -1724,7 +1730,7 @@ const listState = {
   JP:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
   FUND:   { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
   SIGNAL: { sortKey: 'drop',   sortDir: 1, broker: '', account: '', category: '', detailType: '' },
-  ANALYSIS: { sortKey: 'anaContra', sortDir: -1, broker: '', account: '', category: '', detailType: '' },
+  ANALYSIS: { sortKey: 'anaContraScore', sortDir: -1, broker: '', account: '', category: '', detailType: '' },
 };
 // カラム設定: 市場ごとに [{key, visible}] の配列
 let colPrefs = {};
@@ -1953,8 +1959,14 @@ function cfCellValue(key, sec, ctx) {
     case 'marginRatio': return sec.market === 'JP' ? calc.marginRatio(sec) : null;
     case 'principalSoldAmount': return sec.principalSoldAmount;
     case 'anaTotal': return techComposite(sec);
+    case 'anaContraScore': return techContraScore(sec);
     case 'anaTrend': return techSideScore(sec, 'trend');
     case 'anaContra': return techSideScore(sec, 'contra');
+    case 'anaRsiDiv': return techPatScore(sec, 'rsiDivergence');
+    case 'anaBoll': return techPatScore(sec, 'bollingerRecover');
+    case 'anaMaDev': return techPatScore(sec, 'maDeviation');
+    case 'anaGap': return techPatScore(sec, 'gapFill');
+    case 'anaVolDry': return techPatScore(sec, 'volDryUp');
     case 'anaCup': return techPatScore(sec, 'cup');
     case 'anaRange': return techPatScore(sec, 'range');
     case 'anaWbottom': return techPatScore(sec, 'doubleBottom');
@@ -2094,10 +2106,16 @@ const COL_RENDERERS = {
   principalSoldAmount: (s,c) => `<td>${s.principalSoldAmount != null ? fmtAmt(s.principalSoldAmount, c.market) : muted}</td>`,
   // テクニカル分析（分析タブ）。スコアは0-100で色分け。値は techAnalysis から取得。
   anaTotal:    (s,c) => anaScoreCell(techComposite(s)),
+  anaContraScore: (s,c) => anaScoreCell(techContraScore(s)),
   anaTrend:    (s,c) => anaScoreCell(techSideScore(s, 'trend')),
   anaContra:   (s,c) => anaScoreCell(techSideScore(s, 'contra')),
   anaUndercut: (s,c) => anaScoreCell(techPatScore(s, 'undercutRally')),
   anaClimax:   (s,c) => anaScoreCell(techPatScore(s, 'sellingClimax')),
+  anaRsiDiv:   (s,c) => anaScoreCell(techPatScore(s, 'rsiDivergence')),
+  anaBoll:     (s,c) => anaScoreCell(techPatScore(s, 'bollingerRecover')),
+  anaMaDev:    (s,c) => anaScoreCell(techPatScore(s, 'maDeviation')),
+  anaGap:      (s,c) => anaScoreCell(techPatScore(s, 'gapFill')),
+  anaVolDry:   (s,c) => anaScoreCell(techPatScore(s, 'volDryUp')),
   anaCup:      (s,c) => anaScoreCell(techPatScore(s, 'cup')),
   anaRange:    (s,c) => anaScoreCell(techPatScore(s, 'range')),
   anaWbottom:  (s,c) => anaScoreCell(techPatScore(s, 'doubleBottom')),
@@ -2119,6 +2137,7 @@ const COL_RENDERERS = {
 function techOf(sec) { return store.data.techAnalysis[priceKey(sec)] || null; }
 function techComposite(sec) { const r = techOf(sec); return r && r.best ? r.best.score : null; } // 総合＝最強シグナルのスコア
 function techSideScore(sec, side) { const r = techOf(sec); const b = r && (side === 'trend' ? r.bestTrend : r.bestContra); return b ? b.score : null; } // 順張り/逆張りの総合
+function techContraScore(sec) { const r = techOf(sec); return r && r.contraScore != null ? r.contraScore : null; } // 逆張り候補スコア（複数条件の加点）
 function techPatScore(sec, pat) { const r = techOf(sec); return r && r.patterns && r.patterns[pat] && r.patterns[pat].status !== 0 ? r.patterns[pat].score : null; }
 function techLevel(sec, kind) {
   const r = techOf(sec); if (!r || !r.best || !r.levels) return null;
@@ -2652,8 +2671,14 @@ function sortValue(sec, key) {
     case 'name': return calc.displayName(sec).toLowerCase();
     case 'ticker': return (sec.ticker || '').toLowerCase();
     case 'anaTotal': return techComposite(sec) ?? -Infinity;
+    case 'anaContraScore': return techContraScore(sec) ?? -Infinity;
     case 'anaTrend': return techSideScore(sec, 'trend') ?? -Infinity;
     case 'anaContra': return techSideScore(sec, 'contra') ?? -Infinity;
+    case 'anaRsiDiv': return techPatScore(sec, 'rsiDivergence') ?? -Infinity;
+    case 'anaBoll': return techPatScore(sec, 'bollingerRecover') ?? -Infinity;
+    case 'anaMaDev': return techPatScore(sec, 'maDeviation') ?? -Infinity;
+    case 'anaGap': return techPatScore(sec, 'gapFill') ?? -Infinity;
+    case 'anaVolDry': return techPatScore(sec, 'volDryUp') ?? -Infinity;
     case 'anaCup': return techPatScore(sec, 'cup') ?? -Infinity;
     case 'anaRange': return techPatScore(sec, 'range') ?? -Infinity;
     case 'anaWbottom': return techPatScore(sec, 'doubleBottom') ?? -Infinity;
@@ -5615,7 +5640,7 @@ let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
 const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
 // 分析エンジンの版。パターン/指標を追加したら上げる。保存結果の ver がこれと違えば「分析」で再計算対象にする。
-const TECH_VER = 3;
+const TECH_VER = 4;
 
 function anaToday() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function anaThresholds() { return TA.mergeThresholds(store.data.settings && store.data.settings.techThresholds); }
@@ -5737,7 +5762,7 @@ function saveTechResult(sec, result, today) {
   while (history.length > 104) history.shift();             // 上限104点（週次2年相当）で剪定（§5）
   store.data.techAnalysis[key] = {
     ver: TECH_VER,
-    lastAnalyzed: today, best: result.best, bestTrend: result.bestTrend, bestContra: result.bestContra, warn: result.warn, patterns: result.patterns,
+    lastAnalyzed: today, best: result.best, bestTrend: result.bestTrend, bestContra: result.bestContra, contraScore: result.contraScore, warn: result.warn, patterns: result.patterns,
     metrics: result.metrics, levels: result.levels, marks: result.marks,
     evidence: result.evidence, lastClose: result.lastClose,
     ma200Pos: result.ma200Pos, ma200Slope: result.ma200Slope,
@@ -5755,7 +5780,7 @@ function rescoreAll() {
     const shim = { byPattern: {} };
     for (const p of Object.keys(r.metrics)) shim.byPattern[p] = { metrics: r.metrics[p] };
     const sc = TA.score(shim, th);
-    r.patterns = sc.patterns; r.best = sc.best; r.bestTrend = sc.bestTrend; r.bestContra = sc.bestContra; r.warn = sc.warn; r._updatedAt = new Date().toISOString();
+    r.patterns = sc.patterns; r.best = sc.best; r.bestTrend = sc.bestTrend; r.bestContra = sc.bestContra; r.contraScore = sc.contraScore; r.warn = sc.warn; r._updatedAt = new Date().toISOString();
     // 履歴の最新点も採点だけ更新（同日）
     if (r.history && r.history.length) {
       const last = r.history[r.history.length - 1];
@@ -5889,7 +5914,8 @@ function anaEvidenceHtml(r) {
   return `<div style="font-size:13px">
     ${seg}
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">
-      <span>${isContra ? '逆張り' : '順張り'}総合: <b style="color:${total == null ? 'var(--muted)' : scColor(total)};font-size:15px">${total == null ? '—' : total}</b></span>
+      ${isContra ? `<span>逆張りスコア: <b style="color:${r.contraScore == null ? 'var(--muted)' : scColor(r.contraScore)};font-size:16px" title="複数条件の加点。80点以上＝有力候補">${r.contraScore == null ? '—' : r.contraScore}</b></span>` : ''}
+      <span>${isContra ? '逆張り総合' : '順張り総合'}: <b style="color:${total == null ? 'var(--muted)' : scColor(total)};font-size:15px">${total == null ? '—' : total}</b></span>
       <span>${rsiTxt}</span><span>${macdTxt}</span>
     </div>
     <div style="margin-bottom:6px">${ma}</div>
@@ -5911,6 +5937,11 @@ const PATTERN_INFO = {
   baseOnBase: { d: 'ベース・オン・ベース。上昇後の保ち合い（ベース）を階段状に重ねる強い形。', h: '新しいベースの上限を上抜けたら買い。' },
   undercutRally:{ d: 'アンダーカット&ラリー（逆張り）。前回安値を一時的に割った後、すぐ終値で回復し売り方の失敗になる形。', h: '安値割れ→終値回復＋出来高急増＋下ヒゲが揃うほど強い。割ったまま戻らない/出来高の伴う安値割れは危険。' },
   sellingClimax:{ d: 'セリングクライマックス（逆張り）。急落の最終局面で出来高急増・大陰線/長い下ヒゲが出て売りが一巡する形。', h: '当日買いは危険。出来高急増＋下ヒゲ＋以後その安値を割らない（安値維持）を確認してから。基本は監視強化。' },
+  rsiDivergence:{ d: 'RSIダイバージェンス（逆張り）。株価は安値を更新しているのにRSIは安値を切り上げる＝下落の勢いが弱まっている形。', h: '単独では弱い。二番底・下ヒゲ・出来高減少と組み合わせて。RSIが30割れから改善しているほど良い。' },
+  bollingerRecover:{ d: 'ボリンジャーバンド -2σ回復（逆張り）。-2σを下回った後、下に走らずバンド内へ戻る形。', h: '-2σ接触だけでは買わない（強い下落は-2σに沿って下げ続ける）。バンド内回復＋5日線回復＋RSI改善を確認。' },
+  maDeviation:{ d: 'MA大幅下方乖離（逆張り候補抽出）。移動平均線から大きく下に離れた売られすぎ状態。', h: '単独では危険。下ヒゲ・出来高急増・5日線回復などの確認と組み合わせる。乖離が深いほど反発余地は大きいが落ちるナイフ注意。' },
+  gapFill:{ d: '窓開け急落後の下げ止まり（逆張り）。悪材料で窓を開けて急落した後、売りが続かず安値を割らない/窓を埋める形。', h: '窓開け日の安値を割らない＋窓開け高値を回復で強い。ただし業績が構造的に悪化した場合はチャートだけで判断しない。' },
+  volDryUp:{ d: '出来高減少を伴う下落（逆張りの補助）。株価は下がっているが出来高が細る＝売り圧力の鈍化。', h: '単独の買いシグナルではない。二番底・ラウンドボトムの補助条件として使う。' },
   hsTop:      { d: '三尊天井（ヘッド&ショルダー）。高値が「肩・頭・肩」の天井転換型。', h: 'ネックライン割れで下落警戒（利益確定/撤退）。買いではなく警戒シグナル。' },
   doubleTop:  { d: 'ダブルトップ。ほぼ同じ水準の高値を2度つけるM字型の天井。', h: '中間の安値（ネックライン）割れで下落警戒。買いではなく警戒シグナル。' },
 };

@@ -113,6 +113,18 @@
     return { macd: macdLine, signal, hist };
   }
 
+  // ボリンジャーバンド（SMA period ± k*標準偏差）。各点で配列を返す（period未満は null）。
+  function bollinger(closes, period, k) {
+    const mid = sma(closes, period), lower = [], upper = [];
+    for (let i = 0; i < closes.length; i++) {
+      if (mid[i] == null) { lower.push(null); upper.push(null); continue; }
+      let sum = 0; for (let j = i - period + 1; j <= i; j++) { const d = closes[j] - mid[i]; sum += d * d; }
+      const sd = Math.sqrt(sum / period);
+      lower.push(mid[i] - k * sd); upper.push(mid[i] + k * sd);
+    }
+    return { mid, lower, upper };
+  }
+
   // 直近 period 本の平均出来高（i を含まず i 直前まで）。
   function avgVol(bars, i, period) {
     let sum = 0, n = 0;
@@ -204,7 +216,17 @@
 
     const pv = pivots(closes, struct.pivotWin);
     res.pivots = pv;
-    const baseCtx = { avgVol20, lastVol, lastClose, ma200Pos, ma200Slope, ma: { ma25: ma25[n - 1], ma75: ma75[n - 1], ma200: ma200[n - 1] } };
+    // 逆張りスコア集計に使うスカラー（52週高値乖離・MA乖離・直近下ヒゲ・5/25日線回復）
+    const high52w = maxHigh(bars, Math.max(0, n - 252), n - 1).v;
+    res.dev52w = pct(lastClose, high52w);
+    res.maDev25 = res.ma.ma25 ? pct(lastClose, res.ma.ma25) : null;
+    res.maDev200 = res.ma.ma200 ? pct(lastClose, res.ma.ma200) : null;
+    const lastBar = bars[n - 1]; const lbRng = (lastBar.h - lastBar.l) || 1e-9;
+    res.lastLowerWick = (lastBar.c - lastBar.l) / lbRng;
+    const ma5 = sma(closes, 5)[n - 1];
+    res.above5 = ma5 != null && lastClose > ma5;
+    res.above25 = res.ma.ma25 != null && lastClose > res.ma.ma25;
+    const baseCtx = { avgVol20, lastVol, lastClose, ma200Pos, ma200Slope, rsiSeries: rsiArr, ma: { ma25: ma25[n - 1], ma75: ma75[n - 1], ma200: ma200[n - 1] } };
 
     res.byPattern.range = measureRange(bars, closes, pv, struct, baseCtx);
     res.byPattern.doubleBottom = measureDoubleBottom(bars, closes, pv, struct, baseCtx);
@@ -216,6 +238,11 @@
     res.byPattern.baseOnBase = measureBaseOnBase(bars, closes, pv, struct, baseCtx, sma(closes, 50));
     res.byPattern.undercutRally = measureUndercutRally(bars, closes, pv, struct, baseCtx);
     res.byPattern.sellingClimax = measureSellingClimax(bars, closes, pv, struct, baseCtx);
+    res.byPattern.rsiDivergence = measureRsiDivergence(bars, closes, pv, struct, baseCtx);
+    res.byPattern.bollingerRecover = measureBollinger(bars, closes, pv, struct, baseCtx);
+    res.byPattern.maDeviation = measureMaDeviation(bars, closes, pv, struct, baseCtx);
+    res.byPattern.gapFill = measureGapFill(bars, closes, pv, struct, baseCtx);
+    res.byPattern.volDryUp = measureVolDryUp(bars, closes, pv, struct, baseCtx);
     res.byPattern.hsTop = measureHSTop(bars, closes, pv, struct, baseCtx);
     res.byPattern.doubleTop = measureDoubleTop(bars, closes, pv, struct, baseCtx);
     return res;
@@ -558,6 +585,76 @@
     };
   }
 
+  // --- RSIダイバージェンス（株価は安値更新もRSIは切り上げ＝下落の勢い鈍化。逆張り） ---
+  function measureRsiDivergence(bars, closes, pv, struct, ctx) {
+    const lows = pv.lo; if (lows.length < 2 || !ctx.rsiSeries) return null;
+    const i1 = lows[lows.length - 2], i2 = lows[lows.length - 1];
+    const pl1 = bars[i1].l, pl2 = bars[i2].l;
+    const r1 = ctx.rsiSeries[i1], r2 = ctx.rsiSeries[i2];
+    if (r1 == null || r2 == null) return null;
+    return {
+      metrics: { lowerLow: pl2 < pl1 ? 1 : 0, rsiHigherLow: r2 > r1 ? 1 : 0, r1, r2, rsiImprove: r2 - r1, priceDropPct: pct(pl2, pl1) },
+      levels: { support: pl2 },
+      marks: [{ t: bars[i1].t, price: pl1, label: '安値1', up: false }, { t: bars[i2].t, price: pl2, label: '安値2', up: false }],
+    };
+  }
+  // --- ボリンジャー -2σ下方逸脱からの回復（沿って下げ続けず、バンド内に戻る。逆張り） ---
+  function measureBollinger(bars, closes, pv, struct, ctx) {
+    const n = bars.length; if (n < 25) return null;
+    const bb = bollinger(closes, 20, 2);
+    let breachIdx = -1;
+    for (let i = n - 10; i <= n - 1; i++) { if (i < 20) continue; if (bb.lower[i] != null && closes[i] < bb.lower[i]) { breachIdx = i; break; } }
+    let recovered = false;
+    if (breachIdx >= 0) for (let i = breachIdx; i <= n - 1; i++) { if (bb.lower[i] != null && closes[i] > bb.lower[i]) { recovered = true; break; } }
+    const ma5 = sma(closes, 5)[n - 1];
+    return {
+      metrics: { breached: breachIdx >= 0 ? 1 : 0, recovered: recovered ? 1 : 0, daysSince: breachIdx >= 0 ? n - 1 - breachIdx : -1, above5: (ma5 != null && ctx.lastClose > ma5) ? 1 : 0, rsiNow: ctx.rsiSeries ? ctx.rsiSeries[n - 1] : null },
+      levels: { support: bb.lower[n - 1] != null ? bb.lower[n - 1] : null },
+      marks: breachIdx >= 0 ? [{ t: bars[breachIdx].t, price: bars[breachIdx].l, label: '-2σ割れ', up: false }] : [],
+    };
+  }
+  // --- 移動平均線からの大幅下方乖離（売られすぎ候補。確認＝下ヒゲ/出来高/5日線回復。逆張り） ---
+  function measureMaDeviation(bars, closes, pv, struct, ctx) {
+    const n = bars.length; if (n < 30) return null;
+    const c = ctx.lastClose;
+    const lb = bars[n - 1]; const rng = (lb.h - lb.l) || 1e-9;
+    const ma5 = sma(closes, 5)[n - 1];
+    return {
+      metrics: {
+        dev25: ctx.ma.ma25 ? pct(c, ctx.ma.ma25) : null, dev75: ctx.ma.ma75 ? pct(c, ctx.ma.ma75) : null, dev200: ctx.ma.ma200 ? pct(c, ctx.ma.ma200) : null,
+        lowerWick: (lb.c - lb.l) / rng, above5: (ma5 != null && c > ma5) ? 1 : 0, volRatio: ctx.avgVol20 ? (lb.v || 0) / ctx.avgVol20 : 0,
+      },
+      levels: { support: ctx.ma.ma25 || null }, marks: [],
+    };
+  }
+  // --- 窓開け急落後の下げ止まり（悪材料で窓を開けて急落→その後安値を割らない/窓埋め。逆張り・要ファンダ注意） ---
+  function measureGapFill(bars, closes, pv, struct, ctx) {
+    const n = bars.length; if (n < 10) return null;
+    let gapIdx = -1;
+    for (let i = n - 10; i <= n - 1; i++) { if (i < 1) continue; const pc = bars[i - 1].c, plw = bars[i - 1].l; if (bars[i].o < pc * 0.95 || bars[i].h < plw) { gapIdx = i; break; } }
+    if (gapIdx < 0) return null;
+    const gb = bars[gapIdx];
+    let heldLow = true; for (let i = gapIdx + 1; i <= n - 1; i++) { if (closes[i] < gb.l) { heldLow = false; break; } }
+    let filledHigh = false; for (let i = gapIdx + 1; i <= n - 1; i++) { if (closes[i] > gb.h) { filledHigh = true; break; } }
+    return {
+      metrics: { gapPct: pct(gb.o, bars[gapIdx - 1].c), heldLow: heldLow ? 1 : 0, filledHigh: filledHigh ? 1 : 0, daysSince: n - 1 - gapIdx, volRatio: ctx.avgVol20 ? (gb.v || 0) / ctx.avgVol20 : 0 },
+      levels: { support: gb.l, failLevel: gb.l, breakLevel: gb.h },
+      marks: [{ t: gb.t, price: gb.l, label: '窓開け安値', up: false }, { t: gb.t, price: gb.h, label: '窓開け高値', up: true }],
+    };
+  }
+  // --- 出来高減少を伴う下落（売り圧力の鈍化。単独でなく補助条件。逆張り） ---
+  function measureVolDryUp(bars, closes, pv, struct, ctx) {
+    const n = bars.length; if (n < 65) return null;
+    const drop20 = closes[n - 21] ? pct(closes[n - 1], closes[n - 21]) : 0;
+    const av20 = avgVol(bars, n, 20), av60 = avgVol(bars, n, 60);
+    let dV = 0, dN = 0, uV = 0, uN = 0;
+    for (let i = n - 20; i < n; i++) { if (i < 1) continue; if (closes[i] < closes[i - 1]) { dV += bars[i].v || 0; dN++; } else { uV += bars[i].v || 0; uN++; } }
+    return {
+      metrics: { drop20, volDownRatio: av60 ? av20 / av60 : 1, downLtUp: ((dN ? dV / dN : 0) < (uN ? uV / uN : 0)) ? 1 : 0 },
+      levels: {}, marks: [],
+    };
+  }
+
   // ===== 採点（score） =====
   // ステータス: 0=該当なし 1=形成中 2=完成間近 3=ブレイク済み 4=失敗（逆張りは CONTRA_STATUS_LABEL で語彙差し替え）
   function score(meas, th) {
@@ -568,6 +665,7 @@
       cup: scoreCup, range: scoreRange, doubleBottom: scoreDoubleBottom, ascTriangle: scoreAscTriangle,
       roundBottom: scoreRoundBottom, invHS: scoreInvHS, flag: scoreFlag, baseOnBase: scoreBaseOnBase,
       undercutRally: scoreUndercutRally, sellingClimax: scoreSellingClimax,
+      rsiDivergence: scoreRsiDivergence, bollingerRecover: scoreBollinger, maDeviation: scoreMaDeviation, gapFill: scoreGapFill, volDryUp: scoreVolDryUp,
       hsTop: scoreHSTop, doubleTop: scoreDoubleTop,
     };
     for (const key of Object.keys(fns)) {
@@ -579,6 +677,7 @@
     out.bestTrend = bestOf(TREND_PATTERNS);
     out.bestContra = bestOf(CONTRA_PATTERNS);
     out.best = bestOf(BUY_PATTERNS);
+    out.contraScore = contraCompositeScore(meas, out.patterns); // 逆張り候補スコア（複数条件の加点。組み合わせ重視）
     // 警戒シグナル＝警戒パターンのスコア最大
     let warn = null;
     for (const key of WARN_PATTERNS) {
@@ -622,6 +721,82 @@
       if (!m.heldLow) status = 4;                   // 安値割れ継続＝危険
     } else if (m.drop20 <= -12) status = 1;         // 売られすぎ
     return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り: RSIダイバージェンス
+  function scoreRsiDivergence(m) {
+    let s = 0;
+    const diverge = m.lowerLow && m.rsiHigherLow;
+    if (diverge) s += 30;
+    if (m.r1 < 30) s += 20;
+    if (m.rsiImprove >= 5) s += 20;
+    if (m.r2 >= 30 && m.r1 < 30) s += 15;
+    let status = 0;
+    if (diverge) status = (m.r2 >= 30 && m.r1 < 30) ? 3 : (m.r1 < 35 ? 2 : 1);
+    return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り: ボリンジャー -2σ回復
+  function scoreBollinger(m) {
+    let s = 0;
+    if (m.breached) s += 15;
+    if (m.recovered) s += 30;
+    if (m.above5) s += 20;
+    if (m.rsiNow != null && m.rsiNow >= 30 && m.rsiNow < 50) s += 10;
+    if (m.daysSince >= 0 && m.daysSince <= 6) s += 10;
+    let status = 0;
+    if (m.breached) status = m.recovered ? (m.above5 ? 3 : 2) : 1;
+    return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り: MA大幅下方乖離
+  function scoreMaDeviation(m) {
+    let s = 0;
+    const deep = (m.dev25 != null && m.dev25 <= -10) || (m.dev75 != null && m.dev75 <= -15) || (m.dev200 != null && m.dev200 <= -25);
+    if (deep) s += 30;
+    if (m.lowerWick >= 0.5) s += 15;
+    if (m.volRatio >= 1.5) s += 10;
+    if (m.above5) s += 20;
+    let status = 0;
+    if (deep) status = m.above5 ? 3 : ((m.lowerWick >= 0.5 || m.volRatio >= 1.5) ? 2 : 1);
+    return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り: 窓開け急落後の下げ止まり
+  function scoreGapFill(m) {
+    let s = 0;
+    if (m.gapPct <= -5) s += 15;
+    if (m.heldLow) s += 25;
+    if (m.filledHigh) s += 25;
+    if (m.daysSince >= 2 && m.daysSince <= 10) s += 10;
+    let status = 0;
+    if (m.gapPct <= -3) { status = m.filledHigh ? 3 : (m.heldLow ? 2 : 1); if (!m.heldLow) status = 4; }
+    return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り: 出来高減少を伴う下落（補助条件）
+  function scoreVolDryUp(m) {
+    let s = 0;
+    const falling = m.drop20 <= -10;
+    if (falling && m.volDownRatio < 0.8) s += 30;
+    if (m.downLtUp) s += 20;
+    let status = 0;
+    if (falling && (m.volDownRatio < 0.85 || m.downLtUp)) status = 2;
+    else if (falling) status = 1;
+    return { score: Math.min(100, Math.round(s)), status };
+  }
+  // 逆張り候補スコア（複数条件の加点。単独でなく組み合わせを重視＝80点で有力候補）。
+  function contraCompositeScore(meas, patterns) {
+    let cs = 0;
+    if (meas.dev52w != null && meas.dev52w <= -30) cs += 15;            // 52週高値から30%以上下落
+    if (meas.maDev200 != null && meas.maDev200 <= -25) cs += 10;        // 200日線-25%乖離
+    if (meas.rsi != null && meas.rsi < 30) cs += 10;                    // RSI 30未満
+    const ucM = meas.byPattern.undercutRally && meas.byPattern.undercutRally.metrics;
+    const scM = meas.byPattern.sellingClimax && meas.byPattern.sellingClimax.metrics;
+    if ((ucM && ucM.volRatio >= 1.5) || (scM && scM.volRatio >= 2)) cs += 10; // 出来高急増を伴う急落
+    if (meas.lastLowerWick != null && meas.lastLowerWick >= 0.5) cs += 10;    // 長い下ヒゲ
+    if (ucM && ucM.undercut && ucM.recovered) cs += 15;                // 前回安値を一時割って回復
+    const dbP = patterns.doubleBottom; if (dbP && dbP.status >= 1) cs += 20;  // 二番底形成
+    const dbM = meas.byPattern.doubleBottom && meas.byPattern.doubleBottom.metrics;
+    if (dbM && dbM.vol2OverVol1 != null && dbM.vol2OverVol1 <= 1) cs += 10;   // 第2安値の出来高が第1安値以下
+    if (meas.above5 || meas.above25) cs += 10;                         // 5日/25日線を回復
+    if (scM && scM.heldLow) cs += 15;                                  // 急落後に安値を更新しない
+    return Math.min(100, Math.round(cs));
   }
 
   function scoreCup(m, th) {
@@ -799,7 +974,7 @@
     const evidence = best ? buildEvidence(best.pattern, meas) : { ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope };
     return {
       asOf: meas.asOf, lastClose: meas.lastClose,
-      best, bestTrend: sc.bestTrend, bestContra: sc.bestContra, warn: sc.warn, patterns: sc.patterns, metrics, levels, marks, evidence,
+      best, bestTrend: sc.bestTrend, bestContra: sc.bestContra, contraScore: sc.contraScore, warn: sc.warn, patterns: sc.patterns, metrics, levels, marks, evidence,
       ma: meas.ma, ma200Pos: meas.ma200Pos, ma200Slope: meas.ma200Slope,
       rsi: meas.rsi, rsiState: meas.rsiState, macd: meas.macd, macdCross: meas.macdCross,
     };
@@ -955,11 +1130,12 @@
     cup: 'カップウィズハンドル', range: 'レンジブレイク', doubleBottom: 'ダブルボトム', ascTriangle: 'アセンディングトライアングル',
     roundBottom: 'ラウンドボトム', invHS: '逆三尊', flag: 'フラッグ/ペナント', baseOnBase: 'ベース・オン・ベース',
     undercutRally: 'アンダーカット&ラリー', sellingClimax: 'セリングクライマックス',
+    rsiDivergence: 'RSIダイバージェンス', bollingerRecover: 'ボリンジャー-2σ回復', maDeviation: 'MA大幅下方乖離', gapFill: '窓開け急落の下げ止まり', volDryUp: '出来高減少下落',
     hsTop: '三尊天井(警戒)', doubleTop: 'ダブルトップ(警戒)',
   };
   // 順張り（上に抜けたら買い）と 逆張り（下げ止まり/反転を拾う）でシグナルを分類。総合スコアは各サイドで別算出。
   const TREND_PATTERNS = ['cup', 'range', 'ascTriangle', 'flag', 'baseOnBase'];
-  const CONTRA_PATTERNS = ['doubleBottom', 'invHS', 'roundBottom', 'undercutRally', 'sellingClimax'];
+  const CONTRA_PATTERNS = ['doubleBottom', 'invHS', 'roundBottom', 'undercutRally', 'sellingClimax', 'rsiDivergence', 'bollingerRecover', 'maDeviation', 'gapFill', 'volDryUp'];
   const BUY_PATTERNS = [...TREND_PATTERNS, ...CONTRA_PATTERNS];
   const WARN_PATTERNS = ['hsTop', 'doubleTop'];
   const PATTERN_SIDE = (p) => CONTRA_PATTERNS.includes(p) ? 'contra' : TREND_PATTERNS.includes(p) ? 'trend' : 'warn';
