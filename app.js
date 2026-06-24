@@ -5643,7 +5643,7 @@ let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
 const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
 // 分析エンジンの版。パターン/指標を追加したら上げる。保存結果の ver がこれと違えば「分析」で再計算対象にする。
-const TECH_VER = 6;
+const TECH_VER = 7;
 
 function anaToday() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function anaThresholds() { return TA.mergeThresholds(store.data.settings && store.data.settings.techThresholds); }

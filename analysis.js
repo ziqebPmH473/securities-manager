@@ -839,19 +839,22 @@
   // 増えるほど高得点。「1つだけ点灯したら買い」を避け、複数の根拠が一致したものを高く評価する。
   // base*0.6+25+confirms*8: 単独60→確認1で〜80→確認2-3で90+。weight/上限はここで調整可。
   function sideTotal(patterns, list, side, meas) {
-    let bestScore = 0, strong = 0;
-    // status 4（失敗/下抜け継続）は否定材料なので加点に含めない。1〜3のみ評価。
-    for (const p of list) { const x = patterns[p]; if (!x || x.status === 0 || x.status === 4) continue; if (x.score > bestScore) bestScore = x.score; if (x.status === 2 || x.status === 3) strong++; }
+    let bestScore = 0, c3 = 0, c2 = 0;
+    // status 4（失敗/下抜け継続）は否定材料なので加点に含めない。status3(反転確認/ブレイク)を重く、status2(候補)を軽く数える。
+    for (const p of list) { const x = patterns[p]; if (!x || x.status === 0 || x.status === 4) continue; if (x.score > bestScore) bestScore = x.score; if (x.status === 3) c3++; else if (x.status === 2) c2++; }
     if (bestScore === 0) return 0;
-    let confirms = Math.max(0, strong - 1); // 最強以外で「完成間近/下げ止まり候補」以上の確認シグナル数
+    // 確認＝最強以外のシグナルの一致（status3=1.0 / status2=0.5）。最強の1つ分を除く。
+    let confirms = Math.max(0, (c3 + c2 * 0.5) - 1);
     if (side === 'trend') {
-      if (meas.ma200Pos === 'above' && meas.ma200Slope === 'up') confirms++; // トレンド一致
-      if (meas.macdCross === 'golden') confirms++;
+      if (meas.ma200Pos === 'above' && meas.ma200Slope === 'up') confirms += 1;       // トレンド一致
+      if (meas.macdCross === 'golden') confirms += 0.5;
     } else {
-      if (meas.rsiState === 'oversold' || (meas.dev52w != null && meas.dev52w <= -25)) confirms++; // 売られすぎ文脈
-      if (meas.macdCross === 'golden' || meas.above5) confirms++;          // モメンタム反転の兆し
+      if (meas.rsiState === 'oversold' || (meas.dev52w != null && meas.dev52w <= -25)) confirms += 1; // 売られすぎ文脈
+      if (meas.macdCross === 'golden' || meas.above5) confirms += 0.5;                  // モメンタム反転の兆し
     }
-    let total = confirms <= 0 ? Math.min(bestScore, 60) : Math.min(100, Math.round(bestScore * 0.6 + 25 + confirms * 8));
+    confirms = Math.min(3.5, confirms); // 確認数の上限（飽和＝みんな100、を回避して順位がつくように）
+    // 単独シグナルは最大55（候補止まり）。確認があるほど上げるが、上限95で100張り付きを避け順位を散らす。
+    let total = confirms <= 0.5 ? Math.min(bestScore, 55) : Math.min(95, Math.round(bestScore * 0.5 + 12 + confirms * 9));
     // 逆張りは「底抜け継続/底打ち失敗」の警戒が点灯したら減点（まだ早い）。安値更新+出来高増は買い見送り級。
     if (side === 'contra') {
       const nlv = patterns.newLowHighVol;
