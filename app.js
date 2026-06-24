@@ -3110,8 +3110,9 @@ function openColPicker(market) {
       <input type="number" min="40" step="2" value="${colWidthPx(c)}" ${c.auto ? 'disabled' : ''} onfocus="this.select()" onchange="cpSetWidth('${c.key}', this.value)" title="列幅(px)" style="width:74px;text-align:right${c.auto ? ';opacity:.4' : ''}"><span class="muted" style="font-size:11px">px</span>
     </div>`;
   }).join('');
-  const other = market === 'US' ? 'JP' : market === 'JP' ? 'US' : null;
-  const copyBtn = other ? `<button type="button" class="btn btn-sm" onclick="copyColLayout('${market}','${other}')">この設定を${MARKET_LABEL[other]}にもコピー</button>` : '';
+  const other = market === 'US' ? 'JP' : market === 'JP' ? 'US'
+    : market === 'ANALYSIS' ? 'ANALYSIS_T' : market === 'ANALYSIS_T' ? 'ANALYSIS' : null;
+  const copyBtn = other ? `<button type="button" class="btn btn-sm" onclick="copyColLayout('${market}','${other}')">この列設定を${colMarketLabel(other)}ビューにもコピー</button>` : '';
   showModal('列の表示・並び替え・幅・列名', `
     <p class="muted" style="margin:0 0 8px">チェック=表示/非表示、ハンドル(⠿)ドラッグで並び替え、テキスト=列名（空欄で既定）、数値=列幅(px)。</p>
     <div class="btn-row" style="align-items:center;margin:0 0 8px">
@@ -3135,13 +3136,15 @@ function openColPicker(market) {
     if (w) { w.scrollTop = _prevScroll; requestAnimationFrame(() => { w.scrollTop = _prevScroll; }); }
   }
 }
-// 列レイアウト（表示/非表示・並び順）を他の市場へコピー。米国株↔日本株。
+// 列プロファイルの表示名（コピーボタン/トースト用）。市場のほか分析の逆張り/順張りビューも扱う。
+function colMarketLabel(m) { return ({ US: '米国株', JP: '日本株', FUND: '投信', SIGNAL: '買い増しサイン', ANALYSIS: '逆張り', ANALYSIS_T: '順張り' })[m] || MARKET_LABEL[m] || m; }
+// 列レイアウト（表示/非表示・並び順・幅・列名）を他のプロファイルへコピー。米国株↔日本株 / 逆張り↔順張り。
 function copyColLayout(fromMarket, toMarket) {
   reconcileColPrefs(fromMarket);
   colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width, labelOverride: c.labelOverride, auto: c.auto }));
-  reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（米国株/日本株は同一列なので実質そのまま）
+  reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（同一列群なので実質そのまま）
   saveColPrefs(); touchColPrefs(toMarket);
-  toast(`列設定を${MARKET_LABEL[toMarket]}にコピーしました`, 4000);
+  toast(`列設定を${colMarketLabel(toMarket)}ビューにコピーしました`, 4000);
   openColPicker(_colPickerMarket);
 }
 function cpToggle(key, checked) {
