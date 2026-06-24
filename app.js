@@ -183,6 +183,12 @@ const MASTER_COLS = [
   { key: 'anaBase',     label: 'ベースオンベース', left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaWarn',     label: '順張り警戒',       left: true,  markets: ['ANALYSIS'], noSort: false },
   { key: 'anaWarnC',    label: '逆張り警戒',       left: true,  markets: ['ANALYSIS'], noSort: false },
+  // 警戒パターン個別列（集約＝順張り警戒/逆張り警戒。詳細サイドバーと対応）
+  { key: 'anaHsTop',    label: '三尊天井',         left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaDblTop',   label: 'ダブルトップ',     left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaNewLow',   label: '安値更新+出来高',  left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaBearFlag', label: 'ベアフラッグ',     left: false, markets: ['ANALYSIS'], noSort: false },
+  { key: 'anaDescTri',  label: '下降三角',         left: false, markets: ['ANALYSIS'], noSort: false },
   // 確認に効く文脈指標（総合の加点条件）。200日線=順張りの確認 / RSI・5日線・52週乖離=逆張りの確認 / MACD=共通
   { key: 'anaMa200',    label: '200日線',          left: true,  markets: ['ANALYSIS'], noSort: false },
   { key: 'anaRSI',      label: 'RSI',              left: false, markets: ['ANALYSIS'], noSort: false },
@@ -1994,6 +2000,11 @@ function cfCellValue(key, sec, ctx) {
     case 'anaBase': return techPatScore(sec, 'baseOnBase');
     case 'anaWarn': { const w = techWarnSide(sec, 'trend'); return w ? w.score : null; }
     case 'anaWarnC': { const w = techWarnSide(sec, 'contra'); return w ? w.score : null; }
+    case 'anaHsTop': return techPatScore(sec, 'hsTop');
+    case 'anaDblTop': return techPatScore(sec, 'doubleTop');
+    case 'anaNewLow': return techPatScore(sec, 'newLowHighVol');
+    case 'anaBearFlag': return techPatScore(sec, 'bearFlag');
+    case 'anaDescTri': return techPatScore(sec, 'descTriangle');
     case 'anaMa200': { const r = techOf(sec); return r && r.ma200Pos ? r.ma200Pos : null; }
     case 'ana5d': { const r = techOf(sec); return r && r.above5 != null ? (r.above5 ? '上' : '下') : null; }
     case 'anaDev52w': { const r = techOf(sec); return r && r.dev52w != null ? r.dev52w : null; }
@@ -2144,6 +2155,11 @@ const COL_RENDERERS = {
   anaBase:     (s,c) => anaPatCell(s, 'baseOnBase'),
   anaWarn:     (s,c) => anaWarnCell(techWarnSide(s, 'trend')),
   anaWarnC:    (s,c) => anaWarnCell(techWarnSide(s, 'contra')),
+  anaHsTop:    (s,c) => anaWarnPatCell(s, 'hsTop'),
+  anaDblTop:   (s,c) => anaWarnPatCell(s, 'doubleTop'),
+  anaNewLow:   (s,c) => anaWarnPatCell(s, 'newLowHighVol'),
+  anaBearFlag: (s,c) => anaWarnPatCell(s, 'bearFlag'),
+  anaDescTri:  (s,c) => anaWarnPatCell(s, 'descTriangle'),
   anaMa200:    (s,c) => { const r = techOf(s); if (!r || !r.ma200Pos) return `<td class="l">${muted}</td>`; const pos = r.ma200Pos === 'above' ? '上' : r.ma200Pos === 'below' ? '下' : '—'; const sl = r.ma200Slope === 'up' ? '↗' : r.ma200Slope === 'down' ? '↘' : ''; const ok = r.ma200Pos === 'above' && r.ma200Slope === 'up'; return `<td class="l" style="color:${ok ? 'var(--green)' : 'var(--muted)'};font-weight:600" title="順張りの確認＝株価が200日線の上＆上向き">${pos}${sl}</td>`; },
   ana5d:       (s,c) => { const r = techOf(s); if (!r || r.above5 == null) return `<td class="l">${muted}</td>`; return `<td class="l" style="color:${r.above5 ? 'var(--green)' : 'var(--muted)'};font-weight:600" title="逆張りの確認＝終値が5日線の上（短期反転の兆し）">${r.above5 ? '上' : '下'}</td>`; },
   anaDev52w:   (s,c) => { const r = techOf(s); if (!r || r.dev52w == null) return `<td>${muted}</td>`; const v = r.dev52w; const col = v <= -25 ? 'var(--green)' : v >= -5 ? 'var(--muted)' : 'var(--amber)'; return `<td style="text-align:right;color:${col};font-weight:600" title="52週高値からの乖離。-25%以下で逆張りの売られすぎ確認">${v > 0 ? '+' : ''}${Math.round(v)}%</td>`; },
@@ -2186,6 +2202,13 @@ function techWarnSide(sec, side) {
   return best;
 }
 function anaWarnCell(w) { return `<td class="l">${w ? `<span style="color:var(--red);font-weight:600">${esc(TA.PATTERN_LABEL[w.pattern] || '')} ${w.score}</span>` : muted}</td>`; }
+// 警戒パターンの個別セル：点灯（status≥1）は赤、未点灯(status0)は灰。買いパターンと違い高スコア＝危険なので赤系。
+function anaWarnPatCell(sec, pat) {
+  const p = techPat(sec, pat);
+  if (!p) return `<td style="text-align:right">${muted}</td>`;
+  if (p.status === 0) return `<td style="text-align:right" title="未点灯（部分一致）"><span style="color:var(--muted);font-weight:500">${p.score}</span></td>`;
+  return `<td style="text-align:right" title="警戒点灯（売り材料）"><span style="color:var(--red);font-weight:700">${p.score}</span></td>`;
+}
 function techLevel(sec, kind) {
   const r = techOf(sec); if (!r || !r.best || !r.levels) return null;
   const lv = r.levels[r.best.pattern]; if (!lv) return null;
@@ -2737,6 +2760,11 @@ function sortValue(sec, key) {
     case 'anaBase': return techPatScore(sec, 'baseOnBase') ?? -Infinity;
     case 'anaWarn': { const w = techWarnSide(sec, 'trend'); return w ? w.score : -Infinity; }
     case 'anaWarnC': { const w = techWarnSide(sec, 'contra'); return w ? w.score : -Infinity; }
+    case 'anaHsTop': return techPatScore(sec, 'hsTop') ?? -Infinity;
+    case 'anaDblTop': return techPatScore(sec, 'doubleTop') ?? -Infinity;
+    case 'anaNewLow': return techPatScore(sec, 'newLowHighVol') ?? -Infinity;
+    case 'anaBearFlag': return techPatScore(sec, 'bearFlag') ?? -Infinity;
+    case 'anaDescTri': return techPatScore(sec, 'descTriangle') ?? -Infinity;
     case 'anaMa200': { const r = techOf(sec); if (!r || !r.ma200Pos) return -Infinity; return (r.ma200Pos === 'above' ? 1 : 0) + (r.ma200Slope === 'up' ? 0.5 : 0); }
     case 'ana5d': { const r = techOf(sec); return r && r.above5 != null ? (r.above5 ? 1 : 0) : -Infinity; }
     case 'anaDev52w': { const r = techOf(sec); return r && r.dev52w != null ? r.dev52w : -Infinity; }
@@ -3135,8 +3163,8 @@ function anaColTag(key) {
   if (key === 'anaContra') return { t: '逆張り総合', c: 'var(--amber)' };
   if (key === 'anaTrend') return { t: '順張り総合', c: '#0ea5e9' };
   if (key === 'anaTotal') return { t: '総合', c: 'var(--muted)' };
-  if (key === 'anaWarn') return { t: '順張り警戒', c: 'var(--red)' };
-  if (key === 'anaWarnC') return { t: '逆張り警戒', c: 'var(--red)' };
+  if (key === 'anaWarn' || key === 'anaHsTop' || key === 'anaDblTop') return { t: '順張り警戒', c: 'var(--red)' };
+  if (key === 'anaWarnC' || key === 'anaNewLow' || key === 'anaBearFlag' || key === 'anaDescTri') return { t: '逆張り警戒', c: 'var(--red)' };
   if (key === 'anaMACD') return { t: '共通', c: '#a855f7' };   // ゴールデンクロスは順張り・逆張り両方の確認に使う
   if (key === 'anaMa200') return { t: '順張り', c: '#0ea5e9' }; // 200日線上＋上向き＝順張りの確認
   if (key === 'anaRSI' || key === 'ana5d' || key === 'anaDev52w') return { t: '逆張り', c: 'var(--amber)' }; // 売られすぎ/5日線回復＝逆張りの確認
