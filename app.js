@@ -2941,8 +2941,11 @@ function marketRow(sec, visibleCols, opts = {}) {
     return cfInject(cell, col.key, cfCellValue(col.key, sec, ctx));
   }).join('');
   let actionsTd = '';
+  let rowAttr = '';
   if (opts.actions === 'analysis') {
     actionsTd = `<td class="l nowrap"><button class="btn btn-sm" onclick="openAnalysisDetail('${sec.market}','${esc(String(sec.ticker))}')">詳細</button></td>`;
+    // 行のどこをクリックしても詳細ドロワーを開く（既定のリンク/ボタン/ティッカー/銘柄名リンクは除外）
+    rowAttr = ` class="ana-row" style="cursor:pointer" onclick="anaRowClick(event,'${sec.market}','${esc(String(sec.ticker))}')"`;
   } else if (opts.actions === 'signal') {
     actionsTd = `<td class="l nowrap"><button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id},'buy')">購入を記録</button></td>`;
   } else if (opts.actions !== 'none') {
@@ -2952,7 +2955,12 @@ function marketRow(sec, visibleCols, opts = {}) {
         <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">編集</button>
       </td>`;
   }
-  return `<tr>${selectTd}${dataCells}${actionsTd}</tr>`;
+  return `<tr${rowAttr}>${selectTd}${dataCells}${actionsTd}</tr>`;
+}
+// 分析タブ: 行クリックで詳細ドロワー。既定のリンク/ボタン/入力/ティッカー/銘柄名リンクの上は除外（それぞれの動作を優先）。
+function anaRowClick(e, market, ticker) {
+  if (e.target.closest('a, button, input, select, label, .tk, .lnk-ext, .nm-strong')) return;
+  openAnalysisDetail(market, ticker);
 }
 
 // カテゴリのラベル（マスタの色を反映）。色未設定の旧データは従来の .tag.cat 表示にフォールバック
