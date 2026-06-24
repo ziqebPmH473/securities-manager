@@ -869,6 +869,16 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 /* レポート内タブ */
 .report-tabs { margin: 4px 0 14px; width: fit-content; }
 
+/* 分析タブ: シグナル行のホバー説明（吞き出し）＋クリックで拡大 */
+.ana-sig:hover { background: var(--panel-2); }
+.ana-sig-i { color: var(--muted); font-size: 10px; }
+#ana-tip { position: fixed; z-index: 400; display: none; max-width: 300px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 10px 12px; font-size: 12px; line-height: 1.55; pointer-events: none; }
+#ana-tip .ana-tip-h { font-weight: 700; margin-bottom: 4px; }
+#ana-tip .ana-tip-d { color: var(--text); }
+#ana-tip .ana-tip-r { margin-top: 4px; color: var(--text); }
+#ana-tip .ana-tip-c { margin-top: 6px; color: var(--muted); font-size: 10.5px; }
+.ana-sig-desc { font-size: 12.5px; line-height: 1.6; color: var(--text); margin-top: 10px; padding: 10px 12px; background: var(--panel-2); border-radius: 10px; }
+
 /* マーケットランキング表: 名称列が長すぎて横にはみ出さないよう省略（保有銘柄と同様に画面に収める） */
 .mkt-name { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 

@@ -5846,7 +5846,8 @@ function anaDrawDetailChart() {
 function anaEvidenceHtml(r) {
   if (!r) return '<div class="notice" style="margin:0">未分析です。一覧の「分析」ボタンで計算します。</div>';
   const scColor = (v) => v >= 80 ? 'var(--green)' : v >= 60 ? '#0ea5e9' : v >= 40 ? 'var(--amber)' : 'var(--muted)';
-  const row = (p) => { const x = r.patterns && r.patterns[p]; if (!x || x.status === 0) return ''; return `<tr><td class="l">${esc(TA.PATTERN_LABEL[p])}</td><td style="text-align:right;color:${scColor(x.score)};font-weight:700">${x.score}</td><td>${esc(TA.STATUS_LABEL[x.status])}</td></tr>`; };
+  // 各シグナル行: ホバーで説明（吞き出し）／クリックでそのシグナルだけのチャート拡大
+  const row = (p) => { const x = r.patterns && r.patterns[p]; if (!x || x.status === 0) return ''; return `<tr class="ana-sig" data-pat="${p}" onmouseenter="anaTip(this)" onmouseleave="anaTipHide()" onclick="anaShowSignalChart('${p}')" style="cursor:pointer"><td class="l">${esc(TA.PATTERN_LABEL[p])} <span class="ana-sig-i">ⓘ</span></td><td style="text-align:right;color:${scColor(x.score)};font-weight:700">${x.score}</td><td>${esc(TA.STATUS_LABEL[x.status])}</td></tr>`; };
   const buyRows = (TA.BUY_PATTERNS || []).map(row).filter(Boolean).join('') || '<tr><td colspan="3" class="muted">該当する買いシグナルなし</td></tr>';
   const warnRows = (TA.WARN_PATTERNS || []).map(row).filter(Boolean).join('');
   const total = r.best ? r.best.score : null;
@@ -5861,8 +5862,78 @@ function anaEvidenceHtml(r) {
     <div style="margin-bottom:6px">${ma}</div>
     <table class="holdings dense" style="width:100%"><thead><tr><th class="l">買いシグナル</th><th style="text-align:right">強さ</th><th>ステータス</th></tr></thead><tbody>${buyRows}</tbody></table>
     ${warnRows ? `<div style="margin-top:8px;color:var(--red);font-weight:600;font-size:12px">⚠ 警戒シグナル</div><table class="holdings dense" style="width:100%"><tbody>${warnRows}</tbody></table>` : ''}
-    <div class="muted" style="font-size:11px;margin-top:6px">分析日: ${esc(r.lastAnalyzed || '—')}｜緑線=買いトリガー（抜けたら買い）／赤線=失敗ライン（割れたら撤退）。総合＝最も強い買いシグナルの強さ。</div>
+    <div class="muted" style="font-size:11px;margin-top:6px">分析日: ${esc(r.lastAnalyzed || '—')}｜緑線=買いトリガー（抜けたら買い）／赤線=失敗ライン（割れたら撤退）。総合＝最も強い買いシグナルの強さ。各シグナルにカーソルで説明・クリックで拡大。</div>
   </div>`;
+}
+
+// 各シグナル（チャートパターン）の説明と「どう見るか」。ホバーの吞き出しに表示。
+const PATTERN_INFO = {
+  cup:        { d: 'U字の底（カップ）の後に小さな押し目（取っ手）を作る上昇前の形。', h: '取っ手の上限＝買いトリガーを出来高増で上抜けたら買い。カップが深すぎる/取っ手が浅すぎると失敗しやすい。' },
+  range:      { d: '一定の値幅で横ばい（ボックス/レンジ）が続く保ち合い。', h: '上限（抵抗）を明確に上抜けたら買い。下限割れは失敗（撤退）。' },
+  doubleBottom:{ d: 'ほぼ同じ水準の安値を2度つけるW字型の底。', h: '中間の戻り高値（ネックライン）を上抜けたら買い。2つ目の底が1つ目を大きく割ると失敗。' },
+  ascTriangle:{ d: '高値は水平（抵抗）、安値が切り上がる三角保ち合い。買い圧力が強い形。', h: '水平の抵抗を上抜けたら買い。安値の切り上げが崩れると失敗。' },
+  roundBottom:{ d: 'なだらかなお椀型の底。下落→横ばい→上昇へ緩やかに転換。', h: '徐々に上向き、直近の高値（抵抗）を抜けたら買い。完成に時間がかかる。' },
+  invHS:      { d: '逆三尊（逆ヘッド&ショルダー）。安値が「肩・頭（最安）・肩」の底転換型。', h: 'ネックライン（2つの戻り高値を結ぶ線）を上抜けたら買い。' },
+  flag:       { d: 'フラッグ/ペナント。急騰の後の短い小休止（旗）で再上昇の中継ぎ。', h: '小休止の上限を上抜けたら再上昇を狙う。調整が深い/長いと失敗。' },
+  baseOnBase: { d: 'ベース・オン・ベース。上昇後の保ち合い（ベース）を階段状に重ねる強い形。', h: '新しいベースの上限を上抜けたら買い。' },
+  hsTop:      { d: '三尊天井（ヘッド&ショルダー）。高値が「肩・頭・肩」の天井転換型。', h: 'ネックライン割れで下落警戒（利益確定/撤退）。買いではなく警戒シグナル。' },
+  doubleTop:  { d: 'ダブルトップ。ほぼ同じ水準の高値を2度つけるM字型の天井。', h: '中間の安値（ネックライン）割れで下落警戒。買いではなく警戒シグナル。' },
+};
+// シグナル説明の吞き出し（body直下のfixed要素＝表の overflow に切られない）
+function anaTip(el) {
+  const info = PATTERN_INFO[el.dataset.pat]; if (!info) return;
+  let tip = document.getElementById('ana-tip');
+  if (!tip) { tip = document.createElement('div'); tip.id = 'ana-tip'; document.body.appendChild(tip); }
+  const label = TA.PATTERN_LABEL[el.dataset.pat] || '';
+  tip.innerHTML = `<div class="ana-tip-h">${esc(label)}</div><div class="ana-tip-d">${esc(info.d)}</div><div class="ana-tip-r"><b>見方:</b> ${esc(info.h)}</div><div class="ana-tip-c">クリックでこのシグナルだけのチャートを拡大</div>`;
+  tip.style.display = 'block';
+  const r = el.getBoundingClientRect();
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = Math.min(window.innerWidth - tw - 8, Math.max(8, r.left));
+  let top = r.bottom + 8; if (top + th > window.innerHeight - 8) top = Math.max(8, r.top - th - 8); // 下に入らなければ上
+  tip.style.left = left + 'px'; tip.style.top = top + 'px';
+}
+function anaTipHide() { const t = document.getElementById('ana-tip'); if (t) t.style.display = 'none'; }
+// クリックしたシグナルだけを描いた大きなチャートをオーバーレイ表示（ローソク足＋そのパターンのライン/印のみ。MA/RSI/MACDなし）
+function anaShowSignalChart(pattern) {
+  anaTipHide();
+  const key = anaDetailKey; if (!key) return;
+  const bars = _anaBars[key]; if (!bars || !bars.length) { toast('価格履歴がありません'); return; }
+  const r = store.data.techAnalysis[key];
+  const disp = anaDetailRange === '3y' ? TA.toWeekly(bars) : bars.slice(-(anaDetailRange === '6m' ? 126 : 252));
+  const t0 = disp.length ? disp[0].t : 0, t1 = disp.length ? disp[disp.length - 1].t : 0;
+  const lv = (r && r.levels) ? r.levels[pattern] : null;
+  const mk = ((r && r.marks) ? (r.marks[pattern] || []) : []).filter(m => m.t >= t0 && m.t <= t1);
+  const hlines = [];
+  if (lv) {
+    if (lv.breakLevel != null) hlines.push({ price: lv.breakLevel, color: 'var(--green)', label: '買いトリガー' });
+    if (lv.failLevel != null) hlines.push({ price: lv.failLevel, color: 'var(--red)', label: '失敗ライン' });
+    if (lv.neckline != null) hlines.push({ price: lv.neckline, color: '#a855f7', label: 'ネックライン' });
+    if (lv.resistance != null && lv.breakLevel == null) hlines.push({ price: lv.resistance, color: '#f59e0b', label: '抵抗' });
+    if (lv.support != null) hlines.push({ price: lv.support, color: '#0ea5e9', label: '支持' });
+  }
+  const cur = (store.data.prices[key] || {}).price;
+  if (cur != null) hlines.push({ price: cur, color: 'var(--muted)', label: '現在値', dash: '2 2' });
+  const x = r && r.patterns && r.patterns[pattern];
+  const info = PATTERN_INFO[pattern] || { d: '', h: '' };
+  const chart = TA.candleSVG(disp, { hlines, marks: mk, title: TA.PATTERN_LABEL[pattern] + (x ? `（強さ ${x.score} / ${TA.STATUS_LABEL[x.status]}）` : ''), height: 440 });
+  const desc = `<div class="ana-sig-desc"><div>${esc(info.d)}</div><div style="margin-top:4px"><b>見方:</b> ${esc(info.h)}</div></div>`;
+  anaShowOverlay(TA.PATTERN_LABEL[pattern], chart + desc);
+}
+// 汎用: 拡大オーバーレイに任意HTMLを表示（enlargeDetailChart と同じ器）
+function anaShowOverlay(title, innerHtml) {
+  let ov = document.getElementById('chart-zoom-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'chart-zoom-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,24,40,.55);z-index:300;display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out';
+    ov.onclick = () => ov.remove();
+    document.body.appendChild(ov);
+  }
+  ov.innerHTML = `<div style="background:var(--panel);border-radius:14px;padding:20px;width:min(1400px,94vw);max-height:92vh;overflow:auto;box-shadow:var(--shadow-lg);cursor:default" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><strong style="font-size:15px">${esc(title)}</strong><button class="x-btn" onclick="document.getElementById('chart-zoom-overlay').remove()">&times;</button></div>
+      <div style="width:100%">${innerHtml}</div>
+    </div>`;
 }
 
 // ---------- 銘柄カルテ（市場+コードで1銘柄の全情報を集約＋取引/編集を1画面で） ----------
