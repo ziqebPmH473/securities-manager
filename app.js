@@ -164,7 +164,6 @@ const MASTER_COLS = [
   { key: 'principalSoldAmount', label: '売却済み元本額', left: false, markets: ALLM, noSort: false },
   // テクニカル分析（分析タブ専用）。各シグナルの強さ(0-100)。総合は順張り/逆張りで別評価。
   { key: 'anaTotal',    label: '総合買いシグナル', left: false, markets: ['ANALYSIS'], noSort: false },
-  { key: 'anaContraScore', label: '逆張りスコア',  left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaTrend',    label: '順張り総合',       left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaContra',   label: '逆張り総合',       left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaCup',      label: 'カップ',           left: false, markets: ['ANALYSIS'], noSort: false },
@@ -1960,7 +1959,6 @@ function cfCellValue(key, sec, ctx) {
     case 'marginRatio': return sec.market === 'JP' ? calc.marginRatio(sec) : null;
     case 'principalSoldAmount': return sec.principalSoldAmount;
     case 'anaTotal': return techComposite(sec);
-    case 'anaContraScore': return techContraScore(sec);
     case 'anaTrend': return techSideScore(sec, 'trend');
     case 'anaContra': return techSideScore(sec, 'contra');
     case 'anaRsiDiv': return techPatScore(sec, 'rsiDivergence');
@@ -2107,7 +2105,6 @@ const COL_RENDERERS = {
   principalSoldAmount: (s,c) => `<td>${s.principalSoldAmount != null ? fmtAmt(s.principalSoldAmount, c.market) : muted}</td>`,
   // テクニカル分析（分析タブ）。スコアは0-100で色分け。値は techAnalysis から取得。
   anaTotal:    (s,c) => anaScoreCell(techComposite(s)),
-  anaContraScore: (s,c) => anaScoreCell(techContraScore(s)),
   anaTrend:    (s,c) => anaScoreCell(techSideScore(s, 'trend')),
   anaContra:   (s,c) => anaScoreCell(techSideScore(s, 'contra')),
   anaUndercut: (s,c) => anaPatCell(s, 'undercutRally'),
@@ -2142,7 +2139,6 @@ function techOf(sec) { return store.data.techAnalysis[priceKey(sec)] || null; }
 function techTotals(sec) { const r = techOf(sec); if (!r) return null; if (r.patterns && TA.recomputeTotals) { const t = TA.recomputeTotals(r); if (t) return t; } return { trendTotal: r.trendTotal, contraTotal: r.contraTotal, totalScore: r.totalScore }; }
 function techComposite(sec) { const r = techOf(sec); if (!r) return null; const t = techTotals(sec); if (t && t.totalScore != null) return t.totalScore; return r.best ? r.best.score : null; }
 function techSideScore(sec, side) { const r = techOf(sec); if (!r) return null; const t = techTotals(sec); const v = t ? (side === 'trend' ? t.trendTotal : t.contraTotal) : null; if (v != null) return v; const b = side === 'trend' ? r.bestTrend : r.bestContra; return b ? b.score : null; }
-function techContraScore(sec) { return techSideScore(sec, 'contra'); }
 // そのサイドで最強の「単独パターン」（名前＋強さ）。総合とは別に“何が点灯しているか”を示す情報用。
 function techBestPattern(sec, side) { const r = techOf(sec); return r ? (side === 'trend' ? r.bestTrend : r.bestContra) : null; }
 // パターンの素点（0-100）。分析済みなら status に関わらず常に数値を返す（未確認=部分一致でも「近さ」を出す）。未分析/未計算のみ null。
@@ -2689,7 +2685,6 @@ function sortValue(sec, key) {
     case 'name': return calc.displayName(sec).toLowerCase();
     case 'ticker': return (sec.ticker || '').toLowerCase();
     case 'anaTotal': return techComposite(sec) ?? -Infinity;
-    case 'anaContraScore': return techContraScore(sec) ?? -Infinity;
     case 'anaTrend': return techSideScore(sec, 'trend') ?? -Infinity;
     case 'anaContra': return techSideScore(sec, 'contra') ?? -Infinity;
     case 'anaRsiDiv': return techPatScore(sec, 'rsiDivergence') ?? -Infinity;
