@@ -790,6 +790,7 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-row.kt-2 .v { text-align: right; }
 .kt-row.kt-2head .v { color: var(--muted); font-weight: 400; font-size: var(--fs-cap); }
 
+.kt-memo { white-space: pre-wrap; word-break: break-word; font-size: var(--fs-body); line-height: 1.5; }
 .kt-chart { min-height: 150px; display: flex; align-items: center; justify-content: center; cursor: zoom-in; }
 .kt-chart-legend { margin: 6px 0 0; font-size: var(--fs-cap); }
 

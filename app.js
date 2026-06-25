@@ -3414,19 +3414,25 @@ function openAnalysisHistory(secId) {
     const parts = [a.starValuation, a.starStrength, a.starRisk].map(v => v != null ? '★' + v : '—');
     return parts.every(p => p === '—') ? dash : parts.join('/');
   };
+  const ccy = MARKET_CCY[sec.market];
+  const amtTxt = (a) => a.recoAmount != null ? ccy + num(a.recoAmount) : dash;
+  // カテゴリは分析レコードに保存されていれば各回の値、無ければ先頭(=現在)行のみ銘柄の現在カテゴリで補完
+  const catTxt = (a, isFirst) => { const c = a.category || (isFirst ? sec.category : null); return c ? categoryTag(c) : dash; };
   // [見出し, 列幅px]。table-layout:fixed なので幅はこの colgroup で決まる。分析メモは width 未指定＝可変にし、
   // モーダルの余り幅を吸収させる（テーブルとモーダルの幅を一致＝右余白をなくす）。
-  const cols = [['評価日', 92], ['総合', 50], ['格付', 50], ['買い時', 60], ['★ ﾊﾞﾘｭ/強/ﾘｽｸ', 122], ['優先順', 60], ['分析メモ', null]];
+  const cols = [['評価日', 92], ['総合', 50], ['格付', 50], ['買い時', 60], ['★ ﾊﾞﾘｭ/強/ﾘｽｸ', 122], ['カテゴリ', 96], ['推奨額', 84], ['優先順', 60], ['分析メモ', null]];
   const MEMO_MIN = 240; // 可変メモ列の最小幅。これを下回るとテーブルが横スクロール
   const colgroup = `<colgroup>${cols.map(c => `<col${c[1] ? ` style="width:${c[1]}px"` : ''}>`).join('')}</colgroup>`;
   const minW = cols.reduce((a, c) => a + (c[1] || MEMO_MIN), 0);
   const head = `<tr>${cols.map(c => `<th>${esc(c[0])}</th>`).join('')}</tr>`;
-  const rows = list.map(a => `<tr>
+  const rows = list.map((a, i) => `<tr>
     <td>${esc(a.analysisDate)}</td>
     <td>${g(a.overallGrade)}</td>
     <td>${g(a.rating)}</td>
     <td>${g(a.buyGrade)}</td>
     <td style="white-space:nowrap">${starTxt(a)}</td>
+    <td>${catTxt(a, i === 0)}</td>
+    <td style="white-space:nowrap;text-align:right">${amtTxt(a)}</td>
     <td>${a.priority != null ? a.priority : dash}</td>
     <td class="ah-memo">${a.analysisNote ? esc(a.analysisNote) : dash}</td>
   </tr>`).join('');
@@ -5323,6 +5329,7 @@ function openSecurityForm(id, presetMarket) {
         overallGrade: patch.overallGrade ?? null, rating: patch.rating ?? null, buyGrade: patch.buyGrade ?? null,
         starValuation: patch.starValuation ?? null, starStrength: patch.starStrength ?? null, starRisk: patch.starRisk ?? null,
         priority: patch.priority ?? null, analysisNote: patch.analysisNote ?? null,
+        category: target.category ?? null, // 推奨額(recoAmount)はフォーム入力欄が無いため触らない（取込値を消さない）
       });
       store.syncLatestAnalysis(target.id);
     }
@@ -5611,6 +5618,7 @@ function openSecurityDetail(secId) {
   ].join('');
   const metaBox = [
     kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
+    sec.recoAmount != null ? kv('推奨額', m(sec.recoAmount)) : '',
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
   ].join('');
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
@@ -6420,6 +6428,7 @@ function karteCardHtml(sec) {
     sec.starStrength != null ? row('事業の強さ', starsFmt(sec.starStrength)) : '',
     sec.starRisk != null ? row('リスク', starsFmt(sec.starRisk)) : '',
     row('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
+    sec.recoAmount != null ? row('推奨額', m(sec.recoAmount)) : '',
     row('優先順位/評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
     sec.analysisNote ? row('分析メモ', esc(sec.analysisNote)) : '',
   ].join('');
@@ -6479,6 +6488,7 @@ function karteCardHtml(sec) {
       <div class="kt-col">
         <div class="kt-box"><h3>評価・分析</h3>${analysisBox}</div>
         <div class="kt-box"><h3>ファンダ</h3>${fundBox}</div>
+        ${sec.memo ? `<div class="kt-box"><h3>メモ</h3><div class="kt-memo">${esc(sec.memo)}</div></div>` : ''}
       </div>
     </div>
     <div class="kt-tables">
@@ -6933,7 +6943,7 @@ async function importAnalysis(text, market, create) {
     // 評価日があれば履歴へ upsert→最新を平置きへミラー。古い評価日も履歴として残す（旧実装の stale 破棄は廃止）。
     // 評価日が無い行は履歴化できないので平置きへ直接反映（最新ミラー相当）。
     // 買い増し予定額・推奨購入額はカテゴリ別金額マスタから算出するため、recoAmount からの自動設定は行わない。
-    if (incDate) { store.upsertAnalysis(sec.id, incDate, aFields); store.syncLatestAnalysis(sec.id); }
+    if (incDate) { store.upsertAnalysis(sec.id, incDate, cat ? { ...aFields, category: cat } : aFields); store.syncLatestAnalysis(sec.id); }
     else if (Object.keys(aFields).length) store.updateSecurity(sec.id, aFields);
     touched.push(sec);
   }
