@@ -4952,7 +4952,7 @@ function openTxnImport() {
       <div class="field" style="max-width:160px"><label>既定の証券会社</label><select id="ti-broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
       <div class="field" style="max-width:140px"><label>既定の口座種別</label><select id="ti-account">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label>明細を貼り付け（1行=1取引／タブ・カンマ区切り）</label>
+    <div class="field"><label>明細を貼り付け（1行=1取引／タブ・カンマ・マークダウン表対応）</label>
       <textarea id="ti-text" rows="8" placeholder="日付&#9;種別&#9;数量&#9;単価&#9;[証券会社]&#9;[口座]&#9;[受渡金額]&#10;2024-01-15&#9;買い&#9;100&#9;2500&#9;SBI&#9;特定&#10;2024/03/02&#9;売り&#9;50&#9;2700"></textarea></div>
     <p class="muted" style="font-size:12px;margin:2px 0 8px">列の順番: <strong>日付 / 種別(買い・売り) / 数量 / 単価 / 証券会社(任意) / 口座種別(任意) / 受渡金額(任意・米株の取得円用)</strong>。先頭の見出し行は自動スキップ。証券会社・口座が空の行は上の「既定」を使います。</p>
     <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:2px 0 8px;cursor:pointer">
@@ -4972,9 +4972,11 @@ function _txnImportParse() {
   const text = document.getElementById('ti-text').value;
   const result = { market, code, sec: code ? mktFindSec(code, market) : null, rows: [], errors: [] };
   const toNum = s => { const v = parseFloat(String(s).replace(/[,¥$\s]/g, '')); return isFinite(v) ? v : NaN; };
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const md = isMdTable(lines);
+  if (md) lines = lines.filter(l => !isMdSepRow(l)); // マークダウン表の区切り行を除去
   lines.forEach((line, i) => {
-    const cols = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim());
+    const cols = md ? splitMdRow(line) : (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim());
     // 見出し行スキップ（先頭行かつ単価列が数値でない場合）
     if (i === 0 && /日付|種別|単価|数量|date|type|price|qty/i.test(line) && isNaN(toNum(cols[2]))) return;
     if (cols.length < 4) { result.errors.push(`${i + 1}行目: 列が足りません（日付/種別/数量/単価が必要）`); return; }
@@ -6768,7 +6770,7 @@ function openPasteImport(kind) {
     : 'ティッカー / 証券会社 / 口座種別 / 取得単価 / 数量 / 取得価額';
   showModal(title, `
     <form id="import-form">
-      <p class="muted">Excelの該当シートを<strong>ヘッダ行ごと</strong>選択してコピーし、下に貼り付けてください（タブ/カンマ区切り対応）。</p>
+      <p class="muted">Excelの該当シートを<strong>ヘッダ行ごと</strong>選択してコピーし、下に貼り付けてください（タブ/カンマ/マークダウン表対応）。</p>
       <div class="field"><label>対象市場（ティッカーで既存銘柄に紐づけ／新規作成時に使用）</label>
         <select name="market">${['US', 'JP'].map(x => `<option value="${x}">${MARKET_LABEL[x]}</option>`).join('')}</select></div>
       <label class="check"><input type="checkbox" name="create" checked> 未登録のティッカーは新規銘柄として作成する</label>
@@ -6826,8 +6828,27 @@ function openPasteImport(kind) {
   };
 }
 
+// マークダウン表の区切り行か（|---|:--:| など）。セルがすべてダッシュ（任意で:）のみ
+function isMdSepRow(line) {
+  const t = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells = t.split('|');
+  return cells.length > 0 && cells.every(c => /^\s*:?-+:?\s*$/.test(c));
+}
+// マークダウン表の1行をセル配列へ（先頭・末尾の | を除去して | 区切り）
+function splitMdRow(line) {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map(c => c.trim());
+}
+// 貼り付けテキストがマークダウン表か（区切り行がある、または全行が | を含みタブ無し）
+function isMdTable(lines) {
+  if (!lines.length) return false;
+  return lines.some(isMdSepRow) || lines.every(l => l.includes('|') && !l.includes('\t'));
+}
 function parsePasted(text) {
   const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+  if (isMdTable(lines)) return lines.filter(l => !isMdSepRow(l)).map(splitMdRow);
   return lines.map(l => l.includes('\t') ? l.split('\t') : l.split(','));
 }
 function parseStars(v) {
