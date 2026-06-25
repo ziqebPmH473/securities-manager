@@ -3014,8 +3014,8 @@ function bulkSellAll() {
   const ids = [...document.querySelectorAll('.row-select:checked')].map(b => parseInt(b.dataset.id, 10));
   if (ids.length === 0) { toast('銘柄を選択してください'); return; }
   const names = ids.map(id => { const s = store.data.securities.find(x => x.id === id); return s ? calc.displayName(s) : ''; }).filter(Boolean);
-  if (!confirm(`選択した ${ids.length} 件を全売却（数量を0に）します。\n\n${names.join('、')}\n\nよろしいですか？`)) return;
-  ids.forEach(id => store.sellAll(id));
+  if (!confirm(`選択した ${ids.length} 件を全売却します。取引履歴に「売り」を記録し（売値は現在値）、数量を0にします。\n\n${names.join('、')}\n\nよろしいですか？`)) return;
+  ids.forEach(id => recordSellAll(id));
   render();
   toast(`${ids.length} 件を全売却しました`);
 }
@@ -5520,9 +5520,23 @@ function openHoldingsForm(secId) {
 function removeHolding(hid, secId) {
   store.removeHolding(hid); openHoldingsForm(secId);
 }
+// 全売却を取引履歴に残す: 保有ロットごとに現在値（無ければ平均取得単価）で売り取引を記録し、数量を0にする。
+// 取引履歴・取引サマリーに「売り」として残るのが store.sellAll（履歴を残さず0にするだけ）との違い。
+function recordSellAll(secId) {
+  const sec = store.data.securities.find(s => s.id === secId); if (!sec) return 0;
+  const price = calc.price(sec);
+  const td = today();
+  const lots = store.data.holdings.filter(h => h.securityId === secId && h.quantity > 1e-9);
+  lots.forEach(h => store.addTransaction({
+    securityId: secId, type: 'sell', quantity: h.quantity,
+    price: price != null ? price : (h.avgCost || 0),
+    broker: h.broker, accountType: h.accountType, tradedAt: td,
+  }));
+  return lots.length;
+}
 function sellAll(secId) {
-  if (confirm('この銘柄の全口座の数量を0にします（全売却）。平均取得単価は保持します。よろしいですか？')) {
-    store.sellAll(secId); closeModal(); render();
+  if (confirm('この銘柄の全口座を全売却します。取引履歴に「売り」を記録し（売値は現在値）、数量を0にします。よろしいですか？')) {
+    recordSellAll(secId); closeModal(); render();
   }
 }
 
@@ -5636,7 +5650,7 @@ function openSecurityDetail(secId) {
       <div class="cell"><div class="k">1年安値 / 3年安値</div><div class="v">${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}</div></div>
       <div class="cell"><div class="k">平均取得単価</div><div class="v">${held ? m(th.avgCost) : '—'}</div></div>
       <div class="cell"><div class="k">保有数量</div><div class="v">${qtyDisp}</div></div>
-      <div class="cell"><div class="k">取得原価（円）</div><div class="v">${held ? yen(costJpyV) : '—'}</div></div>
+      <div class="cell"><div class="k">取得原価${sec.market === 'US' ? '（$ / 円）' : '（円）'}</div><div class="v">${held ? (sec.market === 'US' ? `${m(calc.costNative(sec))}<span class="muted" style="font-weight:400;font-size:11px"> / ${yen(costJpyV)}</span>` : yen(costJpyV)) : '—'}</div></div>
     </div>
 
     <fieldset class="form-group"><legend>価格チャート（週足終値）</legend>
