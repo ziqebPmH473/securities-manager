@@ -4909,7 +4909,17 @@ function renderImport() {
       </div>
     </div>
     <div class="section">
-      <div class="section-head"><h2>② 銘柄情報・分析を取り込む</h2></div>
+      <div class="section-head"><h2>② 汎用データ（取込 ⇄ 出力）</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="openGenericImport()">汎用取込（列を選んで取込）</button>
+          <button class="btn" onclick="exportGeneric()">汎用出力（CSV）</button>
+        </div>
+        <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有・メモ・売却前購入額まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます（管理項目をすべて往復）。</p>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>③ 銘柄情報・分析を取り込む</h2></div>
       <div class="section-body" style="padding:16px">
         <div class="btn-row">
           <button class="btn" onclick="refreshAllMeta()">銘柄情報を更新（名前・セクター・PER等）</button>
@@ -4919,22 +4929,12 @@ function renderImport() {
       </div>
     </div>
     <div class="section">
-      <div class="section-head"><h2>③ 取引履歴を取り込む</h2></div>
+      <div class="section-head"><h2>④ 取引履歴を取り込む</h2></div>
       <div class="section-body" style="padding:16px">
         <div class="btn-row">
           <button class="btn btn-primary" onclick="openTxnImport()">取引履歴を一括取込（貼付け）</button>
         </div>
         <p class="muted grp-note">1銘柄分の過去の売買明細（日付・種別・数量・単価…）を貼り付けて一括登録。<strong>「保有に反映しない（履歴のみ）」を既定ON</strong>にしてあるので、現在の保有数量・平均取得単価を崩さず過去履歴を入れられます（前回購入日・購入回数・判定には反映）。</p>
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-head"><h2>汎用データ（取込 ⇄ 出力）</h2></div>
-      <div class="section-body" style="padding:16px">
-        <div class="btn-row">
-          <button class="btn btn-primary" onclick="openGenericImport()">汎用取込（列を選んで取込）</button>
-          <button class="btn" onclick="exportGeneric()">汎用出力（CSV）</button>
-        </div>
-        <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有・メモ・売却前購入額まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます（管理項目をすべて往復）。</p>
       </div>
     </div>`;
 }
