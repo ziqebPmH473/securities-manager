@@ -5433,10 +5433,10 @@ function openHoldingsForm(secId) {
   const rowsHtml = hs.map(h => `
     <tr data-hid="${h.id}">
       <td class="l">${esc(h.broker)}</td><td class="l">${esc(h.accountType)}</td>
-      <td><input type="number" step="any" class="h-qty" value="${h.quantity}"></td>
-      <td><input type="number" step="any" class="h-cost" value="${h.avgCost}"></td>
-      ${us ? `<td><input type="number" step="any" class="h-acq" value="${h.acqJpy ?? ''}" placeholder="取得円"></td>` : ''}
-      <td><input type="number" step="any" class="h-orig" value="${h.origBuyAmount ?? ''}" placeholder="任意"></td>
+      <td><input type="number" step="any" class="h-qty" style="width:100%" value="${h.quantity}"></td>
+      <td><input type="number" step="any" class="h-cost" style="width:100%" value="${h.avgCost}"></td>
+      ${us ? `<td><input type="number" step="any" class="h-acq" style="width:100%" value="${h.acqJpy ?? ''}" placeholder="取得円"></td>` : ''}
+      <td><input type="number" step="any" class="h-orig" style="width:100%" value="${h.origBuyAmount ?? ''}" placeholder="任意"></td>
       <td class="l"><button type="button" class="btn btn-sm btn-danger" onclick="removeHolding(${h.id},${secId})">削除</button></td>
     </tr>`).join('');
 
@@ -5477,7 +5477,7 @@ function openHoldingsForm(secId) {
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
-    </form>`);
+    </form>`, { wide: true });
   document.getElementById('holdings-form').onsubmit = (e) => {
     e.preventDefault();
     const f = e.target;
@@ -6518,7 +6518,7 @@ function openTxnForm(secId, presetType, opts = {}) {
       ${editTxn ? '' : secNavBar(secId, 'txn')}
       <div class="row">
         <div class="field"><label>種別</label>
-          <select name="type"><option value="buy" ${typeSel !== 'sell' ? 'selected' : ''}>買い</option><option value="sell" ${typeSel === 'sell' ? 'selected' : ''}>売り</option></select></div>
+          <select name="type" onchange="txnToggleBuyOnly(this)"><option value="buy" ${typeSel !== 'sell' ? 'selected' : ''}>買い</option><option value="sell" ${typeSel === 'sell' ? 'selected' : ''}>売り</option></select></div>
         <div class="field"><label>日付</label><input name="tradedAt" type="date" value="${e.tradedAt || today()}"></div>
       </div>
       <div class="row">
@@ -6535,6 +6535,11 @@ function openTxnForm(secId, presetType, opts = {}) {
           <input name="settleJpy" type="number" step="any" value="${e.settleJpy ?? ''}" placeholder="取引報告書の国内受渡金額"></div>
       </div>
       <p class="muted">受渡金額(円)を入れると「取得円」に反映（買い=加算・売り=減算）。取得円エクスポート用で、買い増し判定には未使用。</p>` : ''}
+      <div class="row buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">
+        <div class="field"><label>前回売却分の元購入額 (${ccy})（任意・損出し買い直し用）</label>
+          <input name="prevSoldOrig" type="number" step="any" placeholder="前回売却した分の当初の購入額"></div>
+      </div>
+      <p class="muted buy-only" style="font-size:12px;display:${typeSel === 'sell' ? 'none' : ''}">買い直し（損出し）の時、前回売却した分の<strong>当初の購入額</strong>を入れると、今回の取得価額に上乗せして「購入額（本来）」に反映します（その保有ロットの売却前購入額として保存）。空欄なら通常どおり取得価額のみ。</p>
       <p class="muted">買い=数量加算＆平均取得単価を更新 / 売り=数量のみ減算（単価は不変）。証券会社・口座は保有ロットに合わせて選んでください。</p>
       <label class="chk-row">
         <input name="ledgerOnly" type="checkbox" ${ledgerChecked ? 'checked' : ''}>
@@ -6560,13 +6565,27 @@ function openTxnForm(secId, presetType, opts = {}) {
       ...(isNaN(settleJpy) ? {} : { settleJpy }),
     };
     if (editTxn) { store.updateTransaction(editTxn.id, data); toast('取引を更新しました'); }
-    else store.addTransaction(data);
+    else {
+      store.addTransaction(data);
+      // 損出し買い直し: 前回売却分の元購入額を入れたら、その保有ロットの売却前購入額(origBuyAmount)へ
+      // 「今回の取得価額(単価×数量) ＋ 入力額」を反映（購入額（本来）列に出る）。ledgerOnly買いは保有を作らないため対象外。
+      const prevSold = f.prevSoldOrig ? parseFloat(f.prevSoldOrig.value) : NaN;
+      if (data.type === 'buy' && !data.ledgerOnly && !isNaN(prevSold)) {
+        const lot = store.data.holdings.find(h => h.securityId === secId && h.broker === data.broker && h.accountType === data.accountType);
+        if (lot) { lot.origBuyAmount = lot.avgCost * lot.quantity + prevSold; store.save(); }
+      }
+    }
     done();
   };
   if (editTxn) {
     const del = document.getElementById('txn-del');
     if (del) del.onclick = () => { if (confirm('この取引を削除します。保有数量・平均取得単価も取り消されます。よろしいですか？')) { store.removeTransaction(editTxn.id); toast('取引を削除しました'); done(); } };
   }
+}
+// 取引フォーム: 種別=買いの時だけ「前回売却分の元購入額」欄を表示
+function txnToggleBuyOnly(sel) {
+  const show = sel.value === 'buy';
+  document.querySelectorAll('#txn-form .buy-only').forEach(el => { el.style.display = show ? '' : 'none'; });
 }
 // 取引履歴の編集・削除（銘柄カルテの履歴行から）
 function editTxn(id) {
