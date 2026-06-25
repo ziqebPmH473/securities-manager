@@ -6834,12 +6834,16 @@ function isMdSepRow(line) {
   const cells = t.split('|');
   return cells.length > 0 && cells.every(c => /^\s*:?-+:?\s*$/.test(c));
 }
+// マークダウンのセル装飾を除去（**太字** `コード` のアスタリスク/バッククォート、\| エスケープ）
+function stripMdCell(c) {
+  return c.replace(/\\\|/g, '|').replace(/[*`]/g, '').trim();
+}
 // マークダウン表の1行をセル配列へ（先頭・末尾の | を除去して | 区切り）
 function splitMdRow(line) {
   let s = line.trim();
   if (s.startsWith('|')) s = s.slice(1);
   if (s.endsWith('|')) s = s.slice(0, -1);
-  return s.split('|').map(c => c.trim());
+  return s.split('|').map(stripMdCell);
 }
 // 貼り付けテキストがマークダウン表か（区切り行がある、または全行が | を含みタブ無し）
 function isMdTable(lines) {
@@ -7740,7 +7744,7 @@ function openGenericImport() {
       <button class="btn btn-sm" onclick="giLoadFormat()">読込</button>
       <button class="btn btn-sm btn-danger" onclick="giDeleteFormat()">削除</button>
     </div>
-    <textarea id="gi-text" rows="6" style="width:100%;font-family:monospace;font-size:12px" placeholder="ヘッダ行を含めて貼り付け（タブ/カンマ区切り）" oninput="giParse(this.value)"></textarea>
+    <textarea id="gi-text" rows="6" style="width:100%;font-family:monospace;font-size:12px" placeholder="ヘッダ行を含めて貼り付け（タブ/カンマ/マークダウン表対応）" oninput="giParse(this.value)"></textarea>
     <div id="gi-map"></div>
     <div class="grp-label" style="margin-top:8px">列に無い項目を固定値で指定（全行に適用・任意）</div>
     <div class="btn-row" style="align-items:flex-end" id="gi-fixed">
@@ -7779,7 +7783,10 @@ function giFixedValues() {
   return f;
 }
 function giParse(text) {
-  const raw = text.includes('\t') ? text.split(/\r?\n/).map(l => l.split('\t')) : parseCsvText(text);
+  const mdLines = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+  const raw = isMdTable(mdLines)
+    ? mdLines.filter(l => !isMdSepRow(l)).map(splitMdRow)
+    : (text.includes('\t') ? text.split(/\r?\n/).map(l => l.split('\t')) : parseCsvText(text));
   const rows = raw.filter(r => r.some(c => String(c).trim() !== ''));
   const mapDiv = document.getElementById('gi-map'), pvDiv = document.getElementById('gi-preview');
   if (!rows.length) { _giHeaders = []; _giRows = []; _giMapping = []; if (mapDiv) mapDiv.innerHTML = ''; if (pvDiv) pvDiv.innerHTML = ''; return; }
