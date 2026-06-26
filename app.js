@@ -1661,7 +1661,6 @@ function setHoldingsSearch(v) {
   const el = document.getElementById('hold-search');
   if (el) { el.focus(); const p = Math.min(caret, el.value.length); el.setSelectionRange(p, p); }
 }
-function clearHoldFilters(m) { holdingsSearch = ''; clearFilter(m); }
 
 // ---------- サイドナビ（リデザイン） ----------
 const NAV_GROUPS = [
@@ -1768,6 +1767,242 @@ function restoreBundle(obj) {
   if (cp && typeof cp === 'object') { colPrefs = cp; saveColPrefs(); }
   store.load(); loadColPrefs();
 }
+
+// ===== 銘柄名・コードの検索正規化 =====
+// 半角/全角（英数字）・ひらがな/カタカナの差を吸収して一致させる。
+//  NFKC で全角英数字→半角・半角カナ→全角カナに統一 → 小文字化 → カタカナをひらがなへ寄せる。
+function searchNorm(s) {
+  if (s == null) return '';
+  let t = String(s);
+  try { t = t.normalize('NFKC'); } catch (_) {}
+  t = t.toLowerCase();
+  // カタカナ→ひらがな（U+30A1〜U+30F6 を 0x60 引いてひらがな域へ）
+  t = t.replace(/[ァ-ヶ]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+  return t;
+}
+// 銘柄がコード/銘柄名でクエリに一致するか（正規化込み）
+function secMatchesQuery(sec, rawQuery) {
+  const q = searchNorm(rawQuery).trim();
+  if (!q) return true;
+  return searchNorm(sec.ticker || '').includes(q) || searchNorm(calc.displayName(sec)).includes(q);
+}
+
+// ===== 共通列フィルター（分析 / 個別銘柄 / 銘柄マスタで共用） =====
+// scope: 'holdings' | 'analysis' | 'secmaster'
+// ・分析/個別銘柄のライブ状態は localStorage に保存し次回起動時に復元（銘柄マスタは保存しない）
+// ・パターン（名前付きプリセット）は3タブ共通の1リスト
+const FILTER_STATE_KEY = 'sm_filters_v1';
+const FILTER_PRESETS_KEY = 'sm_filter_presets_v1';
+const fltState = {
+  holdings:  { open: false, rows: [], num: {}, sel: {} },
+  analysis:  { open: false, rows: [], num: {}, sel: {} },
+  secmaster: { open: false, rows: [], num: {}, sel: {} },
+};
+let fltPresets = []; // [{id, name, rows:[{key}], num:{key:{min,max}}, sel:{key:[vals]}}]
+function loadFilterState() {
+  try {
+    const o = JSON.parse(localStorage.getItem(FILTER_STATE_KEY) || '{}');
+    for (const sc of ['holdings', 'analysis']) {
+      const s = o[sc]; if (!s || typeof s !== 'object') continue;
+      fltState[sc] = { open: false, rows: Array.isArray(s.rows) ? s.rows : [], num: s.num || {}, sel: s.sel || {} };
+    }
+  } catch (_) {}
+}
+function saveFilterState() {
+  const o = {};
+  for (const sc of ['holdings', 'analysis']) { const s = fltState[sc]; o[sc] = { rows: s.rows, num: s.num, sel: s.sel }; }
+  try { localStorage.setItem(FILTER_STATE_KEY, JSON.stringify(o)); } catch (_) {}
+}
+function loadFilterPresets() { try { fltPresets = JSON.parse(localStorage.getItem(FILTER_PRESETS_KEY)) || []; } catch (_) { fltPresets = []; } }
+function saveFilterPresets() { try { localStorage.setItem(FILTER_PRESETS_KEY, JSON.stringify(fltPresets)); } catch (_) {} }
+
+// 選択肢フィルタの仕様（カテゴリカルな列）。opts=[[値,表示],…], val=銘柄→値。数値列なら null。
+function fltSelectSpec(key) {
+  const distinct = (getter, sort) => { const set = new Set(); for (const s of store.data.securities) { if (s.market !== 'US' && s.market !== 'JP') continue; const v = getter(s); if (v != null && v !== '') set.add(v); } const arr = [...set]; arr.sort(sort || ((a, b) => String(a).localeCompare(String(b), 'ja'))); return arr.map(v => [v, v]); };
+  switch (key) {
+    case 'market': return { opts: [['US', '米国株'], ['JP', '日本株']], val: s => s.market };
+    case 'detailType': return { opts: [['個別株', '個別株'], ['ETF', 'ETF'], ['投資信託', '投資信託']], val: s => detailTypeOf(s) };
+    case 'broker': return { opts: distinct(s => calc.lastBroker(s)), val: s => calc.lastBroker(s) || '' };
+    case 'category': return { opts: distinct(s => s.category), val: s => s.category || '' };
+    case 'ruleName': return { opts: distinct(s => { const r = store.rule(s.ruleId); return r ? r.name : ''; }), val: s => { const r = store.rule(s.ruleId); return r ? r.name : ''; } };
+    case 'sector': return { opts: distinct(s => calc.field(s, 'sector')), val: s => calc.field(s, 'sector') || '' };
+    case 'industry': return { opts: distinct(s => calc.field(s, 'industry')), val: s => calc.field(s, 'industry') || '' };
+    case 'rating': return { opts: [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']], val: s => s.rating || s.overallGrade || '' };
+    case 'overallGrade': return { opts: [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']], val: s => s.overallGrade || '' };
+    case 'buyGrade': return { opts: [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']], val: s => s.buyGrade || '' };
+    case 'reachKind': return { opts: [['新', '新規到達'], ['続', '継続中'], ['－', '未到達']], val: s => calc.reachKind(s) || '－' };
+    case 'principalSold': return { opts: [['1', '売却済み'], ['0', '未売却']], val: s => s.principalSold ? '1' : '0' };
+    case 'anaMACD': return { opts: [['golden', 'GC'], ['dead', 'DC'], ['none', '—']], val: s => { const r = techOf(s); return r ? (r.macdCross || 'none') : ''; } };
+    case 'anaStatus': return { opts: [['1', '形成中'], ['2', '完成間近'], ['3', 'ブレイク済み'], ['4', '失敗']], val: s => { const r = techOf(s); return r && r.best ? String(r.best.status) : ''; } };
+    case 'anaMa200': return { opts: [['above', '上'], ['below', '下']], val: s => { const r = techOf(s); return r ? (r.ma200Pos || '') : ''; } };
+    case 'ana5d': return { opts: [['1', '上'], ['0', '下']], val: s => { const r = techOf(s); return r && r.above5 != null ? (r.above5 ? '1' : '0') : ''; } };
+    case 'anaDate': return { opts: [['done', '分析済み'], ['none', '未分析']], val: s => techOf(s) ? 'done' : 'none' };
+    default: return null;
+  }
+}
+// scope のフィルター対象列一覧（選択肢列＝sel / 数値列＝num）
+const SECMASTER_FILTER_KEYS = ['market', 'detailType', 'sector', 'industry', 'rating', 'overallGrade', 'buyGrade', 'priority', 'ruleName', 'category'];
+function filterScopeBase(scope) {
+  if (scope === 'analysis') return 'ANALYSIS';
+  return holdingsMarket === 'JP' ? 'JP' : holdingsMarket === 'FUND' ? 'FUND' : 'US';
+}
+function filterableCols(scope) {
+  let keys;
+  if (scope === 'secmaster') {
+    keys = SECMASTER_FILTER_KEYS.map(k => { const mc = MASTER_COLS.find(c => c.key === k); return { key: k, label: mc ? mc.label : k }; });
+  } else {
+    const base = filterScopeBase(scope);
+    keys = [];
+    for (const c of MASTER_COLS) {
+      if (!c.markets.includes(base) || c.key === 'ticker' || c.key === 'name') continue;
+      keys.push({ key: c.key, label: c.label });
+    }
+  }
+  const sample = store.data.securities.find(s => s.market === 'US' || s.market === 'JP');
+  const out = [];
+  for (const { key, label } of keys) {
+    const spec = fltSelectSpec(key);
+    if (spec) { if (spec.opts.length) out.push({ key, label, type: 'sel' }); }
+    else { const v = sample ? sortValue(sample, key) : null; if (typeof v === 'number') out.push({ key, label, type: 'num' }); }
+  }
+  return out;
+}
+// 列フィルタ適用（数値＝範囲 / 選択肢＝いずれかに一致）。scope に無効な列は無視。
+function applyColFilters(secs, scope) {
+  const st = fltState[scope];
+  const valid = new Set(filterableCols(scope).map(c => c.key));
+  for (const key in st.num) {
+    if (!valid.has(key)) continue;
+    const { min, max } = st.num[key]; if (min == null && max == null) continue;
+    secs = secs.filter(s => { const v = sortValue(s, key); if (typeof v !== 'number' || !isFinite(v)) return false; if (min != null && v < min) return false; if (max != null && v > max) return false; return true; });
+  }
+  for (const key in st.sel) {
+    if (!valid.has(key)) continue;
+    const want = st.sel[key]; if (!Array.isArray(want) || !want.length) continue;
+    const spec = fltSelectSpec(key); if (!spec) continue;
+    const set = new Set(want.map(String));
+    secs = secs.filter(s => set.has(String(spec.val(s) ?? '')));
+  }
+  return secs;
+}
+function fltActiveCount(scope) {
+  const st = fltState[scope]; let n = 0;
+  for (const k in st.num) { const r = st.num[k]; if (r && (r.min != null || r.max != null)) n++; }
+  for (const k in st.sel) { if (Array.isArray(st.sel[k]) && st.sel[k].length) n++; }
+  return n;
+}
+function fltRerender(scope) {
+  if (scope === 'analysis') renderAnalysis();
+  else if (scope === 'secmaster') renderSecMaster();
+  else render();
+}
+function fltPersist(scope) { if (scope === 'holdings' || scope === 'analysis') saveFilterState(); }
+function fltToggle(scope) { fltState[scope].open = !fltState[scope].open; fltRerender(scope); }
+function fltAddFilter(scope, key) {
+  const st = fltState[scope];
+  if (!key || st.rows.some(r => r.key === key)) { fltRerender(scope); return; }
+  if (!filterableCols(scope).some(c => c.key === key)) { fltRerender(scope); return; }
+  st.rows.push({ key }); fltPersist(scope); fltRerender(scope);
+  const el = document.querySelector(`.afl-row[data-key="${key}"] input`);
+  if (el && el.type === 'number') el.focus();
+}
+function fltRemoveFilter(scope, key) {
+  const st = fltState[scope];
+  st.rows = st.rows.filter(r => r.key !== key); delete st.num[key]; delete st.sel[key];
+  fltPersist(scope); fltRerender(scope);
+}
+function fltSetNum(scope, key, which, v) {
+  const st = fltState[scope]; const o = (st.num[key] = st.num[key] || {});
+  const n = (v === '' || v == null) ? null : parseFloat(v); o[which] = isNaN(n) ? null : n;
+  fltPersist(scope); fltRerender(scope);
+}
+function fltToggleSel(scope, key, idx) {
+  const spec = fltSelectSpec(key); if (!spec || !spec.opts[idx]) return;
+  const st = fltState[scope]; const val = String(spec.opts[idx][0]);
+  const arr = (st.sel[key] = st.sel[key] || []); const at = arr.indexOf(val);
+  if (at >= 0) arr.splice(at, 1); else arr.push(val);
+  fltPersist(scope); fltRerender(scope);
+}
+function fltClear(scope) {
+  const st = fltState[scope]; st.rows = []; st.num = {}; st.sel = {};
+  fltPersist(scope); fltRerender(scope);
+}
+// パターン（プリセット）：現在の条件を名前付きで保存。3タブ共通の1リスト。
+function fltSavePreset(scope) {
+  const st = fltState[scope];
+  if (!st.rows.length) { toast('保存する条件がありません'); return; }
+  const name = (prompt('パターン名を入力してください') || '').trim();
+  if (!name) return;
+  const rows = st.rows.map(r => ({ key: r.key }));
+  const num = {}, sel = {};
+  for (const r of st.rows) { if (st.num[r.key]) num[r.key] = { ...st.num[r.key] }; if (st.sel[r.key]) sel[r.key] = [...st.sel[r.key]]; }
+  const ex = fltPresets.find(p => p.name === name);
+  if (ex) { ex.rows = rows; ex.num = num; ex.sel = sel; }
+  else fltPresets.push({ id: 'p' + Date.now(), name, rows, num, sel });
+  saveFilterPresets(); fltRerender(scope);
+  toast(`パターン「${name}」を保存しました`);
+}
+function fltApplyPreset(scope, id) {
+  if (!id) return;
+  const p = fltPresets.find(x => String(x.id) === String(id)); if (!p) return;
+  const valid = new Set(filterableCols(scope).map(c => c.key));
+  const st = fltState[scope];
+  st.rows = (p.rows || []).filter(r => valid.has(r.key)).map(r => ({ key: r.key }));
+  st.num = {}; st.sel = {};
+  for (const k in (p.num || {})) if (valid.has(k)) st.num[k] = { ...p.num[k] };
+  for (const k in (p.sel || {})) if (valid.has(k)) st.sel[k] = [...p.sel[k]];
+  st.open = true;
+  fltPersist(scope); fltRerender(scope);
+}
+function fltDeletePreset(scope, id) {
+  if (!id) return;
+  const p = fltPresets.find(x => String(x.id) === String(id));
+  if (p && !confirm(`パターン「${p.name}」を削除しますか？`)) { fltRerender(scope); return; }
+  fltPresets = fltPresets.filter(x => String(x.id) !== String(id));
+  saveFilterPresets(); fltRerender(scope);
+}
+// フィルターパネルのHTML（① 項目を追加 →② 値を設定 / パターンの適用・保存・削除）
+function filterPanelHtml(scope) {
+  const st = fltState[scope];
+  const cols = filterableCols(scope);
+  const colMap = Object.fromEntries(cols.map(c => [c.key, c]));
+  const addable = cols.filter(c => !st.rows.some(r => r.key === c.key));
+  const addOpts = `<option value="">＋ フィルター項目を追加…</option>`
+    + addable.map(c => `<option value="${c.key}">${esc(c.label)}（${c.type === 'sel' ? '選択' : '範囲'}）</option>`).join('');
+  const rows = st.rows.map(r => {
+    const c = colMap[r.key]; if (!c) return '';
+    let ctrl;
+    if (c.type === 'sel') {
+      const spec = fltSelectSpec(r.key);
+      const arr = (st.sel[r.key] || []).map(String);
+      ctrl = `<div class="afl-chks">` + spec.opts.map(([v, l], i) => {
+        const on = arr.includes(String(v));
+        return `<label class="afl-chk${on ? ' on' : ''}"><input type="checkbox" ${on ? 'checked' : ''} onchange="fltToggleSel('${scope}','${r.key}',${i})">${esc(String(l))}</label>`;
+      }).join('') + `</div>`;
+    } else {
+      const rg = st.num[r.key] || {};
+      ctrl = `<input type="number" class="afl-num" placeholder="最小" value="${rg.min ?? ''}" onchange="fltSetNum('${scope}','${r.key}','min',this.value)"><span class="afl-tilde">〜</span><input type="number" class="afl-num" placeholder="最大" value="${rg.max ?? ''}" onchange="fltSetNum('${scope}','${r.key}','max',this.value)">`;
+    }
+    return `<div class="afl-row" data-key="${r.key}"><span class="afl-l">${esc(c.label)}</span><div class="afl-ctrl">${ctrl}</div><button class="afl-x" title="削除" onclick="fltRemoveFilter('${scope}','${r.key}')">×</button></div>`;
+  }).join('');
+  const presetOpts = `<option value="">パターンを適用…</option>` + fltPresets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const presetDel = fltPresets.length ? `<select class="afl-add" onchange="fltDeletePreset('${scope}',this.value)"><option value="">パターン削除…</option>${fltPresets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>` : '';
+  return `<div class="ana-panel afl-panel">
+    <div class="afl-head"><b>列フィルター</b><span class="muted">項目を追加して条件を設定。選択肢は複数選べます（いずれかに一致）。</span><div class="tb-spacer"></div>
+      <select class="afl-add" onchange="fltApplyPreset('${scope}',this.value)">${presetOpts}</select>
+      <button class="btn btn-sm" onclick="fltSavePreset('${scope}')">パターン保存</button>
+      ${presetDel}
+      <select class="afl-add" onchange="fltAddFilter('${scope}',this.value)">${addOpts}</select>
+      ${fltActiveCount(scope) || st.rows.length ? `<button class="btn btn-sm" onclick="fltClear('${scope}')">クリア</button>` : ''}</div>
+    ${st.rows.length ? `<div class="afl-rows">${rows}</div>` : `<div class="muted afl-empty">「＋ フィルター項目を追加」から絞り込みたい項目を選んでください。</div>`}
+  </div>`;
+}
+// フィルターボタン（ツールバー用・共通）
+function filterBtnHtml(scope) {
+  const n = fltActiveCount(scope);
+  return `<button class="btn btn-sm${n ? ' active' : ''}" onclick="fltToggle('${scope}')" title="列フィルター">${svgIcon('filter', '')} フィルター${n ? ` (${n})` : ''} ${fltState[scope].open ? '▲' : '▼'}</button>`;
+}
+
 // 列幅(px)。colPrefsのwidth上書き優先、無ければキー/種別ごとの既定。
 function colDefaultWidth(key) {
   const mc = MASTER_COLS.find(c => c.key === key) || {};
@@ -2858,18 +3093,10 @@ function renderMarket(market) {
   // 一覧に出すのは「保有あり(数量>0) または 注意銘柄」のみ。
   // 保有なし＆非注意（例: 分析後に全売却した銘柄）は一覧から外し、銘柄マスタタブで管理する。
   secs = secs.filter(s => s.watch || store.data.holdings.some(h => h.securityId === s.id && h.quantity > 0));
-  if (st.broker)   secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.broker === st.broker && h.quantity > 0));
-  if (st.account)  secs = secs.filter(s => store.data.holdings.some(h => h.securityId === s.id && h.accountType === st.account && h.quantity > 0));
-  if (st.category) secs = secs.filter(s => s.category === st.category);
-  if (st.detailType) secs = secs.filter(s => detailTypeOf(s) === st.detailType);
-  if (holdingsSearch.trim()) {
-    const k = holdingsSearch.trim().toLowerCase();
-    secs = secs.filter(s => (s.ticker || '').toLowerCase().includes(k) || calc.displayName(s).toLowerCase().includes(k));
-  }
+  if (holdingsSearch.trim()) secs = secs.filter(s => secMatchesQuery(s, holdingsSearch));
+  // 列フィルタ（分析と共通。種別・会社・カテゴリ等はパネルで設定）
+  secs = applyColFilters(secs, 'holdings');
   secs = sortSecurities(secs, colMkt);
-
-  const catOpts = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(c => `<option value="${esc(c.category)}" ${st.category === c.category ? 'selected' : ''}>${esc(c.category)}</option>`).join('');
 
   const ccy = MARKET_CCY[colMkt];
   // 表示するカラム（ユーザー設定済みの順・表示フラグ反映）
@@ -2901,7 +3128,6 @@ function renderMarket(market) {
   }
   const sumPnl = sumV - sumC; const sumPnlPct = sumC > 0 ? sumPnl / sumC * 100 : null;
 
-  const hasFilter = st.broker || st.account || st.category || st.detailType || holdingsSearch;
   app.innerHTML = `
     <div class="section">
       <div class="toolbar">
@@ -2914,30 +3140,13 @@ function renderMarket(market) {
           <button class="${market === 'FUND' ? 'active' : ''}" onclick="setHoldingsMarket('FUND')">投資信託</button>
         </div>
         <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
-        <label class="chip">種別
-          <select onchange="setFilter('${colMkt}','detailType',this.value)">
-            <option value="">全て</option>
-            <option value="個別株" ${st.detailType === '個別株' ? 'selected' : ''}>個別株</option>
-            <option value="ETF" ${st.detailType === 'ETF' ? 'selected' : ''}>ETF</option>
-          </select></label>
-        <label class="chip">会社
-          <select onchange="setFilter('${colMkt}','broker',this.value)">
-            <option value="">全て</option>${BROKERS.map(b => `<option ${st.broker === b ? 'selected' : ''}>${b}</option>`).join('')}
-          </select></label>
-        <label class="chip">口座
-          <select onchange="setFilter('${colMkt}','account',this.value)">
-            <option value="">全て</option>${ACCOUNTS.map(a => `<option ${st.account === a ? 'selected' : ''}>${a}</option>`).join('')}
-          </select></label>
-        <label class="chip">カテゴリ
-          <select onchange="setFilter('${colMkt}','category',this.value)">
-            <option value="">全て</option>${catOpts}
-          </select></label>
-        ${hasFilter ? `<button class="btn btn-ghost btn-sm" onclick="clearHoldFilters('${colMkt}')">絞込解除</button>` : ''}
         <div class="tb-spacer"></div>
+        ${filterBtnHtml('holdings')}
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${colMkt}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
         <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
       </div>
+      ${fltState.holdings.open ? filterPanelHtml('holdings') : ''}
       ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価）を直接編集 → <strong>「保存」</strong>で確定。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=このセルを取消。数量・取得単価は単一保有のみ（複数=⧉で保有フォーム）。
         <span class="tb-spacer"></span>
         <span id="ie-pending" class="ie-pending">変更なし</span>
@@ -3125,8 +3334,6 @@ function setSort(market, key) {
   if (st.sortKey === key) st.sortDir *= -1; else { st.sortKey = key; st.sortDir = 1; }
   preserveTableScroll(render);
 }
-function setFilter(market, field, value) { listState[market][field] = value; render(); }
-function clearFilter(market) { Object.assign(listState[market], { broker: '', account: '', category: '', detailType: '' }); render(); }
 
 // ---------- カラムピッカー ----------
 let _colPickerMarket = null;
@@ -4260,9 +4467,11 @@ function renderSecMaster() {
   // 市場フィルター（全株式=US+JP / 米国株 / 日本株 / 投資信託）
   secs = secs.filter(s => secMasterMarket === 'ALL' ? (s.market === 'US' || s.market === 'JP') : s.market === secMasterMarket);
   if (secMasterSearch.trim()) {
-    const k = secMasterSearch.trim().toLowerCase();
-    secs = secs.filter(s => (s.ticker || '').toLowerCase().includes(k) || calc.displayName(s).toLowerCase().includes(k) || (calc.field(s, 'sector') || '').toLowerCase().includes(k));
+    const k = searchNorm(secMasterSearch).trim();
+    secs = secs.filter(s => searchNorm(s.ticker || '').includes(k) || searchNorm(calc.displayName(s)).includes(k) || searchNorm(calc.field(s, 'sector') || '').includes(k));
   }
+  // 列フィルタ（分析・個別銘柄と共通パネル）
+  secs = applyColFilters(secs, 'secmaster');
   // 編集モード(SEC-94): ナビゲーション用に編集可能列キー順（画面の列順）・行順を記録
   _ieCols = inlineEditOn ? ['detailType', 'ruleName', 'category'] : [];
   _ieRowIds = inlineEditOn ? secs.map(s => s.id) : [];
@@ -4318,8 +4527,10 @@ function renderSecMaster() {
           <div class="search" style="max-width:260px">${svgIcon('search', '')}<input id="sm-search" placeholder="コード・銘柄名・セクターで検索" value="${esc(secMasterSearch)}" oninput="setSecMasterSearch(this.value)" autocomplete="off">${secMasterSearch ? `<button class="clr" onclick="setSecMasterSearch('')">×</button>` : ''}</div>
           <span class="muted">抽出</span>
           <div class="seg">${['all', '全て', 'noprice', '価格未取得', 'noholding', '保有なし', 'holding', '保有あり'].reduce((acc, _, i, arr) => { if (i % 2) acc.push(`<button class="${secMasterFilter === arr[i - 1] ? 'active' : ''}" onclick="setSecMasterFilter('${arr[i - 1]}')">${arr[i]}</button>`); return acc; }, []).join('')}</div>
+          ${filterBtnHtml('secmaster')}
           <span class="muted">${secs.length}/${allSecs.length}件</span>
         </div>
+        ${fltState.secmaster.open ? `<div style="padding:0 16px">${filterPanelHtml('secmaster')}</div>` : ''}
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
           <span class="muted">選択した銘柄の</span>
           <select onchange="smBulkFieldChange(this.value)">${SM_BULK_FIELDS.map(f => `<option value="${f.key}" ${smBulkField === f.key ? 'selected' : ''}>${f.label}</option>`).join('')}</select>
@@ -5778,13 +5989,9 @@ let anaSide = 'contra';       // 分析タブの表ビュー: 'contra'(逆張り
 function anaColKey() { return anaSide === 'trend' ? 'ANALYSIS_T' : 'ANALYSIS'; }
 let anaHoldingOnly = false;   // 保有銘柄のみ
 let anaSearch = '';           // 検索（コード/名称）
-let anaCat = '';              // カテゴリ
 let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
-let anaFilterOpen = false;    // 列フィルターパネルの開閉
-let anaFilterRows = [];       // 追加済みフィルタの順序 [{key}]
-let anaFltNum = {};           // 数値列フィルタ key→{min,max}
-let anaFltSel = {};           // 選択列フィルタ key→[選択値…]（複数選択）
+// 列フィルターは共通モジュール（fltState.analysis / filterPanelHtml('analysis')）に統合
 const _anaBars = {};          // priceKey→OHLCV日足（セッション中キャッシュ。再描画・再計測でAPI不要）
 // 分析エンジンの版を2層に分離（「今日データ取得済みなら再取得せず再採点」を実現するため）。
 //  MEASURE_VER: 計測・パターン集合の版。変えたら metrics が足りないのでバー再取得が必要。
@@ -5804,63 +6011,10 @@ function analysisTargets() {
     const held = new Set(store.data.holdings.filter(h => (h.quantity || 0) > 0).map(h => h.securityId));
     secs = secs.filter(s => held.has(s.id));
   }
-  if (anaCat) secs = secs.filter(s => (s.category || '') === anaCat);
-  if (anaSearch) {
-    const q = anaSearch.toLowerCase();
-    secs = secs.filter(s => String(s.ticker).toLowerCase().includes(q) || calc.displayName(s).toLowerCase().includes(q));
-  }
-  // 列フィルタ（数値＝範囲 / 選択肢＝完全一致）。列に出せる項目はすべて対象。
-  for (const key in anaFltNum) {
-    const { min, max } = anaFltNum[key];
-    if (min == null && max == null) continue;
-    secs = secs.filter(s => { const v = sortValue(s, key); if (typeof v !== 'number' || !isFinite(v)) return false; if (min != null && v < min) return false; if (max != null && v > max) return false; return true; });
-  }
-  for (const key in anaFltSel) {
-    const want = anaFltSel[key]; if (!Array.isArray(want) || !want.length) continue;
-    const spec = anaSelectSpec(key); if (!spec) continue;
-    const set = new Set(want.map(String));
-    secs = secs.filter(s => set.has(String(spec.val(s) ?? '')));
-  }
+  if (anaSearch) secs = secs.filter(s => secMatchesQuery(s, anaSearch));
+  // 列フィルタ（共通モジュール。数値＝範囲 / 選択肢＝いずれかに一致）
+  secs = applyColFilters(secs, 'analysis');
   return secs;
-}
-
-// ANALYSIS でフィルター可能な列一覧（選択肢列＝sel / 数値列＝num）
-function anaFilterableCols() {
-  const sample = store.data.securities.find(s => s.market === 'US' || s.market === 'JP');
-  const out = [];
-  for (const c of MASTER_COLS) {
-    if (!c.markets.includes('ANALYSIS') || c.key === 'ticker' || c.key === 'name') continue;
-    const spec = anaSelectSpec(c.key);
-    if (spec) { if (spec.opts.length) out.push({ key: c.key, label: c.label, type: 'sel' }); }
-    else { const v = sample ? sortValue(sample, c.key) : null; if (typeof v === 'number') out.push({ key: c.key, label: c.label, type: 'num' }); }
-  }
-  return out;
-}
-
-// 選択肢フィルタの仕様（カテゴリカルな列）。opts=[[値,表示],…], val=銘柄→値。numなら null。
-function anaSelectSpec(key) {
-  const distinct = (getter, sort) => { const set = new Set(); for (const s of store.data.securities) { if (s.market !== 'US' && s.market !== 'JP') continue; const v = getter(s); if (v != null && v !== '') set.add(v); } const arr = [...set]; arr.sort(sort || ((a, b) => String(a).localeCompare(String(b), 'ja'))); return arr.map(v => [v, v]); };
-  const G = { S: 0, A: 1, B: 2, C: 3, D: 4 };
-  switch (key) {
-    case 'market': return { opts: [['US', '米国株'], ['JP', '日本株']], val: s => s.market };
-    case 'detailType': return { opts: [['個別株', '個別株'], ['ETF', 'ETF'], ['投資信託', '投資信託']], val: s => detailTypeOf(s) };
-    case 'broker': return { opts: distinct(s => calc.lastBroker(s)), val: s => calc.lastBroker(s) || '' };
-    case 'category': return { opts: distinct(s => s.category), val: s => s.category || '' };
-    case 'ruleName': return { opts: distinct(s => { const r = store.rule(s.ruleId); return r ? r.name : ''; }), val: s => { const r = store.rule(s.ruleId); return r ? r.name : ''; } };
-    case 'sector': return { opts: distinct(s => calc.field(s, 'sector')), val: s => calc.field(s, 'sector') || '' };
-    case 'industry': return { opts: distinct(s => calc.field(s, 'industry')), val: s => calc.field(s, 'industry') || '' };
-    case 'rating': return { opts: [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']], val: s => s.rating || s.overallGrade || '' };
-    case 'overallGrade': return { opts: [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']], val: s => s.overallGrade || '' };
-    case 'buyGrade': return { opts: [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']], val: s => s.buyGrade || '' };
-    case 'reachKind': return { opts: [['新', '新規到達'], ['続', '継続中'], ['－', '未到達']], val: s => calc.reachKind(s) || '－' };
-    case 'principalSold': return { opts: [['1', '売却済み'], ['0', '未売却']], val: s => s.principalSold ? '1' : '0' };
-    case 'anaMACD': return { opts: [['golden', 'GC'], ['dead', 'DC'], ['none', '—']], val: s => { const r = techOf(s); return r ? (r.macdCross || 'none') : ''; } };
-    case 'anaStatus': return { opts: [['1', '形成中'], ['2', '完成間近'], ['3', 'ブレイク済み'], ['4', '失敗']], val: s => { const r = techOf(s); return r && r.best ? String(r.best.status) : ''; } };
-    case 'anaMa200': return { opts: [['above', '上'], ['below', '下']], val: s => { const r = techOf(s); return r ? (r.ma200Pos || '') : ''; } };
-    case 'ana5d': return { opts: [['1', '上'], ['0', '下']], val: s => { const r = techOf(s); return r && r.above5 != null ? (r.above5 ? '1' : '0') : ''; } };
-    case 'anaDate': return { opts: [['done', '分析済み'], ['none', '未分析']], val: s => techOf(s) ? 'done' : 'none' };
-    default: return null;
-  }
 }
 
 // 保有銘柄と同じ列システム（列選択・固定列・スクロール・カラールール）を 'ANALYSIS' 画面として再利用する。
@@ -5869,8 +6023,6 @@ function renderAnalysis() {
   const st = listState[AKEY];
   let secs = analysisTargets();
   secs = sortSecurities(secs, AKEY);
-  const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(c => `<option value="${esc(c.category)}" ${anaCat === c.category ? 'selected' : ''}>${esc(c.category)}</option>`).join('');
   const mkBtn = (id, label) => `<button class="${anaMarket === id ? 'active' : ''}" onclick="anaSetMarket('${id}')">${label}</button>`;
   const sideBtn = (id, label) => `<button class="${anaSide === id ? 'active' : ''}" onclick="anaSetSide('${id}')">${label}</button>`;
   // 列（保有銘柄と同じ getColOrder/colTag/colHeadHtml/marketRow を使用）
@@ -5888,9 +6040,8 @@ function renderAnalysis() {
         <div class="seg" role="tablist">${mkBtn('all', '全て')}${mkBtn('US', '米国株')}${mkBtn('JP', '日本株')}</div>
         <label class="chip">保有のみ<input type="checkbox" ${anaHoldingOnly ? 'checked' : ''} onchange="anaToggleHolding(this.checked)" style="margin-left:4px"></label>
         <div class="search">${svgIcon('search', '')}<input id="ana-search" placeholder="コード・銘柄名で検索" value="${esc(anaSearch)}" oninput="anaSetSearch(this.value)" autocomplete="off">${anaSearch ? `<button class="clr" onclick="anaSetSearch('')">×</button>` : ''}</div>
-        <label class="chip">カテゴリ<select onchange="anaSetCat(this.value)"><option value="">全て</option>${cats}</select></label>
         <div class="tb-spacer"></div>
-        <button class="btn btn-sm${anaActiveFilterCount() ? ' active' : ''}" onclick="anaToggleFilter()" title="列フィルター">${svgIcon('filter', '')} フィルター${anaActiveFilterCount() ? ` (${anaActiveFilterCount()})` : ''} ${anaFilterOpen ? '▲' : '▼'}</button>
+        ${filterBtnHtml('analysis')}
         <button class="btn btn-sm" onclick="anaTogglePanel()" title="しきい値設定">しきい値 ${anaPanelOpen ? '▲' : '▼'}</button>
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${AKEY}')" title="列の表示設定（${anaSide === 'trend' ? '順張り' : '逆張り'}ビュー）">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
@@ -5902,7 +6053,7 @@ function renderAnalysis() {
         <div class="tb-spacer"></div>
         <div class="ss"><span class="ss-k muted" style="font-weight:400">順張り/逆張り総合＝確認ゲート方式(0-100)：単独は最大55、確認が増えるほど高得点。各パターン列＝形の近さ(0-100)。<b style="color:var(--muted)">灰字=未確認(部分一致)</b>・<b style="color:var(--red)">赤✕=失敗(崩れ)</b>・色付き=成立。「—」は未分析。行クリックで内訳＋チャート。</span></div>
       </div>
-      ${anaFilterOpen ? anaFilterPanelHtml() : ''}
+      ${fltState.analysis.open ? filterPanelHtml('analysis') : ''}
       ${anaPanelOpen ? anaThresholdPanelHtml() : ''}
       <div class="section-body">
         ${secs.length === 0 ? `<div class="empty">対象銘柄がありません。フィルタを変えるか、銘柄を登録してください。</div>` : `
@@ -5921,7 +6072,6 @@ function renderAnalysis() {
 function anaSetMarket(m) { anaMarket = m; renderAnalysis(); }
 function anaSetSide(s) { anaSide = (s === 'trend') ? 'trend' : 'contra'; renderAnalysis(); }
 function anaToggleHolding(v) { anaHoldingOnly = !!v; renderAnalysis(); }
-function anaSetCat(v) { anaCat = v; renderAnalysis(); }
 function anaSetSearch(v) {
   const el0 = document.getElementById('ana-search');
   const caret = el0 ? el0.selectionStart : v.length;
@@ -5932,73 +6082,6 @@ function anaSetSearch(v) {
   if (el) { el.focus(); const p = Math.min(caret, el.value.length); el.setSelectionRange(p, p); }
 }
 function anaTogglePanel() { anaPanelOpen = !anaPanelOpen; renderAnalysis(); }
-function anaToggleFilter() { anaFilterOpen = !anaFilterOpen; renderAnalysis(); }
-function anaActiveFilterCount() {
-  let n = 0;
-  for (const k in anaFltNum) { const r = anaFltNum[k]; if (r && (r.min != null || r.max != null)) n++; }
-  for (const k in anaFltSel) { if (Array.isArray(anaFltSel[k]) && anaFltSel[k].length) n++; }
-  return n;
-}
-function anaAddFilter(key) {
-  if (!key || anaFilterRows.some(r => r.key === key)) { renderAnalysis(); return; }
-  if (!anaFilterableCols().some(c => c.key === key)) { renderAnalysis(); return; } // パネル対象列のみ
-  anaFilterRows.push({ key });
-  renderAnalysis();
-  // 追加直後に最初の入力へフォーカス
-  const el = document.querySelector(`.afl-row[data-key="${key}"] input, .afl-row[data-key="${key}"] label input`);
-  if (el && el.type === 'number') el.focus();
-}
-function anaRemoveFilter(key) {
-  anaFilterRows = anaFilterRows.filter(r => r.key !== key);
-  delete anaFltNum[key]; delete anaFltSel[key];
-  renderAnalysis();
-}
-function anaSetFltNum(key, which, v) {
-  const o = (anaFltNum[key] = anaFltNum[key] || {});
-  const n = (v === '' || v == null) ? null : parseFloat(v);
-  o[which] = isNaN(n) ? null : n;
-  renderAnalysis();
-}
-function anaToggleSelVal(key, idx) {
-  const spec = anaSelectSpec(key); if (!spec || !spec.opts[idx]) return;
-  const val = String(spec.opts[idx][0]);
-  const arr = (anaFltSel[key] = anaFltSel[key] || []);
-  const at = arr.indexOf(val);
-  if (at >= 0) arr.splice(at, 1); else arr.push(val);
-  renderAnalysis();
-}
-function anaClearFilters() { anaFilterRows = []; anaFltNum = {}; anaFltSel = {}; renderAnalysis(); }
-
-// 列フィルターパネル：①項目を追加 →②値を設定（数値=範囲 / 選択肢=複数選択チェック）
-function anaFilterPanelHtml() {
-  const cols = anaFilterableCols();
-  const colMap = Object.fromEntries(cols.map(c => [c.key, c]));
-  const addable = cols.filter(c => !anaFilterRows.some(r => r.key === c.key));
-  const addOpts = `<option value="">＋ フィルター項目を追加…</option>`
-    + addable.map(c => `<option value="${c.key}">${esc(c.label)}（${c.type === 'sel' ? '選択' : '範囲'}）</option>`).join('');
-  const rows = anaFilterRows.map(r => {
-    const c = colMap[r.key]; if (!c) return '';
-    let ctrl;
-    if (c.type === 'sel') {
-      const spec = anaSelectSpec(r.key);
-      const arr = (anaFltSel[r.key] || []).map(String);
-      ctrl = `<div class="afl-chks">` + spec.opts.map(([v, l], i) => {
-        const on = arr.includes(String(v));
-        return `<label class="afl-chk${on ? ' on' : ''}"><input type="checkbox" ${on ? 'checked' : ''} onchange="anaToggleSelVal('${r.key}',${i})">${esc(String(l))}</label>`;
-      }).join('') + `</div>`;
-    } else {
-      const rg = anaFltNum[r.key] || {};
-      ctrl = `<input type="number" class="afl-num" placeholder="最小" value="${rg.min ?? ''}" onchange="anaSetFltNum('${r.key}','min',this.value)"><span class="afl-tilde">〜</span><input type="number" class="afl-num" placeholder="最大" value="${rg.max ?? ''}" onchange="anaSetFltNum('${r.key}','max',this.value)">`;
-    }
-    return `<div class="afl-row" data-key="${r.key}"><span class="afl-l">${esc(c.label)}</span><div class="afl-ctrl">${ctrl}</div><button class="afl-x" title="削除" onclick="anaRemoveFilter('${r.key}')">×</button></div>`;
-  }).join('');
-  return `<div class="ana-panel afl-panel">
-    <div class="afl-head"><b>列フィルター</b><span class="muted">項目を追加して条件を設定。選択肢は複数選べます（いずれかに一致）。</span><div class="tb-spacer"></div>
-      <select class="afl-add" onchange="anaAddFilter(this.value)">${addOpts}</select>
-      ${anaActiveFilterCount() || anaFilterRows.length ? `<button class="btn btn-sm" onclick="anaClearFilters()">クリア</button>` : ''}</div>
-    ${anaFilterRows.length ? `<div class="afl-rows">${rows}</div>` : `<div class="muted afl-empty">「＋ フィルター項目を追加」から絞り込みたい項目を選んでください。</div>`}
-  </div>`;
-}
 
 // 「分析」: 今日データ取得済み（dataDate=今日・計測版一致）なら再取得せず再採点。未取得/計測版違いだけ取得する（§6）
 async function runAnalysis() {
@@ -6319,37 +6402,67 @@ function anaShowOverlay(title, innerHtml) {
 }
 
 // ---------- 銘柄カルテ（市場+コードで1銘柄の全情報を集約＋取引/編集を1画面で） ----------
-let karteMarket = 'JP';
 let karteCode = '';
-try { const _k = JSON.parse(sessionStorage.getItem('sm_karte') || '{}'); if (_k.market) karteMarket = _k.market; if (typeof _k.code === 'string') karteCode = _k.code; } catch (_) {}
-function saveKarteState() { try { sessionStorage.setItem('sm_karte', JSON.stringify({ market: karteMarket, code: karteCode })); } catch (_) {} }
-function setKarteMarket(m) { karteMarket = m; saveKarteState(); renderTradeEntry(); }
-function karteLookup() {
-  const sel = document.getElementById('karte-market'); if (sel) karteMarket = sel.value;
-  const inp = document.getElementById('karte-code'); if (inp) karteCode = inp.value.trim();
-  saveKarteState(); renderTradeEntry();
+let karteSelId = null;   // リストから明示選択した銘柄ID（同コードが日米にある場合の確定用）
+try { const _k = JSON.parse(sessionStorage.getItem('sm_karte') || '{}'); if (typeof _k.code === 'string') karteCode = _k.code; if (_k.selId != null) karteSelId = _k.selId; } catch (_) {}
+function saveKarteState() { try { sessionStorage.setItem('sm_karte', JSON.stringify({ code: karteCode, selId: karteSelId })); } catch (_) {} }
+// コード/ティッカー/銘柄名（正規化込み）でカルテ対象候補を返す。完全一致→前方一致→部分一致の順。
+function karteMatches(query) {
+  const q = (query || '').trim(); if (!q) return [];
+  const nq = searchNorm(q);
+  const out = [];
+  for (const s of store.data.securities) {
+    if (s.market !== 'US' && s.market !== 'JP') continue;
+    const tk = searchNorm(s.ticker || ''), nm = searchNorm(calc.displayName(s));
+    let rank = -1;
+    if (tk === nq) rank = 0;
+    else if (nm === nq) rank = 1;
+    else if (tk.startsWith(nq)) rank = 2;
+    else if (nm.startsWith(nq)) rank = 3;
+    else if (tk.includes(nq) || nm.includes(nq)) rank = 4;
+    if (rank >= 0) out.push({ s, rank });
+  }
+  out.sort((a, b) => a.rank - b.rank || searchNorm(calc.displayName(a.s)).localeCompare(searchNorm(calc.displayName(b.s)), 'ja'));
+  return out.map(x => x.s);
 }
-function karteOpen(market, code) { karteMarket = market; karteCode = code; saveKarteState(); go('trade'); }
+function karteLookup() {
+  const inp = document.getElementById('karte-code'); if (inp) karteCode = inp.value.trim();
+  karteSelId = null; saveKarteState(); renderTradeEntry();
+}
+function karteSelect(id) { karteSelId = id; const s = store.data.securities.find(x => x.id === id); if (s) karteCode = s.ticker || karteCode; saveKarteState(); renderTradeEntry(); }
+function karteOpen(market, code) { const s = mktFindSec(code, market); karteCode = code; karteSelId = s ? s.id : null; saveKarteState(); go('trade'); }
 function renderTradeEntry() {
-  const sec = karteCode ? mktFindSec(karteCode, karteMarket) : null;
-  const mktOpts = [['JP', '日本株'], ['US', '米国株']]
-    .map(([v, l]) => `<option value="${v}" ${karteMarket === v ? 'selected' : ''}>${l}</option>`).join('');
+  const q = karteCode.trim();
+  const matches = q ? karteMatches(q) : [];
+  let sec = null;
+  if (karteSelId != null) sec = store.data.securities.find(s => s.id === karteSelId) || null;
+  if (!sec && q) {
+    const nq = searchNorm(q);
+    const exact = matches.find(s => searchNorm(s.ticker || '') === nq || searchNorm(calc.displayName(s)) === nq);
+    if (exact) sec = exact;
+    else if (matches.length === 1) sec = matches[0];
+  }
   const searchBar = `
     <div class="kt-search">
-      <div class="field"><label>市場</label><select id="karte-market">${mktOpts}</select></div>
-      <div class="field"><label>コード / ティッカー</label>
-        <input id="karte-code" class="kt-code" type="text" value="${esc(karteCode)}" placeholder="例: 7203 / AAPL" autocomplete="off"></div>
+      <div class="field" style="flex:1"><label>コード・ティッカー・銘柄名</label>
+        <input id="karte-code" class="kt-code" type="text" value="${esc(karteCode)}" placeholder="例: 7203 / AAPL / トヨタ" autocomplete="off"></div>
       <div class="field"><button class="btn btn-primary btn-sm" onclick="karteLookup()">${svgIcon('search', '')} 表示</button></div>
     </div>`;
 
   let body;
-  if (!karteCode) {
-    body = '<div class="empty">市場と証券コードを入力して「表示」を押してください。</div>';
-  } else if (!sec) {
-    body = `<div class="notice">「${esc(MARKET_LABEL[karteMarket] || karteMarket)} / ${esc(karteCode)}」は未登録です。
-      <div style="margin-top:10px"><button class="btn btn-primary" onclick="openSecurityForm(null, '${esc(karteMarket)}')">＋ 銘柄として新規登録</button></div></div>`;
-  } else {
+  if (!q) {
+    body = '<div class="empty">証券コード・ティッカー・銘柄名のいずれかを入力して「表示」を押してください。</div>';
+  } else if (sec) {
     body = karteCardHtml(sec);
+  } else if (matches.length > 1) {
+    const items = matches.slice(0, 30).map(s => `<button class="kt-cand" onclick="karteSelect(${s.id})"><span class="tk ${s.market.toLowerCase()}">${esc(s.ticker)}</span><span class="kt-cand-nm">${esc(calc.displayName(s))}</span><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></button>`).join('');
+    body = `<div class="kt-cands"><div class="muted" style="margin-bottom:6px">「${esc(q)}」に一致する銘柄が ${matches.length} 件あります。選択してください。</div>${items}</div>`;
+  } else {
+    body = `<div class="notice">「${esc(q)}」に一致する登録銘柄がありません。
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="openSecurityForm(null, 'JP')">＋ 日本株として登録</button>
+        <button class="btn btn-primary" onclick="openSecurityForm(null, 'US')">＋ 米国株として登録</button>
+      </div></div>`;
   }
   app.innerHTML = `<div class="kt">${searchBar}${body}</div>`;
 
@@ -9270,10 +9383,13 @@ document.addEventListener('compositionend', (e) => {
   // 検索欄は確定後に反映（変換中はスキップしていたため）
   if (e.target.id === 'hold-search') setHoldingsSearch(e.target.value);
   else if (e.target.id === 'sm-search') setSecMasterSearch(e.target.value);
+  else if (e.target.id === 'ana-search') anaSetSearch(e.target.value);
 }, true);
 
 store.load();
 loadColPrefs();
+loadFilterState();    // 分析・個別銘柄の列フィルター（次回起動時の引継ぎ）
+loadFilterPresets();  // フィルターのパターン（3タブ共通）
 // タブ維持: リロードでは sessionStorage から現在タブを復元。タブ/ブラウザを閉じて開き直すと
 // sessionStorage はクリアされるので自動的に dashboard に戻る（＝開き直しはダッシュボード）。
 try { const v = sessionStorage.getItem('sm_view'); if (v && PAGE_TITLE[v]) currentView = v; } catch (_) {}
