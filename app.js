@@ -1793,10 +1793,11 @@ function secMatchesQuery(sec, rawQuery) {
 // ・パターン（名前付きプリセット）は3タブ共通の1リスト
 const FILTER_STATE_KEY = 'sm_filters_v1';
 const FILTER_PRESETS_KEY = 'sm_filter_presets_v1';
+// open=詳細パネルの開閉（保存しない）。presetId=ツールバーで適用中のパターン（手編集で空に戻す）。
 const fltState = {
-  holdings:  { open: false, rows: [], num: {}, sel: {} },
-  analysis:  { open: false, rows: [], num: {}, sel: {} },
-  secmaster: { open: false, rows: [], num: {}, sel: {} },
+  holdings:  { open: false, presetId: '', rows: [], num: {}, sel: {} },
+  analysis:  { open: false, presetId: '', rows: [], num: {}, sel: {} },
+  secmaster: { open: false, presetId: '', rows: [], num: {}, sel: {} },
 };
 let fltPresets = []; // [{id, name, rows:[{key}], num:{key:{min,max}}, sel:{key:[vals]}}]
 function loadFilterState() {
@@ -1804,13 +1805,13 @@ function loadFilterState() {
     const o = JSON.parse(localStorage.getItem(FILTER_STATE_KEY) || '{}');
     for (const sc of ['holdings', 'analysis']) {
       const s = o[sc]; if (!s || typeof s !== 'object') continue;
-      fltState[sc] = { open: false, rows: Array.isArray(s.rows) ? s.rows : [], num: s.num || {}, sel: s.sel || {} };
+      fltState[sc] = { open: false, presetId: s.presetId || '', rows: Array.isArray(s.rows) ? s.rows : [], num: s.num || {}, sel: s.sel || {} };
     }
   } catch (_) {}
 }
 function saveFilterState() {
   const o = {};
-  for (const sc of ['holdings', 'analysis']) { const s = fltState[sc]; o[sc] = { rows: s.rows, num: s.num, sel: s.sel }; }
+  for (const sc of ['holdings', 'analysis']) { const s = fltState[sc]; o[sc] = { presetId: s.presetId, rows: s.rows, num: s.num, sel: s.sel }; }
   try { localStorage.setItem(FILTER_STATE_KEY, JSON.stringify(o)); } catch (_) {}
 }
 function loadFilterPresets() { try { fltPresets = JSON.parse(localStorage.getItem(FILTER_PRESETS_KEY)) || []; } catch (_) { fltPresets = []; } }
@@ -1902,29 +1903,29 @@ function fltAddFilter(scope, key) {
   const st = fltState[scope];
   if (!key || st.rows.some(r => r.key === key)) { fltRerender(scope); return; }
   if (!filterableCols(scope).some(c => c.key === key)) { fltRerender(scope); return; }
-  st.rows.push({ key }); fltPersist(scope); fltRerender(scope);
+  st.rows.push({ key }); st.presetId = ''; fltPersist(scope); fltRerender(scope);
   const el = document.querySelector(`.afl-row[data-key="${key}"] input`);
   if (el && el.type === 'number') el.focus();
 }
 function fltRemoveFilter(scope, key) {
   const st = fltState[scope];
   st.rows = st.rows.filter(r => r.key !== key); delete st.num[key]; delete st.sel[key];
-  fltPersist(scope); fltRerender(scope);
+  st.presetId = ''; fltPersist(scope); fltRerender(scope);
 }
 function fltSetNum(scope, key, which, v) {
   const st = fltState[scope]; const o = (st.num[key] = st.num[key] || {});
   const n = (v === '' || v == null) ? null : parseFloat(v); o[which] = isNaN(n) ? null : n;
-  fltPersist(scope); fltRerender(scope);
+  st.presetId = ''; fltPersist(scope); fltRerender(scope);
 }
 function fltToggleSel(scope, key, idx) {
   const spec = fltSelectSpec(key); if (!spec || !spec.opts[idx]) return;
   const st = fltState[scope]; const val = String(spec.opts[idx][0]);
   const arr = (st.sel[key] = st.sel[key] || []); const at = arr.indexOf(val);
   if (at >= 0) arr.splice(at, 1); else arr.push(val);
-  fltPersist(scope); fltRerender(scope);
+  st.presetId = ''; fltPersist(scope); fltRerender(scope);
 }
 function fltClear(scope) {
-  const st = fltState[scope]; st.rows = []; st.num = {}; st.sel = {};
+  const st = fltState[scope]; st.rows = []; st.num = {}; st.sel = {}; st.presetId = '';
   fltPersist(scope); fltRerender(scope);
 }
 // パターン（プリセット）：現在の条件を名前付きで保存。3タブ共通の1リスト。
@@ -1937,29 +1938,34 @@ function fltSavePreset(scope) {
   const num = {}, sel = {};
   for (const r of st.rows) { if (st.num[r.key]) num[r.key] = { ...st.num[r.key] }; if (st.sel[r.key]) sel[r.key] = [...st.sel[r.key]]; }
   const ex = fltPresets.find(p => p.name === name);
-  if (ex) { ex.rows = rows; ex.num = num; ex.sel = sel; }
-  else fltPresets.push({ id: 'p' + Date.now(), name, rows, num, sel });
-  saveFilterPresets(); fltRerender(scope);
+  let pid;
+  if (ex) { ex.rows = rows; ex.num = num; ex.sel = sel; pid = ex.id; }
+  else { pid = 'p' + Date.now(); fltPresets.push({ id: pid, name, rows, num, sel }); }
+  fltState[scope].presetId = pid; // 保存後はそのパターンが選択中の状態に
+  saveFilterPresets(); fltPersist(scope); fltRerender(scope);
   toast(`パターン「${name}」を保存しました`);
 }
+// パターン適用（ツールバーのセレクトから）。空＝フィルター解除。詳細パネルは自動で開かない。
 function fltApplyPreset(scope, id) {
-  if (!id) return;
+  const st = fltState[scope];
+  if (!id) { st.rows = []; st.num = {}; st.sel = {}; st.presetId = ''; fltPersist(scope); fltRerender(scope); return; }
   const p = fltPresets.find(x => String(x.id) === String(id)); if (!p) return;
   const valid = new Set(filterableCols(scope).map(c => c.key));
-  const st = fltState[scope];
   st.rows = (p.rows || []).filter(r => valid.has(r.key)).map(r => ({ key: r.key }));
   st.num = {}; st.sel = {};
   for (const k in (p.num || {})) if (valid.has(k)) st.num[k] = { ...p.num[k] };
   for (const k in (p.sel || {})) if (valid.has(k)) st.sel[k] = [...p.sel[k]];
-  st.open = true;
+  st.presetId = String(id);
   fltPersist(scope); fltRerender(scope);
 }
 function fltDeletePreset(scope, id) {
-  if (!id) return;
+  if (!id) { fltRerender(scope); return; }
   const p = fltPresets.find(x => String(x.id) === String(id));
   if (p && !confirm(`パターン「${p.name}」を削除しますか？`)) { fltRerender(scope); return; }
   fltPresets = fltPresets.filter(x => String(x.id) !== String(id));
-  saveFilterPresets(); fltRerender(scope);
+  // 削除したパターンを各タブで適用中だったら選択を外す
+  for (const sc of ['holdings', 'analysis', 'secmaster']) if (fltState[sc].presetId === String(id)) fltState[sc].presetId = '';
+  saveFilterPresets(); saveFilterState(); fltRerender(scope);
 }
 // フィルターパネルのHTML（① 項目を追加 →② 値を設定 / パターンの適用・保存・削除）
 function filterPanelHtml(scope) {
@@ -1985,22 +1991,27 @@ function filterPanelHtml(scope) {
     }
     return `<div class="afl-row" data-key="${r.key}"><span class="afl-l">${esc(c.label)}</span><div class="afl-ctrl">${ctrl}</div><button class="afl-x" title="削除" onclick="fltRemoveFilter('${scope}','${r.key}')">×</button></div>`;
   }).join('');
-  const presetOpts = `<option value="">パターンを適用…</option>` + fltPresets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   const presetDel = fltPresets.length ? `<select class="afl-add" onchange="fltDeletePreset('${scope}',this.value)"><option value="">パターン削除…</option>${fltPresets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>` : '';
   return `<div class="ana-panel afl-panel">
-    <div class="afl-head"><b>列フィルター</b><span class="muted">項目を追加して条件を設定。選択肢は複数選べます（いずれかに一致）。</span><div class="tb-spacer"></div>
-      <select class="afl-add" onchange="fltApplyPreset('${scope}',this.value)">${presetOpts}</select>
-      <button class="btn btn-sm" onclick="fltSavePreset('${scope}')">パターン保存</button>
+    <div class="afl-head"><b>列フィルター</b><span class="muted">項目を追加して条件を設定。「パターン保存」で名前を付けると、次回からツールバーの選択だけで呼び出せます。</span><div class="tb-spacer"></div>
+      <button class="btn btn-sm" onclick="fltSavePreset('${scope}')">現在の条件をパターン保存</button>
       ${presetDel}
       <select class="afl-add" onchange="fltAddFilter('${scope}',this.value)">${addOpts}</select>
       ${fltActiveCount(scope) || st.rows.length ? `<button class="btn btn-sm" onclick="fltClear('${scope}')">クリア</button>` : ''}</div>
     ${st.rows.length ? `<div class="afl-rows">${rows}</div>` : `<div class="muted afl-empty">「＋ フィルター項目を追加」から絞り込みたい項目を選んでください。</div>`}
   </div>`;
 }
-// フィルターボタン（ツールバー用・共通）
+// ツールバー用フィルター操作（共通）: 常設のパターン選択 ＋ 詳細パネル開閉ボタン。
+// パターンは作って選ぶだけで使えるよう常時表示。詳細（項目の行）はボタンを押した時だけ開く。
 function filterBtnHtml(scope) {
+  const st = fltState[scope];
   const n = fltActiveCount(scope);
-  return `<button class="btn btn-sm${n ? ' active' : ''}" onclick="fltToggle('${scope}')" title="列フィルター">${svgIcon('filter', '')} フィルター${n ? ` (${n})` : ''} ${fltState[scope].open ? '▲' : '▼'}</button>`;
+  const presetSel = `<select class="flt-preset" title="保存したパターンを適用" onchange="fltApplyPreset('${scope}',this.value)">`
+    + `<option value="">パターン: なし</option>`
+    + fltPresets.map(p => `<option value="${p.id}" ${st.presetId === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
+    + `</select>`;
+  const btn = `<button class="btn btn-sm${n ? ' active' : ''}" onclick="fltToggle('${scope}')" title="フィルターの詳細設定">${svgIcon('filter', '')} 詳細${n ? ` (${n})` : ''} ${st.open ? '▲' : '▼'}</button>`;
+  return presetSel + btn;
 }
 
 // 列幅(px)。colPrefsのwidth上書き優先、無ければキー/種別ごとの既定。

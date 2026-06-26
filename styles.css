@@ -496,6 +496,8 @@ button { font-family: inherit; }
 .summary-strip .ss-v { font-size: 16px; font-weight: 700; white-space: nowrap; }
 .summary-strip .ss-v small { font-size: 12px; font-weight: 600; margin-left: 4px; }
 
+/* ツールバー常設のパターン選択 */
+.flt-preset { padding: 5px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); max-width: 180px; }
 /* 分析タブ 列フィルターパネル（①項目を追加 →②値を設定） */
 .afl-panel { margin: 8px 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 .afl-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; }
