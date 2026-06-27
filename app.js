@@ -1758,14 +1758,16 @@ function touchColPrefs(market) {
   saveColPrefs();
 }
 // バックアップ/同期用の“全状態”バンドル。store.data に加え列設定(colPrefs)も同梱（_colPrefs）
-function dataBundle() { return Object.assign({}, store.data, { _colPrefs: colPrefs }); }
-// バンドルを復元（store.data ＋ 列設定）。_colPrefs が無い旧バックアップとも互換
+function dataBundle() { return Object.assign({}, store.data, { _colPrefs: colPrefs, _filterPresets: fltPresets }); }
+// バンドルを復元（store.data ＋ 列設定 ＋ フィルターパターン）。各 _xxx が無い旧バックアップとも互換
 function restoreBundle(obj) {
   if (!obj || typeof obj !== 'object') throw new Error('データ形式が不正です');
   const cp = obj._colPrefs; delete obj._colPrefs;
+  const fp = obj._filterPresets; delete obj._filterPresets;
   store.data = obj; store.save();
   if (cp && typeof cp === 'object') { colPrefs = cp; saveColPrefs(); }
-  store.load(); loadColPrefs();
+  if (Array.isArray(fp)) { fltPresets = fp; saveFilterPresets(); }
+  store.load(); loadColPrefs(); loadFilterPresets();
 }
 
 // ===== 銘柄名・コードの検索正規化 =====
