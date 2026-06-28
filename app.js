@@ -1584,6 +1584,10 @@ const api = {
           const inc = clean(d);
           // 日本語名は英語フォールバックで上書きしない（取得のたびに名称がブレないように）
           if (inc.name && ex.name && hasJa(ex.name) && !hasJa(inc.name)) delete inc.name;
+          // 取得内容が空（名称もファンダも取れず）なら meta を書かない。updatedAt だけ進めると
+          // マルチ端末同期（meta は updatedAt の新しい方が勝つ）で「空の新しいエントリ」が
+          // 別端末の正しい名称を上書きしてしまう（＝銘柄名が証券コードに戻る）ため。
+          if (!Object.keys(inc).length) continue;
           store.data.meta[key] = { ...ex, ...inc, updatedAt: store._now() };
         }
       }
@@ -6163,10 +6167,11 @@ async function runAnalysis() {
   const targets = analysisTargets();
   const today = anaToday();
   const th = anaThresholds();
-  // 基本情報（銘柄名・株価）が未取得の対象は分析と一緒に取得する（特にトップ50の未登録銘柄）。
-  // meta/price は priceKey でキャッシュされるので仮想銘柄でも calc.displayName/価格列に反映される。
-  const needMeta = targets.filter(s => !((store.data.meta[priceKey(s)] || {}).name));
-  const needPrice = targets.filter(s => (store.data.prices[priceKey(s)] || {}).price == null);
+  // 基本情報（銘柄名・株価）が未取得の対象は分析と一緒に取得する。
+  // ただし未登録の仮想銘柄(_virtual=トップ50)は store.data.meta/prices に保存すると同期で全端末に
+  // 「登録していないコード」がばらまかれ、銘柄名マスタを汚すため対象外。仮想銘柄の名称はランキング由来を表示する。
+  const needMeta = targets.filter(s => !s._virtual && !((store.data.meta[priceKey(s)] || {}).name));
+  const needPrice = targets.filter(s => !s._virtual && (store.data.prices[priceKey(s)] || {}).price == null);
   const toFetch = [], toRescore = [];
   for (const s of targets) {
     const r = store.data.techAnalysis[priceKey(s)];
