@@ -3339,6 +3339,7 @@ function pickColor(btn) {
 }
 
 function priceInputBtn(sec) {
+  if (sec._virtual) return '<span class="muted">—</span>'; // 仮想銘柄(トップ50の未登録分)は手入力不可
   return `<button class="btn btn-sm" onclick="openPriceInput(${sec.id})">価格入力</button>`;
 }
 
@@ -3775,7 +3776,7 @@ async function loadRanking(force) {
   mktBusy = true; renderMarketTab();
   try {
     const { market, sub, kind } = mktState;
-    const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=${sub}&count=30`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
+    const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=${sub}&count=50`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
     let items = (r && r.items) || [];
     const symOf = (code) => market === 'JP' ? code + '.T' : code;
     if (items.length) {
@@ -3793,9 +3794,15 @@ async function loadRanking(force) {
         return next;
       });
     }
-    // 米株は名称を日本語化（保有銘柄と同ルール。例 AAPL→アップル）。names=1 は1銘柄1リクエストで軽量
+    // 米株は名称を日本語化（保有銘柄と同ルール。例 AAPL→アップル）。names=1 は1銘柄1リクエスト。
+    // 50件だとCloudflareのサブリクエスト上限(~50/req)に達するため20件ずつ分割取得する。
     if (market === 'US' && items.length) {
-      const nm = await fetch(`/api/info?names=1&symbols=${encodeURIComponent(items.map(it => it.code).join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
+      const nm = {};
+      for (let i = 0; i < items.length; i += 20) {
+        const batch = items.slice(i, i + 20).map(it => it.code);
+        const part = await fetch(`/api/info?names=1&symbols=${encodeURIComponent(batch.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
+        Object.assign(nm, part);
+      }
       items = items.map(it => { const n = nm[it.code]; return (n && n.name) ? { ...it, name: n.name } : it; });
     }
     mktCacheMap()[key] = { items, at: Date.now() };
@@ -3917,7 +3924,7 @@ function renderMarketTab() {
   }
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>マーケット ランキング（上位30）</h2>
+      <div class="section-head"><h2>マーケット ランキング（上位50）</h2>
         <div style="display:flex;align-items:center;gap:10px">
           <span class="muted" style="font-size:11px">${cache && cache.at ? '取得：' + mktFetchedAt(cache.at) : ''}</span>
           <button class="btn btn-sm btn-primary" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''}>${mktBusy ? '取得中…' : '更新'}</button></div></div>
@@ -6001,6 +6008,9 @@ let anaMarket = 'all';        // 'all' | 'US' | 'JP'
 let anaSide = 'contra';       // 分析タブの表ビュー: 'contra'(逆張り) | 'trend'(順張り)。列レイアウト/ソートを別プロファイルで保持
 function anaColKey() { return anaSide === 'trend' ? 'ANALYSIS_T' : 'ANALYSIS'; }
 let anaHoldingOnly = false;   // 保有銘柄のみ
+let anaTop50 = false;         // 売買代金トップ50を分析対象にする（保有のみと排他）
+let anaTop50Secs = [];        // トップ50の対象銘柄（登録済みは実体、未登録はランキング由来の仮想銘柄 _virtual）
+let anaTop50Busy = false;     // トップ50ランキング取得中
 let anaSearch = '';           // 検索（コード/名称）
 let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
@@ -6018,11 +6028,18 @@ function anaThresholds() { return TA.mergeThresholds(store.data.settings && stor
 
 // 分析対象（フィルタ適用後の銘柄）
 function analysisTargets() {
-  let secs = store.data.securities.filter(s => s.market === 'US' || s.market === 'JP');
-  if (anaMarket !== 'all') secs = secs.filter(s => s.market === anaMarket);
-  if (anaHoldingOnly) {
-    const held = new Set(store.data.holdings.filter(h => (h.quantity || 0) > 0).map(h => h.securityId));
-    secs = secs.filter(s => held.has(s.id));
+  let secs;
+  if (anaTop50) {
+    // 売買代金トップ50（ランキング由来）。登録済みは実体、未登録は仮想銘柄。市場フィルタのみ適用（保有のみは無視）。
+    secs = anaTop50Secs.slice();
+    if (anaMarket !== 'all') secs = secs.filter(s => s.market === anaMarket);
+  } else {
+    secs = store.data.securities.filter(s => s.market === 'US' || s.market === 'JP');
+    if (anaMarket !== 'all') secs = secs.filter(s => s.market === anaMarket);
+    if (anaHoldingOnly) {
+      const held = new Set(store.data.holdings.filter(h => (h.quantity || 0) > 0).map(h => h.securityId));
+      secs = secs.filter(s => held.has(s.id));
+    }
   }
   if (anaSearch) secs = secs.filter(s => secMatchesQuery(s, anaSearch));
   // 列フィルタ（共通モジュール。数値＝範囲 / 選択肢＝いずれかに一致）
@@ -6051,7 +6068,8 @@ function renderAnalysis() {
       <div class="toolbar">
         <div class="seg seg-side" role="tablist" title="表示する戦略の切替（列レイアウトは戦略ごとに保存）">${sideBtn('contra', '逆張り')}${sideBtn('trend', '順張り')}</div>
         <div class="seg" role="tablist">${mkBtn('all', '全て')}${mkBtn('US', '米国株')}${mkBtn('JP', '日本株')}</div>
-        <label class="chip">保有のみ<input type="checkbox" ${anaHoldingOnly ? 'checked' : ''} onchange="anaToggleHolding(this.checked)" style="margin-left:4px"></label>
+        <label class="chip">保有のみ<input type="checkbox" ${anaHoldingOnly ? 'checked' : ''} ${anaTop50 ? 'disabled' : ''} onchange="anaToggleHolding(this.checked)" style="margin-left:4px"></label>
+        <label class="chip" title="表示時に最新の売買代金ランキングを取得し、トップ50銘柄を分析対象にします（通常と同じ仕組み）">売買代金トップ50<input type="checkbox" ${anaTop50 ? 'checked' : ''} onchange="anaToggleTop50(this.checked)" style="margin-left:4px"></label>
         <div class="search">${svgIcon('search', '')}<input id="ana-search" placeholder="コード・銘柄名で検索" value="${esc(anaSearch)}" oninput="anaSetSearch(this.value)" autocomplete="off">${anaSearch ? `<button class="clr" onclick="anaSetSearch('')">×</button>` : ''}</div>
         <div class="tb-spacer"></div>
         ${filterBtnHtml('analysis')}
@@ -6069,7 +6087,7 @@ function renderAnalysis() {
       ${fltState.analysis.open ? filterPanelHtml('analysis') : ''}
       ${anaPanelOpen ? anaThresholdPanelHtml() : ''}
       <div class="section-body">
-        ${secs.length === 0 ? `<div class="empty">対象銘柄がありません。フィルタを変えるか、銘柄を登録してください。</div>` : `
+        ${secs.length === 0 ? `<div class="empty">${anaTop50Busy ? '売買代金ランキングを取得中…' : anaTop50 ? '売買代金ランキングを取得できませんでした（休場/時間外、または取得元の仕様変更の可能性）。トグルを切り替えると再取得します。' : '対象銘柄がありません。フィルタを変えるか、銘柄を登録してください。'}</div>` : `
         <div class="table-wrap"><table class="fixed-cols holdings dense" style="width:${tableW}px">${colgroupHtml}
           <thead><tr>${headHtml}<th class="l"></th></tr></thead>
           <tbody>${secs.map(sec => marketRow(sec, visibleCols, { actions: 'analysis' })).join('')}</tbody>
@@ -6082,9 +6100,47 @@ function renderAnalysis() {
   scheduleFit();
 }
 
-function anaSetMarket(m) { anaMarket = m; renderAnalysis(); }
+function anaSetMarket(m) { anaMarket = m; renderAnalysis(); if (anaTop50) loadAnaTop50(); }
 function anaSetSide(s) { anaSide = (s === 'trend') ? 'trend' : 'contra'; renderAnalysis(); }
 function anaToggleHolding(v) { anaHoldingOnly = !!v; renderAnalysis(); }
+function anaToggleTop50(v) {
+  anaTop50 = !!v;
+  if (anaTop50) { anaHoldingOnly = false; loadAnaTop50(); } // 排他: トップ50を選ぶと保有のみは解除
+  else { anaTop50Secs = []; renderAnalysis(); }
+}
+// 売買代金トップ50を取得して分析対象に組み立てる。登録済み銘柄は実体を使い（取得済みのメタ/分析を表示）、
+// 未登録はランキングのコード・名称のみを持つ仮想銘柄(_virtual)にする。表示時に毎回最新ランキングを取得する。
+async function loadAnaTop50() {
+  if (anaTop50Busy) return;
+  anaTop50Busy = true; renderAnalysis();
+  const markets = anaMarket === 'all' ? ['JP', 'US'] : [anaMarket];
+  const secs = [], seen = new Set();
+  try {
+    for (const market of markets) {
+      const r = await fetch(`/api/ranking?market=${market}&kind=turnover&sub=all&count=50`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
+      for (const it of ((r && r.items) || []).slice(0, 50)) {
+        if (it.code == null) continue;
+        const code = String(it.code).toUpperCase();
+        const k = market + ':' + code;
+        if (seen.has(k)) continue; seen.add(k);
+        const existing = store.data.securities.find(s => s.market === market && String(s.ticker || '').toUpperCase() === code);
+        if (existing) { secs.push(existing); continue; }
+        // 未登録＝仮想銘柄。priceKey/yahooSymbol が成立するよう market+ticker を持たせる。名称はランキング由来。
+        secs.push({ id: 'v_' + k, market, ticker: it.code, name: it.name || code, currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, _virtual: true });
+      }
+    }
+    anaTop50Secs = secs;
+  } finally {
+    anaTop50Busy = false;
+    if (anaTop50) renderAnalysis(); // 取得完了で再描画（トグルがまだONのときのみ）
+  }
+}
+// 分析タブの銘柄検索（登録済み→トップ50の仮想銘柄の順）。openAnalysisDetail/anaRowClick から共用。
+function anaFindSec(market, ticker) {
+  return store.data.securities.find(s => s.market === market && String(s.ticker) === String(ticker))
+    || anaTop50Secs.find(s => s.market === market && String(s.ticker) === String(ticker))
+    || null;
+}
 function anaSetSearch(v) {
   const el0 = document.getElementById('ana-search');
   const caret = el0 ? el0.selectionStart : v.length;
@@ -6216,7 +6272,7 @@ function anaResetTh() { if (store.data.settings) delete store.data.settings.tech
 let anaDetailKey = null;       // 現在ドロワーで開いている priceKey
 let anaDetailRange = '1y';     // 表示レンジ（ズーム）: '6m'|'1y'|'3y'
 async function openAnalysisDetail(market, ticker) {
-  const sec = store.data.securities.find(s => s.market === market && String(s.ticker) === String(ticker));
+  const sec = anaFindSec(market, ticker);
   if (!sec) return;
   const key = priceKey(sec);
   anaDetailKey = key; anaDetailRange = '1y'; anaDetailSide = 'contra'; // 逆張りを初期表示
