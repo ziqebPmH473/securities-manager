@@ -6163,6 +6163,10 @@ async function runAnalysis() {
   const targets = analysisTargets();
   const today = anaToday();
   const th = anaThresholds();
+  // 基本情報（銘柄名・株価）が未取得の対象は分析と一緒に取得する（特にトップ50の未登録銘柄）。
+  // meta/price は priceKey でキャッシュされるので仮想銘柄でも calc.displayName/価格列に反映される。
+  const needMeta = targets.filter(s => !((store.data.meta[priceKey(s)] || {}).name));
+  const needPrice = targets.filter(s => (store.data.prices[priceKey(s)] || {}).price == null);
   const toFetch = [], toRescore = [];
   for (const s of targets) {
     const r = store.data.techAnalysis[priceKey(s)];
@@ -6173,9 +6177,17 @@ async function runAnalysis() {
     else toFetch.push(s);                                                                               // 取得が必要
   }
   const total = toFetch.length + toRescore.length;
-  if (!total) { toast('対象はすべて最新版で当日分析済みです'); return; }
+  if (!total && !needMeta.length && !needPrice.length) { toast('対象はすべて最新版で当日分析済みです'); return; }
   let ok = 0, fail = 0, done = 0;
   busyShow(`分析中… 0/${total}`);
+  // 0) 基本情報（銘柄名・株価）の取得。未取得分のみ。refreshMeta は内部で8件ずつ、価格は上限回避に15件ずつ。
+  if (needMeta.length) { busyShow(`銘柄情報を取得中… 0/${needMeta.length}`); try { await api.refreshMeta(needMeta); } catch (_) {} }
+  if (needPrice.length) {
+    for (let i = 0; i < needPrice.length; i += 15) {
+      busyShow(`株価を取得中… ${Math.min(i + 15, needPrice.length)}/${needPrice.length}`);
+      try { await api.refreshPrice(needPrice.slice(i, i + 15)); } catch (_) {}
+    }
+  }
   // 1) 採点のみ（API不要・今日のデータを再利用）
   for (const s of toRescore) {
     const r = store.data.techAnalysis[priceKey(s)];
@@ -6196,7 +6208,8 @@ async function runAnalysis() {
   }
   store.save();
   busyHide();
-  toast(`分析完了：成功 ${ok}（取得 ${toFetch.length} / 採点のみ ${toRescore.length}）${fail ? ` / 失敗 ${fail}` : ''}`);
+  const infoNote = (needMeta.length || needPrice.length) ? ` / 基本情報 ${needMeta.length ? `名称${needMeta.length}` : ''}${needMeta.length && needPrice.length ? '・' : ''}${needPrice.length ? `株価${needPrice.length}` : ''}` : '';
+  toast(`分析完了：成功 ${ok}（取得 ${toFetch.length} / 採点のみ ${toRescore.length}）${fail ? ` / 失敗 ${fail}` : ''}${infoNote}`);
   renderAnalysis();
 }
 

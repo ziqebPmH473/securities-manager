@@ -286,6 +286,7 @@ techAnalysis[priceKey] = {     // ※既存 analyses(ファンダ) と別名に�
 - トグルは **市場＝日本株／米国株を選択中のみ表示**（「全て」では非表示。全てに切り替えるとトップ50は自動解除）。
 - ON時／市場切替時に **最新の売買代金ランキング** を取得（`/api/ranking?kind=turnover&sub=all&count=50`）。
 - 仕組みは通常の分析と同じ（`/api/history`→計測→採点→`techAnalysis` に priceKey で保存）。
+- **分析実行時に基本情報（銘柄名・株価）も取得**：未取得の対象だけ `refreshMeta`（名称・セクター・ファンダ）／`refreshPrice`（現在値・高値）を呼ぶ。meta/price は priceKey でキャッシュされるため仮想銘柄でも `calc.displayName`／価格列に反映される（取得済みなら再取得しない）。
 - 取得するのは**ランキングから得られる情報（証券コード・名称）のみ**。登録済み銘柄はその実体（取得済みのメタ／ファンダ／過去分析）を表示。未登録銘柄はコード・名称だけ持つ**仮想銘柄（`_virtual`）**で、メタ等は「取得済みなら表示」。
 - 仮想銘柄は `store.data.securities` には保存しない（モジュール変数 `anaTop50Secs` に保持）。分析結果のみ `techAnalysis` に残る。
 
