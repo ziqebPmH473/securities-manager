@@ -200,7 +200,13 @@ async function fetchYahooChart(symbol, range, interval) {
   if (curDay == null) {
     for (let i = closeArr.length - 1; i >= 0; i--) if (typeof closeArr[i] === 'number') { curDay = dayOf(ts[i]); break; }
   }
-  if (curDay == null || todayDay > curDay) curDay = todayDay; // 現在の暦日を優先（プレ/休場で最終バーが前営業日でも今日基準にする）
+  // todayDay への引き上げは「今日が取引日(平日)」のときだけ。米株プレ市場・祝日翌営業日の1日ズレ対策で
+  // 今日基準にしたいが、土日(=確実に休場)に引き上げると 現在値(=金の終値) と 前日終値(=金) が同値になり
+  // 前日比が全銘柄0%に潰れる。土日は最終セッション(金)を基準にして前日終値を木曜にする。
+  // (祝日はカレンダー非保持のため平日扱い＝従来通り。weekendのみ確実に除外)
+  const dow = ((todayDay % 7) + 4) % 7;                       // 0=日, 6=土（epoch=木曜=4 起点）
+  const todayIsWeekend = dow === 0 || dow === 6;
+  if (curDay == null || (todayDay > curDay && !todayIsWeekend)) curDay = todayDay;
   let prevCloseArr = null, prevCloseTs = null;
   for (let i = closeArr.length - 1; i >= 0; i--) {
     if (typeof closeArr[i] !== 'number') continue;
