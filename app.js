@@ -84,7 +84,8 @@ function solidSwatchPicker(name, selected) {
 }
 const DEFAULT_MATRIX_USDJPY = 100; // 「全部」表示・米国株取得額の円換算レート（初期値。マスタで変更可）
 // 前日終値の取得ロジック版。上げると当日でも refreshPrevCloses を一度だけ再計算（取引所TZ今日基準の修正を即反映）。
-const PREVCLOSE_VER = 4;
+// 5: 休場日・寄り付き前に前日比が0%に潰れる不具合の修正（前日終値の基準日を現在値のセッションに）を全銘柄へ反映。
+const PREVCLOSE_VER = 5;
 
 const MARKET_LABEL = { US: '米国株', JP: '日本株', FUND: '投信' };
 const MARKET_CCY = { US: '$', JP: '¥', FUND: '¥' };
@@ -6167,11 +6168,11 @@ async function runAnalysis() {
   const targets = analysisTargets();
   const today = anaToday();
   const th = anaThresholds();
-  // 基本情報（銘柄名・株価）が未取得の対象は分析と一緒に取得する。
-  // ただし未登録の仮想銘柄(_virtual=トップ50)は store.data.meta/prices に保存すると同期で全端末に
-  // 「登録していないコード」がばらまかれ、銘柄名マスタを汚すため対象外。仮想銘柄の名称はランキング由来を表示する。
-  const needMeta = targets.filter(s => !s._virtual && !((store.data.meta[priceKey(s)] || {}).name));
-  const needPrice = targets.filter(s => !s._virtual && (store.data.prices[priceKey(s)] || {}).price == null);
+  // 基本情報（銘柄名・株価）が未取得の対象は分析と一緒に取得する（トップ50の未登録＝仮想銘柄も含む）。
+  // meta/price は priceKey でキャッシュされるので仮想銘柄でも表示に反映される。仮想銘柄は銘柄マスタ（=登録済み
+  // securities）には出ないため一覧は汚さない。名称の同期上書き（コード化）は sync-merge の名称優先で防止済み。
+  const needMeta = targets.filter(s => !((store.data.meta[priceKey(s)] || {}).name));
+  const needPrice = targets.filter(s => (store.data.prices[priceKey(s)] || {}).price == null);
   const toFetch = [], toRescore = [];
   for (const s of targets) {
     const r = store.data.techAnalysis[priceKey(s)];

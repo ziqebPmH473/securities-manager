@@ -196,17 +196,17 @@ async function fetchYahooChart(symbol, range, interval) {
   // でないと米株のプレ前・休場日に取得した時、最終バーが前営業日になり chartPreviousClose が2営業日前を
   // 指して前日終値が1日ズレる（例: Juneteenth(6/19)翌営業日に SPCX が6/17値=191.82になる事故。正は6/18=185）。
   const todayDay = Math.floor((Date.now() / 1000 + tzoff) / 86400);
+  // 基準日(curDay) = 現在値(regularMarketPrice)が属するセッションの日。前日終値はその「前」の最後の終値。
+  // regularMarketTime は現在値のセッション時刻を指す（場中=今日 / 寄り前・休場=直近セッション=金）ので、
+  // これを基準にすると 場中→当日 vs 前日、寄り前/土日→直近セッション(金) vs その前(木) と常に正しい値動きになる。
+  // ※以前は「todayへ引き上げる」補正を入れていたが、休場日・寄り付き前に 現在値==前日終値 となり前日比が
+  //   全銘柄0%に潰れる副作用があった（土日/平日寄り前の両方で発生）ため撤去。場中の祝日翌営業日は
+  //   regularMarketTime=当日になるので従来どおり前営業日が前日終値になる。
   let curDay = dayOf(meta.regularMarketTime);
   if (curDay == null) {
     for (let i = closeArr.length - 1; i >= 0; i--) if (typeof closeArr[i] === 'number') { curDay = dayOf(ts[i]); break; }
   }
-  // todayDay への引き上げは「今日が取引日(平日)」のときだけ。米株プレ市場・祝日翌営業日の1日ズレ対策で
-  // 今日基準にしたいが、土日(=確実に休場)に引き上げると 現在値(=金の終値) と 前日終値(=金) が同値になり
-  // 前日比が全銘柄0%に潰れる。土日は最終セッション(金)を基準にして前日終値を木曜にする。
-  // (祝日はカレンダー非保持のため平日扱い＝従来通り。weekendのみ確実に除外)
-  const dow = ((todayDay % 7) + 4) % 7;                       // 0=日, 6=土（epoch=木曜=4 起点）
-  const todayIsWeekend = dow === 0 || dow === 6;
-  if (curDay == null || (todayDay > curDay && !todayIsWeekend)) curDay = todayDay;
+  if (curDay == null) curDay = todayDay;
   let prevCloseArr = null, prevCloseTs = null;
   for (let i = closeArr.length - 1; i >= 0; i--) {
     if (typeof closeArr[i] !== 'number') continue;
