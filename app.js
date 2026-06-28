@@ -6069,7 +6069,7 @@ function renderAnalysis() {
         <div class="seg seg-side" role="tablist" title="表示する戦略の切替（列レイアウトは戦略ごとに保存）">${sideBtn('contra', '逆張り')}${sideBtn('trend', '順張り')}</div>
         <div class="seg" role="tablist">${mkBtn('all', '全て')}${mkBtn('US', '米国株')}${mkBtn('JP', '日本株')}</div>
         <label class="chip">保有のみ<input type="checkbox" ${anaHoldingOnly ? 'checked' : ''} ${anaTop50 ? 'disabled' : ''} onchange="anaToggleHolding(this.checked)" style="margin-left:4px"></label>
-        <label class="chip" title="表示時に最新の売買代金ランキングを取得し、トップ50銘柄を分析対象にします（通常と同じ仕組み）">売買代金トップ50<input type="checkbox" ${anaTop50 ? 'checked' : ''} onchange="anaToggleTop50(this.checked)" style="margin-left:4px"></label>
+        ${anaMarket !== 'all' ? `<label class="chip" title="表示時に最新の売買代金ランキングを取得し、トップ50銘柄を分析対象にします（通常と同じ仕組み）">売買代金トップ50<input type="checkbox" ${anaTop50 ? 'checked' : ''} onchange="anaToggleTop50(this.checked)" style="margin-left:4px"></label>` : ''}
         <div class="search">${svgIcon('search', '')}<input id="ana-search" placeholder="コード・銘柄名で検索" value="${esc(anaSearch)}" oninput="anaSetSearch(this.value)" autocomplete="off">${anaSearch ? `<button class="clr" onclick="anaSetSearch('')">×</button>` : ''}</div>
         <div class="tb-spacer"></div>
         ${filterBtnHtml('analysis')}
@@ -6100,7 +6100,13 @@ function renderAnalysis() {
   scheduleFit();
 }
 
-function anaSetMarket(m) { anaMarket = m; renderAnalysis(); if (anaTop50) loadAnaTop50(); }
+function anaSetMarket(m) {
+  anaMarket = m;
+  // トップ50は日本株/米国株でのみ有効。全てに切り替えたら解除（トグル自体も非表示になる）。
+  if (m === 'all' && anaTop50) { anaTop50 = false; anaTop50Secs = []; }
+  renderAnalysis();
+  if (anaTop50) loadAnaTop50(); // 市場を跨いだら最新ランキングを取り直す
+}
 function anaSetSide(s) { anaSide = (s === 'trend') ? 'trend' : 'contra'; renderAnalysis(); }
 function anaToggleHolding(v) { anaHoldingOnly = !!v; renderAnalysis(); }
 function anaToggleTop50(v) {
