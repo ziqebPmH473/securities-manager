@@ -15,6 +15,14 @@
   const byFetchedAt = (l, r) => ((r && r.fetchedAt) || '') > ((l && l.fetchedAt) || '');
   // meta は両端末に同キーがあると従来 local 固定で上書きしていた。updatedAt の新しい方を採る。
   const byUpdatedAt = (l, r) => ((r && r.updatedAt) || '') > ((l && l.updatedAt) || '');
+  // meta(銘柄名)専用: 「名称あり」を「名称なし」より常に優先する。日本株は名称取得に失敗しても
+  // currency等が入るため「名称なし・新updatedAt」エントリが生まれ得て、updatedAt比較だけだと別端末の
+  // 正しい名称を上書きしてしまう（＝銘柄名が証券コードに戻る）。名称の有無を最優先し、同条件なら updatedAt。
+  const metaNewer = (l, r) => {
+    const ln = !!(l && l.name), rn = !!(r && r.name);
+    if (ln !== rn) return rn;                 // remoteのみ名称あり→remote採用 / localのみ名称あり→local維持
+    return ((r && r.updatedAt) || '') > ((l && l.updatedAt) || '');
+  };
   const SCHEMA = {
     securities:      ['records', (s) => `${s.market}:${String(s.ticker || '').toUpperCase()}`],
     holdings:        ['records', (h) => `${h.securityId}|${h.broker}|${h.accountType}`],
@@ -27,7 +35,7 @@
     importHistory:   ['records', (r) => `ih:${r.id}`],
     importFormats:   ['records', (f) => f && f.name != null ? `if:n:${f.name}` : `if:${JSON.stringify(f)}`],
     prices:          ['map', byFetchedAt],
-    meta:            ['map', byUpdatedAt],
+    meta:            ['map', metaNewer],
     techAnalysis:    ['map', byUpdatedAt],   // テクニカル分析結果。priceKey単位で3-way（_updatedAtの新しい方）
     indices:         ['map', null],
     importMappings:  ['map', null],
