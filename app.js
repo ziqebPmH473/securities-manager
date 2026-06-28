@@ -2991,6 +2991,7 @@ const GRADE_RANK = { S: 0, A: 1, B: 2, C: 3, D: 4 };
 function sortValue(sec, key) {
   const th = calc.totalHolding(sec.id);
   switch (key) {
+    case 'rank': return anaTop50Rank[priceKey(sec)] ?? Infinity; // 分析タブ・売買代金トップ50の初期ソート（順位昇順）
     case 'name': return calc.displayName(sec).toLowerCase();
     case 'ticker': return (sec.ticker || '').toLowerCase();
     case 'anaTotal': return techComposite(sec) ?? -Infinity;
@@ -6016,6 +6017,8 @@ let anaHoldingOnly = false;   // 保有銘柄のみ
 let anaTop50 = false;         // 売買代金トップ50を分析対象にする（保有のみと排他）
 let anaTop50Secs = [];        // トップ50の対象銘柄（登録済みは実体、未登録はランキング由来の仮想銘柄 _virtual）
 let anaTop50Busy = false;     // トップ50ランキング取得中
+let anaTop50Rank = {};        // priceKey→ランキング順位(1始まり)。トップ50の初期ソート(rankキー)用
+let _anaTop50SortBackup = null; // トップ50ON前のソートを退避し、OFFで復元（非top50のソートは変えない）
 let anaSearch = '';           // 検索（コード/名称）
 let anaSort = { key: 'score', dir: -1 };
 let anaPanelOpen = false;     // しきい値パネルの開閉
@@ -6116,8 +6119,24 @@ function anaSetSide(s) { anaSide = (s === 'trend') ? 'trend' : 'contra'; renderA
 function anaToggleHolding(v) { anaHoldingOnly = !!v; renderAnalysis(); }
 function anaToggleTop50(v) {
   anaTop50 = !!v;
-  if (anaTop50) { anaHoldingOnly = false; loadAnaTop50(); } // 排他: トップ50を選ぶと保有のみは解除
-  else { anaTop50Secs = []; renderAnalysis(); }
+  if (anaTop50) {
+    anaHoldingOnly = false; // 排他: トップ50を選ぶと保有のみは解除
+    // 非top50のソートを退避（OFFで戻す）。初期ソート=ランキング順は loadAnaTop50 で設定する。
+    _anaTop50SortBackup = {
+      ANALYSIS:   { sortKey: listState.ANALYSIS.sortKey,   sortDir: listState.ANALYSIS.sortDir },
+      ANALYSIS_T: { sortKey: listState.ANALYSIS_T.sortKey, sortDir: listState.ANALYSIS_T.sortDir },
+    };
+    loadAnaTop50();
+  } else {
+    anaTop50Secs = []; anaTop50Rank = {};
+    // 退避していた非top50のソートを復元（トップ50以外のソートは変えない）
+    if (_anaTop50SortBackup) {
+      Object.assign(listState.ANALYSIS, _anaTop50SortBackup.ANALYSIS);
+      Object.assign(listState.ANALYSIS_T, _anaTop50SortBackup.ANALYSIS_T);
+      _anaTop50SortBackup = null;
+    }
+    renderAnalysis();
+  }
 }
 // 売買代金トップ50を取得して分析対象に組み立てる。登録済み銘柄は実体を使い（取得済みのメタ/分析を表示）、
 // 未登録はランキングのコード・名称のみを持つ仮想銘柄(_virtual)にする。表示時に毎回最新ランキングを取得する。
@@ -6125,7 +6144,8 @@ async function loadAnaTop50() {
   if (anaTop50Busy) return;
   anaTop50Busy = true; renderAnalysis();
   const markets = anaMarket === 'all' ? ['JP', 'US'] : [anaMarket];
-  const secs = [], seen = new Set();
+  const secs = [], seen = new Set(), rank = {};
+  let n = 0;
   try {
     for (const market of markets) {
       const r = await fetch(`/api/ranking?market=${market}&kind=turnover&sub=all&count=50`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
@@ -6134,13 +6154,17 @@ async function loadAnaTop50() {
         const code = String(it.code).toUpperCase();
         const k = market + ':' + code;
         if (seen.has(k)) continue; seen.add(k);
+        rank[k] = ++n; // ランキング順位(1始まり)。初期ソート用。k は priceKey と一致
         const existing = store.data.securities.find(s => s.market === market && String(s.ticker || '').toUpperCase() === code);
         if (existing) { secs.push(existing); continue; }
         // 未登録＝仮想銘柄。priceKey/yahooSymbol が成立するよう market+ticker を持たせる。名称はランキング由来。
         secs.push({ id: 'v_' + k, market, ticker: it.code, name: it.name || code, currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, _virtual: true });
       }
     }
-    anaTop50Secs = secs;
+    anaTop50Secs = secs; anaTop50Rank = rank;
+    // 初期ソート＝ランキング順（rankキー昇順）。以後ユーザーが列をクリックすれば通常どおり変わる。
+    listState.ANALYSIS.sortKey = 'rank';   listState.ANALYSIS.sortDir = 1;
+    listState.ANALYSIS_T.sortKey = 'rank'; listState.ANALYSIS_T.sortDir = 1;
   } finally {
     anaTop50Busy = false;
     if (anaTop50) renderAnalysis(); // 取得完了で再描画（トグルがまだONのときのみ）
