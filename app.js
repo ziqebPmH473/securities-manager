@@ -1612,9 +1612,18 @@ const api = {
     const secs = store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
     if (!secs.length) return [];
     const symbols = [...new Set(secs.map(yahooSymbol))];
-    let data;
-    try { const res = await fetch(`/api/splits?symbols=${encodeURIComponent(symbols.join(','))}`); if (!res.ok) return []; data = await res.json(); }
-    catch (_) { return []; }
+    // splits.js は 1シンボル=1 Yahoo fetch のため、全銘柄を1リクエストにまとめると
+    // Cloudflare の1リクエストあたりサブリクエスト上限(~50)を超えて全件失敗する（SEC-203）。
+    // refreshPrice/refreshMeta と同様に 15件ずつチャンク分割し、部分失敗は次チャンクへ。
+    const CHUNK = 15;
+    const data = {};
+    for (let i = 0; i < symbols.length; i += CHUNK) {
+      const part = symbols.slice(i, i + CHUNK);
+      try {
+        const res = await fetch(`/api/splits?symbols=${encodeURIComponent(part.join(','))}`);
+        if (res.ok) Object.assign(data, await res.json());
+      } catch (_) { /* このチャンクは諦めて次へ */ }
+    }
     const td = today(); const now = new Date().toISOString(); const pending = [];
     for (const sec of secs) {
       const info = data[yahooSymbol(sec)];
