@@ -5877,10 +5877,12 @@ function openSecurityDetail(secId) {
     sec.starRisk != null ? kv('リスク', starsFmt(sec.starRisk)) : '',
     sec.analysisNote ? kv('分析メモ' + (sec.analysisDate ? `（${esc(sec.analysisDate)}）` : ''), esc(sec.analysisNote)) : '',
   ].join('');
+  // 推奨額＝カテゴリ別の推奨購入額（市場通貨。US=ドル/JP=円）。store.categoryAmountFor から都度算出する。
+  // 旧実装は取込専用フィールド sec.recoAmount を参照しており、未取込でも古い値が残って桁違い表示になっていた。
+  const recoBuy = sec.category ? store.categoryAmountFor(sec.category, sec.market) : null;
   const metaBox = [
     kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
-    // 推奨額(recoAmount)は分析シート由来の円建て。市場通貨(m=ccy+num)ではなく yen() で表示する。
-    sec.recoAmount != null ? kv('推奨額', yen(sec.recoAmount)) : '',
+    kv('推奨額', recoBuy ? m(recoBuy) : '—'),
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
   ].join('');
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
@@ -6684,8 +6686,8 @@ function karteCardHtml(sec) {
     sec.starStrength != null ? row('事業の強さ', starsFmt(sec.starStrength)) : '',
     sec.starRisk != null ? row('リスク', starsFmt(sec.starRisk)) : '',
     row('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
-    // 推奨額(recoAmount)は分析シート由来の円建て。市場通貨(m=ccy+num)ではなく yen() で表示する。
-    sec.recoAmount != null ? row('推奨額', yen(sec.recoAmount)) : '',
+    // 推奨額＝カテゴリ別の推奨購入額（市場通貨）。都度 categoryAmountFor から算出（取込専用 recoAmount は参照しない）。
+    row('推奨額', sec.category && store.categoryAmountFor(sec.category, sec.market) ? m(store.categoryAmountFor(sec.category, sec.market)) : '—'),
     row('優先順位/評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
     sec.analysisNote ? row('分析メモ', esc(sec.analysisNote)) : '',
   ].join('');
