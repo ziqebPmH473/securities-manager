@@ -3651,7 +3651,8 @@ function openAnalysisHistory(secId) {
     return parts.every(p => p === '—') ? dash : parts.join('/');
   };
   const ccy = MARKET_CCY[sec.market];
-  const amtTxt = (a) => a.recoAmount != null ? ccy + num(a.recoAmount) : dash;
+  // 推奨投資額は円建て（分析シート由来）。市場に関わらず yen() で表示する（米株でも "$" を付けない）。
+  const amtTxt = (a) => a.recoAmount != null ? yen(a.recoAmount) : dash;
   // カテゴリは分析レコードに保存されていれば各回の値、無ければ先頭(=現在)行のみ銘柄の現在カテゴリで補完
   const catTxt = (a, isFirst) => { const c = a.category || (isFirst ? sec.category : null); return c ? categoryTag(c) : dash; };
   // [見出し, 列幅px]。table-layout:fixed なので幅はこの colgroup で決まる。分析メモは width 未指定＝可変にし、
@@ -5878,7 +5879,8 @@ function openSecurityDetail(secId) {
   ].join('');
   const metaBox = [
     kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
-    sec.recoAmount != null ? kv('推奨額', m(sec.recoAmount)) : '',
+    // 推奨額(recoAmount)は分析シート由来の円建て。市場通貨(m=ccy+num)ではなく yen() で表示する。
+    sec.recoAmount != null ? kv('推奨額', yen(sec.recoAmount)) : '',
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
   ].join('');
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
@@ -6682,7 +6684,8 @@ function karteCardHtml(sec) {
     sec.starStrength != null ? row('事業の強さ', starsFmt(sec.starStrength)) : '',
     sec.starRisk != null ? row('リスク', starsFmt(sec.starRisk)) : '',
     row('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
-    sec.recoAmount != null ? row('推奨額', m(sec.recoAmount)) : '',
+    // 推奨額(recoAmount)は分析シート由来の円建て。市場通貨(m=ccy+num)ではなく yen() で表示する。
+    sec.recoAmount != null ? row('推奨額', yen(sec.recoAmount)) : '',
     row('優先順位/評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
     sec.analysisNote ? row('分析メモ', esc(sec.analysisNote)) : '',
   ].join('');
