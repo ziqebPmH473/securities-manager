@@ -8242,6 +8242,14 @@ function refreshAllMeta() {
     await api.refreshMeta(secs); await api.checkSplits(); render();
   }, '銘柄情報を更新しました').catch(() => {});
 }
+// 分割タブ専用: 名前・株価・ファンダ等は取得せず、株式分割・併合の情報だけを再取得する軽量リフレッシュ
+function refreshSplitsOnly() {
+  const secs = store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
+  if (!secs.length) { toast('銘柄がありません'); return; }
+  withBusy('分割情報を取得中…', async () => {
+    await api.checkSplits(); render();
+  }, '分割情報を更新しました').catch(() => {});
+}
 
 // ---------- 株式分割・併合タブ ----------
 function fmtDate(iso) { return iso ? fmtDateTime(iso).slice(0, 10) : '—'; }
@@ -8321,7 +8329,10 @@ function renderSplitsTab() {
   app.innerHTML = `
     <div class="section">
       <div class="section-head"><h2>株式分割・併合の承認待ち（${pending.length} 件）</h2>
-        ${pending.length ? `<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked('sptbl-pending')">選択を調整</button>` : ''}</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-sm" onclick="refreshSplitsOnly()" title="名前・株価等は取得せず、株式分割・併合の情報だけを再取得します">分割情報を再取得</button>
+          ${pending.length ? `<button class="btn btn-primary btn-sm" onclick="openSplitAdjustChecked('sptbl-pending')">選択を調整</button>` : ''}
+        </div></div>
       <div class="section-body">${pending.length === 0 ? '<div class="empty">承認待ちの分割はありません。</div>' : `
         <p class="muted" style="padding:10px 16px 0">警告(⚠)・取込日(分割日より<strong>前</strong>＝未調整の疑いは<span class="after-split">この色</span>)を確認し、調整するものにチェック→「選択を調整」。行の「調整」で個別も可。</p>
         ${splitTable(pending, 'pending')}`}
@@ -9415,6 +9426,7 @@ window.closeModal = closeModal;
 window.exportData = exportData;
 window.exportGeneric = exportGeneric;
 window.refreshAllMeta = refreshAllMeta;
+window.refreshSplitsOnly = refreshSplitsOnly;
 window.splitHistAll = splitHistAll;
 window.openSplitAdjustChecked = openSplitAdjustChecked;
 window.openSplitAdjustOne = openSplitAdjustOne;
