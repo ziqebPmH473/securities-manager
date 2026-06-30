@@ -3145,9 +3145,8 @@ function renderMarket(market) {
   const st = listState[colMkt];
   const isStock = market !== 'FUND';
   let secs = store.data.securities.filter(s => isAll ? (s.market === 'US' || s.market === 'JP') : s.market === market);
-  // 一覧に出すのは「保有あり(数量>0) または 注意銘柄」のみ。
-  // 保有なし＆非注意（例: 分析後に全売却した銘柄）は一覧から外し、銘柄マスタタブで管理する。
-  secs = secs.filter(s => s.watch || store.data.holdings.some(h => h.securityId === s.id && h.quantity > 0));
+  // 保有有無にかかわらず全銘柄を表示する（2026-06-30 すみぽん要望）。絞り込みは検索＋列フィルタで行う。
+  // （旧仕様: 「保有あり(数量>0) または 注意銘柄」のみ表示。列フィルタ追加により撤廃）
   if (holdingsSearch.trim()) secs = secs.filter(s => secMatchesQuery(s, holdingsSearch));
   // 列フィルタ（分析と共通。種別・会社・カテゴリ等はパネルで設定）
   secs = applyColFilters(secs, 'holdings');
