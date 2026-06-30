@@ -1955,8 +1955,9 @@ function fltSavePreset(scope) {
   for (const r of st.rows) { if (st.num[r.key]) num[r.key] = { ...st.num[r.key] }; if (st.sel[r.key]) sel[r.key] = [...st.sel[r.key]]; }
   const ex = fltPresets.find(p => p.name === name);
   let pid;
-  if (ex) { ex.rows = rows; ex.num = num; ex.sel = sel; pid = ex.id; }
-  else { pid = 'p' + Date.now(); fltPresets.push({ id: pid, name, rows, num, sel }); }
+  // 同名があれば内容更新＆復活（deleted解除）。updatedAt で同期マージの新しい方が勝つ。
+  if (ex) { ex.rows = rows; ex.num = num; ex.sel = sel; ex.deleted = false; ex.updatedAt = store._now(); pid = ex.id; }
+  else { pid = 'p' + Date.now(); fltPresets.push({ id: pid, name, rows, num, sel, updatedAt: store._now() }); }
   fltState[scope].presetId = pid; // 保存後はそのパターンが選択中の状態に
   saveFilterPresets(); fltPersist(scope); fltRerender(scope);
   toast(`パターン「${name}」を保存しました`);
@@ -1965,7 +1966,7 @@ function fltSavePreset(scope) {
 function fltApplyPreset(scope, id) {
   const st = fltState[scope];
   if (!id) { st.rows = []; st.num = {}; st.sel = {}; st.presetId = ''; fltPersist(scope); fltRerender(scope); return; }
-  const p = fltPresets.find(x => String(x.id) === String(id)); if (!p) return;
+  const p = fltPresets.find(x => String(x.id) === String(id)); if (!p || p.deleted) return;
   const valid = new Set(filterableCols(scope).map(c => c.key));
   st.rows = (p.rows || []).filter(r => valid.has(r.key)).map(r => ({ key: r.key }));
   st.num = {}; st.sel = {};
@@ -1978,7 +1979,8 @@ function fltDeletePreset(scope, id) {
   if (!id) { fltRerender(scope); return; }
   const p = fltPresets.find(x => String(x.id) === String(id));
   if (p && !confirm(`パターン「${p.name}」を削除しますか？`)) { fltRerender(scope); return; }
-  fltPresets = fltPresets.filter(x => String(x.id) !== String(id));
+  // 配列から消さずトンボストン化（削除を同期で伝播・他端末で勝手に復活させない）
+  { const t = fltPresets.find(x => String(x.id) === String(id)); if (t) { t.deleted = true; t.updatedAt = store._now(); } }
   // 削除したパターンを各タブで適用中だったら選択を外す
   for (const sc of ['holdings', 'analysis', 'secmaster']) if (fltState[sc].presetId === String(id)) fltState[sc].presetId = '';
   saveFilterPresets(); saveFilterState(); fltRerender(scope);
@@ -2007,7 +2009,8 @@ function filterPanelHtml(scope) {
     }
     return `<div class="afl-row" data-key="${r.key}"><span class="afl-l">${esc(c.label)}</span><div class="afl-ctrl">${ctrl}</div><button class="afl-x" title="削除" onclick="fltRemoveFilter('${scope}','${r.key}')">×</button></div>`;
   }).join('');
-  const presetDel = fltPresets.length ? `<select class="afl-add" onchange="fltDeletePreset('${scope}',this.value)"><option value="">パターン削除…</option>${fltPresets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>` : '';
+  const presetList = fltPresets.filter(p => !p.deleted);
+  const presetDel = presetList.length ? `<select class="afl-add" onchange="fltDeletePreset('${scope}',this.value)"><option value="">パターン削除…</option>${presetList.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>` : '';
   return `<div class="ana-panel afl-panel">
     <div class="afl-head"><b>列フィルター</b><span class="muted">項目を追加して条件を設定。「パターン保存」で名前を付けると、次回からツールバーの選択だけで呼び出せます。</span><div class="tb-spacer"></div>
       <button class="btn btn-sm" onclick="fltSavePreset('${scope}')">現在の条件をパターン保存</button>
@@ -2024,7 +2027,7 @@ function filterBtnHtml(scope) {
   const n = fltActiveCount(scope);
   const presetSel = `<select class="flt-preset" title="保存したパターンを適用" onchange="fltApplyPreset('${scope}',this.value)">`
     + `<option value="">パターン: なし</option>`
-    + fltPresets.map(p => `<option value="${p.id}" ${st.presetId === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
+    + fltPresets.filter(p => !p.deleted).map(p => `<option value="${p.id}" ${st.presetId === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
     + `</select>`;
   const btn = `<button class="btn btn-sm${n ? ' active' : ''}" onclick="fltToggle('${scope}')" title="フィルターの詳細設定">${svgIcon('filter', '')} 詳細${n ? ` (${n})` : ''} ${st.open ? '▲' : '▼'}</button>`;
   return presetSel + btn;
@@ -2141,7 +2144,11 @@ function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
 // 上にある範囲ほど優先（先頭一致）。旧ハードコード（前日比/5年高値比/前回比）を移行。初回のみ全画面に適用。
 function defaultCfRules() {
   const all = CF_SCREENS.map(s => s.id);
-  const G = (col, ranges) => ({ id: cfNewId(), col, screens: all.slice(), ranges });
+  // 既定グループは固定id（cf_def_*）にする。ランダムidだと端末ごとに別idの既定が生まれ、
+  // id키ーの3-wayマージで既定どうしが重複合算してしまう。固定idなら同一視され、編集や削除
+  // （トンボストン）が updatedAt で正しく既定に勝てる。seed段階では updatedAt を付けない
+  // （= remote のユーザー編集に負ける）。reset 操作のときだけ後段で updatedAt を打つ。
+  const G = (col, ranges) => ({ id: 'cf_def_' + col, col, screens: all.slice(), ranges });
   return [
     // 前日比: 上昇=緑系 / 下落=赤系
     G('day', [
@@ -2166,12 +2173,31 @@ function defaultCfRules() {
 function migrateCfRules(rules) {
   if (!Array.isArray(rules)) return defaultCfRules();
   if (!rules.length) return rules;
-  if (rules[0] && Array.isArray(rules[0].ranges)) return rules; // 既にグループ型
+  if (rules[0] && Array.isArray(rules[0].ranges)) return cfNormalizeDefaultIds(rules); // 既にグループ型
   const groups = []; const map = {};
   for (const r of rules) {
     const k = r.col + '|' + JSON.stringify(r.screens || []);
     if (!map[k]) { map[k] = { id: cfNewId(), col: r.col, screens: (r.screens || []).slice(), ranges: [] }; groups.push(map[k]); }
     map[k].ranges.push({ min: r.min ?? null, max: r.max ?? null, bg: r.bg });
+  }
+  return cfNormalizeDefaultIds(groups);
+}
+// 旧シードの既定（ランダムid・未編集）を固定id(cf_def_*)へ寄せる。内容が既定と完全一致するグループだけ
+// id を付け替える（＝ユーザーが編集した既定は別物として温存）。これで端末間の id 不一致による既定の
+// 重複合算を防ぐ。冪等（既に cf_def_* なら何もしない）。
+function cfNormalizeDefaultIds(groups) {
+  // 既定の判定は ranges（色と範囲）の一致で行う。screens は既定の構成が増減した履歴があり
+  // （例: 'analysis' 画面の後付け）、screens まで含めると旧シード既定が一致せず再キーできない。
+  const defRangesByCol = {};
+  for (const d of defaultCfRules()) defRangesByCol[d.col] = JSON.stringify(d.ranges);
+  const usedDef = new Set(groups.filter(g => typeof g.id === 'string' && g.id.startsWith('cf_def_')).map(g => g.id));
+  for (const g of groups) {
+    if (typeof g.id === 'string' && g.id.startsWith('cf_def_')) continue;
+    const want = 'cf_def_' + g.col;
+    if (usedDef.has(want)) continue; // 同colの固定id既定が既にある→重複付与しない
+    if (defRangesByCol[g.col] && defRangesByCol[g.col] === JSON.stringify(g.ranges)) {
+      g.id = want; usedDef.add(want);
+    }
   }
   return groups;
 }
@@ -2180,6 +2206,7 @@ function cfBgFor(key, v, screen) {
   if (v == null || !isFinite(v)) return '';
   const groups = store.data.cfRules || [];
   for (const g of groups) {
+    if (g.deleted) continue;            // トンボストン（削除済み・同期保持用）は適用しない
     if (g.col !== key) continue;
     if (g.screens && g.screens.length && !g.screens.includes(screen)) continue;
     for (const r of (g.ranges || [])) {
@@ -4271,7 +4298,9 @@ function mxbReadForm() {
   const rate = parseFloat(document.getElementById('mxb-rate').value) || DEFAULT_MATRIX_USDJPY;
   return { bands, rate };
 }
-function mxbApply(bands, rate) { store.data.matrixBands = bands; store.data.matrixSettings = { ...(store.data.matrixSettings || {}), usdJpy: rate }; store.save(); }
+// matrixBands(順序つき配列)と rate は常に一括編集される。配列自身は _updatedAt を持てない（JSON化で消える）
+// ため、相方 matrixSettings._updatedAt に編集時刻を入れ、同期はこの時刻で両方のタイブレークを行う（pairTs）。
+function mxbApply(bands, rate) { store.data.matrixBands = bands; store.data.matrixSettings = { ...(store.data.matrixSettings || {}), usdJpy: rate, _updatedAt: store._now() }; store.save(); }
 function mxbAddBand() { const { bands, rate } = mxbReadForm(); bands.push({ max: null, label: '新レンジ', color: '#6b7280' }); mxbApply(bands, rate); openMatrixBandMaster(); }
 function mxbDeleteBand(i) { const { bands, rate } = mxbReadForm(); bands.splice(i, 1); mxbApply(bands, rate); openMatrixBandMaster(); }
 function mxbSave() {
@@ -5022,7 +5051,7 @@ function cfApplyTplSel(sel) {
 }
 
 function openCfRulesMaster() {
-  const groups = store.data.cfRules || [];
+  const groups = (store.data.cfRules || []).filter(g => !g.deleted); // トンボストンは一覧に出さない
   const scLabel = id => (CF_SCREENS.find(s => s.id === id) || {}).label || id;
   const colLabel = k => { const c = MASTER_COLS.find(m => m.key === k); return c ? c.label : k; };
   const swatches = g => (g.ranges || []).map(r => `<span title="${r.min != null ? r.min : '−∞'}〜${r.max != null ? r.max : '+∞'}" style="display:inline-block;width:20px;height:14px;border-radius:3px;background:${r.bg};border:1px solid var(--border);vertical-align:middle"></span>`).join(' ');
@@ -5094,8 +5123,9 @@ function saveCfRule(e, id) {
   if (ranges == null) return false;
   if (!ranges.length) { toast('範囲を1行以上入力してください'); return false; }
   store.data.cfRules = store.data.cfRules || [];
-  if (id) { const gr = store.data.cfRules.find(x => x.id === id); if (gr) Object.assign(gr, { col, screens, ranges }); }
-  else { store.data.cfRules.push({ id: cfNewId(), col, screens, ranges }); }
+  // updatedAt を打って同期マージで新しい方が勝つようにする。編集時は deleted を解除（復活）。
+  if (id) { const gr = store.data.cfRules.find(x => x.id === id); if (gr) Object.assign(gr, { col, screens, ranges, deleted: false, updatedAt: store._now() }); }
+  else { store.data.cfRules.push({ id: cfNewId(), col, screens, ranges, updatedAt: store._now() }); }
   store.save(); render(); openCfRulesMaster();
   return false;
 }
@@ -5109,14 +5139,34 @@ function cfCopyToCol() {
   if (ranges == null) return;
   if (!ranges.length) { toast('範囲を1行以上入力してください'); return; }
   store.data.cfRules = store.data.cfRules || [];
-  store.data.cfRules.push({ id: cfNewId(), col: targetCol, screens, ranges });
+  store.data.cfRules.push({ id: cfNewId(), col: targetCol, screens, ranges, updatedAt: store._now() });
   store.save(); render();
   const lbl = (MASTER_COLS.find(m => m.key === targetCol) || {}).label || targetCol;
   toast(`「${lbl}」に設定をコピーしました`);
   openCfRulesMaster();
 }
-function deleteCfRule(id) { store.data.cfRules = (store.data.cfRules || []).filter(x => x.id !== id); store.save(); render(); openCfRulesMaster(); }
-function resetCfRules() { if (!confirm('背景色ルールを既定（初期状態）に戻します。よろしいですか？')) return; store.data.cfRules = defaultCfRules(); store.save(); render(); openCfRulesMaster(); }
+// 削除はトンボストン化（配列から消さず deleted:true＋updatedAt）。これで「削除」が同期で他端末に
+// 伝播し、別端末が既定を再シードしても updatedAt の新しい削除が勝つ（＝勝手に復活しない）。
+function deleteCfRule(id) {
+  const g = (store.data.cfRules || []).find(x => x.id === id);
+  if (g) { g.deleted = true; g.updatedAt = store._now(); }
+  store.save(); render(); openCfRulesMaster();
+}
+function resetCfRules() {
+  if (!confirm('背景色ルールを既定（初期状態）に戻します。よろしいですか？')) return;
+  const now = store._now();
+  const defs = defaultCfRules();
+  const defIds = new Set(defs.map(d => d.id));
+  // 既存グループは全てトンボストン化（同期で削除を伝播）。既定idと被るものは下で復活させる。
+  for (const g of (store.data.cfRules || [])) { g.deleted = true; g.updatedAt = now; }
+  const byId = new Map((store.data.cfRules || []).map(g => [g.id, g]));
+  for (const d of defs) {
+    const ex = byId.get(d.id);
+    if (ex) Object.assign(ex, d, { deleted: false, updatedAt: now }); // 既定idを復活＆既定内容で上書き
+    else (store.data.cfRules = store.data.cfRules || []).push({ ...d, updatedAt: now });
+  }
+  store.save(); render(); openCfRulesMaster();
+}
 
 // ---------- 取込タブ（銘柄・保有データの取込を集約） ----------
 // ソースカード定義（各社のロゴ色・入力方式）。key は IMPORT_PROFILES に対応
@@ -6927,7 +6977,7 @@ function openGradeMaster() {
     const grade = wrap.dataset.name.replace(/^grade-/, '');
     wrap.querySelectorAll('.cswatch').forEach(btn => btn.addEventListener('click', () => {
       const g = store.data.grades.find(x => x.grade === grade);
-      if (g) { g.color = btn.dataset.key; store.save(); render(); openGradeMaster(); }
+      if (g) { g.color = btn.dataset.key; g.updatedAt = store._now(); store.save(); render(); openGradeMaster(); }
     }));
   });
 }

@@ -23,12 +23,21 @@
     if (ln !== rn) return rn;                 // remoteのみ名称あり→remote採用 / localのみ名称あり→local維持
     return ((r && r.updatedAt) || '') > ((l && l.updatedAt) || '');
   };
+  // mktRanking はキャッシュ map（key→{items,at}）。両在時は取得時刻 at の新しい方を採る。
+  const byAt = (l, r) => ((r && r.at) || '') > ((l && l.at) || '');
   const SCHEMA = {
     securities:      ['records', (s) => `${s.market}:${String(s.ticker || '').toUpperCase()}`],
     holdings:        ['records', (h) => `${h.securityId}|${h.broker}|${h.accountType}`],
     transactions:    ['records', (t) => `t:${t.id}`],
     rules:           ['records', (r) => `r:${r.id}`],
     categories:      ['records', (c) => `c:${c.category}`],
+    // マスタ系（背景色ルール/格付け色/フィルタプリセット）。id等で一致＋updatedAtの新しい方。
+    // 削除は配列除去ではなくトンボストン（deleted:true＋新updatedAt）で表現するので、
+    // 「新しい削除」が「古い設定」や「別端末の再シードした既定」に勝てる（＝削除も同期で保持される）。
+    cfRules:         ['records', (r) => `cf:${r.id}`],
+    grades:          ['records', (r) => `g:${r.grade}`],
+    _filterPresets:  ['records', (r) => `fp:${r.id}`],
+    mktRanking:      ['map', byAt],
     amountHistory:   ['records', (r) => `ah:${r.id}`],
     amountSnapshots: ['records', (r) => `as:${r.id}`],
     analyses:        ['records', (r) => `an:${r.securityId}|${r.analysisDate}`],
@@ -42,6 +51,11 @@
     importAliases:   ['map', null],
     fx:              ['single'],
     settings:        ['singleTs'],
+    // マトリックスのレンジ(順序つき配列)とレート設定は常に一括編集される。配列は _updatedAt を
+    // 直接持てない（JSON化でドロップ）ため、matrixSettings._updatedAt を共通の編集時刻として両方の
+    // タイブレークに使う（matrixBands は pairTs で matrixSettings の時刻を参照）。
+    matrixBands:     ['pairTs', 'matrixSettings'],
+    matrixSettings:  ['singleTs'],
     _colPrefs:       ['colprefs'],
     lastPriceUpdate: ['max'],
     lastInfoDate:    ['max'],
@@ -67,7 +81,10 @@
       const lP = l !== undefined, rP = r !== undefined, bP = b !== undefined;
       if (lP && rP) {
         const a = tsOf(l), c = tsOf(r);
-        out.push(a && c && c > a ? r : l);            // 両在→updatedAt新しい方（無ければlocal）
+        // 両在→updatedAt の新しい方。片方だけ updatedAt を持つ場合は「持つ方（=編集された方）」が勝つ
+        // （'' < 実時刻）。両方無し/同値なら local 維持。これで「別端末の編集」が「自端末の再シードした
+        // 既定（updatedAt無し）」に勝ち、背景色ルール等がデフォルトへ戻る不具合を防ぐ。
+        out.push(c > a ? r : l);
       } else if (lP && !rP) {
         // remote が配列として提供されている時だけ「remoteで削除」とみなす（未提供なら local を保持）
         if (remoteGiven && bP && !changedFromBase(l, b)) { /* remoteで削除＆local未変更→削除反映 */ } else out.push(l);
@@ -108,6 +125,15 @@
     if (lj === bj) return remote;
     if (rj === bj) return local;
     const lt = (local && local._updatedAt) || '', rt = (remote && remote._updatedAt) || '';
+    return (rt > lt) ? remote : local;
+  }
+  // singleTs と同じだが、タイブレークの _updatedAt を「別キーの値(lref/rref)」から読む。
+  // 配列など _updatedAt を自身に持てない値を、一括編集される相方(matrixSettings)の時刻で判定する用途。
+  function mergeSingleRefTs3way(base, local, remote, lref, rref) {
+    const bj = JSON.stringify(base), lj = JSON.stringify(local), rj = JSON.stringify(remote);
+    if (lj === bj) return remote;
+    if (rj === bj) return local;
+    const lt = (lref && lref._updatedAt) || '', rt = (rref && rref._updatedAt) || '';
     return (rt > lt) ? remote : local;
   }
   const mergeMax = (a, b) => (a == null) ? b : (b == null) ? a : (b > a ? b : a);
@@ -153,12 +179,13 @@
       else if (rule[0] === 'max') out[key] = mergeMax(local[key], remote[key]);
       else if (rule[0] === 'maxNum') out[key] = mergeMaxNum(local[key], remote[key]);
       else if (rule[0] === 'singleTs') out[key] = mergeSingleTs3way(base[key], local[key], remote[key]);
+      else if (rule[0] === 'pairTs') out[key] = mergeSingleRefTs3way(base[key], local[key], remote[key], local[rule[1]], remote[rule[1]]);
       else if (rule[0] === 'colprefs') out[key] = mergeColPrefs3way(base[key], local[key], remote[key]);
       else out[key] = mergeSingle3way(base[key], local[key], remote[key]);
     }
     return out;
   }
 
-  const api = { mergeBundle, mergeRecords3way, mergeMap3way, mergeSingle3way, mergeSingleTs3way, mergeColPrefs3way, mergeMax, mergeMaxNum, SCHEMA };
+  const api = { mergeBundle, mergeRecords3way, mergeMap3way, mergeSingle3way, mergeSingleTs3way, mergeSingleRefTs3way, mergeColPrefs3way, mergeMax, mergeMaxNum, SCHEMA };
   if (typeof globalThis !== 'undefined') globalThis.SyncMerge = api;
 })();
