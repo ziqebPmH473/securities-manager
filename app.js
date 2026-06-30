@@ -463,6 +463,15 @@ const store = {
     this.applyTransaction(t);
     this.save();
   },
+  // 既存取引の受渡金額(円)だけを更新（他の項目は維持）。旧効果を取り消し→値を更新→新効果を適用するので
+  // 取得円(acqJpy)累計も正しく付け替わる。settleJpy=null で受渡金額をクリア。save しない版（一括用に呼び元でまとめて save）。
+  setTransactionSettle(id, settleJpy) {
+    const t = this.data.transactions.find(x => x.id === id); if (!t) return false;
+    this.reverseTransaction(t);
+    if (settleJpy == null) delete t.settleJpy; else t.settleJpy = settleJpy;
+    this.applyTransaction(t);
+    return true;
+  },
 
   // rules
   rule(id) { return this.data.rules.find(r => r.id === id) || this.defaultRule(); },
@@ -5277,8 +5286,10 @@ function renderImport() {
       <div class="section-body" style="padding:16px">
         <div class="btn-row">
           <button class="btn btn-primary" onclick="openTxnImport()">取引履歴を一括取込（貼付け）</button>
+          <button class="btn" onclick="openTxnSettleImport()">受渡金額(円)を一括上書き</button>
         </div>
         <p class="muted grp-note">1銘柄分の過去の売買明細（日付・種別・数量・単価…）を貼り付けて一括登録。<strong>「保有に反映しない（履歴のみ）」を既定ON</strong>にしてあるので、現在の保有数量・平均取得単価を崩さず過去履歴を入れられます（前回購入日・購入回数・判定には反映）。</p>
+        <p class="muted grp-note">「受渡金額(円)を一括上書き」＝記録時に空欄にした受渡金額(円)を、取引報告書を貼り付けて<strong>既存の取引にまとめて反映</strong>。<strong>銘柄×日付×種別×数量×証券会社×口座</strong>が一致した取引にだけ書き込みます（一致なし・複数一致はスキップ）。</p>
       </div>
     </div>`;
 }
@@ -5377,6 +5388,159 @@ function txnImportCommit() {
   closeModal();
   toast(`${n}件の取引を取り込みました`);
   render();
+}
+
+// ---------- 受渡金額(円)を既存取引に一括上書き ----------
+// 記録時に空欄にした受渡金額(円)=settleJpy を、取引報告書を貼り付けて既存取引にまとめて反映する。
+// 同一判定キー: 銘柄(securityId) × 日付 × 種別 × 数量 × 証券会社 × 口座。一致なし・複数一致はスキップ。
+const TS_FIELDS = [
+  { key: 'ticker', label: 'コード/ティッカー', req: true },
+  { key: 'market', label: '市場', req: true },
+  { key: 'tradedAt', label: '日付', req: true },
+  { key: 'type', label: '種別(買/売)', req: true },
+  { key: 'quantity', label: '数量', req: true },
+  { key: 'broker', label: '証券会社', req: true },
+  { key: 'account', label: '口座', req: true },
+  { key: 'settleJpy', label: '受渡金額(円)', req: true },
+];
+const TS_FIXED_KEYS = ['market', 'type', 'broker', 'account'];
+const TS_AUTOMAP = {
+  'ティッカー': 'ticker', 'コード': 'ticker', '銘柄コード': 'ticker', '証券コード': 'ticker', '銘柄': 'ticker', '市場': 'market',
+  '日付': 'tradedAt', '約定日': 'tradedAt', '取引日': 'tradedAt', '受渡日': 'tradedAt',
+  '種別': 'type', '売買': 'type', '売買区分': 'type', '取引区分': 'type',
+  '数量': 'quantity', '株数': 'quantity', '約定数量': 'quantity', '約定株数': 'quantity',
+  '証券会社': 'broker', '口座': 'account', '口座種別': 'account',
+  '受渡金額(円)': 'settleJpy', '受渡金額（円）': 'settleJpy', '受渡金額': 'settleJpy', '国内受渡金額': 'settleJpy',
+  '受取金額(円)': 'settleJpy', '受取金額（円）': 'settleJpy', '受取金額': 'settleJpy',
+};
+let _tsHeaders = [], _tsRows = [], _tsMapping = [];
+
+function openTxnSettleImport() {
+  _tsHeaders = []; _tsRows = []; _tsMapping = [];
+  showModal('受渡金額(円)を一括上書き', `
+    <p class="muted" style="margin:0 0 8px">取引報告書などをヘッダ行ごと貼り付け→列ごとに取込先を選択。<strong>銘柄×日付×種別×数量×証券会社×口座</strong>が一致した既存取引の<strong>受渡金額(円)だけ</strong>を更新します（保有数量・平均取得単価は変えません）。一致なし・複数一致の行はスキップします。</p>
+    <textarea id="ts-text" rows="6" style="width:100%;font-family:monospace;font-size:12px" placeholder="ヘッダ行を含めて貼り付け（タブ/カンマ/マークダウン表対応）" oninput="tsParse(this.value)"></textarea>
+    <div id="ts-map"></div>
+    <div class="grp-label" style="margin-top:8px">列に無い項目を固定値で指定（全行に適用・任意）</div>
+    <div class="btn-row" style="align-items:flex-end" id="ts-fixed">
+      <div class="field" style="width:auto"><label style="font-size:11px">市場</label>
+        <select id="ts-fix-market" onchange="tsRenderPreview()"><option value="">―</option><option>US</option><option>JP</option></select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">種別</label>
+        <select id="ts-fix-type" onchange="tsRenderPreview()"><option value="">―</option><option value="buy">買い</option><option value="sell">売り</option></select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">証券会社</label>
+        <select id="ts-fix-broker" onchange="tsRenderPreview()"><option value="">―</option>${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">口座</label>
+        <select id="ts-fix-account" onchange="tsRenderPreview()"><option value="">―</option>${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+    </div>
+    <div id="ts-preview"></div>
+    <div class="btn-row" style="margin-top:10px;align-items:center">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeModal()">閉じる</button>
+      <button class="btn btn-primary" onclick="runTxnSettleImport()">取込実行</button>
+    </div>`, { wide: true });
+}
+function tsFixedValues() {
+  const f = {};
+  for (const k of TS_FIXED_KEYS) { const e = document.getElementById('ts-fix-' + k); if (e && e.value) f[k] = e.value; }
+  return f;
+}
+function tsParse(text) {
+  const mdLines = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+  const raw = isMdTable(mdLines)
+    ? mdLines.filter(l => !isMdSepRow(l)).map(splitMdRow)
+    : (text.includes('\t') ? text.split(/\r?\n/).map(l => l.split('\t')) : parseCsvText(text));
+  const rows = raw.filter(r => r.some(c => String(c).trim() !== ''));
+  const mapDiv = document.getElementById('ts-map'), pvDiv = document.getElementById('ts-preview');
+  if (!rows.length) { _tsHeaders = []; _tsRows = []; _tsMapping = []; if (mapDiv) mapDiv.innerHTML = ''; if (pvDiv) pvDiv.innerHTML = ''; return; }
+  _tsHeaders = rows[0].map(h => String(h).trim());
+  _tsRows = rows.slice(1);
+  _tsMapping = _tsHeaders.map(h => TS_AUTOMAP[h] || '');
+  tsRenderMap();
+}
+function tsRenderMap() {
+  const opts = (sel) => `<option value="">（取込まない）</option>` + TS_FIELDS.map(f => `<option value="${f.key}" ${sel === f.key ? 'selected' : ''}>${esc(f.label)}${f.req ? ' *' : ''}</option>`).join('');
+  const items = _tsHeaders.map((h, i) => `<div class="field" style="min-width:150px;flex:0 0 auto">
+    <label style="font-size:11px">${esc(h || '(空欄)')}</label>
+    <select onchange="tsSetMap(${i}, this.value)">${opts(_tsMapping[i])}</select></div>`).join('');
+  document.getElementById('ts-map').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0">${items}</div>`;
+  tsRenderPreview();
+}
+function tsSetMap(i, v) { _tsMapping[i] = v; tsRenderPreview(); }
+function tsNormTradedAt(s) {
+  const m = String(s || '').trim().replace(/[年月]/g, '-').replace(/日/g, '').replace(/\//g, '-').match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  return m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : null;
+}
+function tsNormType(s) { const v = String(s || ''); return /買|buy/i.test(v) ? 'buy' : /売|sell/i.test(v) ? 'sell' : null; }
+// 1行を解析し、一致候補を探す。status: ok(1件一致) / nomatch(0件) / multi(複数) / bad(必須欠落・銘柄未登録・形式NG)
+function tsResolveRow(row, fixed) {
+  const rec = {};
+  _tsMapping.forEach((f, i) => { if (f) rec[f] = row[i] != null ? String(row[i]).trim() : ''; });
+  for (const k of TS_FIXED_KEYS) { if (fixed[k] && (rec[k] == null || rec[k] === '')) rec[k] = fixed[k]; }
+  const ticker = (rec.ticker || '').trim();
+  let market = (rec.market || '').toUpperCase(); if (market !== 'US' && market !== 'JP') market = /米/.test(rec.market || '') ? 'US' : /^\d/.test(ticker) ? 'JP' : '';
+  const tradedAt = tsNormTradedAt(rec.tradedAt);
+  const type = tsNormType(rec.type);
+  const quantity = numClean(rec.quantity);
+  const broker = (rec.broker || '').trim() || null;
+  const account = normAccount(rec.account);
+  const settleJpy = numClean(rec.settleJpy);
+  const info = { ticker, market, tradedAt, type, quantity, broker, account, settleJpy, status: 'bad', reason: '', matches: [] };
+  if (!ticker || !market || !tradedAt || !type || quantity == null || !broker || !account || settleJpy == null) { info.reason = '必須項目が不足'; return info; }
+  const tk = market === 'US' ? ticker.toUpperCase() : ticker;
+  info.tk = tk;
+  const sec = store.findSecurity(market, tk);
+  if (!sec) { info.reason = '銘柄が未登録'; return info; }
+  info.sec = sec;
+  const matches = store.data.transactions.filter(t =>
+    t.securityId === sec.id && t.tradedAt === tradedAt && t.type === type &&
+    Math.abs((t.quantity || 0) - quantity) < 1e-9 && t.broker === broker && t.accountType === account);
+  info.matches = matches;
+  if (matches.length === 0) { info.status = 'nomatch'; info.reason = '一致する取引なし'; }
+  else if (matches.length > 1) { info.status = 'multi'; info.reason = `${matches.length}件一致（特定不可）`; }
+  else { info.status = 'ok'; info.already = matches[0].settleJpy != null; }
+  return info;
+}
+function tsRenderPreview() {
+  const pv = document.getElementById('ts-preview'); if (!pv) return;
+  const fixed = tsFixedValues();
+  if (!_tsRows.length) { pv.innerHTML = ''; return; }
+  const missing = TS_FIELDS.filter(f => f.req && !_tsMapping.includes(f.key) && !(TS_FIXED_KEYS.includes(f.key) && fixed[f.key]));
+  if (missing.length) { pv.innerHTML = `<div class="notice">未割当の必須項目: ${missing.map(f => esc(f.label)).join('・')}（市場・種別・証券会社・口座は固定値でも可）</div>`; return; }
+  const infos = _tsRows.map(r => tsResolveRow(r, fixed));
+  const ok = infos.filter(x => x.status === 'ok').length;
+  const over = infos.filter(x => x.status === 'ok' && x.already).length;
+  const skip = infos.length - ok;
+  const badge = s => s === 'ok' ? '<span class="pos">○ 一致</span>' : s === 'nomatch' ? '<span class="muted">― 未一致</span>' : s === 'multi' ? '<span class="neg">△ 複数</span>' : '<span class="neg">× 不可</span>';
+  const ccyOf = i => i.sec ? MARKET_CCY[i.sec.market] : '';
+  const rowsHtml = infos.slice(0, 30).map(i => `<tr>
+    <td class="l">${badge(i.status)}</td>
+    <td class="l">${esc(i.sec ? calc.displayName(i.sec) : (i.ticker || '?'))}</td>
+    <td class="l">${esc(i.tradedAt || '?')}</td>
+    <td class="l">${i.type === 'buy' ? '買い' : i.type === 'sell' ? '売り' : '?'}</td>
+    <td>${i.quantity != null ? esc(String(i.quantity)) : '?'}</td>
+    <td class="l">${esc(i.broker || '?')}/${esc(i.account || '?')}</td>
+    <td>${i.settleJpy != null ? '¥' + num(i.settleJpy) : '?'}</td>
+    <td class="l muted" style="font-size:11px">${esc(i.status === 'ok' ? (i.already ? '上書き' : '新規記入') : i.reason)}</td></tr>`).join('');
+  pv.innerHTML = `<div class="muted" style="margin:6px 0 4px">反映予定 <strong>${ok}件</strong>${over ? `（うち既存値の上書き ${over}件）` : ''} ／ スキップ ${skip}件 ／ 全${infos.length}行${infos.length > 30 ? '（先頭30行表示）' : ''}</div>
+    <div class="table-wrap" style="max-height:260px"><table class="dense"><thead><tr><th class="l">判定</th><th class="l">銘柄</th><th class="l">日付</th><th class="l">種別</th><th>数量</th><th class="l">会社/口座</th><th>受渡金額(円)</th><th class="l">備考</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
+}
+function runTxnSettleImport() {
+  if (!_tsRows.length) { toast('データがありません'); return; }
+  const fixed = tsFixedValues();
+  const missing = TS_FIELDS.filter(f => f.req && !_tsMapping.includes(f.key) && !(TS_FIXED_KEYS.includes(f.key) && fixed[f.key]));
+  if (missing.length) { toast(`未割当の必須項目: ${missing.map(f => f.label).join('・')}`); return; }
+  const infos = _tsRows.map(r => tsResolveRow(r, fixed));
+  const ok = infos.filter(x => x.status === 'ok');
+  if (!ok.length) { toast('一致する取引がありませんでした'); return; }
+  let updated = 0;
+  const touched = new Set();
+  for (const i of ok) { if (store.setTransactionSettle(i.matches[0].id, i.settleJpy)) { updated++; if (i.sec) touched.add(i.sec); } }
+  store.save();
+  const nomatch = infos.filter(x => x.status === 'nomatch').length;
+  const multi = infos.filter(x => x.status === 'multi').length;
+  const bad = infos.filter(x => x.status === 'bad').length;
+  closeModal();
+  reportImport([...touched], `受渡金額(円)一括上書き: 更新 ${updated}件${nomatch ? ` / 未一致 ${nomatch}` : ''}${multi ? ` / 複数一致 ${multi}` : ''}${bad ? ` / 不備 ${bad}` : ''}（一致なし・複数一致はスキップ）`);
 }
 
 // Google連携（実験的・任意）。クライアントID未設定なら休眠＝現行アプリに影響しない。
