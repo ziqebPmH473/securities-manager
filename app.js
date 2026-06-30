@@ -281,6 +281,12 @@ const store = {
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
+    // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
+    // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
+    if (this.data.settings.masterUsdJpy == null) {
+      const mx = this.data.matrixSettings && this.data.matrixSettings.usdJpy;
+      this.data.settings.masterUsdJpy = (mx != null && isFinite(mx)) ? mx : DEFAULT_MATRIX_USDJPY;
+    }
     this.data.cfRules = migrateCfRules(this.data.cfRules); // 列の背景色ルール（マスタ管理）。未定義は既定シード／旧フラット型は移行
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
       this.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k], ...(this.data.importMappings[k] || {}) };
@@ -2201,6 +2207,23 @@ function cfNormalizeDefaultIds(groups) {
   }
   return groups;
 }
+// 共通ドル円換算レート（マスタ評価用）。背景色ルールのUS金額判定とマトリックス円換算で共用。
+// 編集は「マスタ・設定 → ドル円換算レート」。初期値 DEFAULT_MATRIX_USDJPY(=100)。
+function masterUsdJpy() {
+  const s = store.data.settings || {};
+  if (s.masterUsdJpy != null && isFinite(s.masterUsdJpy) && s.masterUsdJpy > 0) return s.masterUsdJpy;
+  const mx = store.data.matrixSettings && store.data.matrixSettings.usdJpy; // 後方互換
+  return (mx != null && isFinite(mx) && mx > 0) ? mx : DEFAULT_MATRIX_USDJPY;
+}
+// 背景色判定で「US（ドル建て）→円換算」する対象の列（ネイティブ通貨の金額・株価系）。
+// %・倍率・株数・スコア・既に円建ての取得円(acqJpy)は対象外。表示は$のまま、色だけ円換算で判定する。
+const CF_MONEY_KEYS = new Set(['price', 'dayAmt', 'trigger', 'base', 'high5y', 'high52w', 'low1y', 'low3y', 'prevBuyPrice', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'avgCost', 'buyAmount', 'reco', 'fixedBuyPrice', 'dividend', 'eps', 'principalSoldAmount']);
+// US の金額系の素の値を共通レートで円換算（背景色判定用）。それ以外はそのまま返す。
+function cfConvVal(key, market, v) {
+  if (v == null || !isFinite(v)) return v;
+  if (market === 'US' && CF_MONEY_KEYS.has(key)) return v * masterUsdJpy();
+  return v;
+}
 // 値 v が key列・screen画面でマッチする背景色（グループ→範囲を順に走査、先頭一致優先）。無ければ ''。
 function cfBgFor(key, v, screen) {
   if (v == null || !isFinite(v)) return '';
@@ -3321,7 +3344,8 @@ function marketRow(sec, visibleCols, opts = {}) {
     const renderer = COL_RENDERERS[col.key];
     let cell = renderer ? renderer(sec, ctx) : `<td></td>`;
     // 背景色ルール（マスタ）を中央注入。描画中画面(cfScreen)で該当列の数値がルールにマッチすれば背景色を付与。
-    return cfInject(cell, col.key, cfCellValue(col.key, sec, ctx));
+    // US の金額系列は共通レートで円換算した値で判定（表示は$のまま・色だけ円相当）。
+    return cfInject(cell, col.key, cfConvVal(col.key, sec.market, cfCellValue(col.key, sec, ctx)));
   }).join('');
   let actionsTd = '';
   let rowAttr = '';
@@ -3951,12 +3975,12 @@ function renderMarketTab() {
         <td class="l"><span class="tag ${market.toLowerCase()}">${esc(mktMarketLabel(it, market))}</span></td>
         <td class="l col-code"><span class="tk ${market.toLowerCase()}" style="cursor:pointer" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.code)}</span></td>
         <td class="l"><strong class="lnk-ext nm-strong mkt-name" onclick="mktClickName('${esc(it.code)}','${market}')" title="${esc(it.name || it.code)}">${esc(nameAbbr(it.name || it.code))}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
-        <td${cfStyle('price', it.price, 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
+        <td${cfStyle('price', cfConvVal('price', market, it.price), 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
         <td class="${cls(dc)}"${cfStyle('day', dc, 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
-        <td${cfStyle('high5y', high5y, 'market')}>${high5y != null ? fmtAmt(high5y, market) : '—'}</td>
+        <td${cfStyle('high5y', cfConvVal('high5y', market, high5y), 'market')}>${high5y != null ? fmtAmt(high5y, market) : '—'}</td>
         <td class="${cls(dropFrom5y)}"${cfStyle('dropFrom5y', dropFrom5y, 'market')}>${dropFrom5y != null ? signed(dropFrom5y) + '%' : '—'}</td>
-        ${showTurnover ? `<td${cfStyle('turnover', it.turnover, 'market')}>${mktAmt(it.turnover, market)}</td>` : ''}
-        ${showMktCap ? `<td${cfStyle('marketCap', it.marketCap != null ? it.marketCap / 1e6 : null, 'market')}>${mktAmt(it.marketCap, market)}</td>` : ''}
+        ${showTurnover ? `<td${cfStyle('turnover', cfConvVal('turnover', market, it.turnover), 'market')}>${mktAmt(it.turnover, market)}</td>` : ''}
+        ${showMktCap ? `<td${cfStyle('marketCap', cfConvVal('marketCap', market, it.marketCap != null ? it.marketCap / 1e6 : null), 'market')}>${mktAmt(it.marketCap, market)}</td>` : ''}
         <td class="l nowrap">${owned
           ? `<button class="btn btn-sm" disabled title="登録済みの銘柄です">登録済</button>`
           : `<button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button>`}</td>
@@ -4164,7 +4188,7 @@ function matrixAxisLabel(field, key) {
 // 区分×区分 の分布マトリックス。縦横の軸・市場・取得額レンジ（マスタ）を切替可能。各セルは該当銘柄を取得価額レンジ色のチップで表示（合計は出さない）。
 function matrixSectionHtml() {
   const rowF = reportMatrixRow, colF = reportMatrixCol;
-  const rate = (store.data.matrixSettings && store.data.matrixSettings.usdJpy) || DEFAULT_MATRIX_USDJPY;
+  const rate = masterUsdJpy(); // 共通ドル円換算レート（マスタ・設定で編集）
   const bands = store.data.matrixBands || [];
   const cell = {};                 // 'rowKey|colKey' -> [{sec, cost}]
   const rowSet = new Set(), colSet = new Set();
@@ -4266,7 +4290,6 @@ function fitMatrix() {
 // マトリックス取得額レンジのマスタ（色・しきい値・米株換算レート）。
 function openMatrixBandMaster() {
   const bands = store.data.matrixBands || [];
-  const rate = (store.data.matrixSettings && store.data.matrixSettings.usdJpy) || DEFAULT_MATRIX_USDJPY;
   const rows = bands.map((b, i) => `<tr data-idx="${i}">
     <td class="l"><input class="mxb-label" value="${esc(b.label || '')}" style="width:120px"></td>
     <td><input class="mxb-max" type="number" step="any" value="${b.max == null ? '' : b.max}" placeholder="上限なし" style="width:130px"></td>
@@ -4274,8 +4297,7 @@ function openMatrixBandMaster() {
     <td class="l"><button type="button" class="btn btn-sm btn-danger" onclick="mxbDeleteBand(${i})">削除</button></td>
   </tr>`).join('');
   showModal('マトリックス 取得額レンジ設定', `
-    <div class="field"><label>米国株の円換算レート（1ドル＝？円・「全部」/米国株表示の取得額換算に使用）</label>
-      <input id="mxb-rate" type="number" step="any" value="${rate}" style="width:140px"></div>
+    <p class="muted" style="margin:0 0 8px">米国株の円換算レートは<strong>共通レート（1ドル＝${num(masterUsdJpy())}円）</strong>を使用します。変更は「マスタ・設定 → ドル円換算レート」から。</p>
     <div style="display:flex;justify-content:flex-end;margin:10px 0 8px"><button type="button" class="btn btn-sm btn-primary" onclick="mxbAddBand()">＋ レンジを追加</button></div>
     <div class="table-wrap"><table class="holdings dense">
       <thead><tr><th class="l">ラベル</th><th>上限（円・未満）</th><th class="l">色</th><th class="l"></th></tr></thead>
@@ -4294,19 +4316,37 @@ function mxbReadForm() {
     const color = (tr.querySelector('.color-pick input[type=hidden]') || {}).value || '#6b7280';
     return { label, max: (max != null && isNaN(max)) ? null : max, color };
   });
-  const rate = parseFloat(document.getElementById('mxb-rate').value) || DEFAULT_MATRIX_USDJPY;
-  return { bands, rate };
+  return { bands };
 }
 // matrixBands(順序つき配列)と rate は常に一括編集される。配列自身は _updatedAt を持てない（JSON化で消える）
 // ため、相方 matrixSettings._updatedAt に編集時刻を入れ、同期はこの時刻で両方のタイブレークを行う（pairTs）。
-function mxbApply(bands, rate) { store.data.matrixBands = bands; store.data.matrixSettings = { ...(store.data.matrixSettings || {}), usdJpy: rate, _updatedAt: store._now() }; store.save(); }
-function mxbAddBand() { const { bands, rate } = mxbReadForm(); bands.push({ max: null, label: '新レンジ', color: '#6b7280' }); mxbApply(bands, rate); openMatrixBandMaster(); }
-function mxbDeleteBand(i) { const { bands, rate } = mxbReadForm(); bands.splice(i, 1); mxbApply(bands, rate); openMatrixBandMaster(); }
+function mxbApply(bands) { store.data.matrixBands = bands; store.data.matrixSettings = { ...(store.data.matrixSettings || {}), _updatedAt: store._now() }; store.save(); }
+function mxbAddBand() { const { bands } = mxbReadForm(); bands.push({ max: null, label: '新レンジ', color: '#6b7280' }); mxbApply(bands); openMatrixBandMaster(); }
+function mxbDeleteBand(i) { const { bands } = mxbReadForm(); bands.splice(i, 1); mxbApply(bands); openMatrixBandMaster(); }
 function mxbSave() {
-  let { bands, rate } = mxbReadForm();
+  let { bands } = mxbReadForm();
   if (!bands.length) bands = structuredClone(DEFAULT_MATRIX_BANDS);
   bands.sort((a, b) => (a.max == null ? Infinity : a.max) - (b.max == null ? Infinity : b.max)); // 取得額の小さい順
-  mxbApply(bands, rate); closeModal(); if (currentView === 'report') renderReport(); else toast('レンジ設定を保存しました');
+  mxbApply(bands); closeModal(); if (currentView === 'report') renderReport(); else toast('レンジ設定を保存しました');
+}
+// ---------- 共通ドル円換算レート（マスタ評価用） ----------
+function openFxRateMaster() {
+  showModal('ドル円換算レート（マスタ評価用）', `
+    <div class="field"><label>1ドル＝？円（初期値 ${DEFAULT_MATRIX_USDJPY}）</label>
+      <input id="fx-rate" type="number" step="any" min="0" value="${num(masterUsdJpy())}" style="width:140px"></div>
+    <p class="muted" style="margin:8px 0 0">米国株($)の金額を円換算して評価する<strong>共通レート</strong>です。次の2か所で共用します。<br>
+      ・<strong>背景色ルール</strong>: 取得価額・評価額・現在値など単位が異なる金額列で、US は「ドル×レート＝円相当」で背景色を判定（表示は$のまま）。<br>
+      ・<strong>マトリックス レンジ設定</strong>: 「全部」/米国株表示の取得額の円換算。<br>
+      実勢レートではなく「評価のものさし」です（基本は1ドル＝100円で見る想定）。</p>
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">キャンセル</button><button type="button" class="btn btn-primary" onclick="saveFxRate()">保存</button></div>`);
+}
+function saveFxRate() {
+  const v = parseFloat(document.getElementById('fx-rate').value);
+  if (!isFinite(v) || v <= 0) { toast('正の数を入力してください'); return; }
+  store.data.settings = store.data.settings || {};
+  store.data.settings.masterUsdJpy = v;
+  store.data.settings._updatedAt = store._now(); // 同期マージで両端末変更時に新しい方を採るため
+  store.save(); closeModal(); render(); toast(`ドル円換算レートを 1ドル＝${num(v)}円 に設定しました`);
 }
 // トグル連動の「現在の集計」表。assetTableBroker=false: 分類ごとの集計のみ／true: 証券会社×分類のクロス表。
 let assetTableBroker = false;
@@ -4721,7 +4761,8 @@ const MASTER_LAUNCH = [
   { v: 'category', label: 'カテゴリ別 金額マスタ', open: () => openCategoryMaster(), note: '銘柄カテゴリごとの1回購入額（日本株円・米国株$）と変更履歴。' },
   { v: 'rule',     label: '買い増しルールマスタ', open: () => openRuleMaster(),     note: '初回/買い増しの下落率・基準高値のルール。銘柄ごとの割当は各銘柄の編集から。' },
   { v: 'grade',    label: '銘柄格付けマスタ',     open: () => openGradeMaster(),    note: '銘柄格付け（S/A/B/C/D）の一覧・詳細での表示色を設定。' },
-  { v: 'matrix',   label: 'マトリックス レンジ設定', open: () => openMatrixBandMaster(), note: 'レポートの分布マトリックスの取得額レンジ（色・しきい値）と米株円換算レート。' },
+  { v: 'matrix',   label: 'マトリックス レンジ設定', open: () => openMatrixBandMaster(), note: 'レポートの分布マトリックスの取得額レンジ（色・しきい値）。米株円換算は共通レートを使用。' },
+  { v: 'fxrate',   label: 'ドル円換算レート（マスタ評価用）', open: () => openFxRateMaster(), note: '米国株($)を円換算して評価する共通レート（初期100円）。背景色ルールのUS金額判定とマトリックスの取得額換算で共用。' },
   { v: 'fund',     label: '投資信託 コードマスタ', open: () => openFundCodeMaster(), note: '取り込んだ投信のコード（協会コード）編集・名称取得・統合。' },
   { v: 'alias',    label: '取込変換マスタ',         open: () => openImportAliasMaster(), note: '取込時の「マスタに無い値」の変換対応（カテゴリ/格付/詳細種別/ルール）。' },
   { v: 'cf',       label: '列の背景色ルール',       open: () => openCfRulesMaster(),  note: '数値列の値の範囲ごとの背景色。適用画面（保有/サイン/マスタ/マーケット）を複数選択可。' },
@@ -5064,6 +5105,7 @@ function openCfRulesMaster() {
     </tr>`).join('') : `<tr><td colspan="4" class="empty">ルールがありません。</td></tr>`;
   showModal('列の背景色ルール（マスタ）', `
     <p class="muted" style="margin:0 0 8px">1行＝「列 × 適用画面の組」。その中に値の範囲と背景色を<strong>複数段</strong>登録できます（上の段ほど優先）。「コピー」で組ごと複製→別の列/画面に転用できます。</p>
+    <p class="muted" style="margin:0 0 8px">金額系の列（取得価額・評価額・現在値など）は<strong>円基準で範囲を登録</strong>してください。米国株($)は共通レート（1ドル＝${num(masterUsdJpy())}円・「マスタ・設定 → ドル円換算レート」で変更）で円換算してから判定します（表示は$のまま色だけ円相当）。</p>
     <div class="table-wrap"><table class="holdings dense"><thead><tr><th class="l">列</th><th class="l">適用画面</th><th class="l">範囲×色</th><th class="l"></th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
     <div class="form-actions" style="justify-content:space-between">
       <button type="button" class="btn btn-danger" onclick="resetCfRules()">既定に戻す</button>
