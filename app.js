@@ -463,13 +463,23 @@ const store = {
     this.applyTransaction(t);
     this.save();
   },
-  // 既存取引の受渡金額(円)だけを更新（他の項目は維持）。旧効果を取り消し→値を更新→新効果を適用するので
-  // 取得円(acqJpy)累計も正しく付け替わる。settleJpy=null で受渡金額をクリア。save しない版（一括用に呼び元でまとめて save）。
+  // 既存取引の受渡金額(円)だけを更新（保有数量・平均取得単価・購入回数には一切触らない）。
+  // settleJpy は取得円(acqJpy)累計にしか効かない（買い=加算/売り=減算・ledgerOnlyは対象外）ので、
+  // その差分だけを保有に反映する。reverse→apply 方式だと一部売却済みロットで reverseTransaction が
+  // 数量を Math.max(0,…) でクランプし、さらに空ロットの prune で保有が作り直されて数量が壊れるため使わない。
+  // settleJpy=null で受渡金額をクリア。save しない版（一括用に呼び元でまとめて save）。
   setTransactionSettle(id, settleJpy) {
     const t = this.data.transactions.find(x => x.id === id); if (!t) return false;
-    this.reverseTransaction(t);
+    const old = t.settleJpy;
+    if (!t.ledgerOnly) {
+      const h = this.data.holdings.find(x => x.securityId === t.securityId && x.broker === t.broker && x.accountType === t.accountType);
+      if (h) {
+        const sign = t.type === 'buy' ? 1 : -1;              // applyTransaction と同符号（買い=加算/売り=減算）
+        if (old != null) h.acqJpy = (h.acqJpy || 0) - sign * old;             // 旧寄与を取り消し
+        if (settleJpy != null) h.acqJpy = (h.acqJpy || 0) + sign * settleJpy; // 新寄与を加算
+      }
+    }
     if (settleJpy == null) delete t.settleJpy; else t.settleJpy = settleJpy;
-    this.applyTransaction(t);
     return true;
   },
 
