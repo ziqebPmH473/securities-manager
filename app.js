@@ -5658,6 +5658,7 @@ function openSecurityForm(id, presetMarket) {
 
   showModal(id ? '銘柄を編集' : '銘柄を追加', `
     <form id="sec-form">
+      <input type="hidden" name="editId" value="${id || ''}">
       ${id ? secNavBar(id, 'edit') : ''}
       <div class="row">
         <div class="field"><label>市場</label>
@@ -5828,6 +5829,9 @@ function openSecurityForm(id, presetMarket) {
       if (splitRelevantChanged(before)) patch.manualUpdatedAt = store._now();
       target = store.updateSecurity(id, patch);
     } else {
+      // 追加時の重複ガード（ティッカーをキーに未blur/Enter送信でもここで検知）。登録済みなら追加せず既存を呼び出す。
+      const dup = store.findSecurity(market, patch.ticker);
+      if (dup) { toast(`「${calc.displayName(dup)}」は登録済みです。編集画面を開きました。`); closeModal(); openSecurityForm(dup.id); return; }
       if (patch.prevBuyPrice != null || patch.baseHighManual != null) patch.manualUpdatedAt = store._now();
       target = store.addSecurity({ ...patch });
       const qty = parseFloat(f.initQty.value), cost = parseFloat(f.initCost.value);
@@ -5881,11 +5885,23 @@ function autoInfoPanelHtml(market, ticker) {
 // ティッカーをキーに /api/info から銘柄情報を取得し、マスタ(meta)に保存。パネルを更新（フォームには手入力させない）
 async function autoFetchInfo(tickerEl) {
   const f = tickerEl.form;
+  if (!f) return;
   const ticker = tickerEl.value.trim();
   if (!ticker) return;
+  // モーダルが閉じている状態での遅延blur（保存/キャンセル後にフォーカスが外れて発火）では何もしない。
+  // これを怠ると、新規追加の保存直後に「今登録したコード」を登録済みと誤検知して編集画面を開いてしまう。
+  const overlay = document.getElementById('modal-overlay');
+  if (overlay && overlay.hidden) return;
   const status = document.getElementById('info-status');
   const panel = document.getElementById('auto-info');
   const market = f.market.value;
+  // 追加モードで入力したコードが登録済みなら『追加』せず既存データを呼び出す（編集画面へ切替）。
+  // 編集モード（editId あり）では切り替えない。
+  const editId = f.editId ? f.editId.value : '';
+  if (!editId) {
+    const existing = store.findSecurity(market, ticker);
+    if (existing) { toast(`「${calc.displayName(existing)}」は登録済みです。編集画面を開きました。`); openSecurityForm(existing.id); return; }
+  }
   const symbol = (market === 'JP' || market === 'FUND') ? `${ticker}.T` : ticker;
   const key = `${market}:${ticker}`;
   if (status) { status.textContent = '取得中…'; status.style.color = 'var(--muted)'; }
