@@ -5763,7 +5763,7 @@ function openSecurityForm(id, presetMarket) {
       ${id ? secNavBar(id, 'edit') : ''}
       <div class="row">
         <div class="field"><label>市場</label>
-          <select name="market">${['US', 'JP'].map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${MARKET_LABEL[x]}</option>`).join('')}</select></div>
+          <select name="market" ${m === 'FUND' ? 'disabled' : ''}>${(m === 'FUND' ? ['FUND'] : ['US', 'JP']).map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${MARKET_LABEL[x]}</option>`).join('')}</select></div>
         <div class="field"><label>ティッカー / コード</label>
           <div style="display:flex;gap:6px;align-items:center">
             <input name="ticker" value="${sec ? esc(sec.ticker) : ''}" placeholder="例: AAPL / 7203" required style="flex:1" onblur="autoFetchInfo(this)">
@@ -6064,6 +6064,11 @@ function openHoldingsForm(secId) {
   const ccy = MARKET_CCY[sec.market];
   const hs = store.data.holdings.filter(h => h.securityId === secId);
   const us = sec.market === 'US';
+  const isFund = sec.market === 'FUND';
+  // 投信は価格を自動取得しないため評価額は手入力（prices['FUND:...'].price=1口あたり評価額を保存）
+  const fundPrice = (store.data.prices['FUND:' + sec.ticker] || {}).price;
+  const fundTotalQty = hs.reduce((a, h) => a + (h.quantity || 0), 0);
+  const fundEvalNow = (fundPrice != null && fundTotalQty) ? Math.round(fundPrice * fundTotalQty) : '';
   const rowsHtml = hs.map(h => `
     <tr data-hid="${h.id}">
       <td class="l">${esc(h.broker)}</td><td class="l">${esc(h.accountType)}</td>
@@ -6092,6 +6097,13 @@ function openHoldingsForm(secId) {
         <tbody id="holdings-rows">${rowsHtml || ''}</tbody>
       </table></div>
       ${hs.length === 0 ? '<div class="empty">保有がありません。下のフォームから追加してください。</div>' : ''}
+
+      ${isFund ? `
+      <fieldset class="form-group"><legend>投資信託の評価額（自動取得なし・手入力）</legend>
+        <div class="row"><div class="field"><label>現在の評価額(円)（この投信の保有全体）</label>
+          <input name="fundEval" type="number" step="any" value="${fundEvalNow}" placeholder="マネフォ等の評価額を入力"></div></div>
+        <p class="muted" style="margin:6px 0 0">投信は価格を自動取得しないため評価額は手入力です。入力額を保有数量で割った1口単価を保存し、一覧・転記（マネフォ用）の評価額に反映します。空欄なら据え置き。</p>
+      </fieldset>` : ''}
 
       <fieldset class="form-group"><legend>保有を追加</legend>
         <div class="row">
@@ -6142,6 +6154,12 @@ function openHoldingsForm(secId) {
       const nh = store.data.holdings.find(x => x.securityId === secId && x.broker === f.broker.value && x.accountType === f.accountType.value);
       if (nh && f.newAcq && f.newAcq.value.trim() !== '') nh.acqJpy = parseFloat(f.newAcq.value) || 0;
       if (nh && f.newOrig && f.newOrig.value.trim() !== '') nh.origBuyAmount = parseFloat(f.newOrig.value) || 0;
+    }
+    // 投信の評価額（手入力）→ 1口単価(price=評価額/総口数)として保存。一覧・転記の評価額に反映
+    if (isFund && f.fundEval && f.fundEval.value.trim() !== '') {
+      const ev = parseFloat(f.fundEval.value);
+      const tq = store.data.holdings.filter(h => h.securityId === secId).reduce((a, h) => a + (h.quantity || 0), 0);
+      if (!isNaN(ev) && tq > 0) store.data.prices['FUND:' + sec.ticker] = { price: ev / tq, prevClose: null, updatedAt: store._now() };
     }
     // 銘柄単位の元本売却情報（情報管理のみ）
     store.updateSecurity(secId, {
