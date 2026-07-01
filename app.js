@@ -8274,12 +8274,20 @@ async function runBrokerImport() {
   _convSession = {};
   store.save();
   closeModal();
-  reportImport(touched, `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${pendingTotal ? ` / 新規投信 ${Object.keys(pending).length}件はコード入力待ち` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`);
-  // 新規投信は「コード入力→登録」モーダルを出す（自動採番で銘柄マスタに載せない）
-  if (Object.keys(pending).length) { _pendingFundReg = pending; setTimeout(openNewFundCodeModal, 450); }
+  const importMsg = `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${pendingTotal ? ` / 新規投信 ${Object.keys(pending).length}件はコード入力待ち` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`;
+  // 新規投信があれば「コード入力→登録」を先に出し、登録が終わってから取込完了レポートを出す
+  // （同じ #modal-overlay を使うため、レポートと同時に出すと後勝ちで入力画面が消える／裏に回る）
+  if (Object.keys(pending).length) {
+    _pendingFundReg = pending;
+    _pendingImportReport = { touched, msg: importMsg };
+    openNewFundCodeModal();
+  } else {
+    reportImport(touched, importMsg);
+  }
 }
 // 新規投信のコード入力モーダル。協会コードを入れて登録（空欄なら内部コードFND）
 let _pendingFundReg = null;
+let _pendingImportReport = null; // 投信コード登録の後に出す取込完了レポート {touched, msg}
 function openNewFundCodeModal() {
   const entries = Object.entries(_pendingFundReg || {});
   if (!entries.length) return;
@@ -8325,6 +8333,9 @@ function registerPendingFunds(skipCode) {
   _pendingFundReg = null;
   store.save(); closeModal(); render();
   toast(`新規投信 ${n} 件を登録しました`, 4000);
+  // 登録が完了してから取込完了レポートを出す（入力画面が裏に回る／消える問題の解消）
+  const rep = _pendingImportReport; _pendingImportReport = null;
+  if (rep) reportImport(rep.touched, rep.msg);
 }
 
 // 取込フィールド設定（マッピング）の編集UI。列名/位置が変わってもコード変更なしで調整可
