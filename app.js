@@ -1764,7 +1764,7 @@ const NAV_GROUPS = [
     { id: 'holdings',  label: '保有銘柄',       icon: 'holdings' },
     { id: 'trade',     label: '銘柄カルテ',     icon: 'trade' },
     { id: 'signals',   label: '買い増しサイン', icon: 'signal', badge: 'sig' },
-    { id: 'analysis',  label: '分析',           icon: 'signal' },
+    { id: 'analysis',  label: '分析',           icon: 'search' },
     { id: 'report',    label: 'レポート',       icon: 'report' },
   ] },
   { group: 'データ', items: [
