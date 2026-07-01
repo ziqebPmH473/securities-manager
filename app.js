@@ -8269,7 +8269,10 @@ async function runBrokerImport() {
   // 同じCSV/貼付に含まれる投資信託を自動仕分け（FUND保有として内部保存）
   // 既存ファンド（名称/エイリアス一致）は即取込。未登録（新規）は登録せず保留し、後でコード入力させてから登録する
   let fundCount = 0, pendingTotal = 0;
-  const fundItems = parseFundRows(_importText, { strict: true });
+  // strict は「株ファイルに投信が混ざる」moomoo/楽天等の誤検知対策。投信専用プロファイル
+  // （scope が FUND。例: マネックス投信）はファイル全体が投信なので非strict（見出し/種別列が無くても拾う）
+  const fundStrict = !(scope.markets && scope.markets.includes('FUND'));
+  const fundItems = parseFundRows(_importText, { strict: fundStrict });
   const pending = {}; // normName -> { name, items:[{broker,account,qty,acqJpy,evalJpy}] }
   if (fundItems.length) {
     if (mode === 'replace') {
