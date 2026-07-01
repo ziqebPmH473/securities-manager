@@ -8242,7 +8242,7 @@ async function runBrokerImport() {
   // 同じCSV/貼付に含まれる投資信託を自動仕分け（FUND保有として内部保存）
   // 既存ファンド（名称/エイリアス一致）は即取込。未登録（新規）は登録せず保留し、後でコード入力させてから登録する
   let fundCount = 0, pendingTotal = 0;
-  const fundItems = parseFundRows(_importText);
+  const fundItems = parseFundRows(_importText, { strict: true });
   const pending = {}; // normName -> { name, items:[{broker,account,qty,acqJpy,evalJpy}] }
   if (fundItems.length) {
     if (mode === 'replace') {
@@ -9205,9 +9205,13 @@ function detectFundHeader(cells) {
   if (idx.name == null && idx.kind != null && idx.code != null) idx.name = idx.code + 1;
   return (idx.eval != null && idx.name != null) ? idx : null;
 }
-function parseFundRows(text) {
+// strict=true: 「明示的に投信と分かる行」だけ拾う（種別=投資信託 or 投信セクション見出しの下）。
+//   証券会社CSVの自動仕分け用。種別列も投信見出しも無いCSV（moomoo等）を誤って全部投信扱いしないため。
+// strict=false（既定）: 投信部分だけを貼る前提の転記・投信取込用。見出しが無くても投信として扱う。
+function parseFundRows(text, opts = {}) {
+  const strict = !!opts.strict;
   const rows = parseCsvText(text || '');
-  let col = null, section = 'fund', acct = null;
+  let col = null, section = strict ? null : 'fund', acct = null;
   const out = [];
   for (const cells of rows) {
     const joined = cells.join('').trim();
