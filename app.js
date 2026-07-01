@@ -9276,7 +9276,7 @@ function detectFundHeader(cells) {
     if (idx.acq == null && /取得金額|取得額/.test(t)) idx.acq = i;
     if (idx.eval == null && /(時価|概算|当日)?評価額(\[円\])?$/.test(t)) idx.eval = i;     // 概算評価額/当日評価額[円] 等も
     if (idx.pnl == null && /評価損益(\[円\])?$/.test(t)) idx.pnl = i;                    // 取得金額が無い時 評価額−損益 で算出
-    if (idx.qty == null && /保有数量|保有口数|^数量$|口数/.test(t)) idx.qty = i;          // 口数（投信の数量）
+    if (idx.qty == null && /保有数量|保有口数|保有数|^数量$|口数/.test(t)) idx.qty = i;    // 口数（投信の数量。マネックスは「保有数」）
     if (idx.unitCost == null && /取得単価|平均取得(金額|価額)|取得価額/.test(t)) idx.unitCost = i; // 取得金額が無い時 単価×口数/10000 で算出
     if (idx.kind == null && /^種別$/.test(t)) idx.kind = i;                             // SBI明細: 行ごとの種別（投資信託判定）
     if (idx.code == null && /銘柄コード|ティッカー|^コード$/.test(t)) idx.code = i;
