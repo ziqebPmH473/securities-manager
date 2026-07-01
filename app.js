@@ -1096,6 +1096,12 @@ async function restoreDriveBackup(id, label) {
 }
 
 // ---------- 計算 ----------
+// 1描画中だけ有効な計算メモ。render() の間だけ evaluate/totalHolding/lastBuyInfo を
+// 銘柄ごとに1回だけ計算して使い回す（同じ描画内で保有・取引履歴の走査を何度もやり直さない）。
+// 描画の外では常にその場計算（メモOFF）＝古い値が残らない。データ変更→save→render で毎回作り直す。
+let _calcMemo = null;
+function calcMemoBegin() { _calcMemo = { ev: new Map(), th: new Map(), lb: new Map() }; }
+function calcMemoEnd() { _calcMemo = null; }
 const calc = {
   fx() { return store.data.fx.USDJPY || null; },
 
@@ -1147,6 +1153,10 @@ const calc = {
 
   // 銘柄の合計保有（全口座合算）
   totalHolding(secId) {
+    if (_calcMemo) { const m = _calcMemo.th; if (m.has(secId)) return m.get(secId); const v = this._totalHolding(secId); m.set(secId, v); return v; }
+    return this._totalHolding(secId);
+  },
+  _totalHolding(secId) {
     const hs = store.data.holdings.filter(h => h.securityId === secId);
     let qty = 0, cost = 0;
     for (const h of hs) { qty += h.quantity; cost += h.avgCost * h.quantity; }
@@ -1157,6 +1167,10 @@ const calc = {
   // date(YYYY-MM-DD): 高値更新判定で「前回購入後に高値更新したか」を見るため。
   //   取引履歴があればその日付。無ければ手動入力の前回購入日(prevBuyDate)を使う（価格は手動値でも取得単価=みなしでもよい）。
   lastBuyInfo(sec) {
+    if (_calcMemo) { const m = _calcMemo.lb; if (m.has(sec.id)) return m.get(sec.id); const v = this._lastBuyInfo(sec); m.set(sec.id, v); return v; }
+    return this._lastBuyInfo(sec);
+  },
+  _lastBuyInfo(sec) {
     const buys = store.data.transactions
       .filter(t => t.securityId === sec.id && t.type === 'buy')
       .sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
@@ -1240,6 +1254,10 @@ const calc = {
 
   // 判定結果: { type, base, trigger, price, remainingDropPct, reached, recoAmount, recoCcy }
   evaluate(sec) {
+    if (_calcMemo) { const m = _calcMemo.ev; if (m.has(sec.id)) return m.get(sec.id); const v = this._evaluate(sec); m.set(sec.id, v); return v; }
+    return this._evaluate(sec);
+  },
+  _evaluate(sec) {
     if (sec.market === 'FUND' || sec.enabled === false) return null;
     const price = this.price(sec);
     if (price == null) return null;
@@ -1976,7 +1994,20 @@ function fltRerender(scope) {
   else render();
 }
 function fltPersist(scope) { if (scope === 'holdings' || scope === 'analysis') saveFilterState(); }
-function fltToggle(scope) { fltState[scope].open = !fltState[scope].open; fltRerender(scope); }
+// 詳細パネルの開閉。全再描画（一覧の再計算）を避け、パネルDOMだけ出し入れする。
+// これで開閉ラグが消える（一覧は据え置き）。想定外の構造ならフォールバックで従来どおり再描画。
+function fltToggle(scope) {
+  const st = fltState[scope];
+  st.open = !st.open;
+  const host = document.getElementById('flt-host-' + scope);
+  if (!host) { fltRerender(scope); return; }
+  host.innerHTML = st.open
+    ? (scope === 'secmaster' ? `<div style="padding:0 16px">${filterPanelHtml(scope)}</div>` : filterPanelHtml(scope))
+    : '';
+  const btn = document.getElementById('flt-toggle-' + scope);
+  if (btn) btn.outerHTML = fltToggleBtnHtml(scope);
+  scheduleFit(); // パネル分の高さ変化に合わせて表の枠を再フィット
+}
 function fltAddFilter(scope, key) {
   const st = fltState[scope];
   if (!key || st.rows.some(r => r.key === key)) { fltRerender(scope); return; }
@@ -2086,13 +2117,17 @@ function filterPanelHtml(scope) {
 // パターンは作って選ぶだけで使えるよう常時表示。詳細（項目の行）はボタンを押した時だけ開く。
 function filterBtnHtml(scope) {
   const st = fltState[scope];
-  const n = fltActiveCount(scope);
   const presetSel = `<select class="flt-preset" title="保存したパターンを適用" onchange="fltApplyPreset('${scope}',this.value)">`
     + `<option value="">パターン: なし</option>`
     + fltPresets.filter(p => !p.deleted).map(p => `<option value="${p.id}" ${st.presetId === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
     + `</select>`;
-  const btn = `<button class="btn btn-sm${n ? ' active' : ''}" onclick="fltToggle('${scope}')" title="フィルターの詳細設定">${svgIcon('filter', '')} 詳細${n ? ` (${n})` : ''} ${st.open ? '▲' : '▼'}</button>`;
-  return presetSel + btn;
+  return presetSel + fltToggleBtnHtml(scope);
+}
+// 「詳細」開閉ボタン単体（開閉時に全再描画せずこのボタンだけ差し替えて矢印/件数/活性を更新するため分離）
+function fltToggleBtnHtml(scope) {
+  const st = fltState[scope];
+  const n = fltActiveCount(scope);
+  return `<button id="flt-toggle-${scope}" class="btn btn-sm${n ? ' active' : ''}" onclick="fltToggle('${scope}')" title="フィルターの詳細設定">${svgIcon('filter', '')} 詳細${n ? ` (${n})` : ''} ${st.open ? '▲' : '▼'}</button>`;
 }
 
 // 列幅(px)。colPrefsのwidth上書き優先、無ければキー/種別ごとの既定。
@@ -2753,6 +2788,17 @@ function applyStickyCols(table) {
 }
 
 function render() {
+  // この描画中だけ計算メモを有効化（evaluate/totalHolding/lastBuyInfo を銘柄ごとに1回に）。
+  // 入れ子render時は最外側だけがメモの寿命を管理する。
+  const memoOwner = !_calcMemo;
+  if (memoOwner) calcMemoBegin();
+  try {
+    _render();
+  } finally {
+    if (memoOwner) calcMemoEnd();
+  }
+}
+function _render() {
   updateHeader();
   updateSignalBadge();
   updateSplitBadge();
@@ -3283,7 +3329,7 @@ function renderMarket(market) {
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
         <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
       </div>
-      ${fltState.holdings.open ? filterPanelHtml('holdings') : ''}
+      <div id="flt-host-holdings">${fltState.holdings.open ? filterPanelHtml('holdings') : ''}</div>
       ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価）を直接編集 → <strong>「保存」</strong>で確定。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=このセルを取消。数量・取得単価は単一保有のみ（複数=⧉で保有フォーム）。
         <span class="tb-spacer"></span>
         <span id="ie-pending" class="ie-pending">変更なし</span>
@@ -4705,7 +4751,7 @@ function renderSecMaster() {
           ${filterBtnHtml('secmaster')}
           <span class="muted">${secs.length}/${allSecs.length}件</span>
         </div>
-        ${fltState.secmaster.open ? `<div style="padding:0 16px">${filterPanelHtml('secmaster')}</div>` : ''}
+        <div id="flt-host-secmaster">${fltState.secmaster.open ? `<div style="padding:0 16px">${filterPanelHtml('secmaster')}</div>` : ''}</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px 0">
           <span class="muted">選択した銘柄の</span>
           <select onchange="smBulkFieldChange(this.value)">${SM_BULK_FIELDS.map(f => `<option value="${f.key}" ${smBulkField === f.key ? 'selected' : ''}>${f.label}</option>`).join('')}</select>
@@ -6448,7 +6494,7 @@ function renderAnalysis() {
         <div class="tb-spacer"></div>
         <div class="ss"><span class="ss-k muted" style="font-weight:400">順張り/逆張り総合＝確認ゲート方式(0-100)：単独は最大55、確認が増えるほど高得点。各パターン列＝形の近さ(0-100)。<b style="color:var(--muted)">灰字=未確認(部分一致)</b>・<b style="color:var(--red)">赤✕=失敗(崩れ)</b>・色付き=成立。「—」は未分析。行クリックで内訳＋チャート。</span></div>
       </div>
-      ${fltState.analysis.open ? filterPanelHtml('analysis') : ''}
+      <div id="flt-host-analysis">${fltState.analysis.open ? filterPanelHtml('analysis') : ''}</div>
       ${anaPanelOpen ? anaThresholdPanelHtml() : ''}
       <div class="section-body">
         ${secs.length === 0 ? `<div class="empty">${anaTop50Busy ? '売買代金ランキングを取得中…' : anaTop50 ? '売買代金ランキングを取得できませんでした（休場/時間外、または取得元の仕様変更の可能性）。トグルを切り替えると再取得します。' : '対象銘柄がありません。フィルタを変えるか、銘柄を登録してください。'}</div>` : `

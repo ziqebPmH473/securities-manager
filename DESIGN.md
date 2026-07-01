@@ -13,6 +13,7 @@
 
 - **技術**: バニラ HTML/CSS/JS（**ビルド無し**。React/Vite ではない）＋ Cloudflare Pages Functions。
 - **保存**: ブラウザ **localStorage**（キー `sm_data_v1`、列設定は `sm_colprefs_v2`、**列フィルター**は `sm_filters_v1`（分析・個別銘柄のライブ状態）と `sm_filter_presets_v1`（パターン＝3タブ共通））。Sheets/KV は未実装。
+- **描画パフォーマンス**（2026-07-01）: ①**列フィルターの詳細パネル開閉は全再描画しない**（`fltToggle` は `render()` を呼ばず `#flt-host-<scope>` のDOMと `#flt-toggle-<scope>` ボタンだけ差し替え＋`scheduleFit`）。開閉が一覧再計算を伴わず即時化（大量銘柄で約2000ms→数十ms）。フィルタ値の変更・追加削除は従来どおり `fltRerender→render`。②**1描画中だけ有効な計算メモ**（`calcMemoBegin/End`。`render()` の最外側で開始・終了）で `calc.evaluate/totalHolding/lastBuyInfo` を銘柄ごとに1回に（保有・取引履歴の重複走査を削減。描画外はメモOFF＝常に最新をその場計算で古い値が残らない）。データ・保存・同期・表示結果は不変。
 - **共通列フィルター**（2026-06-26）: 分析・個別銘柄・銘柄マスタの3タブで**同一のフィルターパネル**を共用（`fltState[scope]` / `filterPanelHtml(scope)` / `applyColFilters(secs, scope)`、`scope='holdings'|'analysis'|'secmaster'`）。項目を追加して数値=範囲 / 選択肢=複数選択（いずれか一致）で絞る。対象列は `filterableCols(scope)`（分析=ANALYSIS列、個別銘柄=現在市場の列、銘柄マスタ=固定キー）。**次回起動時の引継ぎ**＝分析・個別銘柄のみ `loadFilterState`/`saveFilterState` で永続（銘柄マスタは保存しない）。**パターン**（名前付きプリセット）は3タブ共通の1リストで、適用時はそのタブに無い列キーを無視。個別銘柄の旧 種別/会社/口座/カテゴリ ドロップダウンはこのパネルへ統合（`setFilter`/`clearFilter` 廃止）。
 - **銘柄名検索の正規化**（2026-06-26）: `searchNorm()`＝`NFKC`（全角英数字→半角・半角カナ→全角カナ）＋小文字化＋カタカナ→ひらがな。保有・銘柄マスタ・分析・カルテの銘柄名/コード検索すべてに適用（`secMatchesQuery`）。**銘柄カルテ**は市場選択を廃止し、コード/ティッカー/銘柄名のいずれかで検索（複数一致は候補リスト→選択、`karteMatches`）。
 - **デプロイ**: GitHub のブランチ `claude/securities-portfolio-tool-WGIsF`（既定＝本番）への push で **CF Pages 自動デプロイ**。
