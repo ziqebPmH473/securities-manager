@@ -1316,6 +1316,16 @@ const calc = {
 
   // 評価額（原通貨）。価格未取得は null
   valueNative(sec) {
+    // 投信は自動価格が無い。保有（証券会社×口座）ごとの手入力評価額(h.evalJpy)を優先合算し、
+    // 未入力の保有だけ共有単価×口数で概算補完（どちらも無ければ null）
+    if (sec.market === 'FUND') {
+      const hs = store.data.holdings.filter(h => h.securityId === sec.id);
+      const price = this.price(sec);
+      if (hs.some(h => h.evalJpy != null) || price != null) {
+        return hs.reduce((a, h) => a + (h.evalJpy != null ? h.evalJpy : (price != null ? price * (h.quantity || 0) : 0)), 0);
+      }
+      return null;
+    }
     const price = this.price(sec);
     const th = this.totalHolding(sec.id);
     if (price == null) return null;
@@ -6065,16 +6075,17 @@ function openHoldingsForm(secId) {
   const hs = store.data.holdings.filter(h => h.securityId === secId);
   const us = sec.market === 'US';
   const isFund = sec.market === 'FUND';
-  // 投信は価格を自動取得しないため評価額は手入力（prices['FUND:...'].price=1口あたり評価額を保存）
-  const fundPrice = (store.data.prices['FUND:' + sec.ticker] || {}).price;
-  const fundTotalQty = hs.reduce((a, h) => a + (h.quantity || 0), 0);
-  const fundEvalNow = (fundPrice != null && fundTotalQty) ? Math.round(fundPrice * fundTotalQty) : '';
+  // 投信は価格を自動取得しないため評価額は保有（証券会社×口座）ごとに手入力（h.evalJpy）。
+  // 既に h.evalJpy が無い（取込済み）保有は、共有単価×口数の概算を初期表示する。
+  const fundUnitPrice = (store.data.prices['FUND:' + sec.ticker] || {}).price;
+  const fundEvalOf = (h) => h.evalJpy != null ? h.evalJpy : (fundUnitPrice != null ? Math.round(fundUnitPrice * (h.quantity || 0)) : '');
   const rowsHtml = hs.map(h => `
     <tr data-hid="${h.id}">
       <td class="l">${esc(h.broker)}</td><td class="l">${esc(h.accountType)}</td>
       <td><input type="number" step="any" class="h-qty" style="width:100%" value="${h.quantity}"></td>
       <td><input type="number" step="any" class="h-cost" style="width:100%" value="${h.avgCost}"></td>
       ${us ? `<td><input type="number" step="any" class="h-acq" style="width:100%" value="${h.acqJpy ?? ''}" placeholder="取得円"></td>` : ''}
+      ${isFund ? `<td><input type="number" step="any" class="h-eval" style="width:100%" value="${fundEvalOf(h)}" placeholder="評価額(円)"></td>` : ''}
       <td><input type="number" step="any" class="h-orig" style="width:100%" value="${h.origBuyAmount ?? ''}" placeholder="任意"></td>
       <td class="l"><button type="button" class="btn btn-sm btn-danger" onclick="removeHolding(${h.id},${secId})">削除</button></td>
     </tr>`).join('');
@@ -6093,17 +6104,11 @@ function openHoldingsForm(secId) {
         </div>
       </fieldset>
       <div class="table-wrap"><table>
-        <thead><tr><th class="l">証券会社</th><th class="l">口座</th><th>数量</th><th>平均取得単価(${ccy})</th>${us ? '<th>取得円(円)</th>' : ''}<th title="一旦売却→他社で買い直し（損出し）等で、最初の購入額を残したい時に入力。空欄なら取得価額(単価×数量)を使用">売却前購入額(${ccy})</th><th></th></tr></thead>
+        <thead><tr><th class="l">証券会社</th><th class="l">口座</th><th>数量</th><th>平均取得単価(${ccy})</th>${us ? '<th>取得円(円)</th>' : ''}${isFund ? '<th>評価額(円)</th>' : ''}<th title="一旦売却→他社で買い直し（損出し）等で、最初の購入額を残したい時に入力。空欄なら取得価額(単価×数量)を使用">売却前購入額(${ccy})</th><th></th></tr></thead>
         <tbody id="holdings-rows">${rowsHtml || ''}</tbody>
       </table></div>
       ${hs.length === 0 ? '<div class="empty">保有がありません。下のフォームから追加してください。</div>' : ''}
-
-      ${isFund ? `
-      <fieldset class="form-group"><legend>投資信託の評価額（自動取得なし・手入力）</legend>
-        <div class="row"><div class="field"><label>現在の評価額(円)（この投信の保有全体）</label>
-          <input name="fundEval" type="number" step="any" value="${fundEvalNow}" placeholder="マネフォ等の評価額を入力"></div></div>
-        <p class="muted" style="margin:6px 0 0">投信は価格を自動取得しないため評価額は手入力です。入力額を保有数量で割った1口単価を保存し、一覧・転記（マネフォ用）の評価額に反映します。空欄なら据え置き。</p>
-      </fieldset>` : ''}
+      ${isFund ? '<p class="muted" style="margin:6px 0 0">投信は評価額を自動取得しないため、<strong>証券会社×口座ごとに評価額(円)を手入力</strong>します（マネフォ等の値）。一覧・転記（マネフォ用）の評価額に反映。空欄は据え置き。</p>' : ''}
 
       <fieldset class="form-group"><legend>保有を追加</legend>
         <div class="row">
@@ -6115,6 +6120,7 @@ function openHoldingsForm(secId) {
           <div class="field"><label>平均取得単価(${ccy})</label><input name="newCost" type="number" step="any" placeholder="0"></div>
         </div>
         ${us ? `<div class="row"><div class="field"><label>取得円(円)（任意・取得円用）</label><input name="newAcq" type="number" step="any" placeholder="空欄可"></div></div>` : ''}
+        ${isFund ? `<div class="row"><div class="field"><label>評価額(円)（任意・投信の現在評価額）</label><input name="newEval" type="number" step="any" placeholder="空欄可"></div></div>` : ''}
         <div class="row"><div class="field"><label>売却前購入額(${ccy})（任意・損出し時の最初の購入額）</label><input name="newOrig" type="number" step="any" placeholder="空欄可"></div></div>
       </fieldset>
 
@@ -6142,6 +6148,9 @@ function openHoldingsForm(secId) {
         // 取得円(円)の直接編集（米国株）。空欄なら未設定に戻す
         const acqEl = tr.querySelector('.h-acq');
         if (acqEl) { const v = acqEl.value.trim(); h.acqJpy = v === '' ? undefined : (parseFloat(v) || 0); }
+        // 評価額(円)の直接編集（投信・保有＝証券会社×口座ごと）。空欄なら未設定に戻す
+        const evalEl = tr.querySelector('.h-eval');
+        if (evalEl) { const v = evalEl.value.trim(); h.evalJpy = v === '' ? undefined : (parseFloat(v) || 0); }
         // 売却前購入額（損出し用・原通貨）。空欄なら未設定（取得価額を採用）に戻す
         const origEl = tr.querySelector('.h-orig');
         if (origEl) { const v = origEl.value.trim(); h.origBuyAmount = v === '' ? undefined : (parseFloat(v) || 0); }
@@ -6153,13 +6162,8 @@ function openHoldingsForm(secId) {
         parseFloat(f.newQty.value) || 0, parseFloat(f.newCost.value) || 0);
       const nh = store.data.holdings.find(x => x.securityId === secId && x.broker === f.broker.value && x.accountType === f.accountType.value);
       if (nh && f.newAcq && f.newAcq.value.trim() !== '') nh.acqJpy = parseFloat(f.newAcq.value) || 0;
+      if (nh && f.newEval && f.newEval.value.trim() !== '') nh.evalJpy = parseFloat(f.newEval.value) || 0;
       if (nh && f.newOrig && f.newOrig.value.trim() !== '') nh.origBuyAmount = parseFloat(f.newOrig.value) || 0;
-    }
-    // 投信の評価額（手入力）→ 1口単価(price=評価額/総口数)として保存。一覧・転記の評価額に反映
-    if (isFund && f.fundEval && f.fundEval.value.trim() !== '') {
-      const ev = parseFloat(f.fundEval.value);
-      const tq = store.data.holdings.filter(h => h.securityId === secId).reduce((a, h) => a + (h.quantity || 0), 0);
-      if (!isNaN(ev) && tq > 0) store.data.prices['FUND:' + sec.ticker] = { price: ev / tq, prevClose: null, updatedAt: store._now() };
     }
     // 銘柄単位の元本売却情報（情報管理のみ）
     store.updateSecurity(secId, {
@@ -8273,7 +8277,11 @@ async function runBrokerImport() {
         if (normFundName(existing.name) !== key && !(existing.aliasNames || []).some(a => normFundName(a) === key)) existing.aliasNames = [...(existing.aliasNames || []), it.name];
         const q = (it.qty && it.qty > 0) ? it.qty : 1;
         store.setHolding(existing.id, scope.broker, it.account || '特定', q, it.acqJpy != null ? it.acqJpy / q : 0, 'import');
-        if (it.evalJpy != null) store.data.prices['FUND:' + existing.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+        if (it.evalJpy != null) {
+          store.data.prices['FUND:' + existing.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+          const fh = store.data.holdings.find(x => x.securityId === existing.id && x.broker === scope.broker && x.accountType === (it.account || '特定'));
+          if (fh) fh.evalJpy = it.evalJpy; // 保有（証券会社×口座）ごとの評価額
+        }
         fundCount++;
       } else {
         (pending[key] = pending[key] || { name: it.name, items: [] }).items.push({ broker: scope.broker, account: it.account || '特定', qty: it.qty, acqJpy: it.acqJpy, evalJpy: it.evalJpy });
@@ -8344,7 +8352,11 @@ function registerPendingFunds(skipCode) {
     for (const it of v.items) {
       const q = (it.qty && it.qty > 0) ? it.qty : 1;
       store.setHolding(sec.id, it.broker, it.account || '特定', q, it.acqJpy != null ? it.acqJpy / q : 0, 'import');
-      if (it.evalJpy != null) store.data.prices['FUND:' + sec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+      if (it.evalJpy != null) {
+        store.data.prices['FUND:' + sec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+        const fh = store.data.holdings.find(x => x.securityId === sec.id && x.broker === it.broker && x.accountType === (it.account || '特定'));
+        if (fh) fh.evalJpy = it.evalJpy; // 保有ごとの評価額
+      }
     }
     n++;
   }
@@ -9400,7 +9412,11 @@ function runFundImport() {
     const q = (it.qty && it.qty > 0) ? it.qty : 1;
     const avgCost = it.acqJpy != null ? it.acqJpy / q : 0;
     store.setHolding(sec.id, broker, it.account || defAcct, q, avgCost, 'import');
-    if (it.evalJpy != null) store.data.prices['FUND:' + sec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+    if (it.evalJpy != null) {
+      store.data.prices['FUND:' + sec.ticker] = { price: it.evalJpy / q, prevClose: null, updatedAt: store._now() };
+      const fh = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === (it.account || defAcct));
+      if (fh) fh.evalJpy = it.evalJpy; // 保有ごとの評価額
+    }
     n++;
   }
   store.save(); closeModal(); render();
@@ -9414,7 +9430,8 @@ function fundSavedRows() {
     const s = store.data.securities.find(x => x.id === h.securityId);
     if (!s || s.market !== 'FUND') continue;
     const p = store.data.prices['FUND:' + s.ticker] || {};
-    const evalJ = p.price != null ? Math.round(p.price * h.quantity) : null;
+    // 評価額は保有ごとの手入力(h.evalJpy)を優先。無ければ共有単価×口数で概算
+    const evalJ = h.evalJpy != null ? Math.round(h.evalJpy) : (p.price != null ? Math.round(p.price * h.quantity) : null);
     const acqJ = Math.round((h.avgCost || 0) * h.quantity);
     out.push({ name: s.name, code: s.ticker || '', broker: h.broker, account: h.accountType, evalJpy: evalJ, acqJpy: acqJ });
   }
