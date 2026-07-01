@@ -9185,9 +9185,10 @@ function excelExportGenerate() {
     if (!sec || sec.market !== 'FUND') continue;
     if (!includeManual && h.source !== 'import') continue;
     const p = store.data.prices['FUND:' + sec.ticker] || {};
-    const evalJ = p.price != null ? Math.round(p.price * h.quantity) : '';
+    // 評価額は保有ごとの手入力(h.evalJpy)を優先。無ければ共有単価×口数で概算
+    const evalJ = h.evalJpy != null ? Math.round(h.evalJpy) : (p.price != null ? Math.round(p.price * h.quantity) : '');
     const acqJ = Math.round((h.avgCost || 0) * h.quantity);
-    fundRows.push([sec.name, '', '投資信託', '投資信託', h.broker || '', h.accountType || '', 'JPY', evalJ, '', acqJ, '', '']);
+    fundRows.push([sec.name, sec.ticker || '', '投資信託', '投資信託', h.broker || '', h.accountType || '', 'JPY', evalJ, '', acqJ, '', '']);
   }
   fundRows.sort((a, b) => (a[4] + a[0]).localeCompare(b[4] + b[0], 'ja'));
   const block = (label, rows) => {
