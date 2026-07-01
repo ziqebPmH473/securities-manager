@@ -1347,6 +1347,11 @@ const calc = {
   },
   // 損益率（原通貨ベース。為替に依存しない）
   pnlPctNative(sec) {
+    // 投信は自動単価が無く評価額が保有ごとの手入力(h.evalJpy)。評価額ベースで損益率を出す
+    if (sec.market === 'FUND') {
+      const v = this.valueNative(sec), c = this.costNative(sec);
+      return (v == null || !(c > 0)) ? null : (v - c) / c * 100;
+    }
     const th = this.totalHolding(sec.id);
     const price = this.price(sec);
     if (price == null || th.qty <= 0 || !th.avgCost) return null;
