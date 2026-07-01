@@ -9307,7 +9307,9 @@ function fundGenerate() {
   const includeHeader = document.getElementById('fund-header').checked;
   const items = parseFundRows(document.getElementById('fund-text').value);
   const r1 = (n) => n == null ? '' : Math.round(n);
-  const rows = items.map(c => [c.name, '', '投資信託', '投資信託', broker, c.account || defAcct, 'JPY', r1(c.evalJpy), '', r1(c.acqJpy), '', '']);
+  // 取込済みの同名ファンドがあればそのコード（コードマスタの協会コード等）を補完（新規作成はしない）
+  const fundCode = (name) => { const key = normFundName(name); const s = store.data.securities.find(x => x.market === 'FUND' && fundNameKeys(x).includes(key)); return s ? (s.ticker || '') : ''; };
+  const rows = items.map(c => [c.name, fundCode(c.name), '投資信託', '投資信託', broker, c.account || defAcct, 'JPY', r1(c.evalJpy), '', r1(c.acqJpy), '', '']);
   const body = rows.map(r => r.join('\t')).join('\n');
   const text = includeHeader && rows.length ? EXCEL_EXPORT_COLS.join('\t') + '\n' + body : body;
   const total = rows.reduce((s, r) => s + (Number(r[7]) || 0), 0);
@@ -9396,7 +9398,7 @@ function fundSavedRows() {
     const p = store.data.prices['FUND:' + s.ticker] || {};
     const evalJ = p.price != null ? Math.round(p.price * h.quantity) : null;
     const acqJ = Math.round((h.avgCost || 0) * h.quantity);
-    out.push({ name: s.name, broker: h.broker, account: h.accountType, evalJpy: evalJ, acqJpy: acqJ });
+    out.push({ name: s.name, code: s.ticker || '', broker: h.broker, account: h.accountType, evalJpy: evalJ, acqJpy: acqJ });
   }
   return out;
 }
@@ -9404,7 +9406,7 @@ function fundTransferSavedGenerate() {
   const items = fundSavedRows();
   if (!items.length) { toast('保存済みの投信がありません（「取込」タブの投信取込で取り込んでください）'); return; }
   const r1 = (n) => n == null ? '' : Math.round(n);
-  const rows = items.map(c => [c.name, '', '投資信託', '投資信託', c.broker || '', c.account || '', 'JPY', r1(c.evalJpy), '', r1(c.acqJpy), '', '']);
+  const rows = items.map(c => [c.name, c.code || '', '投資信託', '投資信託', c.broker || '', c.account || '', 'JPY', r1(c.evalJpy), '', r1(c.acqJpy), '', '']);
   const includeHeader = (document.getElementById('fund-header') || {}).checked;
   const body = rows.map(r => r.join('\t')).join('\n');
   const text = includeHeader && rows.length ? EXCEL_EXPORT_COLS.join('\t') + '\n' + body : body;
