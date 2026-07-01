@@ -5375,7 +5375,7 @@ function renderImport() {
       <div class="section-body" style="padding:16px">
         <div class="btn-row">
           <button class="btn btn-primary" onclick="openGenericImport()">汎用取込（列を選んで取込）</button>
-          <button class="btn" onclick="exportGeneric()">汎用出力（CSV）</button>
+          <button class="btn" onclick="openGenericExport()">汎用出力（CSV）</button>
         </div>
         <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有・メモ・売却前購入額まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます（管理項目をすべて往復）。</p>
       </div>
@@ -8035,8 +8035,8 @@ const GENERIC_MAP = {
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount',
   '売却前購入額': 'origBuyAmount', 'メモ': 'memo',
 };
-// 注意: exportGeneric の出力配列(base)は末尾に投資カテゴリを append する（下記 [22]）。列を足す時は位置を合わせること。
-const GENERIC_HEADER = ['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ'];
+// 標準レイアウトの列。exportGeneric はこの列名→GENERIC_MAP でフィールドキーを引き、genericFieldValue で値を出す（位置合わせ不要）。列を足すなら GENERIC_MAP にも登録。
+const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -8386,28 +8386,70 @@ function csvCell(v) {
   const s = v == null ? '' : String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
-function exportGeneric() {
-  const lines = [GENERIC_HEADER.join(',')];
+// フィールドキー→出力値（銘柄s・保有h。hは無い場合null）。汎用取込のフィールドキーと1対1で対応させる
+function genericFieldValue(key, s, h) {
+  switch (key) {
+    case 'ticker': return s.ticker;
+    case 'market': return s.market;
+    case 'broker': return h ? h.broker : '';
+    case 'account': return h ? h.accountType : '';
+    case 'quantity': return h ? h.quantity : '';
+    case 'avgCost': return h ? h.avgCost : '';
+    case 'acqJpy': return h && h.acqJpy != null ? h.acqJpy : '';
+    case 'origBuyAmount': return h && h.origBuyAmount != null ? h.origBuyAmount : '';
+    case 'prevBuyPrice': return s.prevBuyPrice ?? '';
+    case 'prevBuyDate': return s.prevBuyDate || '';
+    case 'baseHighMode': return s.baseHighMode || '';
+    case 'baseHighManual': return s.baseHighManual ?? '';
+    case 'fixedBuyPrice': return s.fixedBuyPrice ?? '';
+    case 'ruleName': return (store.rule(s.ruleId) || {}).name || '';
+    case 'category': return s.category || '';
+    case 'investCategory': return s.investCategory || '';
+    case 'buyAmount': return s.buyAmount ?? '';
+    case 'buyCount': return s.buyCount ?? '';
+    case 'enabled': return s.enabled === false ? '無効' : '有効';
+    case 'watch': return s.watch ? '注意' : '通常';
+    case 'detailType': return detailTypeOf(s);
+    case 'principalSold': return s.principalSold ? '売却済' : '';
+    case 'principalSoldAmount': return s.principalSoldAmount ?? '';
+    case 'memo': return s.memo || '';
+    default: return ''; // 分析結果・未対応フィールドは空欄
+  }
+}
+// 出力レイアウト選択（標準 or 汎用取込で保存したフォーマット）
+function openGenericExport() {
+  const fmts = store.data.importFormats || [];
+  showModal('汎用出力（レイアウトを選んで出力）', `
+    <p class="muted" style="margin:0 0 8px"><strong>標準</strong>は全項目を既定の並びで出力します。汎用取込で保存したフォーマットを選ぶと、その<strong>列名・並び</strong>で出力します（取込⇄出力を同じレイアウトで往復）。</p>
+    <div class="field" style="max-width:340px"><label style="font-size:11px">出力レイアウト</label>
+      <select id="ge-format">
+        <option value="">標準（全項目・既定の並び）</option>
+        ${fmts.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('')}
+      </select></div>
+    ${fmts.length ? '' : '<div class="muted" style="margin:6px 0 0">※ 保存フォーマットはまだありません。「汎用取込」で各列に取込先を割り当て→「フォーマット保存」すると、その並びで出力できます。</div>'}
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+      <button type="button" class="btn btn-primary" onclick="const v=document.getElementById('ge-format').value; closeModal(); exportGeneric(v?parseInt(v,10):null);">出力</button>
+    </div>`);
+}
+function exportGeneric(fmtId) {
+  const fmt = fmtId ? (store.data.importFormats || []).find(f => f.id === fmtId) : null;
+  // cols: [{header, key}]。標準=GENERIC_HEADER（列名→キーはGENERIC_MAP）／保存フォーマット=その列名・並び
+  const cols = fmt
+    ? Object.entries(fmt.mapping).map(([header, key]) => ({ header, key }))
+    : GENERIC_HEADER.map(h => ({ header: h, key: GENERIC_MAP[h] || '' }));
+  const lines = [cols.map(c => csvCell(c.header)).join(',')];
   for (const s of store.data.securities) {
-    const ruleName = (store.rule(s.ruleId) || {}).name || '';
-    const base = [s.ticker, s.market, '', '', '', '',
-      s.prevBuyPrice ?? '', s.prevBuyDate || '', s.baseHighMode || '', s.baseHighManual ?? '', s.fixedBuyPrice ?? '', ruleName, s.category || '',
-      s.buyAmount ?? '', s.buyCount ?? '', s.enabled === false ? '無効' : '有効', s.watch ? '注意' : '通常', detailTypeOf(s),
-      s.principalSold ? '売却済' : '', s.principalSoldAmount ?? '',
-      '', s.memo || '', s.investCategory || '']; // [20]=売却前購入額(保有ごと) / [21]=メモ(銘柄) / [22]=投資カテゴリ
     const hs = store.data.holdings.filter(h => h.securityId === s.id);
-    if (hs.length) {
-      for (const h of hs) { const r = base.slice(); r[2] = h.broker; r[3] = h.accountType; r[4] = h.quantity; r[5] = h.avgCost; r[20] = h.origBuyAmount ?? ''; lines.push(r.map(csvCell).join(',')); }
-    } else {
-      lines.push(base.map(csvCell).join(','));
-    }
+    const emit = (h) => lines.push(cols.map(c => csvCell(genericFieldValue(c.key, s, h))).join(','));
+    if (hs.length) hs.forEach(emit); else emit(null);
   }
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `securities-generic-${today()}.csv`;
+  a.download = `securities-generic${fmt ? '-' + fmt.name : ''}-${today()}.csv`;
   a.click();
-  toast('汎用CSVをダウンロードしました');
+  toast(`汎用CSVをダウンロードしました${fmt ? `（${fmt.name}）` : ''}`);
 }
 
 // ---------- 汎用取込（列選択式・フォーマット保存）----------
@@ -9896,6 +9938,7 @@ window.cpReset = cpReset;
 window.closeModal = closeModal;
 window.exportData = exportData;
 window.exportGeneric = exportGeneric;
+window.openGenericExport = openGenericExport;
 window.refreshAllMeta = refreshAllMeta;
 window.refreshSplitsOnly = refreshSplitsOnly;
 window.splitHistAll = splitHistAll;
