@@ -2927,18 +2927,28 @@ function autoFitColumns(table) {
   const sample = table.querySelector('tbody td');
   let font = '13px sans-serif';
   if (sample) { const cs = getComputedStyle(sample); font = (cs.font && cs.font.trim()) ? cs.font : `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; }
-  const meas = document.createElement('span');
-  meas.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden;white-space:nowrap;font:' + font;
-  document.body.appendChild(meas);
   // colspan のグループ見出し行などは列数が合わないので除外
   const rows = [...table.querySelectorAll('tbody tr')].filter(tr => tr.children.length === cols.length);
+  // 一括計測: 計測用spanを全セルぶん先に生成→1回のレイアウトでまとめて offsetWidth を読む。
+  // 旧実装は「span.innerHTML書換→offsetWidth読み」をセルごとに繰り返し、行×列ぶんの強制リフロー
+  // （layout thrashing）で描画が約1秒かかっていた。書込を全て済ませてから読むso計測は1レイアウトで完了。
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
+  const spanCss = 'display:inline-block;white-space:nowrap;font:' + font;
+  const items = []; // {ci, el}
   cols.forEach((col, ci) => {
     if (col.dataset.autocol !== '1') return;
-    let max = 0;
-    rows.forEach(tr => { const td = tr.children[ci]; if (!td) return; meas.innerHTML = td.innerHTML; const w = meas.offsetWidth; if (w > max) max = w; });
-    col.style.width = Math.max(44, Math.ceil(max) + 26) + 'px'; // +26 ≒ セル左右パディング
+    rows.forEach(tr => {
+      const td = tr.children[ci]; if (!td) return;
+      const s = document.createElement('span'); s.style.cssText = spanCss; s.innerHTML = td.innerHTML;
+      holder.appendChild(s); items.push({ ci, el: s });
+    });
   });
-  meas.remove();
+  document.body.appendChild(holder);
+  const maxByCol = {};
+  for (const it of items) { const w = it.el.offsetWidth; if (w > (maxByCol[it.ci] || 0)) maxByCol[it.ci] = w; } // 読取のみ＝レイアウトは1回
+  holder.remove();
+  cols.forEach((col, ci) => { if (col.dataset.autocol !== '1') return; col.style.width = Math.max(44, Math.ceil(maxByCol[ci] || 0) + 26) + 'px'; }); // +26 ≒ セル左右パディング
   let total = 0; cols.forEach(c => total += parseFloat(c.style.width) || 0);
   if (total) table.style.width = total + 'px';
 }
