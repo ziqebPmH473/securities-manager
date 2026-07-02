@@ -1577,6 +1577,13 @@ const api = {
     }
     // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
     await this.refreshExtended(allSecs);
+    // 高値(5年/52週)が未取得の銘柄を補完取得（withHighs=false の通常更新でも、日次高値取得の後に
+    // 追加・取込された新規銘柄は高値が無く残り下落率が出ないため、欠けている分だけ highs=1 で取り直す）。
+    if (!withHighs) {
+      const missHigh = secs.filter(s => (store.data.prices[priceKey(s)] || {}).high5y == null);
+      // highs=1 は5年日足も取るためサブリクエストが重い。10件ずつに分割して上限内に収める
+      for (let i = 0; i < missHigh.length; i += 10) { try { await this.refreshPrice(missHigh.slice(i, i + 10)); } catch (_) {} }
+    }
     // 名前未取得の銘柄だけ銘柄情報を取得
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
     if (need.length) await this.refreshMeta(need);
