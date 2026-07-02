@@ -31,6 +31,7 @@
     transactions:    ['records', (t) => `t:${t.id}`],
     rules:           ['records', (r) => `r:${r.id}`],
     categories:      ['records', (c) => `c:${c.category}`],
+    labelDefs:       ['records', (c) => `ld:${c.name}`],   // 銘柄ラベル（複数タグ）マスタ。名前キーで3-wayマージ
     // マスタ系（背景色ルール/格付け色/フィルタプリセット）。id等で一致＋updatedAtの新しい方。
     // 削除は配列除去ではなくトンボストン（deleted:true＋新updatedAt）で表現するので、
     // 「新しい削除」が「古い設定」や「別端末の再シードした既定」に勝てる（＝削除も同期で保持される）。

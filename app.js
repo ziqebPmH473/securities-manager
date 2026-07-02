@@ -38,6 +38,14 @@ const DEFAULT_INVEST_CATEGORIES = [
   { name: '宝くじ',    color: 'pink',   sortOrder: 8 },
   { name: '防御・配当', color: 'green',  sortOrder: 9 },
 ];
+// 銘柄ラベル（投資テーマ・分類）マスタ。1銘柄に複数付与できるタグ。前提が崩れた時に
+// ラベルで絞って一括判断（売却等）する用途。色・並び順のみ持つ（金額とは無関係）。
+const DEFAULT_LABELS = [
+  { name: '半導体',  color: 'blue',   sortOrder: 1 },
+  { name: '宇宙',    color: 'purple', sortOrder: 2 },
+  { name: '防衛',    color: 'gray',   sortOrder: 3 },
+  { name: '高配当',  color: 'green',  sortOrder: 4 },
+];
 
 // ラベル色プリセット（カテゴリ・格付け等のマスタで共有。将来ルール名など他ラベルにも流用可）。
 // key を categories[].color / grades[].color に保存し、labelColorStyle() でインライン style を生成する。
@@ -156,6 +164,7 @@ const MASTER_COLS = [
   { key: 'reco',        label: '推奨購入額',       left: false, markets: ALLM, noSort: false },
   { key: 'category',    label: 'カテゴリ',         left: true,  markets: ALLM, noSort: false },
   { key: 'investCategory', label: '投資カテゴリ',  left: true,  markets: ALLM, noSort: false },
+  { key: 'labels',      label: '銘柄ラベル',       left: true,  markets: ALLM, noSort: false },
   { key: 'ruleName',    label: '買い増しルール',    left: true,  markets: ALLM, noSort: false },
   { key: 'fixedBuyPrice', label: '買増固定値',       left: false, markets: STKM, noSort: false },
   { key: 'rating',      label: '銘柄格付',         left: true,  markets: STKM, noSort: false },
@@ -218,8 +227,8 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
   ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
@@ -234,6 +243,7 @@ const ANALYSIS_COLMAP = {
   '銘柄格付': 'rating', '銘柄格付け': 'rating', '格付': 'rating', '格付け': 'rating',
   '買い時評価': 'buyGrade', '買い時': 'buyGrade',
   '推奨投資額': 'recoAmount', 'カテゴリ': 'category', '推奨カテゴリ': 'category',
+  '投資カテゴリ': 'investCategory', '銘柄ラベル': 'labels', 'ラベル': 'labels', 'タグ': 'labels',
   'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
   '備考': 'analysisNote', '評価時点_購入優先順位': 'priority', '購入優先順位': 'priority',
   'セクター': 'sector', '業種': 'industry', '時価総額(百万)': 'marketCap',
@@ -275,6 +285,7 @@ const store = {
     if (!Array.isArray(this.data.rules) || this.data.rules.length === 0) this.data.rules = [structuredClone(DEFAULT_RULE)];
     this.data.categories ||= structuredClone(DEFAULT_CATEGORIES);
     this.data.investCategories ||= structuredClone(DEFAULT_INVEST_CATEGORIES); // 投資カテゴリ（分析枠ラベル）マスタ
+    this.data.labelDefs ||= structuredClone(DEFAULT_LABELS); // 銘柄ラベル（複数タグ）マスタ
     this.data.grades ||= structuredClone(DEFAULT_GRADES); // 格付け色マスタ（S/A/B/C/D の表示色）
     this.data.matrixBands ||= structuredClone(DEFAULT_MATRIX_BANDS); // 分布マトリックスの取得額レンジ（色・しきい値）
     this.data.matrixSettings ||= {};
@@ -324,6 +335,7 @@ const store = {
       rules: [structuredClone(DEFAULT_RULE)],
       categories: structuredClone(DEFAULT_CATEGORIES),
       investCategories: structuredClone(DEFAULT_INVEST_CATEGORIES),
+      labelDefs: structuredClone(DEFAULT_LABELS),
       grades: structuredClone(DEFAULT_GRADES),
       prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [], analyses: [], techAnalysis: {},
       importHistory: [], lastPriceUpdate: null, seq: 1,
@@ -598,6 +610,26 @@ const store = {
   removeInvestCategory(name) {
     this.data.investCategories = this.data.investCategories.filter(c => c.name !== name);
     for (const s of this.data.securities) if (s.investCategory === name) s.investCategory = null;
+    this.save();
+  },
+  // 銘柄ラベル（複数タグ）マスタ。名前・色・並び順のみ。sec.labels（配列）が参照する。
+  addLabelDef(c) {
+    c.sortOrder = c.sortOrder || (Math.max(0, ...this.data.labelDefs.map(x => x.sortOrder || 0)) + 1);
+    this.data.labelDefs.push(c); this.save();
+  },
+  updateLabelDef(oldName, patch) {
+    const c = this.data.labelDefs.find(x => x.name === oldName);
+    if (!c) return;
+    const newName = patch.name;
+    Object.assign(c, patch);
+    if (newName && newName !== oldName) {
+      for (const s of this.data.securities) if (Array.isArray(s.labels)) s.labels = s.labels.map(l => l === oldName ? newName : l);
+    }
+    this.save();
+  },
+  removeLabelDef(name) {
+    this.data.labelDefs = this.data.labelDefs.filter(c => c.name !== name);
+    for (const s of this.data.securities) if (Array.isArray(s.labels)) s.labels = s.labels.filter(l => l !== name);
     this.save();
   },
 
@@ -1942,6 +1974,8 @@ function fltSelectSpec(key) {
     case 'detailType': return { opts: [['個別株', '個別株'], ['ETF', 'ETF'], ['投資信託', '投資信託']], val: s => detailTypeOf(s) };
     case 'broker': return { opts: distinct(s => calc.lastBroker(s)), val: s => calc.lastBroker(s) || '' };
     case 'category': return { opts: distinct(s => s.category), val: s => s.category || '' };
+    case 'investCategory': return { opts: distinct(s => s.investCategory), val: s => s.investCategory || '' };
+    case 'labels': return { opts: [...(store.data.labelDefs || [])].sort((a, b) => a.sortOrder - b.sortOrder).map(d => [d.name, d.name]), val: s => secLabels(s), multi: true };
     case 'ruleName': return { opts: distinct(s => { const r = store.rule(s.ruleId); return r ? r.name : ''; }), val: s => { const r = store.rule(s.ruleId); return r ? r.name : ''; } };
     case 'sector': return { opts: distinct(s => calc.field(s, 'sector')), val: s => calc.field(s, 'sector') || '' };
     case 'industry': return { opts: distinct(s => calc.field(s, 'industry')), val: s => calc.field(s, 'industry') || '' };
@@ -1999,7 +2033,8 @@ function applyColFilters(secs, scope) {
     const want = st.sel[key]; if (!Array.isArray(want) || !want.length) continue;
     const spec = fltSelectSpec(key); if (!spec) continue;
     const set = new Set(want.map(String));
-    secs = secs.filter(s => set.has(String(spec.val(s) ?? '')));
+    if (spec.multi) secs = secs.filter(s => (spec.val(s) || []).some(v => set.has(String(v)))); // 複数値（ラベル）＝いずれか一致
+    else secs = secs.filter(s => set.has(String(spec.val(s) ?? '')));
   }
   return secs;
 }
@@ -2165,6 +2200,7 @@ function colDefaultWidth(key) {
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
   if (key === 'analysisNote' || key === 'memo') return 160;
+  if (key === 'labels') return 150; // 複数タグ
   if (key === 'origCost') return 96; // 金額（本来の購入額）
   if (key === 'anaWarn' || key === 'anaWarnC') return 150; // パターン名＋スコア
   if (key === 'anaMa200') return 72;
@@ -2529,6 +2565,7 @@ const COL_RENDERERS = {
   reco:      (s,c) => `<td>${c.recoAmt ? fmtAmtInt(c.recoAmt) : muted}</td>`,
   category:  (s,c) => `<td class="l">${categoryTag(s.category)}</td>`,
   investCategory: (s,c) => `<td class="l">${investCategoryTag(s.investCategory)}</td>`,
+  labels:    (s,c) => `<td class="l">${labelsTag(s)}</td>`,
   ruleName:  (s,c) => { const r = store.rule(s.ruleId); return `<td class="l">${r ? esc(r.name) : muted}</td>`; },
   fixedBuyPrice: (s,c) => `<td>${typeof s.fixedBuyPrice === 'number' ? fmtAmt(s.fixedBuyPrice, c.market) : muted}</td>`,
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
@@ -3234,6 +3271,7 @@ function sortValue(sec, key) {
     case 'sigType': { const ev = calc.evaluate(sec); return ev ? ev.type : 'z'; }
     case 'category': { const c = store.data.categories.find(x => x.category === sec.category); return c ? (c.sortOrder ?? 9998) : (sec.category ? 9999 : 10000); }
     case 'investCategory': { const c = store.data.investCategories.find(x => x.name === sec.investCategory); return c ? (c.sortOrder ?? 9998) : (sec.investCategory ? 9999 : 10000); }
+    case 'labels': { const ls = secLabels(sec); return ls.length ? Math.min(...ls.map(labelSortIdx)) : 10000; } // ラベル先頭のマスタ順、未設定は末尾
     case 'ruleName': { const r = store.rule(sec.ruleId); return r ? (r.name || '').toLowerCase() : ''; }
     case 'fixedBuyPrice': return sec.fixedBuyPrice ?? -Infinity;
     case 'qty': return th.qty;
@@ -3524,6 +3562,33 @@ function investCategoryTag(cat) {
   const c = (store.data.investCategories || []).find(x => x.name === cat);
   const st = c && c.color ? labelColorStyle(c.color) : '';
   return `<span class="tag${st ? '' : ' cat'}"${st ? ` style="${st}"` : ''}>${esc(cat)}</span>`;
+}
+
+// 銘柄ラベル（複数タグ）。sec.labels（配列）を色つきタグで並べる。マスタ順に並べ替え。
+function secLabels(sec) { return Array.isArray(sec && sec.labels) ? sec.labels.filter(Boolean) : []; }
+function labelDefColor(name) { const d = (store.data.labelDefs || []).find(x => x.name === name); return d && d.color ? d.color : 'gray'; }
+function labelSortIdx(name) { const d = (store.data.labelDefs || []).find(x => x.name === name); return d ? (d.sortOrder ?? 9998) : 9999; }
+function labelsTagOne(name) { const st = labelColorStyle(labelDefColor(name)); return `<span class="tag"${st ? ` style="${st}"` : ''}>${esc(name)}</span>`; }
+function labelsTag(sec) {
+  const ls = [...secLabels(sec)].sort((a, b) => labelSortIdx(a) - labelSortIdx(b));
+  if (!ls.length) return muted;
+  return ls.map(labelsTagOne).join(' ');
+}
+// ラベル文字列（取込/出力用）↔配列。区切りは ; , 、 ／ / | いずれも許容。出力は「; 」区切り。
+function parseLabels(str) {
+  if (str == null) return [];
+  return String(str).split(/[;,、／/｜|]+/).map(s => s.trim()).filter(Boolean);
+}
+function serializeLabels(arr) { return (Array.isArray(arr) ? arr : []).filter(Boolean).join('; '); }
+// 取込で未登録ラベルはマスタへ自動追加（色は自動割当）。既存はそのまま。
+function ensureLabelDefs(names) {
+  const palette = ['blue', 'purple', 'gray', 'green', 'orange', 'pink', 'cyan', 'gold', 'brass'];
+  for (const n of names) {
+    if (!n) continue;
+    if (!(store.data.labelDefs || []).some(d => d.name === n)) {
+      store.addLabelDef({ name: n, color: palette[store.data.labelDefs.length % palette.length] });
+    }
+  }
 }
 
 // 銘柄格付（★評価はツールチップに格納してコンパクトに）。色は格付けマスタ(store.data.grades)を反映
@@ -4641,6 +4706,8 @@ const SM_BULK_FIELDS = [
   { key: 'watch', label: '注意銘柄' },
   { key: 'category', label: 'カテゴリ' },
   { key: 'investCategory', label: '投資カテゴリ' },
+  { key: 'labelAdd', label: 'ラベルを付与' },
+  { key: 'labelRemove', label: 'ラベルを外す' },
   { key: 'ruleId', label: '買い増しルール' },
   { key: 'rating', label: '銘柄格付' },
   { key: 'overallGrade', label: '総合評価' },
@@ -4653,12 +4720,14 @@ function bulkValueHtml(field, id) {
   const gradeOpts = ['', 'S', 'A', 'B', 'C', 'D'].map(g => `<option value="${g}">${g || '（クリア）'}</option>`).join('');
   const catOpts = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder).map(c => `<option>${esc(c.category)}</option>`).join('');
   const invCatOpts = [...store.data.investCategories].sort((a, b) => a.sortOrder - b.sortOrder).map(c => `<option>${esc(c.name)}</option>`).join('');
+  const labelOpts = [...(store.data.labelDefs || [])].sort((a, b) => a.sortOrder - b.sortOrder).map(c => `<option>${esc(c.name)}</option>`).join('');
   switch (field) {
     case 'detailType': return `<select id="${id}"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
     case 'enabled': return `<select id="${id}"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
     case 'watch': return `<select id="${id}"><option value="true">付ける</option><option value="false">外す</option></select>`;
     case 'category': return `<select id="${id}">${catOpts}</select>`;
     case 'investCategory': return `<select id="${id}">${invCatOpts}</select>`;
+    case 'labelAdd': case 'labelRemove': return `<select id="${id}">${labelOpts || '<option value="">（ラベル未登録）</option>'}</select>`;
     case 'ruleId': return `<select id="${id}">${store.data.rules.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
     case 'rating': case 'overallGrade': case 'buyGrade': return `<select id="${id}">${gradeOpts}</select>`;
     case 'clearOverrides': return `<select id="${id}"><option value="all">名前・セクター・業種すべて</option><option value="nameOverride">銘柄名のみ</option><option value="sectorOverride">セクターのみ</option><option value="industryOverride">業種のみ</option></select>`;
@@ -4673,10 +4742,13 @@ function bulkConvert(field, raw) {
   return raw;
 }
 // 一括変更で銘柄に適用する patch を作る。clearOverrides は手動上書き(name/sector/industry)を null クリアする特別処理。
-function bulkPatch(field, val) {
+// labelAdd/labelRemove は銘柄ごとの現状ラベル配列に対して付与/削除するため sec が必要。
+function bulkPatch(field, val, sec) {
   if (field === 'clearOverrides') {
     return val === 'all' ? { nameOverride: null, sectorOverride: null, industryOverride: null } : { [val]: null };
   }
+  if (field === 'labelAdd') { if (!val) return {}; return { labels: [...new Set([...secLabels(sec), val])] }; }
+  if (field === 'labelRemove') { if (!val) return {}; return { labels: secLabels(sec).filter(l => l !== val) }; }
   return { [field]: val };
 }
 function smBulkFieldChange(f) { smBulkField = f; const c = document.getElementById('sm-bulk-value-wrap'); if (c) c.innerHTML = bulkValueHtml(f, 'sm-bulk-value'); }
@@ -4684,8 +4756,7 @@ function smBulkApply() {
   const ids = [...document.querySelectorAll('.sm-check:checked')].map(c => parseInt(c.value, 10));
   if (!ids.length) { toast('銘柄を選択してください'); return; }
   const val = bulkConvert(smBulkField, (document.getElementById('sm-bulk-value') || {}).value);
-  const patch = bulkPatch(smBulkField, val);
-  for (const id of ids) store.updateSecurity(id, patch);
+  for (const id of ids) store.updateSecurity(id, bulkPatch(smBulkField, val, store.data.securities.find(s => s.id === id)));
   store.save(); renderSecMaster();
   const fl = SM_BULK_FIELDS.find(f => f.key === smBulkField);
   toast(`${ids.length}件の「${fl ? fl.label : smBulkField}」を${smBulkField === 'clearOverrides' ? '削除' : '変更'}しました`, 4000);
@@ -4697,8 +4768,7 @@ function holdBulkApply() {
   const ids = [...document.querySelectorAll('.row-select:checked')].map(b => parseInt(b.dataset.id, 10));
   if (!ids.length) { toast('銘柄を選択してください'); return; }
   const val = bulkConvert(holdBulkField, (document.getElementById('hold-bulk-value') || {}).value);
-  const patch = bulkPatch(holdBulkField, val);
-  for (const id of ids) store.updateSecurity(id, patch);
+  for (const id of ids) store.updateSecurity(id, bulkPatch(holdBulkField, val, store.data.securities.find(s => s.id === id)));
   store.save(); render();
   const fl = SM_BULK_FIELDS.find(f => f.key === holdBulkField);
   toast(`${ids.length}件の「${fl ? fl.label : holdBulkField}」を${holdBulkField === 'clearOverrides' ? '削除' : '変更'}しました`, 4000);
@@ -4912,6 +4982,7 @@ function mergeFundInto(from, to) {
 const MASTER_LAUNCH = [
   { v: 'category', label: 'カテゴリ別 金額マスタ', open: () => openCategoryMaster(), note: '銘柄カテゴリごとの1回購入額（日本株円・米国株$）と変更履歴。' },
   { v: 'investcat', label: '投資カテゴリ マスタ', open: () => openInvestCategoryMaster(), note: '分析枠のラベル（高配当・テーマ株など）。金額とは無関係の別管理。' },
+  { v: 'label',    label: '銘柄ラベル マスタ', open: () => openLabelMaster(), note: '1銘柄に複数付けられる投資テーマ/分類タグ（半導体・宇宙・防衛・高配当）。フィルタ＋一括で前提崩れ時の判断に。' },
   { v: 'rule',     label: '買い増しルールマスタ', open: () => openRuleMaster(),     note: '初回/買い増しの下落率・基準高値のルール。銘柄ごとの割当は各銘柄の編集から。' },
   { v: 'grade',    label: '銘柄格付けマスタ',     open: () => openGradeMaster(),    note: '銘柄格付け（S/A/B/C/D）の一覧・詳細での表示色を設定。' },
   { v: 'matrix',   label: 'マトリックス レンジ設定', open: () => openMatrixBandMaster(), note: 'レポートの分布マトリックスの取得額レンジ（色・しきい値）。米株円換算は共通レートを使用。' },
@@ -5783,6 +5854,10 @@ function openSecurityForm(id, presetMarket) {
     .map(c => `<option value="${esc(c.category)}" ${sec && sec.category === c.category ? 'selected' : ''}>${esc(c.category)}</option>`).join('');
   const invCatOpts = [...store.data.investCategories].sort((a, b) => a.sortOrder - b.sortOrder)
     .map(c => `<option value="${esc(c.name)}" ${sec && sec.investCategory === c.name ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  // 銘柄ラベル（複数タグ）: マスタのチェックボックス＋新規追加テキスト
+  const curLabels = secLabels(sec);
+  const labelChecks = [...(store.data.labelDefs || [])].sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(d => `<label class="lbl-chk"><input type="checkbox" name="lbl" value="${esc(d.name)}" ${curLabels.includes(d.name) ? 'checked' : ''}> ${labelsTagOne(d.name)}</label>`).join('');
   const curRuleId = sec ? (sec.ruleId || store.defaultRule().id) : store.defaultRule().id;
   const ruleOpts = store.data.rules
     .map(r => `<option value="${r.id}" ${r.id === curRuleId ? 'selected' : ''}>${esc(r.name)}${r.isDefault ? '（既定）' : ''}</option>`).join('');
@@ -5847,6 +5922,11 @@ function openSecurityForm(id, presetMarket) {
 
       <div class="field"><label>メモ（自由記述・任意）</label>
         <textarea name="memo" rows="2" placeholder="この銘柄に関する覚書（損出しの経緯・方針など）">${sec ? esc(sec.memo || '') : ''}</textarea></div>
+
+      <div class="field"><label>銘柄ラベル（複数可・投資テーマ/分類。例: 半導体・高配当）</label>
+        <div class="label-picker" style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center">${labelChecks || '<span class="muted">ラベル未登録（下に入力するか、マスタで追加）</span>'}</div>
+        <input name="labelsNew" placeholder="新規ラベルを追加（; か , 区切り）— 例: AI; ロボット" style="margin-top:6px" autocomplete="off">
+        <p class="muted" style="margin:4px 0 0">前提（テーマ）が崩れた時に、ラベルで絞り込んで一括判断できます。マスタ・設定の「銘柄ラベル」で色・並び順を編集できます。</p></div>
 
       <fieldset class="form-group"><legend>表示の手動上書き（任意・自動取得では上書きされません）</legend>
         <div class="field"><label>銘柄名（上書き）</label>
@@ -5946,6 +6026,12 @@ function openSecurityForm(id, presetMarket) {
       principalSold: f.principalSold && f.principalSold.value === '1', // 元本売却済みフラグ（情報管理のみ）
       principalSoldAmount: numOrNull(f.principalSoldAmount && f.principalSoldAmount.value), // 売却済み元本額（原通貨・情報管理のみ）
       memo: (f.memo && f.memo.value.trim()) || null, // 銘柄メモ（自由記述・判定には影響しない）
+      labels: (() => { // 銘柄ラベル（複数タグ）: チェック済み＋新規入力をまとめる。新規はマスタへ追加
+        const chosen = [...f.querySelectorAll('input[name="lbl"]:checked')].map(x => x.value);
+        const added = parseLabels(f.labelsNew ? f.labelsNew.value : '');
+        ensureLabelDefs(added);
+        return [...new Set([...chosen, ...added])];
+      })(),
 
       buyAmount: numOrNull(f.buyAmount.value), buyCount: intOrNull(f.buyCount.value),
       overallGrade: f.overallGrade.value || null, rating: f.rating.value || null, buyGrade: f.buyGrade.value || null,
@@ -6279,6 +6365,7 @@ function openSecurityDetail(secId) {
     kv('★(ﾊﾞﾘｭ/強/ﾘｽｸ)', [sec.starValuation, sec.starStrength, sec.starRisk].some(x => x != null) ? [sec.starValuation, sec.starStrength, sec.starRisk].map(x => x ?? '—').join('/') : '—'),
     kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
     kv('投資カテゴリ', sec.investCategory ? investCategoryTag(sec.investCategory) : '—'),
+    kv('銘柄ラベル', secLabels(sec).length ? labelsTag(sec) : '—'),
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
     sec.analysisNote ? kv('分析メモ', esc(sec.analysisNote)) : '',
   ].join('');
@@ -6318,6 +6405,7 @@ function openSecurityDetail(secId) {
   const metaBox = [
     kv('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
     kv('投資カテゴリ', sec.investCategory ? investCategoryTag(sec.investCategory) : '—'),
+    kv('銘柄ラベル', secLabels(sec).length ? labelsTag(sec) : '—'),
     kv('推奨額', recoBuy ? m(recoBuy) : '—'),
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
   ].join('');
@@ -7123,6 +7211,7 @@ function karteCardHtml(sec) {
     sec.starRisk != null ? row('リスク', starsFmt(sec.starRisk)) : '',
     row('カテゴリ', sec.category ? categoryTag(sec.category) : '—'),
     row('投資カテゴリ', sec.investCategory ? investCategoryTag(sec.investCategory) : '—'),
+    row('銘柄ラベル', secLabels(sec).length ? labelsTag(sec) : '—'),
     // 推奨額＝カテゴリ別の推奨購入額（市場通貨）。都度 categoryAmountFor から算出（取込専用 recoAmount は参照しない）。
     row('推奨額', sec.category && store.categoryAmountFor(sec.category, sec.market) ? m(store.categoryAmountFor(sec.category, sec.market)) : '—'),
     row('優先順位/評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
@@ -7490,6 +7579,53 @@ function deleteInvestCategory(name) {
   }
 }
 
+// 銘柄ラベル（複数タグ）マスタ
+function openLabelMaster() {
+  const defs = [...(store.data.labelDefs || [])].sort((a, b) => a.sortOrder - b.sortOrder);
+  const cnt = (name) => store.data.securities.filter(s => secLabels(s).includes(name)).length;
+  showModal('銘柄ラベル マスタ（投資テーマ・分類タグ）', `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-sm btn-primary" onclick="openLabelEdit(null)">＋ ラベルを追加</button></div>
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr><th class="l">ラベル</th><th>並び順</th><th>付与銘柄</th><th class="l"></th></tr></thead>
+      <tbody>${defs.length ? defs.map(c => `<tr>
+        <td class="l">${labelsTagOne(c.name)}</td><td>${c.sortOrder}</td><td>${cnt(c.name)}件</td>
+        <td class="l nowrap"><button class="btn btn-sm" onclick="openLabelEdit('${esc(c.name)}')">編集</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteLabelDef('${esc(c.name)}')">削除</button></td>
+      </tr>`).join('') : '<tr><td class="l muted" colspan="4">ラベル未登録。「＋ ラベルを追加」か、銘柄編集の「銘柄ラベル」欄で新規追加できます。</td></tr>'}</tbody>
+    </table></div>
+    <p class="muted" style="margin:8px 0 0">1銘柄に複数付けられる投資テーマ/分類タグ（半導体・宇宙・防衛・高配当 など）。前提が崩れた時に、一覧の<strong>フィルタ「銘柄ラベル」</strong>で絞り込み→<strong>一括変更（ラベルを外す／付与）</strong>や選択→全売却で一括判断できます。</p>
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
+}
+function openLabelEdit(name) {
+  const c = name ? (store.data.labelDefs || []).find(x => x.name === name) : null;
+  showModal(name ? `ラベルを編集 — ${esc(name)}` : 'ラベルを追加', `
+    <form id="label-form">
+      <div class="field"><label>ラベル名</label><input name="name" value="${c ? esc(c.name) : ''}" placeholder="例: 半導体 / 高配当" required></div>
+      <div class="field"><label>並び順</label><input name="sortOrder" type="number" step="1" value="${c ? c.sortOrder : ''}" placeholder="自動"></div>
+      <div class="field"><label>表示色（一覧のタグ色）</label>${colorSwatchPicker('color', c ? c.color : 'gray')}</div>
+      <div class="form-actions">
+        ${c ? `<button type="button" class="btn btn-danger" onclick="deleteLabelDef('${esc(c.name)}')">削除</button>` : ''}
+        <button type="button" class="btn" onclick="openLabelMaster()">キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>`);
+  document.getElementById('label-form').onsubmit = (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const patch = { name: f.name.value.trim(), sortOrder: f.sortOrder.value ? parseInt(f.sortOrder.value, 10) : undefined, color: f.color.value || undefined };
+    if (!patch.name) { toast('ラベル名を入力してください'); return; }
+    if (c) store.updateLabelDef(name, patch);
+    else if ((store.data.labelDefs || []).some(x => x.name === patch.name)) { toast('同名のラベルが既にあります'); return; }
+    else store.addLabelDef(patch);
+    render(); openLabelMaster();
+  };
+}
+function deleteLabelDef(name) {
+  if (confirm(`ラベル「${name}」を削除します。付与済みの銘柄からも外れます。よろしいですか？`)) {
+    store.removeLabelDef(name); render(); openLabelMaster();
+  }
+}
+
 // ルール: 追加 or 編集
 function openRuleEdit(id) {
   const r = id ? store.data.rules.find(x => x.id === id) : null;
@@ -7706,6 +7842,7 @@ async function importAnalysis(text, market, create) {
     if (cat) store.updateSecurity(sec.id, { category: cat });
     const invCat = cg(rec, 'investCategory'); // シートの「投資カテゴリ」列→分析枠ラベル（取込値があれば更新・変換マスタ適用）
     if (invCat) store.updateSecurity(sec.id, { investCategory: invCat });
+    if (rec.labels) { const ls = parseLabels(rec.labels); if (ls.length) { ensureLabelDefs(ls); store.updateSecurity(sec.id, { labels: ls }); } } // 銘柄ラベル（; 区切り）
     // 評価日があれば履歴へ upsert→最新を平置きへミラー。古い評価日も履歴として残す（旧実装の stale 破棄は廃止）。
     // 評価日が無い行は履歴化できないので平置きへ直接反映（最新ミラー相当）。
     // 買い増し予定額・推奨購入額はカテゴリ別金額マスタから算出するため、recoAmount からの自動設定は行わない。
@@ -8077,13 +8214,13 @@ const GENERIC_MAP = {
   '前回購入価格': 'prevBuyPrice', '前回購入日': 'prevBuyDate', '基準高値モード': 'baseHighMode', '手動基準高値': 'baseHighManual',
   '買増固定値': 'fixedBuyPrice', '次回購入固定値': 'fixedBuyPrice',
   'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category', '詳細種別': 'detailType',
-  '投資カテゴリ': 'investCategory',
+  '投資カテゴリ': 'investCategory', '銘柄ラベル': 'labels', 'ラベル': 'labels',
   '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount',
   '売却前購入額': 'origBuyAmount', 'メモ': 'memo',
 };
 // 標準レイアウトの列。exportGeneric はこの列名→GENERIC_MAP でフィールドキーを引き、genericFieldValue で値を出す（位置合わせ不要）。列を足すなら GENERIC_MAP にも登録。
-const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ'];
+const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -8125,6 +8262,7 @@ function parseGeneric(text) {
     if ('principalSold' in rec) sec.principalSold = /売却|済|^1$|true|yes|○/i.test(rec.principalSold);
     if ('principalSoldAmount' in rec) sec.principalSoldAmount = numClean(rec.principalSoldAmount);
     if ('memo' in rec) sec.memo = rec.memo || null;
+    if ('labels' in rec) sec.labels = parseLabels(rec.labels); // 銘柄ラベル（; 区切り→配列）
     // 売却前購入額は保有(holding)単位。row 直下に持たせる（_sec＝銘柄属性ではない）
     if ('origBuyAmount' in rec) row.origBuyAmount = numClean(rec.origBuyAmount);
     if (Object.keys(sec).length) row._sec = sec;
@@ -8268,6 +8406,7 @@ async function runBrokerImport() {
       // マスタ管理項目は変換マスタで正規化／スキップ
       for (const k of Object.keys(p)) { if (k !== 'ruleName' && FIELD_DOMAIN[k]) { const cv = convMaster(k, p[k]); if (cv === SKIP) delete p[k]; else p[k] = cv; } }
       if ('ruleName' in p) { const rn = convMaster('ruleName', p.ruleName); delete p.ruleName; if (rn !== SKIP) { const r = store.data.rules.find(x => x.name === rn); if (r) p.ruleId = r.id; } }
+      if (Array.isArray(p.labels)) ensureLabelDefs(p.labels); // 未登録ラベルはマスタへ自動追加
       store.updateSecurity(sec.id, p);
     }
     // 数量がある行のみ保有を作成/更新
@@ -8463,6 +8602,7 @@ function genericFieldValue(key, s, h) {
     case 'ruleName': return (store.rule(s.ruleId) || {}).name || '';
     case 'category': return s.category || '';
     case 'investCategory': return s.investCategory || '';
+    case 'labels': return serializeLabels(secLabels(s));
     case 'buyAmount': return s.buyAmount ?? '';
     case 'buyCount': return s.buyCount ?? '';
     case 'enabled': return s.enabled === false ? '無効' : '有効';
@@ -8529,6 +8669,7 @@ const GI_FIELDS = [
   { key: 'ruleName',      label: '買い増しルール' },
   { key: 'category',      label: 'カテゴリ' },
   { key: 'investCategory', label: '投資カテゴリ' },
+  { key: 'labels',        label: '銘柄ラベル（複数; 区切り）' },
   { key: 'detailType',    label: '詳細種別' },
   { key: 'buyAmount',     label: '買い増し予定額' },
   { key: 'buyCount',      label: '購入回数' },
@@ -8556,7 +8697,7 @@ const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', '
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
   { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy', 'origBuyAmount'] },
-  { g: '判定・属性', keys: ['category', 'investCategory', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
+  { g: '判定・属性', keys: ['category', 'investCategory', 'labels', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
   { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride', 'memo'] },
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
 ];
@@ -8568,6 +8709,7 @@ const GI_AUTOMAP = { ...GENERIC_MAP,
   '前回購入日': 'prevBuyDate',
   '詳細種別': 'detailType', '総合評価': 'overallGrade', '銘柄格付': 'rating', '格付': 'rating', '買い時評価': 'buyGrade',
   '推奨カテゴリ': 'category', 'カテゴリ': 'category', '投資カテゴリ': 'investCategory', '購入優先順位': 'priority', '優先順位': 'priority',
+  '銘柄ラベル': 'labels', 'ラベル': 'labels', 'タグ': 'labels',
   '評価日': 'analysisDate', '備考': 'analysisNote', '分析メモ': 'analysisNote',
   'バリュエーション': 'starValuation', '独自の強み': 'starStrength', 'リスク': 'starRisk',
   'セクター': 'sectorOverride', '業種': 'industryOverride',
@@ -8680,6 +8822,7 @@ function giParseValue(field, raw) {
     case 'account': return normAccount(v);
     case 'market': { const u = v.toUpperCase(); return (u === 'US' || u === 'JP') ? u : (/米/.test(v) ? 'US' : /日|国内/.test(v) ? 'JP' : /^\d/.test(v) ? 'JP' : 'US'); }
     case 'detailType': return /ETF|ＥＴＦ/i.test(v) ? 'ETF' : (v || null);
+    case 'labels': return parseLabels(v); // 銘柄ラベル（; 区切り→配列）
     default: return v || null;
   }
 }
@@ -8732,6 +8875,7 @@ async function runGenericImport() {
       if (k === 'ruleName') { const rn = convMaster('ruleName', rec.ruleName); if (rn === SKIP) continue; const r = store.data.rules.find(x => x.name === rn); if (r) patch.ruleId = r.id; continue; }
       if (GI_SEC_FIELDS.has(k)) { const cv = convMaster(k, rec[k]); if (cv !== SKIP) patch[k] = cv; }
     }
+    if (Array.isArray(rec.labels)) { ensureLabelDefs(rec.labels); patch.labels = rec.labels; } // 銘柄ラベル（配列・未登録はマスタ追加）
     if (Object.keys(patch).length) store.updateSecurity(sec.id, patch);
     // 保有・取得円・売却前購入額
     const hasQty = ('quantity' in rec) && rec.quantity != null;
