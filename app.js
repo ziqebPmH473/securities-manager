@@ -1452,7 +1452,9 @@ const api = {
   // 市場が閉場中で当日の終値を既に持っている銘柄はスキップ（再取得しない）。米株の時間外(プレ/アフター)は別取得。
   async refreshAll(opts = {}) {
     const withHighs = opts.withHighs === true;
-    const allSecs = store.data.securities.filter(s => s.ticker);
+    // 投信(FUND)は自動価格が無く（評価額は手入力）、Yahooに無い協会コードへの無駄な問い合わせで
+    // 更新が遅くなるため価格取得対象から除外する
+    const allSecs = store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
     const lightSymbols = ['USDJPY=X', ...INDICES.map(ix => ix.sym)];
     if (allSecs.length === 0 && lightSymbols.length === 0) return;
     // 取得対象を選別: withHighs(日次)は全件。通常は「開場中 or 価格未取得 or 当日終値を未取得」のみ取得（閉場中で終値済みはスキップ）。
@@ -1547,6 +1549,9 @@ const api = {
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
     if (need.length) await this.refreshMeta(need);
     toast('価格を更新しました');
+    // ランキング順位バッジは「株価更新時だけ」取得（タブ表示のたびの取得をやめ、保有銘柄タブの引っかかりを解消）。
+    // 1日1回のキャッシュを尊重（force無し）。取得後にバッジだけ反映するため再描画。
+    loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); });
   },
 
   // 米株のプレ/アフター価格を「時間外」列(prices.extPrice/extType)に保存。
@@ -1656,7 +1661,8 @@ const api = {
   // まとめると Cloudflareのサブリクエスト上限(約50)やFinnhubレート制限を超え、後半（特に時価総額）が
   // 取りこぼされる。→ 小分けバッチ(8銘柄)で順次取得する。
   async refreshMeta(secs) {
-    secs = secs || store.data.securities.filter(s => s.ticker);
+    // 引数なし（日次/全体更新）では投信を除外。投信名はコードマスタの「名称取得」で個別に取得する
+    secs = secs || store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
     if (secs.length === 0) return;
     const symbols = [...new Set(secs.map(yahooSymbol))];
     const CHUNK = 8;
@@ -2836,10 +2842,8 @@ function _render() {
     case 'master': renderMaster(); break;
   }
   scheduleFit();
-  // ランキング順位バッジ: 一覧/サイン表示時に未取得なら1日1回だけ取得し、取得後に再描画
-  if (!_rankTop && !_rankBadgesBusy && ['holdings', 'us', 'jp', 'signals'].includes(currentView)) {
-    loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); });
-  }
+  // ランキング順位バッジはここ（タブ表示）では取得しない。株価更新時（api.refreshAll 末尾）にのみ取得する。
+  // 以前は保有銘柄/株式/サインを開くたびに /api/ranking を叩き、遅延時にタブ表示が引っかかっていた。
 }
 
 // 一覧テーブルの枠(.table-wrap)の高さを画面に合わせて制限し、枠内スクロール＋見出し固定を成立させる。
