@@ -1580,7 +1580,9 @@ const api = {
     // 高値(5年/52週)が未取得の銘柄を補完取得（withHighs=false の通常更新でも、日次高値取得の後に
     // 追加・取込された新規銘柄は高値が無く残り下落率が出ないため、欠けている分だけ highs=1 で取り直す）。
     if (!withHighs) {
-      const missHigh = secs.filter(s => (store.data.prices[priceKey(s)] || {}).high5y == null);
+      // 全銘柄から高値欠けを拾う（現在値が既にある銘柄は今回の取得対象secsから外れるため、
+      // secsではなくallSecsで判定しないと後から追加した銘柄の高値が永遠に埋まらない）。
+      const missHigh = allSecs.filter(s => (store.data.prices[priceKey(s)] || {}).high5y == null);
       // highs=1 は5年日足も取るためサブリクエストが重い。10件ずつに分割して上限内に収める
       for (let i = 0; i < missHigh.length; i += 10) { try { await this.refreshPrice(missHigh.slice(i, i + 10)); } catch (_) {} }
     }
