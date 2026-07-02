@@ -2671,6 +2671,7 @@ const INLINE_FIELDS = {
   principalSold: { kind: 'sec', type: 'select', get: s => s.principalSold ? '1' : '', patch: v => ({ principalSold: v === '1' }),
                    options: () => [{ v: '', l: '—' }, { v: '1', l: '売却済' }] },
   principalSoldAmount: { kind: 'sec', type: 'number', get: s => s.principalSoldAmount ?? '', patch: v => ({ principalSoldAmount: ieNum(v) }) },
+  buyAmount:     { kind: 'sec', type: 'number', get: s => s.buyAmount ?? '', patch: v => ({ buyAmount: ieNum(v) }) },
   buyCount:      { kind: 'sec', type: 'number', get: s => s.buyCount ?? '', patch: v => ({ buyCount: v === '' ? null : (parseInt(v, 10) || 0) }) },
   memo:          { kind: 'sec', type: 'text', get: s => s.memo || '', patch: v => ({ memo: v.trim() || null }) },
   analysisNote:  { kind: 'sec', type: 'text', get: s => s.analysisNote || '', patch: v => ({ analysisNote: v.trim() || null }) },
@@ -3364,7 +3365,7 @@ function renderMarket(market) {
         <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
       </div>
       <div id="flt-host-holdings">${fltState.holdings.open ? filterPanelHtml('holdings') : ''}</div>
-      ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価・購入回数・メモ・分析メモ）を直接編集 → <strong>「保存」</strong>で確定。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=このセルを取消。数量・取得単価は単一保有のみ（複数=⧉で保有フォーム）。
+      ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価・買い増し予定額・購入回数・メモ・分析メモ）を直接編集 → <strong>「保存」</strong>で確定。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=このセルを取消。数量・取得単価は単一保有のみ（複数=⧉で保有フォーム）。
         <span class="tb-spacer"></span>
         <span id="ie-pending" class="ie-pending">変更なし</span>
         <button class="btn btn-sm btn-primary" onclick="ieSaveAll()">保存</button>
