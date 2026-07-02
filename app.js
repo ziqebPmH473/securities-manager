@@ -2671,6 +2671,9 @@ const INLINE_FIELDS = {
   principalSold: { kind: 'sec', type: 'select', get: s => s.principalSold ? '1' : '', patch: v => ({ principalSold: v === '1' }),
                    options: () => [{ v: '', l: '—' }, { v: '1', l: '売却済' }] },
   principalSoldAmount: { kind: 'sec', type: 'number', get: s => s.principalSoldAmount ?? '', patch: v => ({ principalSoldAmount: ieNum(v) }) },
+  buyCount:      { kind: 'sec', type: 'number', get: s => s.buyCount ?? '', patch: v => ({ buyCount: v === '' ? null : (parseInt(v, 10) || 0) }) },
+  memo:          { kind: 'sec', type: 'text', get: s => s.memo || '', patch: v => ({ memo: v.trim() || null }) },
+  analysisNote:  { kind: 'sec', type: 'text', get: s => s.analysisNote || '', patch: v => ({ analysisNote: v.trim() || null }) },
   qty:           { kind: 'hold', type: 'number', field: 'quantity', get: h => h.quantity ?? '' },
   avgCost:       { kind: 'hold', type: 'number', field: 'avgCost', get: h => h.avgCost ?? '' },
 };
@@ -2701,6 +2704,8 @@ function ieCellHtml(sec, key, ctx) {
   }
   const dv = esc(String(val ?? ''));
   if (f.type === 'date') return `<td class="ie-cell"><input class="ie-input ie-date" type="date" value="${dv}" oninput="ieMark(this)" ${attrs}></td>`;
+  // 自由記述（メモ・分析メモ）は左寄せテキスト入力（decimal入力モードにしない）。改行はインラインでは扱えないため単一行編集
+  if (f.type === 'text') return `<td class="ie-cell"><input class="ie-input ie-text l" type="text" autocomplete="off" value="${dv}" oninput="ieMark(this)" ${attrs}></td>`;
   return `<td class="ie-cell"><input class="ie-input ie-num" type="text" inputmode="decimal" autocomplete="off" value="${dv}" onfocus="this.select()" oninput="ieMark(this)" ${attrs}></td>`;
 }
 
@@ -3359,7 +3364,7 @@ function renderMarket(market) {
         <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
       </div>
       <div id="flt-host-holdings">${fltState.holdings.open ? filterPanelHtml('holdings') : ''}</div>
-      ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価）を直接編集 → <strong>「保存」</strong>で確定。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=このセルを取消。数量・取得単価は単一保有のみ（複数=⧉で保有フォーム）。
+      ${inlineEditOn ? `<div class="ie-hint">✏️ 編集モード：対象セル（カテゴリ・ルール・前回購入単価/日・買増固定値・詳細種別・数量・取得単価・購入回数・メモ・分析メモ）を直接編集 → <strong>「保存」</strong>で確定。<strong>Tab</strong>=右 / <strong>Enter</strong>=下 / <strong>Esc</strong>=このセルを取消。数量・取得単価は単一保有のみ（複数=⧉で保有フォーム）。
         <span class="tb-spacer"></span>
         <span id="ie-pending" class="ie-pending">変更なし</span>
         <button class="btn btn-sm btn-primary" onclick="ieSaveAll()">保存</button>
