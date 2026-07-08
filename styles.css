@@ -438,6 +438,17 @@ button { font-family: inherit; }
 .txn-list-table th, .txn-list-table td { white-space: nowrap; }
 .txn-list-table a { color: var(--navy); text-decoration: none; }
 .txn-list-table a:hover { text-decoration: underline; }
+/* 取引サマリー: 見出し右のコントロール群（期間セレクタ＋トグル＋絞り込み）。トグルの位置を固定するため右寄せ。 */
+.txn-head-ctrls { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.txn-sel { padding: 5px 8px; border: 1px solid var(--border-strong, #ccc); border-radius: 7px; background: var(--panel); color: var(--ink); font-size: 13px; font-weight: 600; }
+/* 適用中フィルタのチップ */
+.txn-filter-chip { display: flex; align-items: center; gap: 4px; padding: 4px 16px 0; }
+.txn-filter-clear { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+.txn-filter-clear:hover { color: var(--danger, #c0392b); background: var(--hover, rgba(0,0,0,.05)); }
+/* 絞り込みモーダル: 市場/モードのボタン列・ラベルチェック一覧 */
+.seg-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.lbl-chk-list { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow: auto; }
+.lbl-chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 
 /* ============================ コンテンツ ============================ */
 .content { padding: 22px 26px 16px; max-width: none; width: 100%; margin: 0; }

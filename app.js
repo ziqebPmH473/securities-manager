@@ -3583,10 +3583,6 @@ function labelsTag(sec) {
   if (!ls.length) return muted;
   return ls.map(labelsTagOne).join(' ');
 }
-// 「取引サマリーから除外」フラグの付いたラベル名の集合（短期投資などの分類用）。
-function txnExcludedLabelSet() { return new Set((store.data.labelDefs || []).filter(d => d.excludeFromTxn).map(d => d.name)); }
-// この銘柄が除外対象ラベルを1つでも持つか（取引サマリーの集計・一覧から外す判定）。
-function secExcludedFromTxn(sec) { if (!sec) return false; const ex = txnExcludedLabelSet(); return ex.size > 0 && secLabels(sec).some(l => ex.has(l)); }
 // ラベル文字列（取込/出力用）↔配列。区切りは ; , 、 ／ / | いずれも許容。出力は「; 」区切り。
 function parseLabels(str) {
   if (str == null) return [];
@@ -4012,12 +4008,23 @@ function importStatusHtml() {
 }
 
 // ---------- レポート（SEC-17） ----------
-let reportPeriod = 'all'; // 'all' | 'ytd' | 'month'
-let reportMonth = '';     // 月別選択時の対象月 'YYYY-MM'。未設定なら今月扱い。
-function currentMonthStr() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
+// 取引サマリーの期間: 'all'=全期間 / 'year'=年別（年指定）/ 'month'=月別（年＋月指定）
+let reportPeriod = 'all';
+let reportYear = new Date().getFullYear();       // 年別・月別で対象の年
+let reportMonthNum = new Date().getMonth() + 1;  // 月別で対象の月(1-12)
+// 取引サマリーの絞り込み（汎用フィルタ）。市場・銘柄ラベルで金額/件数/一覧を絞る（他の扱いは不変）。
+let txnFilter = { market: 'ALL', labels: [], labelMode: 'exclude' }; // labelMode: 'exclude'=選択ラベルを除外 / 'include'=選択ラベルのみ
 function refreshTxnSection() { const el = document.getElementById('txn-section'); if (el) el.innerHTML = txnSummaryHtml(); else renderReport(); scheduleFit(); }
-function setReportPeriod(p) { reportPeriod = p; if (p === 'month' && !reportMonth) reportMonth = currentMonthStr(); refreshTxnSection(); }
-function setReportMonth(m) { reportMonth = m || currentMonthStr(); refreshTxnSection(); }
+function setReportPeriod(p) { reportPeriod = p; refreshTxnSection(); }
+function setReportYear(y) { reportYear = parseInt(y, 10) || new Date().getFullYear(); refreshTxnSection(); }
+function setReportMonthNum(m) { reportMonthNum = parseInt(m, 10) || (new Date().getMonth() + 1); refreshTxnSection(); }
+// 取引データに存在する年の一覧（降順）。無ければ今年のみ。年・月プルダウンの選択肢に使う。
+function txnYears() {
+  const set = new Set();
+  for (const t of store.data.transactions) { const y = (t.tradedAt || '').slice(0, 4); if (/^\d{4}$/.test(y)) set.add(+y); }
+  set.add(new Date().getFullYear());
+  return [...set].sort((a, b) => b - a);
+}
 // レポート内タブ: 'assets'=資産集計 / 'txn'=取引サマリー / 'matrix'=分布マトリックス
 let reportTab = 'assets';
 function setReportTab(t) { reportTab = t; renderReport(); }
@@ -4346,36 +4353,49 @@ function renderReport() {
     scheduleFit();      // 取引サマリー等の表を枠内スクロール
   }
 }
-// 現在の期間トグル（all/ytd/month）に合致する取引を返す。サマリー集計と明細一覧で共通利用。
-function txnInPeriod() {
-  const yStart = `${new Date().getFullYear()}-01-01`;
-  const mSel = reportMonth || currentMonthStr();
-  return store.data.transactions.filter(t => {
-    if (reportPeriod === 'ytd' && !(t.tradedAt && t.tradedAt >= yStart)) return false;
-    if (reportPeriod === 'month' && !(t.tradedAt && t.tradedAt.slice(0, 7) === mSel)) return false;
-    // 「取引サマリーから除外」ラベル（短期投資分類など）が付いた銘柄の取引は集計・一覧から外す
-    return !secExcludedFromTxn(store.data.securities.find(s => s.id === t.securityId));
-  });
+// 銘柄が取引サマリーの絞り込み条件（市場・銘柄ラベル）に合致するか。null（削除済み銘柄）はフィルタ無効時のみ通す。
+function txnSecMatchesFilter(sec) {
+  if (txnFilter.market !== 'ALL') { if (!sec || sec.market !== txnFilter.market) return false; }
+  if (txnFilter.labels.length) {
+    const ls = sec ? secLabels(sec) : [];
+    const hit = txnFilter.labels.some(l => ls.includes(l));
+    if (txnFilter.labelMode === 'exclude' ? hit : !hit) return false;
+  }
+  return true;
 }
-// 現在の期間で除外ラベルにより集計対象外になった取引の件数（サマリーの注記用）。
-function txnExcludedCount() {
-  if (txnExcludedLabelSet().size === 0) return 0;
-  const yStart = `${new Date().getFullYear()}-01-01`;
-  const mSel = reportMonth || currentMonthStr();
+function txnFilterActive() { return txnFilter.market !== 'ALL' || txnFilter.labels.length > 0; }
+// 現在の期間トグル（all/year/month）＋絞り込みに合致する取引を返す。サマリー集計と明細一覧で共通利用。
+function txnInPeriod() {
+  const yPrefix = String(reportYear);
+  const mPrefix = `${reportYear}-${String(reportMonthNum).padStart(2, '0')}`;
   return store.data.transactions.filter(t => {
-    if (reportPeriod === 'ytd' && !(t.tradedAt && t.tradedAt >= yStart)) return false;
-    if (reportPeriod === 'month' && !(t.tradedAt && t.tradedAt.slice(0, 7) === mSel)) return false;
-    return secExcludedFromTxn(store.data.securities.find(s => s.id === t.securityId));
-  }).length;
+    if (reportPeriod === 'year' && !(t.tradedAt && t.tradedAt.slice(0, 4) === yPrefix)) return false;
+    if (reportPeriod === 'month' && !(t.tradedAt && t.tradedAt.slice(0, 7) === mPrefix)) return false;
+    return txnSecMatchesFilter(store.data.securities.find(s => s.id === t.securityId));
+  });
 }
 // 現在の期間トグルの表示ラベル（見出し・明細一覧のタイトル用）。
 function periodLabelText() {
-  const mSel = reportMonth || currentMonthStr();
-  return reportPeriod === 'ytd' ? '今年' : reportPeriod === 'month' ? `${mSel.replace('-', '年')}月` : '全期間';
+  return reportPeriod === 'year' ? `${reportYear}年` : reportPeriod === 'month' ? `${reportYear}年${reportMonthNum}月` : '全期間';
 }
-// 取引サマリー（期間: 全期間/今年/月別）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
+// 期間セレクタ（年・月プルダウン）。トグルの左に置き、月別でもトグルの位置が動かないようにする。
+function periodSelectorHtml() {
+  if (reportPeriod === 'all') return '';
+  const years = txnYears();
+  const yearSel = `<select class="txn-sel" onchange="setReportYear(this.value)">${years.map(y => `<option value="${y}" ${y === reportYear ? 'selected' : ''}>${y}年</option>`).join('')}</select>`;
+  if (reportPeriod === 'year') return yearSel;
+  const monthSel = `<select class="txn-sel" onchange="setReportMonthNum(this.value)">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === reportMonthNum ? 'selected' : ''}>${m}月</option>`).join('')}</select>`;
+  return yearSel + monthSel;
+}
+// 現在の絞り込み内容を表す短いテキスト（フィルタチップ用）。
+function txnFilterSummaryText() {
+  const parts = [];
+  if (txnFilter.market !== 'ALL') parts.push(MARKET_LABEL[txnFilter.market] || txnFilter.market);
+  if (txnFilter.labels.length) parts.push(`ラベル${txnFilter.labelMode === 'exclude' ? '除外' : 'のみ'}: ${txnFilter.labels.map(esc).join('・')}`);
+  return parts.join(' / ');
+}
+// 取引サマリー（期間: 全期間/年別/月別 ＋ 汎用フィルタ）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
 function txnSummaryHtml() {
-  const mSel = reportMonth || currentMonthStr();
   let buyTot = 0, sellTot = 0, buyN = 0, sellN = 0;
   for (const t of txnInPeriod()) {
     const sec = store.data.securities.find(s => s.id === t.securityId); if (!sec) continue;
@@ -4384,22 +4404,52 @@ function txnSummaryHtml() {
   }
   const net = buyTot - sellTot;
   const seg = (p, l) => `<button class="${reportPeriod === p ? 'active' : ''}" onclick="setReportPeriod('${p}')">${l}</button>`;
-  const monthPicker = reportPeriod === 'month'
-    ? `<input type="month" class="txn-month" value="${mSel}" onchange="setReportMonth(this.value)" style="margin-left:8px">` : '';
   // 買い/売りの行はクリックで明細一覧を表示。件数0の区分はクリック不可。
   const row = (type, label, n, tot) => n > 0
     ? `<tr class="txn-clickable" onclick="openTxnList('${type}')" title="クリックで明細を表示"><td class="l">${label} <span class="txn-more">明細 ›</span></td><td>${n}</td><td>${yen(tot)}</td></tr>`
     : `<tr><td class="l">${label}</td><td>${n}</td><td>${yen(tot)}</td></tr>`;
+  // フィルタチップ（適用中のみ）。クリックで再編集、×でクリア。
+  const filterChip = txnFilterActive()
+    ? `<div class="txn-filter-chip"><span class="tag" onclick="openTxnFilter()" title="絞り込みを編集" style="cursor:pointer">🔎 ${esc(txnFilterSummaryText())}</span><button class="txn-filter-clear" onclick="clearTxnFilter()" title="絞り込み解除">×</button></div>`
+    : '';
   return `<div class="section-head"><h2>取引サマリー（${periodLabelText()}・円換算）</h2>
-      <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}${seg('month', '月別')}</div>${monthPicker}</div>
+      <div class="txn-head-ctrls">
+        ${periodSelectorHtml()}
+        <div class="seg" role="tablist">${seg('all', '全期間')}${seg('year', '年別')}${seg('month', '月別')}</div>
+        <button class="btn btn-sm ${txnFilterActive() ? 'btn-primary' : ''}" onclick="openTxnFilter()" title="市場・銘柄ラベルで絞り込み">🔎 絞り込み</button>
+      </div></div>
+    ${filterChip}
     <div style="overflow-x:auto;max-width:100%"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
       <tbody>
         ${row('buy', '買い', buyN, buyTot)}
         ${row('sell', '売り', sellN, sellTot)}
         <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
       </tbody></table></div>
-    <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。買い/売りの行をクリックすると明細一覧を表示。${(() => { const ex = [...txnExcludedLabelSet()]; const n = txnExcludedCount(); return ex.length ? `<br>除外ラベル（${ex.map(esc).join('・')}）付き銘柄の取引${n ? ` ${n}件` : ''}をこの集計から除外中。<a href="#" onclick="openLabelMaster();return false">ラベル設定</a>` : ''; })()}<br>ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
+    <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。買い/売りの行をクリックすると明細一覧を表示。ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
 }
+// 取引サマリーの絞り込み設定モーダル（市場・銘柄ラベル）。汎用フィルタ。
+function openTxnFilter() {
+  const defs = [...(store.data.labelDefs || [])].sort((a, b) => a.sortOrder - b.sortOrder);
+  const mkBtn = (m, l) => `<button type="button" class="btn btn-sm ${txnFilter.market === m ? 'btn-primary' : ''}" onclick="txnFilterSetMarket('${m}')">${l}</button>`;
+  const modeBtn = (v, l) => `<button type="button" class="btn btn-sm ${txnFilter.labelMode === v ? 'btn-primary' : ''}" onclick="txnFilterSetMode('${v}')">${l}</button>`;
+  const labelChecks = defs.length
+    ? defs.map(d => `<label class="lbl-chk"><input type="checkbox" value="${esc(d.name)}" ${txnFilter.labels.includes(d.name) ? 'checked' : ''} onchange="txnFilterToggleLabel(this.value, this.checked)"> ${labelsTagOne(d.name)}</label>`).join('')
+    : '<span class="muted">ラベル未登録。銘柄編集の「銘柄ラベル」で追加できます。</span>';
+  showModal('取引サマリーの絞り込み', `
+    <div class="field"><label>市場</label><div class="seg-btns">${mkBtn('ALL', '全部')}${mkBtn('US', '米国株')}${mkBtn('JP', '日本株')}</div></div>
+    <div class="field"><label>銘柄ラベルで絞り込み</label>
+      <div class="seg-btns" style="margin-bottom:6px">${modeBtn('exclude', '選択を除外')}${modeBtn('include', '選択のみ')}</div>
+      <div class="lbl-chk-list">${labelChecks}</div>
+      <p class="muted" style="margin:6px 0 0">短期投資などのラベルを「選択を除外」にすると、そのラベルの付いた銘柄の売買を集計・一覧から外せます。取引サマリーの金額・件数・明細一覧のみに効き、保有・資産集計・判定など他の扱いは変わりません。</p></div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-danger" onclick="clearTxnFilter();closeModal()">絞り込み解除</button>
+      <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
+    </div>`, { wide: true });
+}
+function txnFilterSetMarket(m) { txnFilter.market = m; refreshTxnSection(); openTxnFilter(); }
+function txnFilterSetMode(v) { txnFilter.labelMode = v; refreshTxnSection(); if (txnFilter.labels.length) openTxnFilter(); }
+function txnFilterToggleLabel(name, on) { txnFilter.labels = on ? [...new Set([...txnFilter.labels, name])] : txnFilter.labels.filter(l => l !== name); refreshTxnSection(); }
+function clearTxnFilter() { txnFilter = { market: 'ALL', labels: [], labelMode: 'exclude' }; refreshTxnSection(); }
 // 取引サマリーの買い/売り行クリック → その期間の該当取引の明細一覧をモーダル表示。
 function openTxnList(type) {
   const label = type === 'buy' ? '買い' : '売り';
@@ -7666,13 +7716,12 @@ function openLabelMaster() {
   showModal('銘柄ラベル マスタ（投資テーマ・分類タグ）', `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-sm btn-primary" onclick="openLabelEdit(null)">＋ ラベルを追加</button></div>
     <div class="table-wrap"><table class="holdings dense">
-      <thead><tr><th class="l">ラベル</th><th>並び順</th><th>付与銘柄</th><th>サマリー除外</th><th class="l"></th></tr></thead>
+      <thead><tr><th class="l">ラベル</th><th>並び順</th><th>付与銘柄</th><th class="l"></th></tr></thead>
       <tbody>${defs.length ? defs.map(c => `<tr>
         <td class="l">${labelsTagOne(c.name)}</td><td>${c.sortOrder}</td><td>${cnt(c.name)}件</td>
-        <td>${c.excludeFromTxn ? '<span class="tag" title="取引サマリーの金額・件数・一覧から除外">除外</span>' : '—'}</td>
         <td class="l nowrap"><button class="btn btn-sm" onclick="openLabelEdit('${esc(c.name)}')">編集</button>
           <button class="btn btn-sm btn-danger" onclick="deleteLabelDef('${esc(c.name)}')">削除</button></td>
-      </tr>`).join('') : '<tr><td class="l muted" colspan="5">ラベル未登録。「＋ ラベルを追加」か、銘柄編集の「銘柄ラベル」欄で新規追加できます。</td></tr>'}</tbody>
+      </tr>`).join('') : '<tr><td class="l muted" colspan="4">ラベル未登録。「＋ ラベルを追加」か、銘柄編集の「銘柄ラベル」欄で新規追加できます。</td></tr>'}</tbody>
     </table></div>
     <p class="muted" style="margin:8px 0 0">1銘柄に複数付けられる投資テーマ/分類タグ（半導体・宇宙・防衛・高配当 など）。前提が崩れた時に、一覧の<strong>フィルタ「銘柄ラベル」</strong>で絞り込み→<strong>一括変更（ラベルを外す／付与）</strong>や選択→全売却で一括判断できます。</p>
     <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
@@ -7684,8 +7733,7 @@ function openLabelEdit(name) {
       <div class="field"><label>ラベル名</label><input name="name" value="${c ? esc(c.name) : ''}" placeholder="例: 半導体 / 高配当" required></div>
       <div class="field"><label>並び順</label><input name="sortOrder" type="number" step="1" value="${c ? c.sortOrder : ''}" placeholder="自動"></div>
       <div class="field"><label>表示色（一覧のタグ色）</label>${colorSwatchPicker('color', c ? c.color : 'gray')}</div>
-      <div class="field"><label class="lbl-chk" style="font-weight:600"><input type="checkbox" name="excludeFromTxn" ${c && c.excludeFromTxn ? 'checked' : ''}> レポートの取引サマリーから除外する（短期投資など）</label>
-        <p class="muted" style="margin:4px 0 0">チェックすると、このラベルが付いた銘柄の売買を<strong>取引サマリーの金額・件数・明細一覧からのみ</strong>除外します。保有銘柄・資産集計・判定など他の扱いは変わりません。</p></div>
+      <p class="muted" style="margin:0 0 4px">※取引サマリーからの除外は、レポートの取引サマリーの「🔎 絞り込み」でこのラベルを指定してください（登録は不要）。</p>
       <div class="form-actions">
         ${c ? `<button type="button" class="btn btn-danger" onclick="deleteLabelDef('${esc(c.name)}')">削除</button>` : ''}
         <button type="button" class="btn" onclick="openLabelMaster()">キャンセル</button>
@@ -7695,7 +7743,7 @@ function openLabelEdit(name) {
   document.getElementById('label-form').onsubmit = (e) => {
     e.preventDefault();
     const f = e.target;
-    const patch = { name: f.name.value.trim(), sortOrder: f.sortOrder.value ? parseInt(f.sortOrder.value, 10) : undefined, color: f.color.value || undefined, excludeFromTxn: f.excludeFromTxn.checked };
+    const patch = { name: f.name.value.trim(), sortOrder: f.sortOrder.value ? parseInt(f.sortOrder.value, 10) : undefined, color: f.color.value || undefined };
     if (!patch.name) { toast('ラベル名を入力してください'); return; }
     if (c) store.updateLabelDef(name, patch);
     else if ((store.data.labelDefs || []).some(x => x.name === patch.name)) { toast('同名のラベルが既にあります'); return; }
@@ -10306,7 +10354,14 @@ renderNav();
 document.getElementById('modal-close').onclick = closeModal;
 document.getElementById('drawer-close').onclick = closeDrawer;
 document.getElementById('drawer-overlay').addEventListener('click', (e) => { if (e.target.id === 'drawer-overlay') closeDrawer(); });
-// モーダル外クリックでは閉じない（意図しない消失を防止）。× か各フォームのボタンのみで閉じる
+// モーダルの枠外（オーバーレイ地）クリックで閉じる。内側の .modal クリックは伝播で閉じないよう対象を限定。
+document.getElementById('modal-overlay').addEventListener('click', (e) => { if (e.target.id === 'modal-overlay') closeModal(); });
+// Escキーで開いているモーダル/ドロワーを閉じる
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!document.getElementById('modal-overlay').hidden) closeModal();
+  else if (!document.getElementById('drawer-overlay').hidden) closeDrawer();
+});
 // 「価格更新」: その日まだ高値を取得していなければ高値も取得（LDOS等の古い5年高値を修正）、以降は価格のみで軽量
 // マーケットタブ表示中はランキングも更新（保有銘柄と同じ手動更新ルール）
 document.getElementById('btn-refresh').onclick = () => withBusy('価格を更新中…', async () => {
