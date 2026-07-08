@@ -431,6 +431,14 @@ button { font-family: inherit; }
 .seg button .seg-n { font-size: 11px; color: var(--faint); font-weight: 600; }
 .seg button.active .seg-n { color: var(--brass); }
 
+/* 取引サマリー: 買い/売り行はクリックで明細一覧を開く */
+.txn-clickable { cursor: pointer; }
+.txn-clickable:hover { background: var(--hover, rgba(0,0,0,.04)); }
+.txn-more { font-size: 11px; color: var(--brass); font-weight: 600; margin-left: 4px; }
+.txn-list-table th, .txn-list-table td { white-space: nowrap; }
+.txn-list-table a { color: var(--navy); text-decoration: none; }
+.txn-list-table a:hover { text-decoration: underline; }
+
 /* ============================ コンテンツ ============================ */
 .content { padding: 22px 26px 16px; max-width: none; width: 100%; margin: 0; }
 .page-intro { margin: 0 0 18px; }

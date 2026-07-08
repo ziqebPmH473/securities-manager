@@ -4342,32 +4342,78 @@ function renderReport() {
     scheduleFit();      // 取引サマリー等の表を枠内スクロール
   }
 }
-// 取引サマリー（期間: 全期間/今年）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
-function txnSummaryHtml() {
+// 現在の期間トグル（all/ytd/month）に合致する取引を返す。サマリー集計と明細一覧で共通利用。
+function txnInPeriod() {
   const yStart = `${new Date().getFullYear()}-01-01`;
   const mSel = reportMonth || currentMonthStr();
+  return store.data.transactions.filter(t => {
+    if (reportPeriod === 'ytd') return t.tradedAt && t.tradedAt >= yStart;
+    if (reportPeriod === 'month') return t.tradedAt && t.tradedAt.slice(0, 7) === mSel;
+    return true;
+  });
+}
+// 現在の期間トグルの表示ラベル（見出し・明細一覧のタイトル用）。
+function periodLabelText() {
+  const mSel = reportMonth || currentMonthStr();
+  return reportPeriod === 'ytd' ? '今年' : reportPeriod === 'month' ? `${mSel.replace('-', '年')}月` : '全期間';
+}
+// 取引サマリー（期間: 全期間/今年/月別）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
+function txnSummaryHtml() {
+  const mSel = reportMonth || currentMonthStr();
   let buyTot = 0, sellTot = 0, buyN = 0, sellN = 0;
-  for (const t of store.data.transactions) {
-    if (reportPeriod === 'ytd' && !(t.tradedAt && t.tradedAt >= yStart)) continue;
-    if (reportPeriod === 'month' && !(t.tradedAt && t.tradedAt.slice(0, 7) === mSel)) continue;
+  for (const t of txnInPeriod()) {
     const sec = store.data.securities.find(s => s.id === t.securityId); if (!sec) continue;
     const amt = calc.toJpy(sec.market, (t.price || 0) * (t.quantity || 0)); if (amt == null) continue;
     if (t.type === 'buy') { buyTot += amt; buyN++; } else if (t.type === 'sell') { sellTot += amt; sellN++; }
   }
   const net = buyTot - sellTot;
   const seg = (p, l) => `<button class="${reportPeriod === p ? 'active' : ''}" onclick="setReportPeriod('${p}')">${l}</button>`;
-  const periodLabel = reportPeriod === 'ytd' ? '今年' : reportPeriod === 'month' ? `${mSel.replace('-', '年')}月` : '全期間';
   const monthPicker = reportPeriod === 'month'
     ? `<input type="month" class="txn-month" value="${mSel}" onchange="setReportMonth(this.value)" style="margin-left:8px">` : '';
-  return `<div class="section-head"><h2>取引サマリー（${periodLabel}・円換算）</h2>
+  // 買い/売りの行はクリックで明細一覧を表示。件数0の区分はクリック不可。
+  const row = (type, label, n, tot) => n > 0
+    ? `<tr class="txn-clickable" onclick="openTxnList('${type}')" title="クリックで明細を表示"><td class="l">${label} <span class="txn-more">明細 ›</span></td><td>${n}</td><td>${yen(tot)}</td></tr>`
+    : `<tr><td class="l">${label}</td><td>${n}</td><td>${yen(tot)}</td></tr>`;
+  return `<div class="section-head"><h2>取引サマリー（${periodLabelText()}・円換算）</h2>
       <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}${seg('month', '月別')}</div>${monthPicker}</div>
     <div style="overflow-x:auto;max-width:100%"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
       <tbody>
-        <tr><td class="l">買い</td><td>${buyN}</td><td>${yen(buyTot)}</td></tr>
-        <tr><td class="l">売り</td><td>${sellN}</td><td>${yen(sellTot)}</td></tr>
+        ${row('buy', '買い', buyN, buyTot)}
+        ${row('sell', '売り', sellN, sellTot)}
         <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
       </tbody></table></div>
-    <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
+    <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。買い/売りの行をクリックすると明細一覧を表示。ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
+}
+// 取引サマリーの買い/売り行クリック → その期間の該当取引の明細一覧をモーダル表示。
+function openTxnList(type) {
+  const label = type === 'buy' ? '買い' : '売り';
+  const list = txnInPeriod().filter(t => t.type === type).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
+  const title = `${periodLabelText()}の${label}取引（${list.length}件）`;
+  if (!list.length) { showModal(title, '<div class="muted" style="padding:8px">該当する取引はありません。</div>'); return; }
+  let tot = 0;
+  const rows = list.map(t => {
+    const sec = store.data.securities.find(s => s.id === t.securityId);
+    const name = sec ? esc(calc.displayName(sec)) : `<span class="muted">#${esc(String(t.securityId))}（削除済み）</span>`;
+    const ccy = sec ? MARKET_CCY[sec.market] : '';
+    const amtNative = (t.price || 0) * (t.quantity || 0);
+    const jpy = sec ? calc.toJpy(sec.market, amtNative) : null;
+    if (jpy != null) tot += jpy;
+    const qty = sec ? fmtQty(t.quantity, sec.market) : num(t.quantity);
+    const nameCell = sec ? `<a href="#" onclick="closeModal();openSecurityDetail(${sec.id});return false">${name}</a>` : name;
+    return `<tr>
+      <td class="l">${esc(t.tradedAt || '—')}</td>
+      <td class="l">${nameCell}${t.broker ? ` <span class="muted" style="font-size:11px">${esc(t.broker)}</span>` : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}</td>
+      <td>${qty}</td>
+      <td>${ccy}${num(t.price)}</td>
+      <td>${jpy != null ? yen(jpy) : '—'}</td>
+    </tr>`;
+  }).join('');
+  const body = `<div style="overflow:auto;max-height:60vh"><table class="txn-list-table"><thead>
+      <tr><th class="l">日付</th><th class="l">銘柄</th><th>数量</th><th>単価</th><th>金額（円換算）</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td class="l" colspan="4"><strong>合計（円換算）</strong></td><td><strong>${yen(tot)}</strong></td></tr></tfoot>
+    </table></div>`;
+  showModal(title, body, { wide: true });
 }
 // 取得価額（円換算）→ レンジ(band) のインデックス。マスタ store.data.matrixBands を参照（max未満で区分・最後はmax=null）。
 function mxBandOf(cost) {
