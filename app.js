@@ -3583,6 +3583,10 @@ function labelsTag(sec) {
   if (!ls.length) return muted;
   return ls.map(labelsTagOne).join(' ');
 }
+// 「取引サマリーから除外」フラグの付いたラベル名の集合（短期投資などの分類用）。
+function txnExcludedLabelSet() { return new Set((store.data.labelDefs || []).filter(d => d.excludeFromTxn).map(d => d.name)); }
+// この銘柄が除外対象ラベルを1つでも持つか（取引サマリーの集計・一覧から外す判定）。
+function secExcludedFromTxn(sec) { if (!sec) return false; const ex = txnExcludedLabelSet(); return ex.size > 0 && secLabels(sec).some(l => ex.has(l)); }
 // ラベル文字列（取込/出力用）↔配列。区切りは ; , 、 ／ / | いずれも許容。出力は「; 」区切り。
 function parseLabels(str) {
   if (str == null) return [];
@@ -4347,10 +4351,22 @@ function txnInPeriod() {
   const yStart = `${new Date().getFullYear()}-01-01`;
   const mSel = reportMonth || currentMonthStr();
   return store.data.transactions.filter(t => {
-    if (reportPeriod === 'ytd') return t.tradedAt && t.tradedAt >= yStart;
-    if (reportPeriod === 'month') return t.tradedAt && t.tradedAt.slice(0, 7) === mSel;
-    return true;
+    if (reportPeriod === 'ytd' && !(t.tradedAt && t.tradedAt >= yStart)) return false;
+    if (reportPeriod === 'month' && !(t.tradedAt && t.tradedAt.slice(0, 7) === mSel)) return false;
+    // 「取引サマリーから除外」ラベル（短期投資分類など）が付いた銘柄の取引は集計・一覧から外す
+    return !secExcludedFromTxn(store.data.securities.find(s => s.id === t.securityId));
   });
+}
+// 現在の期間で除外ラベルにより集計対象外になった取引の件数（サマリーの注記用）。
+function txnExcludedCount() {
+  if (txnExcludedLabelSet().size === 0) return 0;
+  const yStart = `${new Date().getFullYear()}-01-01`;
+  const mSel = reportMonth || currentMonthStr();
+  return store.data.transactions.filter(t => {
+    if (reportPeriod === 'ytd' && !(t.tradedAt && t.tradedAt >= yStart)) return false;
+    if (reportPeriod === 'month' && !(t.tradedAt && t.tradedAt.slice(0, 7) === mSel)) return false;
+    return secExcludedFromTxn(store.data.securities.find(s => s.id === t.securityId));
+  }).length;
 }
 // 現在の期間トグルの表示ラベル（見出し・明細一覧のタイトル用）。
 function periodLabelText() {
@@ -4382,7 +4398,7 @@ function txnSummaryHtml() {
         ${row('sell', '売り', sellN, sellTot)}
         <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
       </tbody></table></div>
-    <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。買い/売りの行をクリックすると明細一覧を表示。ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
+    <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。買い/売りの行をクリックすると明細一覧を表示。${(() => { const ex = [...txnExcludedLabelSet()]; const n = txnExcludedCount(); return ex.length ? `<br>除外ラベル（${ex.map(esc).join('・')}）付き銘柄の取引${n ? ` ${n}件` : ''}をこの集計から除外中。<a href="#" onclick="openLabelMaster();return false">ラベル設定</a>` : ''; })()}<br>ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
 }
 // 取引サマリーの買い/売り行クリック → その期間の該当取引の明細一覧をモーダル表示。
 function openTxnList(type) {
@@ -7650,12 +7666,13 @@ function openLabelMaster() {
   showModal('銘柄ラベル マスタ（投資テーマ・分類タグ）', `
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-sm btn-primary" onclick="openLabelEdit(null)">＋ ラベルを追加</button></div>
     <div class="table-wrap"><table class="holdings dense">
-      <thead><tr><th class="l">ラベル</th><th>並び順</th><th>付与銘柄</th><th class="l"></th></tr></thead>
+      <thead><tr><th class="l">ラベル</th><th>並び順</th><th>付与銘柄</th><th>サマリー除外</th><th class="l"></th></tr></thead>
       <tbody>${defs.length ? defs.map(c => `<tr>
         <td class="l">${labelsTagOne(c.name)}</td><td>${c.sortOrder}</td><td>${cnt(c.name)}件</td>
+        <td>${c.excludeFromTxn ? '<span class="tag" title="取引サマリーの金額・件数・一覧から除外">除外</span>' : '—'}</td>
         <td class="l nowrap"><button class="btn btn-sm" onclick="openLabelEdit('${esc(c.name)}')">編集</button>
           <button class="btn btn-sm btn-danger" onclick="deleteLabelDef('${esc(c.name)}')">削除</button></td>
-      </tr>`).join('') : '<tr><td class="l muted" colspan="4">ラベル未登録。「＋ ラベルを追加」か、銘柄編集の「銘柄ラベル」欄で新規追加できます。</td></tr>'}</tbody>
+      </tr>`).join('') : '<tr><td class="l muted" colspan="5">ラベル未登録。「＋ ラベルを追加」か、銘柄編集の「銘柄ラベル」欄で新規追加できます。</td></tr>'}</tbody>
     </table></div>
     <p class="muted" style="margin:8px 0 0">1銘柄に複数付けられる投資テーマ/分類タグ（半導体・宇宙・防衛・高配当 など）。前提が崩れた時に、一覧の<strong>フィルタ「銘柄ラベル」</strong>で絞り込み→<strong>一括変更（ラベルを外す／付与）</strong>や選択→全売却で一括判断できます。</p>
     <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
@@ -7667,6 +7684,8 @@ function openLabelEdit(name) {
       <div class="field"><label>ラベル名</label><input name="name" value="${c ? esc(c.name) : ''}" placeholder="例: 半導体 / 高配当" required></div>
       <div class="field"><label>並び順</label><input name="sortOrder" type="number" step="1" value="${c ? c.sortOrder : ''}" placeholder="自動"></div>
       <div class="field"><label>表示色（一覧のタグ色）</label>${colorSwatchPicker('color', c ? c.color : 'gray')}</div>
+      <div class="field"><label class="lbl-chk" style="font-weight:600"><input type="checkbox" name="excludeFromTxn" ${c && c.excludeFromTxn ? 'checked' : ''}> レポートの取引サマリーから除外する（短期投資など）</label>
+        <p class="muted" style="margin:4px 0 0">チェックすると、このラベルが付いた銘柄の売買を<strong>取引サマリーの金額・件数・明細一覧からのみ</strong>除外します。保有銘柄・資産集計・判定など他の扱いは変わりません。</p></div>
       <div class="form-actions">
         ${c ? `<button type="button" class="btn btn-danger" onclick="deleteLabelDef('${esc(c.name)}')">削除</button>` : ''}
         <button type="button" class="btn" onclick="openLabelMaster()">キャンセル</button>
@@ -7676,7 +7695,7 @@ function openLabelEdit(name) {
   document.getElementById('label-form').onsubmit = (e) => {
     e.preventDefault();
     const f = e.target;
-    const patch = { name: f.name.value.trim(), sortOrder: f.sortOrder.value ? parseInt(f.sortOrder.value, 10) : undefined, color: f.color.value || undefined };
+    const patch = { name: f.name.value.trim(), sortOrder: f.sortOrder.value ? parseInt(f.sortOrder.value, 10) : undefined, color: f.color.value || undefined, excludeFromTxn: f.excludeFromTxn.checked };
     if (!patch.name) { toast('ラベル名を入力してください'); return; }
     if (c) store.updateLabelDef(name, patch);
     else if ((store.data.labelDefs || []).some(x => x.name === patch.name)) { toast('同名のラベルが既にあります'); return; }
