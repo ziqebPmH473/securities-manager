@@ -4008,8 +4008,12 @@ function importStatusHtml() {
 }
 
 // ---------- レポート（SEC-17） ----------
-let reportPeriod = 'all'; // 'all' | 'ytd'
-function setReportPeriod(p) { reportPeriod = p; const el = document.getElementById('txn-section'); if (el) el.innerHTML = txnSummaryHtml(); else renderReport(); }
+let reportPeriod = 'all'; // 'all' | 'ytd' | 'month'
+let reportMonth = '';     // 月別選択時の対象月 'YYYY-MM'。未設定なら今月扱い。
+function currentMonthStr() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
+function refreshTxnSection() { const el = document.getElementById('txn-section'); if (el) el.innerHTML = txnSummaryHtml(); else renderReport(); scheduleFit(); }
+function setReportPeriod(p) { reportPeriod = p; if (p === 'month' && !reportMonth) reportMonth = currentMonthStr(); refreshTxnSection(); }
+function setReportMonth(m) { reportMonth = m || currentMonthStr(); refreshTxnSection(); }
 // レポート内タブ: 'assets'=資産集計 / 'txn'=取引サマリー / 'matrix'=分布マトリックス
 let reportTab = 'assets';
 function setReportTab(t) { reportTab = t; renderReport(); }
@@ -4341,17 +4345,22 @@ function renderReport() {
 // 取引サマリー（期間: 全期間/今年）。期間トグルは資産推移の表に影響させないため別関数化し、#txn-section だけ更新する。
 function txnSummaryHtml() {
   const yStart = `${new Date().getFullYear()}-01-01`;
+  const mSel = reportMonth || currentMonthStr();
   let buyTot = 0, sellTot = 0, buyN = 0, sellN = 0;
   for (const t of store.data.transactions) {
     if (reportPeriod === 'ytd' && !(t.tradedAt && t.tradedAt >= yStart)) continue;
+    if (reportPeriod === 'month' && !(t.tradedAt && t.tradedAt.slice(0, 7) === mSel)) continue;
     const sec = store.data.securities.find(s => s.id === t.securityId); if (!sec) continue;
     const amt = calc.toJpy(sec.market, (t.price || 0) * (t.quantity || 0)); if (amt == null) continue;
     if (t.type === 'buy') { buyTot += amt; buyN++; } else if (t.type === 'sell') { sellTot += amt; sellN++; }
   }
   const net = buyTot - sellTot;
   const seg = (p, l) => `<button class="${reportPeriod === p ? 'active' : ''}" onclick="setReportPeriod('${p}')">${l}</button>`;
-  return `<div class="section-head"><h2>取引サマリー（${reportPeriod === 'ytd' ? '今年' : '全期間'}・円換算）</h2>
-      <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}</div></div>
+  const periodLabel = reportPeriod === 'ytd' ? '今年' : reportPeriod === 'month' ? `${mSel.replace('-', '年')}月` : '全期間';
+  const monthPicker = reportPeriod === 'month'
+    ? `<input type="month" class="txn-month" value="${mSel}" onchange="setReportMonth(this.value)" style="margin-left:8px">` : '';
+  return `<div class="section-head"><h2>取引サマリー（${periodLabel}・円換算）</h2>
+      <div class="seg" role="tablist" style="margin-left:auto">${seg('all', '全期間')}${seg('ytd', '今年')}${seg('month', '月別')}</div>${monthPicker}</div>
     <div style="overflow-x:auto;max-width:100%"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
       <tbody>
         <tr><td class="l">買い</td><td>${buyN}</td><td>${yen(buyTot)}</td></tr>
