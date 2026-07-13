@@ -1540,6 +1540,10 @@ const api = {
           high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),
           high5yDate: q.high5yDate != null ? q.high5yDate : (prev.high5yDate ?? null),
           high52wDate: q.high52wDate != null ? q.high52wDate : (prev.high52wDate ?? null),
+          // 高値を実際に取得できた日を銘柄ごとに記録（=成功日）。取れなかった時は既存値を保持。
+          // 全体フラグ(lastHighsDate)は失敗しても立つため「取得済みなのに古い高値のまま」が起きる。
+          // 銘柄単位の成功日で「今日まだ取れていない銘柄」を下で取り直す（GLW 230.5固定バグ）。
+          highsAt: q.high5y != null ? today() : (prev.highsAt ?? null),
           low1y: q.low1y != null ? q.low1y : (prev.low1y ?? null),
           low3y: q.low3y != null ? q.low3y : (prev.low3y ?? null),
           low1yDate: q.low1yDate != null ? q.low1yDate : (prev.low1yDate ?? null),
@@ -1577,14 +1581,16 @@ const api = {
     }
     // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
     await this.refreshExtended(allSecs);
-    // 高値(5年/52週)が未取得の銘柄を補完取得（withHighs=false の通常更新でも、日次高値取得の後に
-    // 追加・取込された新規銘柄は高値が無く残り下落率が出ないため、欠けている分だけ highs=1 で取り直す）。
-    if (!withHighs) {
-      // 全銘柄から高値欠けを拾う（現在値が既にある銘柄は今回の取得対象secsから外れるため、
-      // secsではなくallSecsで判定しないと後から追加した銘柄の高値が永遠に埋まらない）。
-      const missHigh = allSecs.filter(s => (store.data.prices[priceKey(s)] || {}).high5y == null);
+    // 高値(5年/52週)が「今日まだ取得成功していない」銘柄を補完取得する（withHighs の成否に関わらず常時）。
+    // ・未取得の新規/取込銘柄（highsAt が無い＝欠け）
+    // ・その日の日次高値取得が失敗して古い高値のまま固定された銘柄（highsAt が過去日）
+    // どちらも highsAt !== today() で拾える。成功済み（highsAt===today）は skip＝毎回の再取得はしない。
+    // 全体フラグ(lastHighsDate)は失敗でも立つため使わず、銘柄ごとの成功日(prices[k].highsAt)で判定する。
+    // ※ secs ではなく allSecs で判定（現在値取得済みで今回対象外の銘柄も高値だけ古いことがあるため）。
+    {
+      const staleHigh = allSecs.filter(s => (store.data.prices[priceKey(s)] || {}).highsAt !== today());
       // highs=1 は5年日足も取るためサブリクエストが重い。10件ずつに分割して上限内に収める
-      for (let i = 0; i < missHigh.length; i += 10) { try { await this.refreshPrice(missHigh.slice(i, i + 10)); } catch (_) {} }
+      for (let i = 0; i < staleHigh.length; i += 10) { try { await this.refreshPrice(staleHigh.slice(i, i + 10)); } catch (_) {} }
     }
     // 名前未取得の銘柄だけ銘柄情報を取得
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
@@ -1683,10 +1689,13 @@ const api = {
           price: q.price,
           // 前日終値は highs=1 の値(Finnhub pc/Yahoo長期配列)を使わず、下の refreshPrevCloses で確定する。
           prevClose: prev.prevClose ?? null, prevCloseDate: prev.prevCloseDate ?? null,
-          high5y: q.high5y, high52w: q.high52w,
-          high5yDate: q.high5yDate ?? null, high52wDate: q.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
-          low1y: q.low1y ?? null, low3y: q.low3y ?? null,
-          low1yDate: q.low1yDate ?? null, low3yDate: q.low3yDate ?? null, // 安値が付いた日（情報表示用）
+          // 高値・安値は取れた時だけ更新。null で既存の正しい高値を潰さない（取得失敗時に基準値が壊れる）。
+          high5y: q.high5y != null ? q.high5y : (prev.high5y ?? null),
+          high52w: q.high52w != null ? q.high52w : (prev.high52w ?? null),
+          high5yDate: q.high5yDate ?? prev.high5yDate ?? null, high52wDate: q.high52wDate ?? prev.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
+          low1y: q.low1y != null ? q.low1y : (prev.low1y ?? null), low3y: q.low3y != null ? q.low3y : (prev.low3y ?? null),
+          low1yDate: q.low1yDate ?? prev.low1yDate ?? null, low3yDate: q.low3yDate ?? prev.low3yDate ?? null, // 安値が付いた日（情報表示用）
+          highsAt: q.high5y != null ? today() : (prev.highsAt ?? null), // 高値取得の成功日（銘柄単位）
           volume: q.volume != null ? q.volume : (prev.volume ?? null), // 当日出来高（売買代金算出用）
           fetchedAt: q.fetchedAt,
         };
