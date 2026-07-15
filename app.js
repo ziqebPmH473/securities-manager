@@ -107,7 +107,7 @@ function solidSwatchPicker(name, selected) {
 const DEFAULT_MATRIX_USDJPY = 100; // 「全部」表示・米国株取得額の円換算レート（初期値。マスタで変更可）
 // 前日終値の取得ロジック版。上げると当日でも refreshPrevCloses を一度だけ再計算（取引所TZ今日基準の修正を即反映）。
 // 5: 休場日・寄り付き前に前日比が0%に潰れる不具合の修正（前日終値の基準日を現在値のセッションに）を全銘柄へ反映。
-const PREVCLOSE_VER = 5;
+const PREVCLOSE_VER = 6;
 
 const MARKET_LABEL = { US: '米国株', JP: '日本株', FUND: '投信' };
 const MARKET_CCY = { US: '$', JP: '¥', FUND: '¥' };
@@ -1640,13 +1640,17 @@ const api = {
   },
 
   // 前日終値を信頼できる方法で取得してキャッシュ（1日1回でよい）。
-  // mode=light&range=5d で日足を数本取り、API側で「取引所TZの“今日”より前の最後の有効終値」を前日終値として
-  // 選ぶ（プレ前・休場日でも1日ズレない）。引け日(prevCloseDate)もAPIの実値を使う（休場を正しく反映）。
-  // 取れた銘柄だけ prevClose とその引け日を保存。取れない時は既存値を壊さず保持。
+  // mode=light（range=1d）で取得し、API側は meta.chartPreviousClose（Yahoo がサーバ側で算出する
+  // 「本当の前営業日終値」）を前日終値に使う。これが最も堅牢。
+  // ※以前は range=5d で日足配列から「今日より前の最後の有効終値」を選んでいたが、Yahoo が昨日の日足を
+  //   null 欠損させると一昨日を前日終値と誤認し、変動率が壊れた（実例: IBM 07-14がnull→07-13の290.23を
+  //   前日終値にして-24%表示。正は chartPreviousClose=217.07で約+1%。PGRも同様に-10.9%と過大表示）。
+  //   chartPreviousClose は日足の歯抜けに影響されず、休場・プレ前でも前営業日を正しく指す。
+  // 引け日(prevCloseDate)は range=1d では配列から取れないため prevBizDate() の近似を使う（値は正、日付は表示注記のみ）。
   async refreshPrevCloses(secs) {
     secs = (secs || []).filter(s => s && s.ticker);
     if (!secs.length) return;
-    const pd = prevBizDate(); // APIが引け日を返さない時のフォールバック（近似）
+    const pd = prevBizDate(); // 引け日は近似（range=1d は日足配列を持たないため）
     const syms = [...new Set(secs.map(yahooSymbol))];
     const BATCH = 40;
     const batches = [];
@@ -1654,7 +1658,7 @@ const api = {
     let quotes = {};
     try {
       const results = await Promise.all(batches.map(b =>
-        fetch(`/api/price?mode=light&range=5d&symbols=${encodeURIComponent(b.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({}))));
+        fetch(`/api/price?mode=light&symbols=${encodeURIComponent(b.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({}))));
       quotes = Object.assign({}, ...results);
     } catch (_) { return; }
     for (const sec of secs) {
