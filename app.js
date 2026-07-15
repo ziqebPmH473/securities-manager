@@ -234,7 +234,14 @@ const DEFAULT_VISIBLE = {
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
   ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
   ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
+  // マーケットランキングタブ（既定＝現状維持）。順位/コード/名称は先頭固定列で、ここには含めない。
+  MKTRANK: ['market','price','day','high5y','dropFrom5y','turnover','marketCap'],
 };
+// マーケットランキングで列設定に出せる項目（追加取得ゼロで出せる市場データ＋登録済み銘柄のツール内情報）。
+// MASTER_COLS に実在するkeyのみ（resetColPrefs 側で実在チェックして交差を取る）。表示順もこの順。
+const MKTRANK_KEYS = ['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap','sector','industry','category','investCategory','labels','ruleName','rating','per','pbr','dividend','buyAmount'];
+// このうち「市場データ列」＝ランキング取得値(it)から描画する（store.data.prices を参照しない）。残りは登録済み銘柄のみ COL_RENDERERS(sec) に委譲。
+const MKTRANK_IT_KEYS = new Set(['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap']);
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
 // 分析メタの取込列マッピング（Excel「銘柄分析結果」のヘッダ名 → 内部キー）
@@ -1920,6 +1927,7 @@ const listState = {
   SIGNAL: { sortKey: 'drop',   sortDir: 1, broker: '', account: '', category: '', detailType: '' },
   ANALYSIS:   { sortKey: 'anaContra', sortDir: -1, broker: '', account: '', category: '', detailType: '' },
   ANALYSIS_T: { sortKey: 'anaTrend',  sortDir: -1, broker: '', account: '', category: '', detailType: '' },
+  MKTRANK:    { sortKey: 'rank',      sortDir: 1,  broker: '', account: '', category: '', detailType: '' }, // マーケットランキングタブの列設定・ソート
 };
 // カラム設定: 市場ごとに [{key, visible}] の配列
 let colPrefs = {};
@@ -2248,27 +2256,32 @@ function getColOrder(market) {
 // 列の利用可否を決める基準市場。分析の順張りビュー(ANALYSIS_T)は ANALYSIS と同じ列群を使う
 // （列レイアウトとソートだけ別プロファイルで持つ）。
 function colBaseMarket(market) { return market === 'ANALYSIS_T' ? 'ANALYSIS' : market; }
-function resetColPrefs(market) {
+// そのスコープで利用可能な MASTER_COLS を MASTER_COLS の順で返す。
+// MKTRANK はマーケットランキング専用の明示リスト(MKTRANK_KEYS・実在チェック済)を使う。
+function colsForScope(market) {
+  if (market === 'MKTRANK') { const set = new Set(MKTRANK_KEYS); return MASTER_COLS.filter(c => set.has(c.key)); }
   const base = colBaseMarket(market);
+  return MASTER_COLS.filter(c => c.markets.includes(base));
+}
+function resetColPrefs(market) {
   const visible = new Set(DEFAULT_VISIBLE[market]);
-  colPrefs[market] = MASTER_COLS.filter(c => c.markets.includes(base)).map(c => ({
+  colPrefs[market] = colsForScope(market).map(c => ({
     key: c.key, visible: visible.has(c.key),
   }));
   saveColPrefs();
 }
 // 保存済み設定に、新規追加カラムを補完し、廃止カラムを除去（アプリ更新対応）
 function reconcileColPrefs(market) {
-  const base = colBaseMarket(market);
-  const validKeys = MASTER_COLS.filter(c => c.markets.includes(base)).map(c => c.key);
+  const scopeCols = colsForScope(market);
+  const validKeys = scopeCols.map(c => c.key);
   const validSet = new Set(validKeys);
   const have = new Set(colPrefs[market].map(c => c.key));
   const visible = new Set(DEFAULT_VISIBLE[market]);
   let arr = colPrefs[market].filter(c => validSet.has(c.key)); // 廃止カラム除去
-  // 未保持の新カラムを MASTER_COLS の順序で挿入
+  // 未保持の新カラムをスコープ既定の順序で挿入
   let changed = arr.length !== colPrefs[market].length;
-  for (let i = 0; i < MASTER_COLS.length; i++) {
-    const mc = MASTER_COLS[i];
-    if (!mc.markets.includes(base) || have.has(mc.key)) continue;
+  for (const mc of scopeCols) {
+    if (have.has(mc.key)) continue;
     arr.push({ key: mc.key, visible: visible.has(mc.key) });
     changed = true;
   }
@@ -3520,13 +3533,14 @@ function bulkSellAll() {
 }
 
 // opts: { select: true で先頭にチェックボックス列, actions: 'list'|'signal' }
-function marketRow(sec, visibleCols, opts = {}) {
+// 行コンテキスト（COL_RENDERERS が参照する派生値）を1銘柄分作る。marketRow とマーケットランキング行で共用。
+function rowContext(sec) {
   const market = sec.market; // ccy/ev は銘柄の市場で判定（サインタブの混在に対応）
   const th = calc.totalHolding(sec.id);
   const p = store.data.prices[priceKey(sec)] || {};
   const price = p.price ?? null;
   const ccy = MARKET_CCY[market];
-  const ctx = {
+  return {
     ccy, market, th,
     ev: market !== 'FUND' ? calc.evaluate(sec) : null,
     price,
@@ -3549,6 +3563,10 @@ function marketRow(sec, visibleCols, opts = {}) {
     prevBuy: calc.lastBuyPrice(sec),
     m: (v) => v != null ? fmtAmt(v, market) : '<span class="muted">—</span>',
   };
+}
+function marketRow(sec, visibleCols, opts = {}) {
+  const market = sec.market; // ccy/ev は銘柄の市場で判定（サインタブの混在に対応）
+  const ctx = rowContext(sec);
   const selectTd = opts.select ? `<td class="l"><input type="checkbox" class="row-select" data-id="${sec.id}"></td>` : (opts.lead ? '<td class="l"></td>' : '');
   // 編集モード(SEC-94): 一覧(取引/保有/編集アクションを持つ表)でのみ対象列をインライン入力化。サイン/アクション無しの表は対象外
   const editable = inlineEditOn && opts.actions !== 'signal' && opts.actions !== 'none';
@@ -4113,11 +4131,25 @@ async function loadRanking(force) {
       const hi = await mktFetchHighs(items.map(it => symOf(it.code)));
       items = items.map(it => {
         const q = hi[symOf(it.code)]; const ok = q && !q.error;
-        const next = { ...it, high5y: ok && q.high5y != null ? q.high5y : null };
+        // highs=1 の1回取得で返る値を保持（追加取得ゼロで列を増やせる）。5年高値だけでなく
+        // 52週高値・1年/3年安値・前日終値・出来高も列設定で表示できるよう項目に載せる。
+        const next = {
+          ...it,
+          high5y:  ok && q.high5y  != null ? q.high5y  : null,
+          high52w: ok && q.high52w != null ? q.high52w : null,
+          low1y:   ok && q.low1y   != null ? q.low1y   : null,
+          low3y:   ok && q.low3y   != null ? q.low3y   : null,
+          volume:  ok && q.volume  != null ? q.volume  : (it.volume ?? null),
+        };
         if (market === 'JP') {
+          // 日本株はランキング取得元HTMLに現在値・前日比が無いため highs 取得で補う。
           const price = ok ? q.price : null;
           next.price = price;
+          next.prevClose = ok && q.prevClose != null ? q.prevClose : null;
           next.changePct = (price != null && ok && q.prevClose) ? (price - q.prevClose) / q.prevClose * 100 : null;
+        } else {
+          // 米株はランキングに現在値・前日比があるが、前日終値は無いので highs 取得の prevClose を保持。
+          next.prevClose = ok && q.prevClose != null ? q.prevClose : (it.prevClose ?? null);
         }
         return next;
       });
@@ -4213,54 +4245,125 @@ function mktMarketLabel(it, market) {
   if (market === 'US') return it.exchange || '米国株';
   return it.section || '東証'; // 日本株は銘柄ごとの区分
 }
+// ---- マーケットランキングの列描画（列設定＝MKTRANKスコープ）----
+// 市場データ列は「追加取得ゼロ」でランキング取得値(it)から算出（store.data.prices は非参照＝判定に無影響）。
+// ツール内情報列（カテゴリ/格付/ラベル等）は登録済み銘柄のみ既存 COL_RENDERERS(sec) に委譲、未登録は「—」。
+function mktItValue(it, key, market) {
+  const price = it.price ?? null;
+  switch (key) {
+    case 'market':      return market;
+    case 'price':       return price;
+    case 'day':         return it.changePct ?? null;
+    case 'prevClose':   return it.prevClose ?? null;
+    case 'dayAmt':      return (price != null && it.prevClose != null) ? price - it.prevClose : null;
+    case 'high5y':      return it.high5y ?? null;
+    case 'high52w':     return it.high52w ?? null;
+    case 'low1y':       return it.low1y ?? null;
+    case 'low3y':       return it.low3y ?? null;
+    case 'dropFrom5y':  return pctFromBase(price, it.high5y);
+    case 'dropFrom52w': return pctFromBase(price, it.high52w);
+    case 'riseFrom1y':  return pctFromBase(price, it.low1y);
+    case 'riseFrom3y':  return pctFromBase(price, it.low3y);
+    case 'turnover':    return it.turnover ?? null;
+    case 'marketCap':   return it.marketCap ?? null;
+    default: return null;
+  }
+}
+// 背景色ルール用の値（時価総額は保有側の列と同じ百万単位に合わせる）
+function mktCfValue(it, sec, ctx, key, market) {
+  if (key === 'marketCap') return it.marketCap != null ? it.marketCap / 1e6 : null;
+  if (MKTRANK_IT_KEYS.has(key)) return mktItValue(it, key, market);
+  return sec ? cfCellValue(key, sec, ctx) : null;
+}
+// 市場データ列の <td>（表示）。値は it 由来。既存ランキングの見た目（かぶたんリンク・億/万表記）を踏襲。
+function mktItCell(it, key, market) {
+  const v = mktItValue(it, key, market);
+  switch (key) {
+    case 'market':    return `<td class="l"><span class="tag ${market.toLowerCase()}">${esc(mktMarketLabel(it, market))}</span></td>`;
+    case 'price':     return `<td><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${it.price != null ? fmtAmt(it.price, market) : '—'}</a></td>`;
+    case 'day':       return `<td class="${cls(v)}"><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${v != null ? signed(v) + '%' : '—'}</a></td>`;
+    case 'dayAmt':    return `<td class="${cls(v)}">${v != null ? (v > 0 ? '+' : '') + fmtAmt(v, market) : '—'}</td>`;
+    case 'prevClose': case 'high5y': case 'high52w': case 'low1y': case 'low3y':
+      return `<td>${v != null ? fmtAmt(v, market) : '—'}</td>`;
+    case 'dropFrom5y': case 'dropFrom52w': case 'riseFrom1y': case 'riseFrom3y':
+      return `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
+    case 'turnover':  return `<td>${mktAmt(it.turnover, market)}</td>`;
+    case 'marketCap': return `<td>${mktAmt(it.marketCap, market)}</td>`;
+    default: return '<td>—</td>';
+  }
+}
+// ソート値。市場データ列は it 由来、ツール内情報列は登録済み銘柄の sortValue を流用（未登録は末尾）。
+function mktSortVal(it, key, market) {
+  if (MKTRANK_IT_KEYS.has(key)) { const v = mktItValue(it, key, market); return (typeof v === 'number') ? v : (v == null ? -Infinity : v); }
+  const sec = mktFindSec(it.code, market);
+  return sec ? sortValue(sec, key) : -Infinity;
+}
+// ランキング1行（順位・コード・名称は先頭固定、以降は列設定に従う）。
+function mktRankRow(it, rank, market, visibleCols) {
+  const sec = mktFindSec(it.code, market);   // 登録済みなら実体（ツール内情報を表示）
+  const owned = !!sec;
+  const ctx = sec ? rowContext(sec) : null;
+  const cells = visibleCols.map(col => {
+    let cell;
+    if (MKTRANK_IT_KEYS.has(col.key)) cell = mktItCell(it, col.key, market);
+    else if (sec) { const r = COL_RENDERERS[col.key]; cell = r ? r(sec, ctx) : '<td class="l"><span class="muted">—</span></td>'; }
+    else cell = '<td class="l"><span class="muted">—</span></td>';
+    return cfInject(cell, col.key, cfConvVal(col.key, market, mktCfValue(it, sec, ctx, col.key, market)));
+  }).join('');
+  const codeTd = `<td class="l col-code"><span class="tk ${market.toLowerCase()}" style="cursor:pointer" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.code)}</span></td>`;
+  const nameTd = `<td class="l"><strong class="lnk-ext nm-strong mkt-name" onclick="mktClickName('${esc(it.code)}','${market}')" title="${esc(it.name || it.code)}">${esc(nameAbbr(it.name || it.code))}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>`;
+  const actionTd = `<td class="l nowrap">${owned
+    ? `<button class="btn btn-sm" disabled title="登録済みの銘柄です">登録済</button>`
+    : `<button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button>`}</td>`;
+  return `<tr><td>${rank}</td>${codeTd}${nameTd}${cells}${actionTd}</tr>`;
+}
 function renderMarketTab() {
   const key = mktKey(); const cache = mktCacheMap()[key]; const items = cache ? cache.items : null;
   const { market, sub, kind } = mktState;
   const mseg = `<div class="seg"><button class="${market === 'US' ? 'active' : ''}" onclick="setMktMarket('US')">米国株</button><button class="${market === 'JP' ? 'active' : ''}" onclick="setMktMarket('JP')">日本株</button></div>`;
   const subseg = market === 'JP' ? `<div class="seg" style="margin-left:6px;flex-wrap:wrap">${MKT_JP_SUBS.map(([v, l]) => `<button class="${sub === v ? 'active' : ''}" onclick="setMktSub('${v}')">${l}</button>`).join('')}</div>` : '';
   const kseg = `<div class="seg">${MKT_KINDS.map(([v, l]) => `<button class="${kind === v ? 'active' : ''}" onclick="setMktKind('${v}')">${l}</button>`).join('')}</div>`;
+  // 列設定（保有銘柄と同じ getColOrder/colHeadHtml/colTag/openColPicker を MKTRANK スコープで再利用）
+  const st = listState.MKTRANK;
+  const ccy = MARKET_CCY[market];
+  const visOrder = getColOrder('MKTRANK').filter(c => c.visible);
+  const visibleCols = visOrder.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
   let body;
   if (!items) body = '<div class="empty">読み込み中…</div>';
   else if (!items.length) body = '<div class="empty">データを取得できませんでした（休場/時間外、または取得元の仕様変更の可能性）。「更新」で再取得できます。</div>';
   else {
-    // データのある列だけ表示（全行nullの列は隠す）。日本株はランキング種別ごとに片方しか取得元に無いため。
-    const showTurnover = items.some(it => it.turnover != null);
-    const showMktCap = items.some(it => it.marketCap != null);
-    const rows = items.map((it, i) => {
-      const owned = !!mktFindSec(it.code, market);
-      const dc = it.changePct;
-      const priceTxt = it.price != null ? fmtAmt(it.price, market) : '—';
-      const high5y = it.high5y ?? null;
-      const dropFrom5y = pctFromBase(it.price, high5y); // 5年高値比＝(現在値−5年高値)/5年高値（保有銘柄の判定と同式）
-      return `<tr>
-        <td>${i + 1}</td>
-        <td class="l"><span class="tag ${market.toLowerCase()}">${esc(mktMarketLabel(it, market))}</span></td>
-        <td class="l col-code"><span class="tk ${market.toLowerCase()}" style="cursor:pointer" onclick="mktClickName('${esc(it.code)}','${market}')">${esc(it.code)}</span></td>
-        <td class="l"><strong class="lnk-ext nm-strong mkt-name" onclick="mktClickName('${esc(it.code)}','${market}')" title="${esc(it.name || it.code)}">${esc(nameAbbr(it.name || it.code))}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>
-        <td${cfStyle('price', cfConvVal('price', market, it.price), 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${priceTxt}</a></td>
-        <td class="${cls(dc)}"${cfStyle('day', dc, 'market')}><a href="${mktKabutan(it.code, market)}" target="_blank" rel="noopener" class="lnk-ext">${dc != null ? signed(dc) + '%' : '—'}</a></td>
-        <td${cfStyle('high5y', cfConvVal('high5y', market, high5y), 'market')}>${high5y != null ? fmtAmt(high5y, market) : '—'}</td>
-        <td class="${cls(dropFrom5y)}"${cfStyle('dropFrom5y', dropFrom5y, 'market')}>${dropFrom5y != null ? signed(dropFrom5y) + '%' : '—'}</td>
-        ${showTurnover ? `<td${cfStyle('turnover', cfConvVal('turnover', market, it.turnover), 'market')}>${mktAmt(it.turnover, market)}</td>` : ''}
-        ${showMktCap ? `<td${cfStyle('marketCap', cfConvVal('marketCap', market, it.marketCap != null ? it.marketCap / 1e6 : null), 'market')}>${mktAmt(it.marketCap, market)}</td>` : ''}
-        <td class="l nowrap">${owned
-          ? `<button class="btn btn-sm" disabled title="登録済みの銘柄です">登録済</button>`
-          : `<button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button>`}</td>
-      </tr>`;
-    }).join('');
-    body = `<div class="table-wrap"><table class="holdings dense"><thead><tr><th>順位</th><th class="l">市場</th><th class="l">コード</th><th class="l">名称</th><th>現在値</th><th>前日比</th><th>5年高値</th><th title="5年高値比＝(現在値−5年高値)÷5年高値">5年高値比</th>${showTurnover ? '<th>売買代金</th>' : ''}${showMktCap ? '<th>時価総額</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    // 順位は取得順（ランキング順位）を保持。列ヘッダをクリックした時だけ並べ替える。
+    let entries = items.map((it, i) => ({ it, rank: i + 1 }));
+    if (st.sortKey && st.sortKey !== 'rank') {
+      const dir = st.sortDir;
+      entries = entries.slice().sort((A, B) => {
+        const va = mktSortVal(A.it, st.sortKey, market), vb = mktSortVal(B.it, st.sortKey, market);
+        if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0;
+      });
+    }
+    const LEAD = [{ w: 48 }, { w: 70 }, { w: 190 }]; // 順位/コード/名称（先頭固定）
+    const ACTION_W = 76;
+    const leadW = LEAD.reduce((a, c) => a + c.w, 0);
+    const colgroup = `<colgroup>${LEAD.map(c => `<col style="width:${c.w}px">`).join('')}${visOrder.map(c => colTag(c)).join('')}<col style="width:${ACTION_W}px"></colgroup>`;
+    const tableW = leadW + ACTION_W + visOrder.reduce((a, c) => a + colWidthPx(c), 0);
+    const head = `<th>順位</th><th class="l">コード</th><th class="l">名称</th>${colHeadHtml(visibleCols, st, 'MKTRANK', ccy)}<th class="l"></th>`;
+    const rows = entries.map(e => mktRankRow(e.it, e.rank, market, visibleCols)).join('');
+    body = `<div class="table-wrap"><table class="fixed-cols holdings dense" style="width:${tableW}px">${colgroup}<thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   app.innerHTML = `
     <div class="section">
       <div class="section-head"><h2>マーケット ランキング（上位50）</h2>
         <div style="display:flex;align-items:center;gap:10px">
           <span class="muted" style="font-size:11px">${cache && cache.at ? '取得：' + mktFetchedAt(cache.at) : ''}</span>
+          <button class="btn btn-sm col-picker-btn" onclick="openColPicker('MKTRANK')" title="列の表示・並び替え・幅の設定">${svgIcon('columns', '')} 列</button>
           <button class="btn btn-sm btn-primary" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''}>${mktBusy ? '取得中…' : '更新'}</button></div></div>
       <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${mseg}${subseg}</div>
       <div class="toolbar" style="border:none;padding:8px 16px 0;gap:8px;flex-wrap:wrap"><span class="muted">ランキング</span>${kseg}
         ${market === 'JP' ? '<span class="muted" style="font-size:11px">※日本株の現在値・前日比は価格APIから取得</span>' : ''}</div>
       <div class="section-body" style="padding:12px 16px 16px">${body}</div>
     </div>`;
+  autoFitColumns(document.querySelector('#app table.fixed-cols'));
+  applyStickyCols(document.querySelector('#app table.fixed-cols'));
   scheduleFit(); // 表を枠内スクロールに（ページ全体でなく表内でスクロール・画面に収める）。非同期データ到着後の高さで確定させる
   if (!items && !mktBusy) loadRanking(false); // タブを開いた時（起動時相当）に自動取得
 }
