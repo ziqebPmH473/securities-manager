@@ -6071,8 +6071,8 @@ function openSecurityForm(id, presetMarket) {
       </div>
       <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" name="addonFromHigh" ${sec && sec.addonFromHigh ? 'checked' : ''} style="width:auto">
-          買い増しも初回基準で判定（基準高値×初回下落率でトリガーを固定）</label>
-        <p class="muted" style="margin:4px 0 0">ONにすると、買い増し時も前回購入単価でなく初回と同じライン（例: 5年高値−40%）でトリガーを算出します。1回目を少額で買っても次回購入ラインが下がらず、同じ水準で残り全額を買い増す運用向け。「買増固定値」を入れている場合はそちらが優先されます。</p></div>
+          買い増しも初回基準で判定</label>
+        <p class="muted" style="margin:4px 0 0">買い増しも初回と同じライン（基準高値×初回下落率）でトリガー固定。</p></div>
 
       <div class="row">
         <div class="field"><label>元本売却済み（情報管理のみ・判定には影響しません）</label>
