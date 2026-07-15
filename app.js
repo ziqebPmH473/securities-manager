@@ -6071,8 +6071,7 @@ function openSecurityForm(id, presetMarket) {
       </div>
       <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" name="addonFromHigh" ${sec && sec.addonFromHigh ? 'checked' : ''} style="width:auto">
-          買い増しも初回基準で判定</label>
-        <p class="muted" style="margin:4px 0 0">買い増しも初回と同じライン（基準高値×初回下落率）でトリガー固定。</p></div>
+          買い増しも初回基準で判定</label></div>
 
       <div class="row">
         <div class="field"><label>元本売却済み（情報管理のみ・判定には影響しません）</label>
