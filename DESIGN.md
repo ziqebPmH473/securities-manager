@@ -338,11 +338,19 @@ for each enabled holding h:
         last_buy = latest buy transaction price of h
         last_buy_date = latest buy transaction date of h   # tradedAt(YYYY-MM-DD)
         type = 'addon'
+        # 「買い増しも初回基準」フラグ（securities.addon_from_high / sec.addonFromHigh）:
+        # ONなら買い増しでも常に初回と同じ判定＝ base_high × (1 - initial_drop_pct/100)。
+        # 前回購入単価に依らずトリガーが動かない（1回目を少額で買っても次回購入ラインが下がらず、
+        # 同じ初回ライン=例−40%で残り全額を買い増せる）。addon_drop_pct は使わない。baseSource='初回固定'。
+        # 買増固定値(fixed_buy_price)があればそちらが優先。高値更新オプションより優先。
+        if s.addon_from_high:
+            base = base_high(h)
+            trigger = base * (1 - rule.initial_drop_pct/100)
         # 高値更新オプション（rule.high_reset_mode）: 「前回購入より後に最高値を更新した」場合は初回ルールで判定。
         # 判定は時間軸（最高値の付いた日 > 前回購入日）。値の大小ではなく日付で比較する。
         #   ※旧実装は base_high > last_buy の値比較で、暴落後に買った銘柄が常に高値更新扱いになる誤判定があった。
         #   高値の日付(high_5y_date 等)・前回購入日(取引履歴)が両方そろう時のみ発動。片方でも無ければ通常addon。
-        if rule.high_reset_mode and last_buy_date and base_high_date(h) and base_high_date(h) > last_buy_date:
+        elif rule.high_reset_mode and last_buy_date and base_high_date(h) and base_high_date(h) > last_buy_date:
             base = base_high(h)
             trigger = base * (1 - rule.initial_drop_pct/100)   # 高値から初回下落率
         else:

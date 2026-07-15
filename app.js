@@ -167,6 +167,7 @@ const MASTER_COLS = [
   { key: 'labels',      label: '銘柄ラベル',       left: true,  markets: ALLM, noSort: false },
   { key: 'ruleName',    label: '買い増しルール',    left: true,  markets: ALLM, noSort: false },
   { key: 'fixedBuyPrice', label: '買増固定値',       left: false, markets: STKM, noSort: false },
+  { key: 'addonFromHigh', label: '買増を初回基準',    left: true,  markets: STKM, noSort: false, narrow: true },
   { key: 'rating',      label: '銘柄格付',         left: true,  markets: STKM, noSort: false },
   { key: 'per',         label: 'PER',              left: false, markets: STKM, noSort: false },
   { key: 'pbr',         label: 'PBR',              left: false, markets: STKM, noSort: false },
@@ -1307,6 +1308,13 @@ const calc = {
       base = this.baseHigh(sec); baseSource = 'high';
       if (base == null) return null;
       trigger = base * (1 - rule.initialDropPct / 100);
+    } else if (sec.addonFromHigh) {
+      // 「買い増しも初回基準」フラグ: 買い増しでも常に初回と同じ判定＝基準高値×(1−初回下落率)。
+      // 前回購入単価に依らずトリガーが動かない（1回目を少額で買っても次回購入ラインが下がらず、
+      // 同じ初回ライン＝例:−40%で残り全額を買い増せる）。買い増し下落率(addonDropPct)は使わない。
+      const bh = this.baseHigh(sec);
+      if (bh == null) return null;
+      base = bh; baseSource = '初回固定'; trigger = base * (1 - rule.initialDropPct / 100);
     } else {
       const bh = this.baseHigh(sec);
       const bhDate = this.baseHighDate(sec);
@@ -2215,6 +2223,7 @@ function colDefaultWidth(key) {
   if (key === 'name') return 200;
   if (key === 'market' || key === 'detailType') return 72;
   if (key === 'trigBasis') return 64; // 1文字バッジ（初/増/高/固）
+  if (key === 'addonFromHigh') return 84; // 「初回基準」タグ or —
   if (key === 'extPrice') return 92;  // 時間外価格＋種別タグ
   if (key === 'prevClose') return 96; // 前日終値＋引け日(MM-DD)
   if (key === 'dayAmt') return 88;    // 前日比の値幅（符号つき金額）
@@ -2536,6 +2545,7 @@ const COL_RENDERERS = {
     let code, title;
     if (ev.baseSource === '固定') { code = '固'; title = '買増固定値（手入力の固定トリガー）'; }
     else if (ev.baseSource === '高値更新') { code = '高'; title = '高値更新（前回購入より後に最高値更新→初回ルールで判定）'; }
+    else if (ev.baseSource === '初回固定') { code = '初'; title = '買い増しも初回基準（基準高値×初回下落率で固定・前回購入単価に依らない）'; }
     else if (ev.type === 'initial') { code = '初'; title = '初回購入（基準高値から初回下落率）'; }
     else { code = '増'; title = '買い増し（前回購入単価から買い増し下落率）'; }
     return `<td class="l"><span class="tag basis-${code === '初' ? 'init' : code === '増' ? 'addon' : code === '高' ? 'high' : 'fixed'}" title="${title}">${code}</span></td>`;
@@ -2590,6 +2600,7 @@ const COL_RENDERERS = {
   labels:    (s,c) => `<td class="l">${labelsTag(s)}</td>`,
   ruleName:  (s,c) => { const r = store.rule(s.ruleId); return `<td class="l">${r ? esc(r.name) : muted}</td>`; },
   fixedBuyPrice: (s,c) => `<td>${typeof s.fixedBuyPrice === 'number' ? fmtAmt(s.fixedBuyPrice, c.market) : muted}</td>`,
+  addonFromHigh: (s,c) => `<td class="l">${s.addonFromHigh ? '<span class="tag" title="買い増しも初回基準（基準高値×初回下落率）でトリガー固定">初回基準</span>' : muted}</td>`,
   rating:    (s,c) => `<td class="l">${gradeBadge(s)}</td>`,
   per:       (s,c) => { const v = calc.per(s); return `<td>${v != null ? num(v) : muted}</td>`; },
   pbr:       (s,c) => { const v = calc.pbr(s); return `<td>${v != null ? num(v) : muted}</td>`; },
@@ -3296,6 +3307,7 @@ function sortValue(sec, key) {
     case 'labels': { const ls = secLabels(sec); return ls.length ? Math.min(...ls.map(labelSortIdx)) : 10000; } // ラベル先頭のマスタ順、未設定は末尾
     case 'ruleName': { const r = store.rule(sec.ruleId); return r ? (r.name || '').toLowerCase() : ''; }
     case 'fixedBuyPrice': return sec.fixedBuyPrice ?? -Infinity;
+    case 'addonFromHigh': return sec.addonFromHigh ? 1 : 0;
     case 'qty': return th.qty;
     case 'avgCost': return th.avgCost;
     case 'cost': return th.acquiredCost;
@@ -4852,6 +4864,7 @@ const SM_BULK_FIELDS = [
   { key: 'labelAdd', label: 'ラベルを付与' },
   { key: 'labelRemove', label: 'ラベルを外す' },
   { key: 'ruleId', label: '買い増しルール' },
+  { key: 'addonFromHigh', label: '買い増しを初回基準' },
   { key: 'rating', label: '銘柄格付' },
   { key: 'overallGrade', label: '総合評価' },
   { key: 'buyGrade', label: '買い時評価' },
@@ -4868,6 +4881,7 @@ function bulkValueHtml(field, id) {
     case 'detailType': return `<select id="${id}"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
     case 'enabled': return `<select id="${id}"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
     case 'watch': return `<select id="${id}"><option value="true">付ける</option><option value="false">外す</option></select>`;
+    case 'addonFromHigh': return `<select id="${id}"><option value="true">初回基準にする</option><option value="false">通常（前回購入単価基準）に戻す</option></select>`;
     case 'category': return `<select id="${id}">${catOpts}</select>`;
     case 'investCategory': return `<select id="${id}">${invCatOpts}</select>`;
     case 'labelAdd': case 'labelRemove': return `<select id="${id}">${labelOpts || '<option value="">（ラベル未登録）</option>'}</select>`;
@@ -4878,7 +4892,7 @@ function bulkValueHtml(field, id) {
   }
 }
 function bulkConvert(field, raw) {
-  if (field === 'enabled' || field === 'watch') return raw === 'true';
+  if (field === 'enabled' || field === 'watch' || field === 'addonFromHigh') return raw === 'true';
   if (field === 'detailType') return raw === '__null' ? null : raw;
   if (field === 'ruleId') return parseInt(raw, 10);
   if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return raw || null;
@@ -5156,7 +5170,7 @@ const NOTIFY_DEFAULT_TPL = {
 const NOTIFY_PH_LINE = [
   { g: '基本', items: [['kind', '初回/買増'], ['ticker', 'コード'], ['name', '銘柄名'], ['market', '市場'], ['broker', '証券会社'], ['category', 'カテゴリ'], ['ruleName', '買い増しルール'], ['rating', '銘柄格付']] },
   { g: '価格', items: [['price', '現在値'], ['dayChange', '前日比'], ['dayAmt', '前日比値幅'], ['prevClose', '前日終値']] },
-  { g: '判定', items: [['trigger', '次回購入'], ['trigBasis', '適用区分'], ['reachKind', '到達区分(新/続)'], ['base', '基準値'], ['remaining', '残り下落率'], ['fixedBuyPrice', '買増固定値']] },
+  { g: '判定', items: [['trigger', '次回購入'], ['trigBasis', '適用区分'], ['reachKind', '到達区分(新/続)'], ['base', '基準値'], ['remaining', '残り下落率'], ['fixedBuyPrice', '買増固定値'], ['addonFromHigh', '買増を初回基準']] },
   { g: '前回購入', items: [['prevBuyPrice', '前回購入単価'], ['prevBuyDate', '前回購入日'], ['dropFromPrev', '前回からの下落率']] },
   { g: '高値・安値', items: [['high5y', '5年高値'], ['high52w', '52週高値'], ['dropFrom5y', '5年高値からの下落率'], ['dropFrom52w', '52週高値からの下落率'], ['low1y', '1年安値'], ['low3y', '3年安値'], ['riseFrom1y', '1年安値からの上昇率'], ['riseFrom3y', '3年安値からの上昇率']] },
   { g: '保有・損益', items: [['qty', '数量'], ['avgCost', '取得単価'], ['value', '評価額'], ['cost', '取得価額'], ['pnl', '損益率'], ['buyCount', '購入回数'], ['buyAmount', '購入額']] },
@@ -6055,6 +6069,10 @@ function openSecurityForm(id, presetMarket) {
             ${['個別株', 'ETF'].map(t => `<option ${sec && sec.detailType === t ? 'selected' : ''}>${t}</option>`).join('')}
           </select></div>
       </div>
+      <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" name="addonFromHigh" ${sec && sec.addonFromHigh ? 'checked' : ''} style="width:auto">
+          買い増しも初回基準で判定（基準高値×初回下落率でトリガーを固定）</label>
+        <p class="muted" style="margin:4px 0 0">ONにすると、買い増し時も前回購入単価でなく初回と同じライン（例: 5年高値−40%）でトリガーを算出します。1回目を少額で買っても次回購入ラインが下がらず、同じ水準で残り全額を買い増す運用向け。「買増固定値」を入れている場合はそちらが優先されます。</p></div>
 
       <div class="row">
         <div class="field"><label>元本売却済み（情報管理のみ・判定には影響しません）</label>
@@ -6163,6 +6181,7 @@ function openSecurityForm(id, presetMarket) {
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
       prevBuyDate: (f.prevBuyDate && f.prevBuyDate.value) || null, // 前回購入日（手動・高値更新判定の比較用。取引履歴があればそちら優先）
       fixedBuyPrice: numOrNull(f.fixedBuyPrice.value),
+      addonFromHigh: !!(f.addonFromHigh && f.addonFromHigh.checked), // 買い増しも初回基準（基準高値×初回下落率）でトリガー固定
       baseHighMode: f.baseHighMode.value || null,
       baseHighManual: f.baseHighMode.value === 'manual' ? numOrNull(f.baseHighManual.value) : null,
       detailType: (f.detailType && f.detailType.value) || null, // 詳細種別マスタ（空=自動判定）
@@ -6468,10 +6487,11 @@ function openSecurityDetail(secId) {
   // 種別（高値更新・固定値も区別）
   const typeLabel = ev ? (ev.baseSource === '固定' ? '買い増し（買増固定値）'
     : ev.baseSource === '高値更新' ? '買い増し（高値更新→初回ルールで判定）'
+    : ev.baseSource === '初回固定' ? '買い増し（初回基準に固定＝基準高値×初回下落率）'
     : ev.type === 'initial' ? '初回購入' : '買い増し') : '';
   // 高値更新オプションがONなのに高値更新が適用されていない時、その理由を表示（サイレント失敗の可視化）
   let highResetNote = '';
-  if (ev && rule && rule.highResetMode && ev.type === 'addon' && ev.baseSource !== '高値更新' && ev.baseSource !== '固定') {
+  if (ev && rule && rule.highResetMode && ev.type === 'addon' && ev.baseSource !== '高値更新' && ev.baseSource !== '固定' && ev.baseSource !== '初回固定') {
     const bhDate = calc.baseHighDate(sec);
     let reason;
     if (!lb.date) reason = '前回購入日が未設定です。取引履歴の買い、または銘柄編集の「前回購入日」を入力してください。';
@@ -7299,6 +7319,7 @@ function karteCardHtml(sec) {
   const bhMode = (sec.baseHighMode || (rule && rule.baseHighMode) || '5y');
   const typeLabel = ev ? (ev.baseSource === '固定' ? '買い増し（買増固定値）'
     : ev.baseSource === '高値更新' ? '買い増し（高値更新→初回ルールで判定）'
+    : ev.baseSource === '初回固定' ? '買い増し（初回基準に固定＝基準高値×初回下落率）'
     : ev.type === 'initial' ? '初回購入' : '買い増し') : '';
   const buyStatus = ev && ev.reached
     ? '<span class="tag" style="background:var(--green);color:#fff">買い増しOK</span>'
@@ -8357,6 +8378,7 @@ const GENERIC_MAP = {
   '数量': 'quantity', '取得単価': 'avgCost', '平均取得単価': 'avgCost',
   '前回購入価格': 'prevBuyPrice', '前回購入日': 'prevBuyDate', '基準高値モード': 'baseHighMode', '手動基準高値': 'baseHighManual',
   '買増固定値': 'fixedBuyPrice', '次回購入固定値': 'fixedBuyPrice',
+  '買増を初回基準': 'addonFromHigh', '買い増し初回基準': 'addonFromHigh',
   'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category', '詳細種別': 'detailType',
   '投資カテゴリ': 'investCategory', '銘柄ラベル': 'labels', 'ラベル': 'labels',
   '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
@@ -8364,7 +8386,7 @@ const GENERIC_MAP = {
   '売却前購入額': 'origBuyAmount', 'メモ': 'memo',
 };
 // 標準レイアウトの列。exportGeneric はこの列名→GENERIC_MAP でフィールドキーを引き、genericFieldValue で値を出す（位置合わせ不要）。列を足すなら GENERIC_MAP にも登録。
-const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル'];
+const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', '買増を初回基準', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -8394,6 +8416,7 @@ function parseGeneric(text) {
     if ('prevBuyDate' in rec) sec.prevBuyDate = rec.prevBuyDate || null;
     if ('detailType' in rec) sec.detailType = /ETF|ＥＴＦ/i.test(rec.detailType) ? 'ETF' : (rec.detailType || null);
     if ('fixedBuyPrice' in rec) sec.fixedBuyPrice = numClean(rec.fixedBuyPrice);
+    if ('addonFromHigh' in rec) sec.addonFromHigh = /初回|^1$|true|yes|○|有/i.test(rec.addonFromHigh);
     if ('baseHighMode' in rec) sec.baseHighMode = normBaseHighMode(rec.baseHighMode);
     if ('baseHighManual' in rec) sec.baseHighManual = numClean(rec.baseHighManual);
     if ('ruleName' in rec) sec.ruleName = rec.ruleName || '';
@@ -8743,6 +8766,7 @@ function genericFieldValue(key, s, h) {
     case 'baseHighMode': return s.baseHighMode || '';
     case 'baseHighManual': return s.baseHighManual ?? '';
     case 'fixedBuyPrice': return s.fixedBuyPrice ?? '';
+    case 'addonFromHigh': return s.addonFromHigh ? '初回基準' : '';
     case 'ruleName': return (store.rule(s.ruleId) || {}).name || '';
     case 'category': return s.category || '';
     case 'investCategory': return s.investCategory || '';
@@ -8808,6 +8832,7 @@ const GI_FIELDS = [
   { key: 'prevBuyPrice',  label: '前回購入価格' },
   { key: 'prevBuyDate',   label: '前回購入日' },
   { key: 'fixedBuyPrice', label: '買増固定値' },
+  { key: 'addonFromHigh', label: '買い増しを初回基準' },
   { key: 'baseHighMode',  label: '基準高値モード' },
   { key: 'baseHighManual', label: '手動基準高値' },
   { key: 'ruleName',      label: '買い増しルール' },
@@ -8836,12 +8861,12 @@ const GI_FIELDS = [
   { key: 'origBuyAmount', label: '売却前購入額' },
   { key: 'memo',          label: 'メモ' },
 ];
-const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'category', 'investCategory', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo']);
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'category', 'investCategory', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo']);
 // 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
   { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy', 'origBuyAmount'] },
-  { g: '判定・属性', keys: ['category', 'investCategory', 'labels', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
+  { g: '判定・属性', keys: ['category', 'investCategory', 'labels', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
   { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride', 'memo'] },
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
 ];
@@ -8962,6 +8987,7 @@ function giParseValue(field, raw) {
     case 'starValuation': case 'starStrength': case 'starRisk': return parseStars(v);
     case 'enabled': return /有効|^1$|true|yes|○|有/i.test(v);
     case 'watch': return /注意|^1$|true|yes|○/i.test(v);
+    case 'addonFromHigh': return /初回|^1$|true|yes|○|有/i.test(v);
     case 'baseHighMode': return normBaseHighMode(v);
     case 'account': return normAccount(v);
     case 'market': { const u = v.toUpperCase(); return (u === 'US' || u === 'JP') ? u : (/米/.test(v) ? 'US' : /日|国内/.test(v) ? 'JP' : /^\d/.test(v) ? 'JP' : 'US'); }
