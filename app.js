@@ -4318,6 +4318,10 @@ function mktRankRow(it, rank, market, visibleCols) {
   return `<tr><td>${rank}</td>${codeTd}${nameTd}${cells}${actionTd}</tr>`;
 }
 function renderMarketTab() {
+  // ランキング取得は数秒かかり、その間にユーザーが別タブへ移りうる。取得完了後の再描画が
+  // #app を無条件に上書きすると「別タブに移ったのに数秒後マーケットに戻される」ように見える。
+  // 描画は「マーケットを表示中」の時だけ行う（キャッシュは保存済みなので戻れば表示される）。
+  if (currentView !== 'market') return;
   const key = mktKey(); const cache = mktCacheMap()[key]; const items = cache ? cache.items : null;
   const { market, sub, kind } = mktState;
   const mseg = `<div class="seg"><button class="${market === 'US' ? 'active' : ''}" onclick="setMktMarket('US')">米国株</button><button class="${market === 'JP' ? 'active' : ''}" onclick="setMktMarket('JP')">日本株</button></div>`;
