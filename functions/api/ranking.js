@@ -35,6 +35,11 @@ async function rankUs(kind, count) {
   const quotes = (data && data.finance && data.finance.result && data.finance.result[0] && data.finance.result[0].quotes) || [];
   let items = quotes.filter(q => q && q.symbol).map(q => {
     const price = num(q.regularMarketPrice), vol = num(q.regularMarketVolume), mc = num(q.marketCap);
+    // 配当は同じレスポンスに含まれる（追加取得ゼロ）。yieldは小数(0.0518)なので%へ。
+    // 表示通貨(currency)と財務通貨(financialCurrency)が違うADR(ITUB/BBD/SKHY等)は
+    // 配当がBRL/KRW建てなのに株価がUSDで、Yahooのyield自体が壊れる(39%/1912%)。この場合は載せない。
+    const divOk = !(q.currency && q.financialCurrency && q.currency !== q.financialCurrency);
+    const dy = divOk ? num(q.trailingAnnualDividendYield) : null;
     return {
       code: q.symbol,
       name: cleanName(q.shortName || q.longName || q.symbol),
@@ -42,6 +47,8 @@ async function rankUs(kind, count) {
       prevClose: num(q.regularMarketPreviousClose),
       volume: vol, marketCap: mc,
       turnover: (price != null && vol != null) ? price * vol : null, // 売買代金=価格×出来高
+      dividend: divOk ? num(q.trailingAnnualDividendRate) : null,
+      divYield: dy != null ? dy * 100 : null,
       exchange: q.fullExchangeName || q.exchange || null,
       market: 'US',
     };

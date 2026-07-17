@@ -239,9 +239,12 @@ const DEFAULT_VISIBLE = {
 };
 // マーケットランキングで列設定に出せる項目（追加取得ゼロで出せる市場データ＋登録済み銘柄のツール内情報）。
 // MASTER_COLS に実在するkeyのみ（resetColPrefs 側で実在チェックして交差を取る）。表示順もこの順。
-const MKTRANK_KEYS = ['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap','sector','industry','category','investCategory','labels','ruleName','rating','per','pbr','dividend','buyAmount'];
+const MKTRANK_KEYS = ['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap','sector','industry','category','investCategory','labels','ruleName','rating','per','pbr','dividend','divYield','buyAmount'];
 // このうち「市場データ列」＝ランキング取得値(it)から描画する（store.data.prices を参照しない）。残りは登録済み銘柄のみ COL_RENDERERS(sec) に委譲。
 const MKTRANK_IT_KEYS = new Set(['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap']);
+// 配当は米株のみランキング取得値に含まれる（USスクリーナーの同一レスポンス＝追加取得ゼロ）。
+// 日本株ランキングのHTMLには無いので、it に値が無ければ登録済み銘柄のマスタ値へフォールバックする両対応列。
+const MKTRANK_HYBRID_KEYS = new Set(['dividend','divYield']);
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
 // 分析メタの取込列マッピング（Excel「銘柄分析結果」のヘッダ名 → 内部キー）
@@ -4266,13 +4269,23 @@ function mktItValue(it, key, market) {
     case 'riseFrom3y':  return pctFromBase(price, it.low3y);
     case 'turnover':    return it.turnover ?? null;
     case 'marketCap':   return it.marketCap ?? null;
+    case 'dividend':    return it.dividend ?? null;
+    case 'divYield':    return it.divYield ?? null;
     default: return null;
   }
+}
+// ハイブリッド列は it（米株）→ 無ければ登録済み銘柄のマスタ値、の順で解決する。
+function mktHybridValue(it, sec, key) {
+  const v = mktItValue(it, key, null);
+  if (v != null) return v;
+  if (!sec) return null;
+  return key === 'divYield' ? calc.divYield(sec) : calc.field(sec, 'dividend');
 }
 // 背景色ルール用の値（時価総額は保有側の列と同じ百万単位に合わせる）
 function mktCfValue(it, sec, ctx, key, market) {
   if (key === 'marketCap') return it.marketCap != null ? it.marketCap / 1e6 : null;
   if (MKTRANK_IT_KEYS.has(key)) return mktItValue(it, key, market);
+  if (MKTRANK_HYBRID_KEYS.has(key)) return mktHybridValue(it, sec, key);
   return sec ? cfCellValue(key, sec, ctx) : null;
 }
 // 市場データ列の <td>（表示）。値は it 由来。既存ランキングの見た目（かぶたんリンク・億/万表記）を踏襲。
@@ -4292,10 +4305,17 @@ function mktItCell(it, key, market) {
     default: return '<td>—</td>';
   }
 }
+// ハイブリッド列の <td>。配当/株は市場通貨で、配当利回りは%で（保有銘柄の列と同じ書式）。
+function mktHybridCell(it, sec, key, market) {
+  const v = mktHybridValue(it, sec, key);
+  if (v == null) return `<td class="l"><span class="muted">—</span></td>`;
+  return key === 'divYield' ? `<td>${v.toFixed(2)}%</td>` : `<td>${fmtAmt(v, market)}</td>`;
+}
 // ソート値。市場データ列は it 由来、ツール内情報列は登録済み銘柄の sortValue を流用（未登録は末尾）。
 function mktSortVal(it, key, market) {
   if (MKTRANK_IT_KEYS.has(key)) { const v = mktItValue(it, key, market); return (typeof v === 'number') ? v : (v == null ? -Infinity : v); }
   const sec = mktFindSec(it.code, market);
+  if (MKTRANK_HYBRID_KEYS.has(key)) return mktHybridValue(it, sec, key) ?? -Infinity;
   return sec ? sortValue(sec, key) : -Infinity;
 }
 // ランキング1行（順位・コード・名称は先頭固定、以降は列設定に従う）。
@@ -4306,6 +4326,7 @@ function mktRankRow(it, rank, market, visibleCols) {
   const cells = visibleCols.map(col => {
     let cell;
     if (MKTRANK_IT_KEYS.has(col.key)) cell = mktItCell(it, col.key, market);
+    else if (MKTRANK_HYBRID_KEYS.has(col.key)) cell = mktHybridCell(it, sec, col.key, market);
     else if (sec) { const r = COL_RENDERERS[col.key]; cell = r ? r(sec, ctx) : '<td class="l"><span class="muted">—</span></td>'; }
     else cell = '<td class="l"><span class="muted">—</span></td>';
     return cfInject(cell, col.key, cfConvVal(col.key, market, mktCfValue(it, sec, ctx, col.key, market)));
