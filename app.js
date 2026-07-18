@@ -320,6 +320,7 @@ const store = {
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     this.data.newsRead ||= {};        // ニュース既読（記事リンク→既読日時ISO）。Google同期対象（sync-merge SCHEMA登録済み）
+    this.data.newsTags ||= [];        // ニュース注目タグ（保有登録なしの企業/人物/テーマ名）[{id,name}]。見出し一致で別色チップ表示・Google同期
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -4420,11 +4421,16 @@ async function newsRefresh(auto) {
   newsBusy = true;
   if (!auto) renderNews(); // 「更新」ボタンを取得中…に
   try {
-    const res = await fetch('/api/news');
-    const data = await res.json();
-    if (data && Array.isArray(data.items)) _newsCache = { items: data.items, at: data.at || new Date().toISOString() };
+    // クライアント側も保険のタイムアウト（25秒）。サーバーが詰まっても newsBusy を戻す
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    try {
+      const res = await fetch('/api/news', { signal: ctrl.signal });
+      const data = await res.json();
+      if (data && Array.isArray(data.items)) _newsCache = { items: data.items, at: data.at || new Date().toISOString() };
+    } finally { clearTimeout(timer); }
   } catch (_) { /* 失敗時は既存キャッシュのまま。キャッシュ無しなら empty 表示になる */ }
-  newsBusy = false;
+  finally { newsBusy = false; }
   // 取得完了時に別タブへ移っていたら描画しない（マーケットタブと同じ配慮。DESIGN.md参照）
   if (currentView === 'news') renderNews();
 }
@@ -4449,6 +4455,23 @@ function newsReadLink(el) {
 // 照合パターンは銘柄ごとに生成してキャッシュ（storeに保存しないよう Map。銘柄編集/名称取得で作り直し）
 const _newsPatCache = new Map();
 function _newsEscReg(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+// 日本株の見出し通称（正式名では見出しに出ない銘柄。ticker→通称。|区切りで複数可）。
+// 自動生成（トヨタ自動車→トヨタ 等）で拾えるものは載せず、正式名と通称が乖離するものだけ。
+const NEWS_JP_ALIAS = {
+  '9432': 'NTT', '9433': 'KDDI|au', '9434': 'ソフトバンク', '9984': 'ソフトバンクグループ|ソフトバンクG|SBG',
+  '9020': 'JR東日本|JR東', '9021': 'JR西日本|JR西', '9022': 'JR東海', '9147': '日本通運|日通',
+  '8306': '三菱UFJ|MUFG', '8316': '三井住友|SMBC|三井住友FG', '8411': 'みずほ', '8309': '三井住友トラスト',
+  '7267': 'ホンダ|本田技研', '7201': '日産', '7269': 'スズキ', '7270': 'SUBARU|スバル', '7211': '三菱自',
+  '6501': '日立', '6502': '東芝', '6752': 'パナソニック', '6503': '三菱電機', '6702': '富士通',
+  '4502': '武田|タケダ', '4503': 'アステラス', '4568': '第一三共', '4519': '中外製薬',
+  '9983': 'ファーストリテイリング|ファストリ|ユニクロ', '6098': 'リクルート', '4661': 'オリエンタルランド|OLC',
+  '8058': '三菱商事', '8031': '三井物産', '8053': '住友商事', '2914': 'JT|日本たばこ',
+  '6902': 'デンソー', '6981': '村田製作所|ムラタ', '6857': 'アドバンテスト', '8035': '東京エレクトロン|東エレク',
+  '6954': 'ファナック', '6367': 'ダイキン', '7974': '任天堂', '9613': 'NTTデータ',
+  '9501': '東京電力|東電', '9503': '関西電力|関電', '9531': '東京ガス', '5401': '日本製鉄|日鉄',
+  '8801': '三井不動産', '8802': '三菱地所', '2802': '味の素', '2503': 'キリン', '2502': 'アサヒ',
+  '4063': '信越化学', '4901': '富士フイルム', '7751': 'キヤノン', '7741': 'HOYA',
+};
 // 米国主要銘柄の日本語表記（見出しは「米アップル」等のカタカナ表記のため。|区切りで複数可）
 const NEWS_US_ALIAS = {
   AAPL: 'アップル', MSFT: 'マイクロソフト', GOOGL: 'グーグル|アルファベット', GOOG: 'グーグル|アルファベット',
@@ -4490,21 +4513,62 @@ function _newsPat(sec) {
     }
   }
   const t = String(sec.ticker || '').toUpperCase();
-  if (sec.market === 'US' && NEWS_US_ALIAS[t]) for (const a of NEWS_US_ALIAS[t].split('|')) if (!p.jp.includes(a)) p.jp.push(a); // 日本語見出し用の別名
+  // 通称辞書（見出し頻出の略称）を追加
+  if (sec.market === 'JP' && NEWS_JP_ALIAS[t]) for (const a of NEWS_JP_ALIAS[t].split('|')) if (a && !p.jp.includes(a)) p.jp.push(a);
+  if (sec.market === 'US' && NEWS_US_ALIAS[t]) for (const a of NEWS_US_ALIAS[t].split('|')) if (a && !p.jp.includes(a)) p.jp.push(a);
+  // 正規化版（半角全角・カナ/かな差を吸収した比較用）。日本語名は searchNorm 済みで含有判定する
+  p.jpNorm = p.jp.map(searchNorm).filter(x => x.length >= 2);
   if (sec.market === 'JP' && /^\d{4}$/.test(t)) p.code = new RegExp(`(^|[^0-9])${t}($|[^0-9円万億兆])`); // 4桁コード（金額の一部は除外）
   else if (sec.market === 'US' && /^[A-Z]{3,5}$/.test(t)) p.code = new RegExp(`\\b${t}\\b`); // 1〜2文字ティッカー(A/IT等)は誤検知するので対象外
   _newsPatCache.set(k, p);
   return p;
 }
 function newsSecHit(title, sec) {
-  const t = String(title || '');
+  const raw = String(title || '');
+  const norm = searchNorm(raw); // 半角全角・カナ差を吸収（NTT/ＮＴＴ・9432/９４３２ 等）
   const p = _newsPat(sec);
-  return p.jp.some(n => t.includes(n)) || p.en.some(re => re.test(t)) || !!(p.code && p.code.test(t));
+  if (p.jpNorm.some(n => norm.includes(n))) return true;       // 日本語名・通称（正規化して含有）
+  if (p.en.some(re => re.test(raw))) return true;               // 英語名（単語境界。小文字化は正規表現側で吸収）
+  if (p.code && p.code.test(norm)) return true;                 // 証券コード/ティッカー（正規化後の半角数字で照合）
+  return false;
 }
 function newsMatchSecs(title) {
   return store.data.securities.filter(s => s.enabled !== false && (s.market === 'JP' || s.market === 'US') && newsSecHit(title, s));
 }
+// 注目タグ（保有登録なしの企業/人物/テーマ名）の見出し一致。名前を searchNorm して含有判定
+function newsMatchTags(title) {
+  const tags = store.data.newsTags || [];
+  if (!tags.length) return [];
+  const norm = searchNorm(String(title || ''));
+  return tags.filter(t => { const n = searchNorm(t.name || ''); return n.length >= 2 && norm.includes(n); });
+}
 function setNewsHeldOnly(v) { newsHeldOnly = v; renderNews(); }
+// 注目タグ管理モーダル（1行1名。改行区切りで一括編集）
+function openNewsTagsEditor() {
+  const cur = (store.data.newsTags || []).map(t => t.name).join('\n');
+  showModal('注目タグ（保有していない企業・人物・テーマ）', `
+    <p class="muted" style="margin:0 0 8px;font-size:12px">1行に1つ。ここに書いた名前がニュース見出しに含まれると、保有銘柄とは別色のタグが付きます（クリックしても銘柄画面は開きません）。例: エヌビディア / テスタ / 半導体 / 生成AI</p>
+    <textarea id="news-tags-ta" rows="10" style="width:100%;font-size:13px" placeholder="エヌビディア&#10;半導体&#10;生成AI">${esc(cur)}</textarea>
+    <div class="form-actions" style="margin-top:12px">
+      <button type="button" class="btn btn-primary" onclick="saveNewsTags()">保存</button>
+      <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+    </div>`);
+}
+function saveNewsTags() {
+  const ta = document.getElementById('news-tags-ta');
+  if (!ta) return;
+  const names = ta.value.split('\n').map(s => s.trim()).filter(s => s.length >= 2);
+  const uniq = [...new Set(names)];
+  const prev = store.data.newsTags || [];
+  // 既存の名前はidを維持（同期の一致キー安定のため）、新規はid採番
+  store.data.newsTags = uniq.map(name => {
+    const ex = prev.find(t => t.name === name);
+    return ex || { id: store.nextId(), name };
+  });
+  store.save();
+  closeModal();
+  renderNews();
+}
 // 相対時刻表示（60分未満=分前 / 24時間未満=時間前 / それ以前=月/日）
 function newsTime(iso) {
   if (!iso) return '';
@@ -4523,10 +4587,13 @@ function newsItemHtml(it, read, matches, opts = {}) {
   // 一致した登録銘柄のチップ（最大3件）。クリックで銘柄詳細（リンク遷移はさせない）
   const secChips = (matches || []).slice(0, 3).map(s =>
     `<span class="news-sec" onclick="event.preventDefault();event.stopPropagation();openSecurityDetail(${s.id})" title="${esc(calc.displayName(s))}">${esc(nameAbbr(calc.displayName(s)))}</span>`).join('');
+  // 注目タグのチップ（別色・クリックしても開かない）。mini（ドロワー）では出さない
+  const tagChips = opts.mini ? '' : (newsMatchTags(it.title)).slice(0, 3).map(t =>
+    `<span class="news-tag">${esc(t.name)}</span>`).join('');
   const catChip = opts.mini ? '' : `<span class="news-cat cat-${cat}">${catLbl}</span>`;
   return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" onclick="newsReadLink(this)">
       <span class="news-title">${esc(it.title)}</span>
-      <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}</span>
+      <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}</span>
     </a>`;
 }
 function renderNews() {
@@ -4534,16 +4601,17 @@ function renderNews() {
   const cache = _newsCache;
   const read = store.data.newsRead || {};
   const seg = `<div class="seg">${NEWS_CATS.map(([v, l]) => `<button class="${newsCat === v ? 'active' : ''}" onclick="setNewsCat('${v}')">${l}</button>`).join('')}</div>
-    <div class="seg" style="margin-left:6px"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄（保有＋ウォッチ）の名前・コードが見出しに含まれる記事のみ">関連銘柄のみ</button></div>`;
+    <div class="seg" style="margin-left:6px"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
+    <button class="btn btn-sm" style="margin-left:auto" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>`;
   let body;
   if (!cache) {
     body = '<div class="empty">読み込み中…</div>';
   } else {
-    // カテゴリ→関連銘柄の順に絞り込み。一致銘柄は行チップ表示に使うので [item, matches] で持つ
+    // カテゴリ→関連（銘柄 or 注目タグ）の順に絞り込み。一致銘柄は行チップ表示に使うので [item, matches] で持つ
     let entries = cache.items
       .filter(it => newsCat === 'all' || newsCategory(it.title) === newsCat)
       .map(it => [it, newsMatchSecs(it.title)]);
-    if (newsHeldOnly) entries = entries.filter(([, ms]) => ms.length);
+    if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it.title).length);
     body = entries.length
       ? `<div class="table-wrap news-wrap"><div class="news-list">${entries.map(([it, ms]) => newsItemHtml(it, read, ms)).join('')}</div></div>`
       : '<div class="empty">記事がありません。「更新」で再取得できます。</div>';
@@ -10695,6 +10763,8 @@ window.setNewsCat = setNewsCat;
 window.newsRefresh = newsRefresh;
 window.newsReadLink = newsReadLink;
 window.setNewsHeldOnly = setNewsHeldOnly;
+window.openNewsTagsEditor = openNewsTagsEditor;
+window.saveNewsTags = saveNewsTags;
 window.setMktMarket = setMktMarket;
 window.setMktSub = setMktSub;
 window.setMktKind = setMktKind;

@@ -3,12 +3,20 @@
 // 無料の公式RSS（見出し＋リンク＋時刻のみ）を複数まとめて返す。本文は取得しない（著作権上、
 // 見出し一覧→クリックで元記事へ飛ぶ構成）。カテゴリ分類はクライアント側（キーワードルール）で行う。
 
+// broad:true のフィードは総合ニュース（スポーツ・生活・車等が混ざる）なので MARKET_RE で経済関連だけ通す。
+// broad なしは経済・マーケット専門メディアのため全通し。
+// ※ 日経本体（news/markets）は公式RSSが無く assets.wor.jp（第三者の再配信）経由。継続性リスクがあるため
+//   止まっても他フィードで成立するよう複数ソース構成にしている。source は表示名。
 const FEEDS = [
-  // Yahoo!ニュース 経済トピックス（編集部ピックアップ。件数少なめ・重要度高）
-  { url: 'https://news.yahoo.co.jp/rss/topics/business.xml', source: 'Yahoo!ニュース' },
-  // Yahoo!ニュース 経済カテゴリ（新着。件数多めだが車・生活系も混ざるため broad=キーワード絞り込み対象）
-  { url: 'https://news.yahoo.co.jp/rss/categories/business.xml', source: 'Yahoo!経済', broad: true },
-  // NHK 経済ニュース
+  // 経済・マーケット専門（全通し・良質）
+  { url: 'https://assets.wor.jp/rss/rdf/nikkei/markets.rdf', source: '日経マーケット' },
+  { url: 'https://business.nikkei.com/rss/sns/nb.rdf', source: '日経ビジネス' },
+  // 総合ニュース・汎用フィード（経済キーワードで絞り込み。俳句・歴史・生活記事等を除去）
+  { url: 'https://toyokeizai.net/list/feed/rss', source: '東洋経済', broad: true },
+  { url: 'https://diamond.jp/list/feed/rss/dol', source: 'ダイヤモンド', broad: true },
+  { url: 'https://assets.wor.jp/rss/rdf/nikkei/news.rdf', source: '日経', broad: true },
+  { url: 'https://news.yahoo.co.jp/rss/topics/business.xml', source: 'Yahoo!ニュース', splitSuffix: true },
+  { url: 'https://news.yahoo.co.jp/rss/categories/business.xml', source: 'Yahoo!経済', broad: true, splitSuffix: true },
   { url: 'https://www3.nhk.or.jp/rss/news/cat5.xml', source: 'NHK' },
 ];
 
@@ -57,13 +65,20 @@ async function companyNews(context, symbol) {
 }
 
 async function fetchFeed(f) {
-  const res = await fetch(f.url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' },
-    cf: { cacheTtl: 300, cacheEverything: true }, // 5分エッジキャッシュ（配信元への負荷も抑える）
-  });
+  // 各フィードに個別タイムアウト（6秒）。遅い1本が全体を止めないよう AbortController で打ち切る。
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  let res;
+  try {
+    res = await fetch(f.url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' },
+      cf: { cacheTtl: 300, cacheEverything: true }, // 5分エッジキャッシュ（配信元への負荷も抑える）
+      signal: ctrl.signal,
+    });
+  } finally { clearTimeout(timer); }
   if (!res.ok) throw new Error(`${f.source} ${res.status}`);
   const xml = await res.text();
-  const items = parseRss(xml, f.source);
+  const items = parseRss(xml, f.source, f.splitSuffix);
   // 広域フィード（Yahoo!経済カテゴリ等）は車・生活・エンタメ系が大量に混ざる。
   // マーケット・経済関連キーワードに一致する見出しだけ通す（トピックス/NHKは編集済みなので全通し）
   return f.broad ? items.filter(it => MARKET_RE.test(it.title)) : items;
@@ -72,22 +87,30 @@ async function fetchFeed(f) {
 const MARKET_RE = /株|投資|市場|市況|経済|景気|金利|為替|円安|円高|ドル円|日銀|FRB|FOMC|決算|業績|増益|減益|赤字|黒字|配当|上場|IPO|証券|債券|国債|インフレ|物価|関税|増税|減税|消費税|GDP|雇用|賃金|資産|銀行|金融|保険|不動産価格|原油|金価格|半導体|輸出|輸入|貿易|買収|合併|TOB|倒産|日経平均|TOPIX|ダウ|ナスダック/;
 
 // RSS 2.0 の <item> を正規表現で抽出（Workers に DOMParser は無い）。title/link/pubDate のみ使用
-function parseRss(xml, source) {
+function parseRss(xml, source, splitSuffix) {
   const items = [];
   const re = /<item[\s>][\s\S]*?<\/item>/g;
   let m;
   while ((m = re.exec(xml)) && items.length < 80) {
     const chunk = m[0];
-    const title = clean(tag(chunk, 'title'));
-    const link = clean(tag(chunk, 'link'));
-    const pub = tag(chunk, 'pubDate') || tag(chunk, 'dc:date');
+    let title = clean(tag(chunk, 'title'));
+    // 「見出し ｜ カテゴリ ｜ 媒体名」形式（東洋経済等）は先頭セグメント=見出しだけにする。
+    // 末尾の媒体名（例:東洋経済オンライン）に含まれる語が MARKET_RE や銘柄名に誤ヒットするのを防ぐ。
+    if (title && /[｜|]/.test(title)) { const seg = title.split(/\s*[｜|]\s*/); if (seg.length > 1 && seg[0].length >= 6) title = seg[0].trim(); }
+    // RSS1.0(RDF)/2.0はlinkが要素値、Atomは<link href=...>属性。両対応
+    let link = clean(tag(chunk, 'link'));
+    if (!link) { const lm = chunk.match(/<link[^>]*href=["']([^"']+)["']/); if (lm) link = lm[1]; }
+    const pub = tag(chunk, 'pubDate') || tag(chunk, 'dc:date') || tag(chunk, 'updated') || tag(chunk, 'published');
     if (!title || !link) continue;
     let iso = null;
     if (pub) { const d = new Date(pub.trim()); if (!isNaN(d)) iso = d.toISOString(); }
-    // Yahoo!の見出しは末尾に「(配信元)」が付く。表示用に分離し、sourceを配信元名に置き換える
+    // Yahoo!の見出しだけ末尾に「(配信元)」が付く。表示用に分離し source を配信元名に置き換える
+    // （日経ビジネス等はコラム名がカッコ書きされるので分離しない＝splitSuffix指定フィードのみ）
     let t = title, src = source;
-    const pm = t.match(/^(.*)\(([^()]{2,20})\)$/);
-    if (pm && !/^[0-9.,%美$¥]+$/.test(pm[2])) { t = pm[1].trim(); src = pm[2]; }
+    if (splitSuffix) {
+      const pm = t.match(/^(.*)\(([^()]{2,20})\)$/);
+      if (pm && !/^[0-9.,%美$¥]+$/.test(pm[2])) { t = pm[1].trim(); src = pm[2]; }
+    }
     items.push({ title: t, link, source: src, pubDate: iso });
   }
   return items;

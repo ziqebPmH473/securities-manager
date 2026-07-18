@@ -1106,3 +1106,6 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .news-sec:hover { background: var(--accent-d); }
 .news-mini .news-item { padding: 7px 2px; }
 .news-mini .news-title { font-size: 12.5px; }
+
+/* ニュース注目タグ（保有外・クリック不可・別色） */
+.news-tag { padding: 1px 7px; border-radius: 999px; font-size: 10px; background: var(--panel-2); color: var(--muted); border: 1px dashed var(--border-strong, #cbd5e1); white-space: nowrap; }
