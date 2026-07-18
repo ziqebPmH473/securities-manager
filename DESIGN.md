@@ -720,3 +720,25 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - Google Cloud: OAuthクライアント（project 381390060466。Sheets/Drive API 有効）＋ サービスアカウント（鍵JSON・Drive/Sheets API有効）。
 - Drive: `securities-manager` フォルダを**サービスアカウントのメールに閲覧者共有**（通知サーバーがdata.jsonを読むため）。
 - Resend: APIキー発行→CF env。手順書 `SERVICE_ACCOUNT_SETUP.md` / `NOTIFY_RESEND_SETUP.md`。
+
+## 16. ニュースタブ（フェーズN1・2026-07-18）
+
+全体は5フェーズ構成（N1=基盤 / N2=銘柄紐付け・銘柄別表示 / N3=YouTube要約(Gemini) / N4=開示・決算(TDnet/EDGAR) / N5=X連携[有料・費用判断後]）。本節はN1。
+
+### 16.1 取得（functions/api/news.js）
+- `GET /api/news` → `{ items:[{title,link,source,pubDate}], at }`。無料RSSのみ・見出し＋リンク＋時刻だけ返す（本文は取得しない＝著作権配慮。クリックで元記事へ）。
+- フィード: Yahoo!ニュース経済トピックス / Yahoo!ニュース経済カテゴリ（broad） / NHK経済(cat5)。リンクで重複排除・新しい順・最大120件。エッジ5分キャッシュ（cf.cacheTtl）。
+- **broadフィードは `MARKET_RE`（株/金利/決算…のキーワード正規表現）に一致する見出しだけ通す**。Yahoo!経済カテゴリは車・生活・エンタメ記事が大半のため必須（全通しにするとニュースタブがノイズで埋まる）。
+- Yahoo!見出し末尾の「(配信元)」は分離して source に採用（表示は「ロイター」等になる）。
+- Workers に DOMParser は無いので RSS は正規表現でパース（`<item>`→title/link/pubDate）。
+
+### 16.2 表示（app.js renderNews）
+- ナビ「メイン>ニュース」。見出し一覧（未読=太字＋青ドット）＋配信元＋相対時刻、クリックで元記事を新規タブ表示。
+- カテゴリはクライアント側キーワード判定 `newsCategory(title)`（判定順=特異度順: 決算→為替・金利→市況→その他）。segボタンで絞り込み。
+- 記事一覧は**メモリキャッシュのみ**（`_newsCache`。RSS取得は無料なので永続化しない）。タブを開いた時に自動取得、キャッシュ5分超で裏更新。取得完了時は `currentView==='news'` を確認してから描画（別タブ上書き防止・§マーケットと同じ）。
+- 一覧は `.table-wrap` に入れて枠内スクロール（`fitListTables` の対象。main.content はスクロールさせない）。
+
+### 16.3 既読（唯一の永続データ）
+- `store.data.newsRead = { link: 読了ISO }`。クリック時に記録し **45日より古いエントリは自動掃除**（同期データの肥大防止）。
+- **sync-merge.js SCHEMA に `newsRead:['map',null]` 登録済み**（キー単位3-way。端末間で既読が同期される）。
+- 将来のN3（YouTube要約）は「1動画=世界で1回生成」のためサーバー側共有キャッシュ方式を予定（端末単位で再生成しない）。

@@ -319,6 +319,7 @@ const store = {
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
+    this.data.newsRead ||= {};        // ニュース既読（記事リンク→既読日時ISO）。Google同期対象（sync-merge SCHEMA登録済み）
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -1854,6 +1855,7 @@ const NAV_GROUPS = [
   { group: 'メイン', items: [
     { id: 'dashboard', label: 'ダッシュボード', icon: 'dashboard' },
     { id: 'market',    label: 'マーケット',     icon: 'report' },
+    { id: 'news',      label: 'ニュース',       icon: 'news' },
     { id: 'holdings',  label: '保有銘柄',       icon: 'holdings' },
     { id: 'trade',     label: '銘柄カルテ',     icon: 'trade' },
     { id: 'signals',   label: '買い増しサイン', icon: 'signal', badge: 'sig' },
@@ -1874,6 +1876,7 @@ const PAGE_TITLE = {
   dashboard: 'ダッシュボード', market: 'マーケット', holdings: '保有銘柄', signals: '買い増しサイン',
   report: 'レポート', import: '取込', secmaster: '銘柄マスタ', splits: '株式分割', trade: '銘柄カルテ',
   transfer: '転記用', master: 'マスタ・設定', us: '米国株', jp: '日本株', analysis: '分析（チャートパターン）',
+  news: 'ニュース',
 };
 const ICON_PATHS = {
   dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
@@ -1894,6 +1897,7 @@ const ICON_PATHS = {
   trade: 'M7 10 3 6l4-4M3 6h12a4 4 0 0 1 4 4M17 14l4 4-4 4M21 18H9a4 4 0 0 1-4-4',
   edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
   external: 'M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
+  news: 'M4 4h13v16H6a2 2 0 0 1-2-2zM17 8h3v10a2 2 0 0 1-2 2M8 8h5M8 12h5M8 16h5',
 };
 // SVGアイコン生成。クラス省略時はナビ用(nav-ico)
 function svgIcon(name, cls = 'nav-ico') {
@@ -2920,6 +2924,7 @@ function _render() {
   switch (currentView) {
     case 'dashboard': renderDashboard(); break;
     case 'market': renderMarketTab(); break;
+    case 'news': renderNews(); break;
     case 'holdings': renderMarket(holdingsMarket); break;
     case 'us': renderMarket('US'); break;
     case 'jp': renderMarket('JP'); break;
@@ -4391,6 +4396,100 @@ function renderMarketTab() {
   applyStickyCols(document.querySelector('#app table.fixed-cols'));
   scheduleFit(); // 表を枠内スクロールに（ページ全体でなく表内でスクロール・画面に収める）。非同期データ到着後の高さで確定させる
   if (!items && !mktBusy) loadRanking(false); // タブを開いた時（起動時相当）に自動取得
+}
+
+// ---------- ニュースタブ（フェーズN1: RSS見出し一覧＋カテゴリ絞り込み） ----------
+// 記事一覧はメモリキャッシュのみ（RSS取得は無料・軽量なので保存しない）。既読だけを
+// store.data.newsRead（リンク→既読日時）に保存し Google同期する（sync-merge.js SCHEMA 登録済み）。
+let _newsCache = null;   // { items:[{title,link,source,pubDate}], at }
+let _newsShown = [];     // 直近描画した記事（onclick の index→link 解決用。URL中の引用符エスケープ問題を避ける）
+let newsBusy = false;
+let newsCat = 'all';
+const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['macro', '為替・金利'], ['other', 'その他']];
+// 見出しキーワードでカテゴリ判定。判定順は特異度順（決算→為替・金利→市況→その他）
+function newsCategory(title) {
+  const t = title || '';
+  if (/決算|上方修正|下方修正|業績予想|増益|減益|営業利益|純利益|増配|減配|自社株買い|株式分割/.test(t)) return 'earnings';
+  if (/円安|円高|ドル円|為替|金利|日銀|FRB|FOMC|利上げ|利下げ|国債|インフレ|物価|CPI|関税/.test(t)) return 'macro';
+  if (/日経平均|東証|TOPIX|株式市場|株価|続伸|続落|反発|反落|急騰|急落|ダウ|ナスダック|S&P|米国株|米株|プライム市場|グロース市場|半導体株/.test(t)) return 'market';
+  return 'other';
+}
+function setNewsCat(c) { newsCat = c; renderNews(); }
+async function newsRefresh(auto) {
+  if (newsBusy) return;
+  newsBusy = true;
+  if (!auto) renderNews(); // 「更新」ボタンを取得中…に
+  try {
+    const res = await fetch('/api/news');
+    const data = await res.json();
+    if (data && Array.isArray(data.items)) _newsCache = { items: data.items, at: data.at || new Date().toISOString() };
+  } catch (_) { /* 失敗時は既存キャッシュのまま。キャッシュ無しなら empty 表示になる */ }
+  newsBusy = false;
+  // 取得完了時に別タブへ移っていたら描画しない（マーケットタブと同じ配慮。DESIGN.md参照）
+  if (currentView === 'news') renderNews();
+}
+// 記事クリック時: 既読を記録（再描画はしない＝リンクを開く動作を妨げず、クラスだけ落とす）
+function newsMarkRead(i, el) {
+  const it = _newsShown[i];
+  if (!it) return;
+  store.data.newsRead[it.link] = new Date().toISOString();
+  // 既読は45日で掃除（同期データを無限に増やさない）
+  const lim = Date.now() - 45 * 86400 * 1000;
+  for (const k in store.data.newsRead) {
+    const d = new Date(store.data.newsRead[k]);
+    if (isNaN(d) || d.getTime() < lim) delete store.data.newsRead[k];
+  }
+  store.save();
+  if (el) el.classList.remove('unread');
+}
+// 相対時刻表示（60分未満=分前 / 24時間未満=時間前 / それ以前=月/日）
+function newsTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const diff = Date.now() - d.getTime();
+  if (diff < 3600 * 1000) return Math.max(1, Math.floor(diff / 60000)) + '分前';
+  if (diff < 24 * 3600 * 1000) return Math.floor(diff / 3600000) + '時間前';
+  return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+function newsItemHtml(it, i, read) {
+  const unread = !read[it.link];
+  const cat = newsCategory(it.title);
+  const catLbl = (NEWS_CATS.find(c => c[0] === cat) || [])[1] || '';
+  return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" target="_blank" rel="noopener" onclick="newsMarkRead(${i}, this)">
+      <span class="news-title">${esc(it.title)}</span>
+      <span class="news-meta"><span class="news-cat cat-${cat}">${catLbl}</span><span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span></span>
+    </a>`;
+}
+function renderNews() {
+  if (currentView !== 'news') return;
+  const cache = _newsCache;
+  const read = store.data.newsRead || {};
+  const seg = `<div class="seg">${NEWS_CATS.map(([v, l]) => `<button class="${newsCat === v ? 'active' : ''}" onclick="setNewsCat('${v}')">${l}</button>`).join('')}</div>`;
+  let body;
+  if (!cache) {
+    _newsShown = [];
+    body = '<div class="empty">読み込み中…</div>';
+  } else {
+    const items = cache.items.filter(it => newsCat === 'all' || newsCategory(it.title) === newsCat);
+    _newsShown = items;
+    body = items.length
+      ? `<div class="table-wrap news-wrap"><div class="news-list">${items.map((it, i) => newsItemHtml(it, i, read)).join('')}</div></div>`
+      : '<div class="empty">記事がありません。「更新」で再取得できます。</div>';
+  }
+  const unreadN = cache ? cache.items.filter(it => !read[it.link]).length : 0;
+  app.innerHTML = `
+    <div class="section">
+      <div class="section-head"><h2>マーケットニュース${unreadN ? `<span class="news-unread-n">未読 ${unreadN}</span>` : ''}</h2>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="muted" style="font-size:11px">${cache && cache.at ? '取得：' + mktFetchedAt(cache.at) : ''}</span>
+          <button class="btn btn-sm btn-primary" onclick="newsRefresh()" ${newsBusy ? 'disabled' : ''}>${newsBusy ? '取得中…' : '更新'}</button></div></div>
+      <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${seg}</div>
+      <div class="section-body" style="padding:12px 16px 16px">${body}</div>
+    </div>`;
+  scheduleFit(); // 一覧を枠内スクロールに（ページ全体をスクロールさせない）
+  if (!newsBusy && !cache) newsRefresh(true); // タブを開いた時に自動取得
+  else if (!newsBusy && cache && Date.now() - new Date(cache.at).getTime() > 5 * 60 * 1000) newsRefresh(true); // 5分超は裏で自動更新
 }
 
 function renderReport() {
@@ -10484,6 +10583,9 @@ window.cfAddRangeRow = cfAddRangeRow;
 window.cfDelRangeRow = cfDelRangeRow;
 window.cfApplyTplSel = cfApplyTplSel;
 window.cfCopyToCol = cfCopyToCol;
+window.setNewsCat = setNewsCat;
+window.newsRefresh = newsRefresh;
+window.newsMarkRead = newsMarkRead;
 window.setMktMarket = setMktMarket;
 window.setMktSub = setMktSub;
 window.setMktKind = setMktKind;

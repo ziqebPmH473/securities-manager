@@ -1,0 +1,89 @@
+// Cloudflare Pages Function: 経済ニュース見出しの取得（フェーズN1）
+// GET /api/news → { items: [{ title, link, source, pubDate }], at }
+// 無料の公式RSS（見出し＋リンク＋時刻のみ）を複数まとめて返す。本文は取得しない（著作権上、
+// 見出し一覧→クリックで元記事へ飛ぶ構成）。カテゴリ分類はクライアント側（キーワードルール）で行う。
+
+const FEEDS = [
+  // Yahoo!ニュース 経済トピックス（編集部ピックアップ。件数少なめ・重要度高）
+  { url: 'https://news.yahoo.co.jp/rss/topics/business.xml', source: 'Yahoo!ニュース' },
+  // Yahoo!ニュース 経済カテゴリ（新着。件数多めだが車・生活系も混ざるため broad=キーワード絞り込み対象）
+  { url: 'https://news.yahoo.co.jp/rss/categories/business.xml', source: 'Yahoo!経済', broad: true },
+  // NHK 経済ニュース
+  { url: 'https://www3.nhk.or.jp/rss/news/cat5.xml', source: 'NHK' },
+];
+
+export async function onRequestGet(context) {
+  const results = await Promise.allSettled(FEEDS.map(f => fetchFeed(f)));
+  const items = [];
+  const errors = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') items.push(...r.value);
+    else errors.push(String(r.reason && r.reason.message || r.reason));
+  }
+  // リンクで重複排除（トピックスとカテゴリ新着で同一記事が来る）
+  const seen = new Set();
+  const uniq = items.filter(it => {
+    const k = it.link;
+    if (!k || seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+  uniq.sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
+  return json({ items: uniq.slice(0, 120), at: new Date().toISOString(), errors: errors.length ? errors : undefined });
+}
+
+async function fetchFeed(f) {
+  const res = await fetch(f.url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' },
+    cf: { cacheTtl: 300, cacheEverything: true }, // 5分エッジキャッシュ（配信元への負荷も抑える）
+  });
+  if (!res.ok) throw new Error(`${f.source} ${res.status}`);
+  const xml = await res.text();
+  const items = parseRss(xml, f.source);
+  // 広域フィード（Yahoo!経済カテゴリ等）は車・生活・エンタメ系が大量に混ざる。
+  // マーケット・経済関連キーワードに一致する見出しだけ通す（トピックス/NHKは編集済みなので全通し）
+  return f.broad ? items.filter(it => MARKET_RE.test(it.title)) : items;
+}
+
+const MARKET_RE = /株|投資|市場|市況|経済|景気|金利|為替|円安|円高|ドル円|日銀|FRB|FOMC|決算|業績|増益|減益|赤字|黒字|配当|上場|IPO|証券|債券|国債|インフレ|物価|関税|増税|減税|消費税|GDP|雇用|賃金|資産|銀行|金融|保険|不動産価格|原油|金価格|半導体|輸出|輸入|貿易|買収|合併|TOB|倒産|日経平均|TOPIX|ダウ|ナスダック/;
+
+// RSS 2.0 の <item> を正規表現で抽出（Workers に DOMParser は無い）。title/link/pubDate のみ使用
+function parseRss(xml, source) {
+  const items = [];
+  const re = /<item[\s>][\s\S]*?<\/item>/g;
+  let m;
+  while ((m = re.exec(xml)) && items.length < 80) {
+    const chunk = m[0];
+    const title = clean(tag(chunk, 'title'));
+    const link = clean(tag(chunk, 'link'));
+    const pub = tag(chunk, 'pubDate') || tag(chunk, 'dc:date');
+    if (!title || !link) continue;
+    let iso = null;
+    if (pub) { const d = new Date(pub.trim()); if (!isNaN(d)) iso = d.toISOString(); }
+    // Yahoo!の見出しは末尾に「(配信元)」が付く。表示用に分離し、sourceを配信元名に置き換える
+    let t = title, src = source;
+    const pm = t.match(/^(.*)\(([^()]{2,20})\)$/);
+    if (pm && !/^[0-9.,%美$¥]+$/.test(pm[2])) { t = pm[1].trim(); src = pm[2]; }
+    items.push({ title: t, link, source: src, pubDate: iso });
+  }
+  return items;
+}
+
+function tag(xml, name) {
+  const m = xml.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`));
+  return m ? m[1] : null;
+}
+
+// CDATA・HTMLエンティティを素のテキストに
+function clean(s) {
+  if (!s) return null;
+  return s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#0?39;|&apos;/g, "'").replace(/&amp;/g, '&').trim() || null;
+}
+
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
+}

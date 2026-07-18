@@ -50,6 +50,8 @@
     indices:         ['map', null],
     importMappings:  ['map', null],
     importAliases:   ['map', null],
+    newsRead:        ['map', null],   // ニュース既読（記事リンク→既読日時ISO）。キー単位3-way・両在はlocal
+
     fx:              ['single'],
     settings:        ['singleTs'],
     // マトリックスのレンジ(順序つき配列)とレート設定は常に一括編集される。配列は _updatedAt を
