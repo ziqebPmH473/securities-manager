@@ -1100,3 +1100,9 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .news-cat.cat-macro { background: #e0e7ff; border-color: #c7d2fe; color: #3730a3; }
 .news-cat.cat-market { background: #dcfce7; border-color: #bbf7d0; color: #166534; }
 .news-unread-n { margin-left: 8px; font-size: 11px; font-weight: 600; color: var(--accent); }
+
+/* ニュース: 銘柄チップ＋ドロワー内ミニ一覧（フェーズN2） */
+.news-sec { padding: 1px 7px; border-radius: 999px; font-size: 10px; background: var(--accent); color: #fff; cursor: pointer; white-space: nowrap; }
+.news-sec:hover { background: var(--accent-d); }
+.news-mini .news-item { padding: 7px 2px; }
+.news-mini .news-title { font-size: 12.5px; }

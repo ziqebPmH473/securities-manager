@@ -13,6 +13,13 @@ const FEEDS = [
 ];
 
 export async function onRequestGet(context) {
+  const url = new URL(context.request.url);
+  // 銘柄別ニュース（フェーズN2・米国株）: /api/news?symbol=AAPL → Finnhub company-news（無料枠・既存キー）
+  const symbol = url.searchParams.get('symbol');
+  if (symbol) {
+    try { return json(await companyNews(context, symbol)); }
+    catch (e) { return json({ items: [], error: String(e && e.message || e) }); }
+  }
   const results = await Promise.allSettled(FEEDS.map(f => fetchFeed(f)));
   const items = [];
   const errors = [];
@@ -29,6 +36,24 @@ export async function onRequestGet(context) {
   });
   uniq.sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
   return json({ items: uniq.slice(0, 120), at: new Date().toISOString(), errors: errors.length ? errors : undefined });
+}
+
+// Finnhub company-news（直近14日・最大20件）。キー未設定なら空を返す（クライアントはRSS一致分のみ表示）
+async function companyNews(context, symbol) {
+  const key = context.env && context.env.FINNHUB_API_KEY;
+  if (!key) return { items: [], note: 'no-key' };
+  const day = 86400 * 1000;
+  const to = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 14 * day).toISOString().slice(0, 10);
+  const u = `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol.toUpperCase())}&from=${from}&to=${to}&token=${key}`;
+  const res = await fetch(u, { cf: { cacheTtl: 600, cacheEverything: true } });
+  if (!res.ok) throw new Error(`finnhub ${res.status}`);
+  const arr = await res.json();
+  const items = (Array.isArray(arr) ? arr : []).slice(0, 20).map(n => ({
+    title: n.headline, link: n.url, source: n.source || 'Finnhub',
+    pubDate: n.datetime ? new Date(n.datetime * 1000).toISOString() : null,
+  })).filter(it => it.title && it.link);
+  return { items, at: new Date().toISOString() };
 }
 
 async function fetchFeed(f) {
