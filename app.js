@@ -4409,6 +4409,9 @@ let newsBusy = false;
 let newsCat = 'all';
 let newsHeldOnly = false; // 関連銘柄（登録銘柄に見出し一致）のみ表示
 let newsShowHidden = false; // 非表示にした記事の一覧（復元用）を表示中か
+let newsDays = 0; // 期間フィルタ（0=全て / 1 / 3 / 7 日以内）
+const NEWS_DAYS = [[0, '全期間'], [1, '24時間'], [3, '3日'], [7, '7日']];
+function setNewsDays(d) { newsDays = d; renderNews(); }
 const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['macro', '為替・金利'], ['other', 'その他']];
 // 見出しキーワードでカテゴリ判定。判定順は特異度順（決算→為替・金利→市況→その他）
 function newsCategory(title) {
@@ -4474,22 +4477,33 @@ function newsOpenArticle(ev, el) {
       .map(mj => `<span class="news-listed" onclick="window.open('${mktKabutan(mj.code, mj.market)}','_blank')">${esc(mj.label)}</span>`),
   ].join(' ');
   const isEn = it.lang === 'en';
+  const hasTransTitle = isEn && store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t;
+  const descPending = isEn && it.desc && !(store.data.newsTrans[it.link] && store.data.newsTrans[it.link].d); // 本文は開いた時に遅延翻訳
   const jaTitle = newsDispTitle(it), jaDesc = newsDispDesc(it);
-  const hasTrans = isEn && store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t;
+  const bodyHtml = jaDesc
+    ? esc(jaDesc)
+    : (descPending ? '<span class="muted">翻訳中…</span>' : '<span class="muted">この記事は要約が配信されていません。元記事でご確認ください。</span>');
   const body = `
     <div class="news-panel">
-      <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>${isEn ? `<span class="news-trans-badge">${hasTrans ? '自動翻訳' : 'EN'}</span>` : ''}</div>
+      <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>${isEn ? `<span class="news-trans-badge">${hasTransTitle ? '自動翻訳' : 'EN'}</span>` : ''}</div>
       <h3 class="np-title">${esc(jaTitle)}</h3>
-      ${hasTrans ? `<div class="np-orig muted">原題: ${esc(it.title)}</div>` : ''}
+      ${hasTransTitle ? `<div class="np-orig muted">原題: ${esc(it.title)}</div>` : ''}
       ${chips ? `<div class="np-chips">${chips}</div>` : ''}
-      <div class="np-body">${jaDesc ? esc(jaDesc) : '<span class="muted">この記事は要約が配信されていません。元記事でご確認ください。</span>'}</div>
-      <p class="np-note muted">※ アプリ内に表示できるのは配信元の要約までです（記事全文は著作権のため取得しません）。${isEn && !hasTrans ? '翻訳は取得できませんでした（原文表示）。' : ''}</p>
+      <div class="np-body" id="np-body-text">${bodyHtml}</div>
+      <p class="np-note muted">※ アプリ内に表示できるのは配信元の要約までです（記事全文は著作権のため取得しません）。</p>
       <div class="form-actions" style="margin-top:14px">
         <button type="button" class="btn btn-primary" onclick="window.open('${esc(it.link)}','_blank')">元記事を開く ↗</button>
         <button type="button" class="btn" onclick="closeModal()">閉じる</button>
       </div>
     </div>`;
   showModal('ニュース', body);
+  // 英語記事の本文（要約）は開いた時に翻訳して差し替え（未翻訳時のみ）
+  if (descPending) newsTranslateDesc(link).then(() => {
+    const el = document.getElementById('np-body-text');
+    const tr = store.data.newsTrans[link];
+    if (el && tr && tr.d) el.textContent = tr.d;
+    else if (el) el.innerHTML = '<span class="muted">翻訳を取得できませんでした。' + (it.desc ? '原文: ' + esc(it.desc) : '') + '</span>';
+  });
 }
 
 // ===== 銘柄マッチング（フェーズN2） =====
@@ -4602,26 +4616,41 @@ function _newsPruneTrans() { // 30日より古い翻訳キャッシュを掃除
   const lim = Date.now() - 30 * 86400 * 1000;
   for (const k in store.data.newsTrans) { const d = new Date((store.data.newsTrans[k] || {}).at); if (isNaN(d) || d.getTime() < lim) delete store.data.newsTrans[k]; }
 }
-async function _newsTranslate(text) {
-  if (!text) return '';
-  try { const r = await fetch('/api/translate?sl=en&tl=ja&text=' + encodeURIComponent(text)); const d = await r.json(); return d.translated || ''; }
-  catch (_) { return ''; }
+// 複数テキストを1リクエストで翻訳（バッチ＝レート制限に強い）。入力順の配列で返す
+async function _newsTranslateBatch(texts) {
+  if (!texts.length) return [];
+  try {
+    const qs = texts.map(t => 'q=' + encodeURIComponent(t)).join('&');
+    const r = await fetch('/api/translate?sl=en&tl=ja&' + qs);
+    const d = await r.json();
+    return Array.isArray(d.translated) ? d.translated : [];
+  } catch (_) { return []; }
 }
-// 未翻訳の英語記事をまとめて翻訳→キャッシュ→再描画（順次・最大20件。壊れたら原文フォールバック）
+// 未翻訳の英語記事の「見出し」をまとめて翻訳→キャッシュ→再描画（本文は重いのでパネルを開いた時に遅延翻訳）
 async function newsTranslatePending() {
   if (_newsTransBusy) return;
   const pend = (_newsCache ? _newsCache.items : []).filter(it => it.lang === 'en' && !(store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t));
   if (!pend.length) return;
   _newsTransBusy = true;
   try {
+    const batch = pend.slice(0, 30);
+    const tr = await _newsTranslateBatch(batch.map(it => it.title));
     let any = false;
-    for (const it of pend.slice(0, 20)) {
-      const t = await _newsTranslate(it.title);
-      const d = it.desc ? await _newsTranslate(it.desc) : '';
-      if (t) { store.data.newsTrans[it.link] = { t, d: d || '', at: new Date().toISOString() }; any = true; }
-    }
+    batch.forEach((it, i) => {
+      const t = tr[i];
+      if (t) { const cur = store.data.newsTrans[it.link] || {}; store.data.newsTrans[it.link] = { t, d: cur.d || '', at: new Date().toISOString() }; any = true; }
+    });
     if (any) { _newsPruneTrans(); store.save(); if (currentView === 'news') renderNews(); }
   } finally { _newsTransBusy = false; }
+}
+// 本文（要約）の遅延翻訳: パネルを開いた英語記事の desc を翻訳してキャッシュ（未翻訳時のみ）
+async function newsTranslateDesc(link) {
+  const it = newsFindItem(link);
+  if (!it || it.lang !== 'en' || !it.desc) return;
+  const cur = store.data.newsTrans[link] || {};
+  if (cur.d) return;
+  const [d] = await _newsTranslateBatch([it.desc]);
+  if (d) { store.data.newsTrans[link] = { t: cur.t || '', d, at: new Date().toISOString() }; store.save(); }
 }
 // 表示用の見出し/要約（英語記事は翻訳があれば日本語、なければ原文）
 function newsDispTitle(it) { const tr = store.data.newsTrans[it.link]; return (it.lang === 'en' && tr && tr.t) ? tr.t : it.title; }
@@ -4655,11 +4684,21 @@ function _newsPruneHidden() { // 45日より古い非表示は掃除（同期デ
   const lim = Date.now() - 45 * 86400 * 1000;
   for (const k in store.data.newsHidden) { const d = new Date(store.data.newsHidden[k]); if (isNaN(d) || d.getTime() < lim) delete store.data.newsHidden[k]; }
 }
-function newsHideBtn(ev, el) { // 行の✕（非表示化）。リンク遷移させず一覧から消す
+// ヘッダの件数（未読／非表示）だけを更新（行のDOM削除に伴う軽量更新。全体再描画しないのでスクロール維持）
+function _newsUpdateHeaderCounts() {
+  const hidden = store.data.newsHidden || {}, read = store.data.newsRead || {};
+  const hiddenN = Object.keys(hidden).length;
+  const hb = document.getElementById('news-hidden-btn'); if (hb) hb.textContent = '非表示' + (hiddenN ? ` ${hiddenN}` : '');
+  const unreadN = _newsCache ? _newsCache.items.filter(it => !read[it.link] && !hidden[it.link]).length : 0;
+  const ub = document.getElementById('news-unread-badge'); if (ub) ub.textContent = unreadN ? `未読 ${unreadN}` : '';
+}
+function newsHideBtn(ev, el) { // 行の✕（非表示化）。再描画せず該当行だけDOMから消す＝スクロール位置を完全維持
   ev.preventDefault(); ev.stopPropagation();
   const link = el.dataset.link; if (!link) return;
   store.data.newsHidden[link] = new Date().toISOString();
-  _newsPruneHidden(); store.save(); renderNews();
+  _newsPruneHidden(); store.save();
+  const row = el.closest('.news-item'); if (row) row.remove();
+  _newsUpdateHeaderCounts();
 }
 function newsUnhideBtn(ev, el) { // 非表示一覧の「戻す」
   ev.preventDefault(); ev.stopPropagation();
@@ -4683,9 +4722,11 @@ function toggleNewsHiddenView() { newsShowHidden = !newsShowHidden; renderNews()
 // 現在の絞り込み（カテゴリ／関連のみ／非表示除外）を適用した表示対象 [item, matchedSecs] の配列
 function _newsCurrentEntries() {
   const hidden = store.data.newsHidden || {};
+  const since = newsDays ? Date.now() - newsDays * 86400 * 1000 : 0;
   let entries = (_newsCache ? _newsCache.items : [])
     .filter(it => newsCat === 'all' || newsCategory(it.title) === newsCat)
     .filter(it => !hidden[it.link])
+    .filter(it => !since || (it.pubDate && new Date(it.pubDate).getTime() >= since))
     .map(it => [it, newsMatchSecs(it)]);
   if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it).length);
   return entries;
@@ -4779,7 +4820,8 @@ function renderNews() {
       : '<div class="empty">非表示にした記事はありません。<br><span class="muted">（このセッションの取得分のうち非表示中のものを表示します）</span></div>';
   } else {
     seg = `<div class="seg">${NEWS_CATS.map(([v, l]) => `<button class="${newsCat === v ? 'active' : ''}" onclick="setNewsCat('${v}')">${l}</button>`).join('')}</div>
-      <div class="seg" style="margin-left:6px"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
+      <div class="seg">${NEWS_DAYS.map(([v, l]) => `<button class="${newsDays === v ? 'active' : ''}" onclick="setNewsDays(${v})" title="この期間に配信された記事のみ">${l}</button>`).join('')}</div>
+      <div class="seg"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
       <button class="btn btn-sm" style="margin-left:auto" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>`;
     if (!cache) {
       body = '<div class="empty">読み込み中…</div>';
@@ -4794,10 +4836,10 @@ function renderNews() {
   // ヘッダ右のアクション。非表示ボタン・一括非表示
   const headActions = newsShowHidden ? '' : `
     <button class="btn btn-sm" onclick="newsHideAllShown()" title="表示中の記事をまとめて非表示（あとで戻せます）">表示中を非表示</button>
-    <button class="btn btn-sm" onclick="toggleNewsHiddenView()" title="非表示にした記事を確認・復元">非表示${hiddenN ? ` ${hiddenN}` : ''}</button>`;
+    <button class="btn btn-sm" id="news-hidden-btn" onclick="toggleNewsHiddenView()" title="非表示にした記事を確認・復元">非表示${hiddenN ? ` ${hiddenN}` : ''}</button>`;
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>${newsShowHidden ? '非表示の記事' : 'マーケットニュース'}${!newsShowHidden && unreadN ? `<span class="news-unread-n">未読 ${unreadN}</span>` : ''}</h2>
+      <div class="section-head"><h2>${newsShowHidden ? '非表示の記事' : 'マーケットニュース'}<span class="news-unread-n" id="news-unread-badge">${!newsShowHidden && unreadN ? `未読 ${unreadN}` : ''}</span></h2>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           ${headActions}
           <span class="muted" style="font-size:11px">${cache && cache.at ? '取得：' + mktFetchedAt(cache.at) : ''}</span>
@@ -10940,6 +10982,7 @@ window.cfDelRangeRow = cfDelRangeRow;
 window.cfApplyTplSel = cfApplyTplSel;
 window.cfCopyToCol = cfCopyToCol;
 window.setNewsCat = setNewsCat;
+window.setNewsDays = setNewsDays;
 window.newsRefresh = newsRefresh;
 window.newsReadLink = newsReadLink;
 window.newsOpenArticle = newsOpenArticle;
