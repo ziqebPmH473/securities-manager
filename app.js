@@ -323,6 +323,9 @@ const store = {
     this.data.newsTags ||= [];        // ニュース注目タグ（保有登録なしの企業/人物/テーマ名）[{id,name}]。見出し一致で別色チップ表示・Google同期
     this.data.newsHidden ||= {};      // ニュース非表示（記事リンク→非表示日時ISO）。一覧から除外・復元可・Google同期
     this.data.newsTrans ||= {};       // ニュース翻訳キャッシュ（記事リンク→{t:訳題,d:訳要約,at}）。1記事1回だけ翻訳・Google同期
+    this.data.newsPrefs ||= {};       // ニュース表示設定（hideCats:「すべて」から除外するカテゴリ / hideDiscTypes:非表示にする開示種類）・同期
+    this.data.newsPrefs.hideCats ||= [];
+    this.data.newsPrefs.hideDiscTypes ||= [];
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -4413,6 +4416,29 @@ let newsDays = 0; // 期間フィルタ（0=全て / 1 / 3 / 7 日以内）
 const NEWS_DAYS = [[0, '全期間'], [1, '24時間'], [3, '3日'], [7, '7日']];
 function setNewsDays(d) { newsDays = d; renderNews(); }
 const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['disclosure', '開示'], ['macro', '為替・金利'], ['other', 'その他']];
+// 開示の細分類（TDnet/EDGARの見出し・書類種別から判定）。表示設定で種類ごとに除外できる
+const NEWS_DISC_TYPES = [
+  ['kessan', '決算', /決算短信|四半期報告書|年次報告書|決算説明|決算報告/],
+  ['forecast', '業績修正', /業績予想|業績修正|上方修正|下方修正|通期予想|配当予想の修正/],
+  ['dividend', '配当', /配当(?!予想の修正)|剰余金の配当|増配|減配/],
+  ['buyback', '自己株取得', /自己株式.{0,6}(取得|買付|公開買付)|自社株買/],
+  ['treasury', '自己株処分', /自己株式.{0,6}処分/],
+  ['split', '株式分割', /株式分割|併合/],
+  ['comp', '株式報酬', /譲渡制限付株式|ＲＳＵ|RSU|新株予約権|ストックオプション|従業員持株/],
+  ['jinji', '人事', /役員.{0,4}異動|人事異動|代表取締役|取締役.{0,4}(選任|異動)|社長/],
+  ['ma', 'M&A・組織', /買収|合併|子会社.{0,4}(取得|異動|設立)|事業譲渡|会社分割|ＴＯＢ|TOB|株式交換|株式移転/],
+  ['event', '重要事象(8-K)', /重要事象/],
+  ['meeting', '株主総会', /株主総会|招集通知/],
+  ['fix', '訂正・変更', /開示事項の(変更|訂正)|（訂正）|の一部変更/],
+];
+function disclosureType(it) {
+  const t = (it && it.title) || '';
+  for (const [id, , re] of NEWS_DISC_TYPES) if (re.test(t)) return id;
+  return 'other_disc';
+}
+function disclosureTypeLabel(id) { const d = NEWS_DISC_TYPES.find(x => x[0] === id); return d ? d[1] : 'その他開示'; }
+// 記事が開示アイテムか（TDnet/EDGAR合流分）
+function isDiscItem(it) { return it && (it.source === '適時開示' || it.source === 'SEC EDGAR'); }
 // 見出しキーワードでカテゴリ判定。判定順は特異度順（決算→為替・金利→市況→その他）。
 // 開示アイテム(TDnet/EDGAR)は item.cat を持つのでそれを優先
 function newsCategory(itOrTitle) {
@@ -4639,12 +4665,25 @@ async function _newsTranslateBatch(texts) {
     return Array.isArray(d.translated) ? d.translated : [];
   } catch (_) { return []; }
 }
+// 直近に翻訳を試みたリンク（失敗分の無限リトライ防止・非永続）。5分あけて再試行する
+const _newsTransTried = new Map();
 // 未翻訳の英語記事の「見出し＋本文」を1リクエストでまとめて翻訳→キャッシュ→再描画。
-// 見出しと要約を同じバッチに入れる（パネルを開いた時の個別翻訳失敗を無くすため）。
+// 見出しと要約を同じバッチに入れる。失敗して未翻訳のままの記事も、時間をあけて再試行する（取得済み＝翻訳済みではない）。
 async function newsTranslatePending() {
   if (_newsTransBusy) return;
-  const pend = (_newsCache ? _newsCache.items : []).filter(it => it.lang === 'en' && !(store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t)).slice(0, 15);
+  const now = Date.now();
+  const pend = (_newsCache ? _newsCache.items : []).filter(it => {
+    if (it.lang !== 'en') return false;
+    const tr = store.data.newsTrans[it.link];
+    const needTitle = !(tr && tr.t);
+    const needDesc = it.desc && !(tr && tr.d);
+    if (!needTitle && !needDesc) return false;                       // 完全に翻訳済み
+    const tried = _newsTransTried.get(it.link);
+    if (tried && now - tried < 5 * 60 * 1000) return false;          // 直近5分に試行済みなら待つ
+    return true;
+  }).slice(0, 15);
   if (!pend.length) return;
+  pend.forEach(it => _newsTransTried.set(it.link, now));             // 試行時刻を記録（失敗しても記録）
   _newsTransBusy = true;
   try {
     // [t0,d0,t1,d1,...] の順で1リクエスト（descが無い記事は空文字送らずスキップ管理）
@@ -4740,10 +4779,16 @@ function toggleNewsHiddenView() { newsShowHidden = !newsShowHidden; renderNews()
 function _newsCurrentEntries() {
   const hidden = store.data.newsHidden || {};
   const since = newsDays ? Date.now() - newsDays * 86400 * 1000 : 0;
+  const prefs = store.data.newsPrefs || {};
+  const hideCats = prefs.hideCats || [], hideDiscTypes = prefs.hideDiscTypes || [];
   let entries = (_newsCache ? _newsCache.items : [])
     .filter(it => newsCat === 'all' || newsCategory(it) === newsCat)
     .filter(it => !hidden[it.link])
     .filter(it => !since || (it.pubDate && new Date(it.pubDate).getTime() >= since))
+    // 「すべて」表示のとき、設定で除外したカテゴリを隠す（他のカテゴリを直接選べば見える）
+    .filter(it => !(newsCat === 'all' && hideCats.includes(newsCategory(it))))
+    // 非表示にした開示種類（決算/自己株取得 等）はどのカテゴリでも隠す
+    .filter(it => !(isDiscItem(it) && hideDiscTypes.includes(disclosureType(it))))
     .map(it => [it, newsMatchSecs(it)]);
   if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it).length);
   return entries;
@@ -4758,6 +4803,36 @@ function openNewsTagsEditor() {
       <button type="button" class="btn btn-primary" onclick="saveNewsTags()">保存</button>
       <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
     </div>`);
+}
+// 表示設定モーダル（「すべて」に出すカテゴリ／表示する開示の種類）
+function openNewsPrefs() {
+  const prefs = store.data.newsPrefs || { hideCats: [], hideDiscTypes: [] };
+  const catRows = NEWS_CATS.filter(([v]) => v !== 'all').map(([v, l]) =>
+    `<label class="np-check"><input type="checkbox" data-cat="${v}" ${prefs.hideCats.includes(v) ? '' : 'checked'}> ${l}</label>`).join('');
+  const typeRows = NEWS_DISC_TYPES.concat([['other_disc', 'その他開示']]).map(([id, l]) =>
+    `<label class="np-check"><input type="checkbox" data-dtype="${id}" ${prefs.hideDiscTypes.includes(id) ? '' : 'checked'}> ${l}</label>`).join('');
+  showModal('ニュース表示設定', `
+    <p class="muted" style="margin:0 0 6px;font-size:12px">チェックを外すと非表示になります（設定は端末間で同期）。</p>
+    <fieldset class="form-group"><legend>「すべて」タブに表示するカテゴリ</legend>
+      <div class="np-checks">${catRows}</div>
+      <p class="muted" style="font-size:11px;margin:6px 0 0">※外しても、そのカテゴリのボタンを直接押せば表示できます。</p>
+    </fieldset>
+    <fieldset class="form-group"><legend>表示する開示の種類（決算・開示）</legend>
+      <div class="np-checks">${typeRows}</div>
+      <p class="muted" style="font-size:11px;margin:6px 0 0">例：自己株取得を外すと、決算・開示から自社株買い関連が消えます。</p>
+    </fieldset>
+    <div class="form-actions" style="margin-top:12px">
+      <button type="button" class="btn btn-primary" onclick="saveNewsPrefs()">保存</button>
+      <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+    </div>`);
+}
+function saveNewsPrefs() {
+  const hideCats = [...document.querySelectorAll('#modal-body input[data-cat]')].filter(c => !c.checked).map(c => c.dataset.cat);
+  const hideDiscTypes = [...document.querySelectorAll('#modal-body input[data-dtype]')].filter(c => !c.checked).map(c => c.dataset.dtype);
+  store.data.newsPrefs = { hideCats, hideDiscTypes, _updatedAt: new Date().toISOString() };
+  store.save();
+  closeModal();
+  renderNews();
 }
 function saveNewsTags() {
   const ta = document.getElementById('news-tags-ta');
@@ -4788,7 +4863,8 @@ function newsTime(iso) {
 function newsItemHtml(it, read, matches, opts = {}) {
   const unread = !read[it.link];
   const cat = newsCategory(it);
-  const catLbl = (NEWS_CATS.find(c => c[0] === cat) || [])[1] || '';
+  // 開示アイテムは細分類ラベル（決算/自己株取得 等）、通常記事はカテゴリ名
+  const catLbl = isDiscItem(it) ? disclosureTypeLabel(disclosureType(it)) : ((NEWS_CATS.find(c => c[0] === cat) || [])[1] || '');
   // 一致した登録銘柄のチップ（最大3件）。クリックで銘柄詳細（リンク遷移はさせない）
   const matchSecs = matches || [];
   const secChips = matchSecs.slice(0, 3).map(s =>
@@ -4813,7 +4889,7 @@ function newsItemHtml(it, read, matches, opts = {}) {
   // 英語記事は翻訳（あれば）を表示し、翻訳済みなら「訳」バッジ。クリックで要約パネル（元記事へは行かない）
   const dispTitle = newsDispTitle(it);
   const trBadge = it.lang === 'en' ? `<span class="news-trans-badge">${store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t ? '訳' : 'EN'}</span>` : '';
-  return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" onclick="newsOpenArticle(event,this)">
+  return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
       <span class="news-title">${trBadge}${esc(dispTitle)}</span>
       <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
@@ -4839,7 +4915,8 @@ function renderNews() {
     seg = `<div class="seg">${NEWS_CATS.map(([v, l]) => `<button class="${newsCat === v ? 'active' : ''}" onclick="setNewsCat('${v}')">${l}</button>`).join('')}</div>
       <div class="seg">${NEWS_DAYS.map(([v, l]) => `<button class="${newsDays === v ? 'active' : ''}" onclick="setNewsDays(${v})" title="この期間に配信された記事のみ">${l}</button>`).join('')}</div>
       <div class="seg"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
-      <button class="btn btn-sm" style="margin-left:auto" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>`;
+      <button class="btn btn-sm" style="margin-left:auto" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>
+      <button class="btn btn-sm" onclick="openNewsPrefs()" title="「すべて」に出すカテゴリ・表示する開示の種類を設定">${svgIcon('settings', '')} 表示設定</button>`;
     if (!cache) {
       body = '<div class="empty">読み込み中…</div>';
     } else {
@@ -4919,15 +4996,15 @@ async function loadSecNews(sec) {
   el.classList.remove('muted');
   el.innerHTML = items.length
     ? `<div class="news-list news-mini">${items.map(it => newsItemHtml(it, read, null, { mini: true })).join('')}</div>`
-    : '<div class="muted">関連ニュースは見つかりませんでした（直近の見出しに銘柄名の一致なし）</div>';
+    : '<div class="muted">なし</div>';
 }
 
-// 開示・決算1行（TDnet/EDGAR）。kindで色分け、クリックで原本(PDF/EDGAR)を開く
+// 開示・決算1行（TDnet/EDGAR）。細分類ラベルで色分け、クリックで原本(PDF/EDGAR)を開く
 function discItemHtml(d) {
-  const kindLbl = d.kind === 'earnings' ? '決算' : '開示';
-  return `<a class="news-item disc-item" href="${esc(d.link)}" target="_blank" rel="noopener">
+  const typeLbl = disclosureTypeLabel(disclosureType(d));
+  return `<a class="news-item disc-item" href="${esc(d.link)}" target="_blank" rel="noopener" draggable="false">
       <span class="news-title">${esc(d.title)}</span>
-      <span class="news-meta"><span class="news-cat ${d.kind === 'earnings' ? 'cat-earnings' : ''}">${kindLbl}</span><span>${d.market === 'US' ? 'SEC EDGAR' : 'TDnet'}</span><span>${newsTime(d.pubDate)}</span></span>
+      <span class="news-meta"><span class="news-cat ${d.kind === 'earnings' ? 'cat-earnings' : ''}">${typeLbl}</span><span>${d.market === 'US' ? 'SEC EDGAR' : 'TDnet'}</span><span>${newsTime(d.pubDate)}</span></span>
     </a>`;
 }
 // 銘柄詳細ドロワーの「開示・決算」欄（フェーズN4）。JP=TDnet銘柄別 / US=SEC EDGAR銘柄別（日本語ラベル）
@@ -11053,6 +11130,8 @@ window.newsOpenArticle = newsOpenArticle;
 window.setNewsHeldOnly = setNewsHeldOnly;
 window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
+window.openNewsPrefs = openNewsPrefs;
+window.saveNewsPrefs = saveNewsPrefs;
 window.newsHideBtn = newsHideBtn;
 window.newsUnhideBtn = newsUnhideBtn;
 window.newsUnhideAll = newsUnhideAll;

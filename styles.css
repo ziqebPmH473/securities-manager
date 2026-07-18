@@ -1136,3 +1136,9 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 
 /* ニュース: 開示・決算アイテム（ドロワー内） */
 .disc-item .news-cat { border-color: var(--border-strong, #cbd5e1); }
+
+/* ニュース: 表示設定モーダルのチェック群／リンクのドラッグ無効（スクロールバー操作を邪魔しない） */
+.news-item { -webkit-user-drag: none; user-drag: none; }
+.np-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px 12px; }
+.np-check { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 2px 0; cursor: pointer; }
+.np-check input { margin: 0; }
