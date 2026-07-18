@@ -1109,3 +1109,7 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 
 /* ニュース注目タグ（保有外・クリック不可・別色） */
 .news-tag { padding: 1px 7px; border-radius: 999px; font-size: 10px; background: var(--panel-2); color: var(--muted); border: 1px dashed var(--border-strong, #cbd5e1); white-space: nowrap; }
+
+/* ニュース: 自動タグ（保有外の主要上場銘柄・クリックで株探） */
+.news-listed { padding: 1px 7px; border-radius: 999px; font-size: 10px; background: transparent; color: var(--accent); border: 1px solid var(--accent); cursor: pointer; white-space: nowrap; opacity: .85; }
+.news-listed:hover { background: var(--accent); color: #fff; opacity: 1; }

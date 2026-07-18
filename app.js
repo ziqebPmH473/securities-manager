@@ -4459,7 +4459,7 @@ function _newsEscReg(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'
 // 自動生成（トヨタ自動車→トヨタ 等）で拾えるものは載せず、正式名と通称が乖離するものだけ。
 const NEWS_JP_ALIAS = {
   '9432': 'NTT', '9433': 'KDDI|au', '9434': 'ソフトバンク', '9984': 'ソフトバンクグループ|ソフトバンクG|SBG',
-  '9020': 'JR東日本|JR東', '9021': 'JR西日本|JR西', '9022': 'JR東海', '9147': '日本通運|日通',
+  '9020': 'JR東日本', '9021': 'JR西日本', '9022': 'JR東海', '9147': '日本通運|日通',
   '8306': '三菱UFJ|MUFG', '8316': '三井住友|SMBC|三井住友FG', '8411': 'みずほ', '8309': '三井住友トラスト',
   '7267': 'ホンダ|本田技研', '7201': '日産', '7269': 'スズキ', '7270': 'SUBARU|スバル', '7211': '三菱自',
   '6501': '日立', '6502': '東芝', '6752': 'パナソニック', '6503': '三菱電機', '6702': '富士通',
@@ -4471,6 +4471,11 @@ const NEWS_JP_ALIAS = {
   '9501': '東京電力|東電', '9503': '関西電力|関電', '9531': '東京ガス', '5401': '日本製鉄|日鉄',
   '8801': '三井不動産', '8802': '三菱地所', '2802': '味の素', '2503': 'キリン', '2502': 'アサヒ',
   '4063': '信越化学', '4901': '富士フイルム', '7751': 'キヤノン', '7741': 'HOYA',
+  '6861': 'キーエンス', '4755': '楽天', '4385': 'メルカリ', '4751': 'サイバーエージェント',
+  '8766': '東京海上', '8750': '第一生命', '6178': '日本郵政', '9201': '日本航空|JAL', '9202': '全日空',
+  '3382': 'セブン&アイ', '8267': 'イオン', '9843': 'ニトリ', '4911': '資生堂', '4452': '花王',
+  '7011': '三菱重工|三菱重', '7012': '川崎重工', '6920': 'レーザーテック', '6146': 'ディスコ',
+  '9766': 'コナミ', '7832': 'バンダイナムコ|バンナム', '4324': '電通', '1605': 'INPEX', '5108': 'ブリヂストン',
 };
 // 米国主要銘柄の日本語表記（見出しは「米アップル」等のカタカナ表記のため。|区切りで複数可）
 const NEWS_US_ALIAS = {
@@ -4485,6 +4490,32 @@ const NEWS_US_ALIAS = {
   C: 'シティグループ', XOM: 'エクソンモービル', CVX: 'シェブロン', CAT: 'キャタピラー', MMM: 'スリーエム',
   ORCL: 'オラクル', CRM: 'セールスフォース', ADBE: 'アドビ', PYPL: 'ペイパル', UBER: 'ウーバー', PG: 'P&G',
 };
+// 主要上場銘柄の自動タグ用リスト（保有外でも見出し/本文に出たら別色チップ）。
+// 辞書は上の NEWS_JP_ALIAS / NEWS_US_ALIAS を再利用（コード付き＝クリックで株探へ）。将来は全上場マスタ取込で拡張予定。
+// 誤検知抑制: 照合語は「3文字以上」または「2文字以上かつ非ASCII（日立・東芝等の漢字2字）」のみ採用（JT/au等の短いASCIIは除外）。
+const NEWS_MAJORS = (() => {
+  const okNorm = x => x.length >= 3 || (x.length >= 2 && /[^\x00-\x7f]/.test(x));
+  const build = (dict, market) => Object.entries(dict).map(([code, s]) => {
+    const names = s.split('|').filter(Boolean);
+    return { market, code, label: names[0], norms: names.map(searchNorm).filter(okNorm) };
+  }).filter(e => e.norms.length);
+  return [...build(NEWS_JP_ALIAS, 'JP'), ...build(NEWS_US_ALIAS, 'US')];
+})();
+// 記事に出現する主要上場銘柄（保有外・手動タグ外）。excludeNorms=既に別チップで表示済みの正規化名の集合
+function newsMatchMajors(it, excludeNorms) {
+  const norm = searchNorm(newsText(it));
+  const out = [], seen = new Set();
+  for (const e of NEWS_MAJORS) {
+    // 保有登録済みは青チップで出るので除外
+    if (store.data.securities.some(s => s.market === e.market && String(s.ticker || '').toUpperCase() === e.code.toUpperCase())) continue;
+    if (!e.norms.some(n => norm.includes(n))) continue;
+    if (excludeNorms && e.norms.some(n => excludeNorms.has(n))) continue;
+    const key = e.market + e.code;
+    if (seen.has(key)) continue; seen.add(key);
+    out.push({ market: e.market, code: e.code, label: e.label });
+  }
+  return out;
+}
 function _newsPat(sec) {
   const metaName = (store.data.meta[priceKey(sec)] || {}).name || '';
   const k = sec.id + '|' + (sec.nameOverride || '') + '|' + (sec.name || '') + '|' + metaName;
@@ -4588,15 +4619,25 @@ function newsItemHtml(it, read, matches, opts = {}) {
   const cat = newsCategory(it.title);
   const catLbl = (NEWS_CATS.find(c => c[0] === cat) || [])[1] || '';
   // 一致した登録銘柄のチップ（最大3件）。クリックで銘柄詳細（リンク遷移はさせない）
-  const secChips = (matches || []).slice(0, 3).map(s =>
+  const matchSecs = matches || [];
+  const secChips = matchSecs.slice(0, 3).map(s =>
     `<span class="news-sec" onclick="event.preventDefault();event.stopPropagation();openSecurityDetail(${s.id})" title="${esc(calc.displayName(s))}">${esc(nameAbbr(calc.displayName(s)))}</span>`).join('');
-  // 注目タグのチップ（別色・クリックしても開かない）。mini（ドロワー）では出さない
-  const tagChips = opts.mini ? '' : (newsMatchTags(it)).slice(0, 3).map(t =>
-    `<span class="news-tag">${esc(t.name)}</span>`).join('');
+  let tagChips = '', majorChips = '';
+  if (!opts.mini) {
+    const tags = newsMatchTags(it);
+    tagChips = tags.slice(0, 3).map(t => `<span class="news-tag">${esc(t.name)}</span>`).join('');
+    // 既に登録銘柄／注目タグで出した名前は主要銘柄チップから除外
+    const exclude = new Set();
+    for (const s of matchSecs) exclude.add(searchNorm(calc.displayName(s)));
+    for (const t of tags) exclude.add(searchNorm(t.name));
+    // 自動タグ（保有外の主要上場銘柄）。クリックで株探（新規タブ）
+    majorChips = newsMatchMajors(it, exclude).slice(0, 3).map(mj =>
+      `<span class="news-listed" onclick="event.preventDefault();event.stopPropagation();window.open('${mktKabutan(mj.code, mj.market)}','_blank')" title="${esc(mj.label)}（未登録の上場銘柄・クリックで株探）">${esc(mj.label)}</span>`).join('');
+  }
   const catChip = opts.mini ? '' : `<span class="news-cat cat-${cat}">${catLbl}</span>`;
   return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" onclick="newsReadLink(this)">
       <span class="news-title">${esc(it.title)}</span>
-      <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}</span>
+      <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
     </a>`;
 }
 function renderNews() {
