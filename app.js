@@ -11152,7 +11152,6 @@ window.cfApplyTplSel = cfApplyTplSel;
 window.cfCopyToCol = cfCopyToCol;
 window.setNewsCat = setNewsCat;
 window.setNewsDays = setNewsDays;
-window.loadSecDisc = loadSecDisc;
 window.newsRefresh = newsRefresh;
 window.newsReadLink = newsReadLink;
 window.newsOpenArticle = newsOpenArticle;
