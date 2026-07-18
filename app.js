@@ -4974,31 +4974,6 @@ async function newsEnsure() {
   } catch (_) { /* 失敗時は手持ちのキャッシュ（null含む）のまま */ }
   return _newsCache;
 }
-// 銘柄詳細ドロワーの「ニュース」欄（フェーズN2）。国内RSSプールの見出し一致＋（米国株は）Finnhub銘柄別ニュース
-async function loadSecNews(sec) {
-  if (!document.getElementById('sec-news')) return;
-  const pool = await newsEnsure();
-  let items = pool ? pool.items.filter(it => newsSecHit(it, sec)) : [];
-  if (sec.market === 'US') {
-    try {
-      const res = await fetch('/api/news?symbol=' + encodeURIComponent(sec.ticker));
-      const d = await res.json();
-      if (d && Array.isArray(d.items)) items = items.concat(d.items);
-    } catch (_) { /* Finnhub未設定・失敗時はRSS一致分のみ */ }
-  }
-  const seen = new Set();
-  items = items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link));
-  items.sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
-  items = items.slice(0, 12);
-  const el = document.getElementById('sec-news'); // ドロワーが閉じられた/別銘柄に切り替わった後は描画しない
-  if (!el) return;
-  const read = store.data.newsRead || {};
-  el.classList.remove('muted');
-  el.innerHTML = items.length
-    ? `<div class="news-list news-mini">${items.map(it => newsItemHtml(it, read, null, { mini: true })).join('')}</div>`
-    : '<div class="muted">なし</div>';
-}
-
 // 開示・決算1行（TDnet/EDGAR）。細分類ラベルで色分け、クリックで原本(PDF/EDGAR)を開く
 function discItemHtml(d) {
   const typeLbl = disclosureTypeLabel(disclosureType(d));
@@ -5007,23 +4982,79 @@ function discItemHtml(d) {
       <span class="news-meta"><span class="news-cat ${d.kind === 'earnings' ? 'cat-earnings' : ''}">${typeLbl}</span><span>${d.market === 'US' ? 'SEC EDGAR' : 'TDnet'}</span><span>${newsTime(d.pubDate)}</span></span>
     </a>`;
 }
-// 銘柄詳細ドロワーの「開示・決算」欄（フェーズN4）。JP=TDnet銘柄別 / US=SEC EDGAR銘柄別（日本語ラベル）
-async function loadSecDisc(sec) {
-  if (!document.getElementById('sec-disc')) return;
-  let items = [];
+
+// ===== 銘柄別ニュース・開示 専用画面（詳細ドロワー/カルテの「ニュース・開示」ボタンから開く） =====
+// 詳細ページを圧迫しないよう、モーダルの専用画面に集約。開示は細分類ボタンで複数選択フィルタ（初期=全部）。
+let _secNewsCtx = null; // { sec, news:[], disc:[], typeSel:Set|null }
+async function openSecNews(secId) {
+  const sec = store.data.securities.find(s => s.id === secId); if (!sec) return;
+  _secNewsCtx = { sec, news: null, disc: null, typeSel: null };
+  showModal(`ニュース・開示 — ${calc.displayName(sec)}`, `<div id="sec-news-screen" class="muted" style="padding:8px 0">読み込み中…</div>`, { wide: true });
+  // ニュースと開示を並行取得
+  const [news, disc] = await Promise.all([_secNewsFetch(sec), _secDiscFetch(sec)]);
+  if (!_secNewsCtx || _secNewsCtx.sec.id !== secId) return; // 別銘柄に切替/閉じたら中断
+  _secNewsCtx.news = news; _secNewsCtx.disc = disc;
+  _secNewsCtx.typeSel = new Set(disc.map(disclosureType)); // 初期＝存在する全種類を選択
+  renderSecNewsScreen();
+}
+async function _secNewsFetch(sec) {
+  const pool = await newsEnsure();
+  let items = pool ? pool.items.filter(it => newsSecHit(it, sec)) : [];
+  if (sec.market === 'US') {
+    try { const d = await (await fetch('/api/news?symbol=' + encodeURIComponent(sec.ticker))).json(); if (d && Array.isArray(d.items)) items = items.concat(d.items); } catch (_) {}
+  }
+  const seen = new Set();
+  return items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link)).sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1).slice(0, 20);
+}
+async function _secDiscFetch(sec) {
   try {
     const q = sec.market === 'US' ? 'market=US&ticker=' + encodeURIComponent(sec.ticker) : 'market=JP&code=' + encodeURIComponent(sec.ticker);
-    const res = await fetch('/api/disclosure?' + q);
-    const d = await res.json();
-    if (d && Array.isArray(d.items)) items = d.items;
-  } catch (_) { /* 失敗時は空 */ }
-  items = items.slice(0, 10);
-  const el = document.getElementById('sec-disc'); // 閉じられた/切替後は描画しない
-  if (!el) return;
+    const d = await (await fetch('/api/disclosure?' + q)).json();
+    return (d && Array.isArray(d.items)) ? d.items : [];
+  } catch (_) { return []; }
+}
+function secNewsToggleType(id) {
+  if (!_secNewsCtx || !_secNewsCtx.typeSel) return;
+  const s = _secNewsCtx.typeSel;
+  s.has(id) ? s.delete(id) : s.add(id);
+  renderSecNewsScreen();
+}
+function secNewsAllTypes(on) {
+  if (!_secNewsCtx) return;
+  _secNewsCtx.typeSel = on ? new Set((_secNewsCtx.disc || []).map(disclosureType)) : new Set();
+  renderSecNewsScreen();
+}
+function renderSecNewsScreen() {
+  const el = document.getElementById('sec-news-screen'); if (!el || !_secNewsCtx) return;
+  const { news, disc, typeSel } = _secNewsCtx;
+  const read = store.data.newsRead || {};
   el.classList.remove('muted');
-  el.innerHTML = items.length
-    ? `<div class="news-list news-mini">${items.map(discItemHtml).join('')}</div>`
-    : `<div class="muted">${sec.market === 'US' ? 'SEC EDGAR' : 'TDnet'}に直近の開示は見つかりませんでした</div>`;
+  // ニュース欄
+  const newsHtml = news && news.length
+    ? `<div class="news-list news-mini">${news.map(it => newsItemHtml(it, read, null, { mini: true })).join('')}</div>`
+    : '<div class="muted">なし</div>';
+  // 開示欄: 存在する種類だけボタン表示（細分類・複数選択・初期全部）
+  const presentTypes = [...new Set((disc || []).map(disclosureType))];
+  const orderedTypes = NEWS_DISC_TYPES.map(t => t[0]).concat(['other_disc']).filter(id => presentTypes.includes(id));
+  const filterBtns = orderedTypes.length ? `<div class="seg sec-disc-filter" style="flex-wrap:wrap;margin-bottom:8px">
+      <button class="${typeSel && orderedTypes.every(id => typeSel.has(id)) ? 'active' : ''}" onclick="secNewsAllTypes(true)">すべて</button>
+      ${orderedTypes.map(id => `<button class="${typeSel && typeSel.has(id) ? 'active' : ''}" onclick="secNewsToggleType('${id}')">${disclosureTypeLabel(id)}</button>`).join('')}
+    </div>` : '';
+  const discFiltered = (disc || []).filter(d => !typeSel || typeSel.has(disclosureType(d)));
+  const discHtml = disc && disc.length
+    ? filterBtns + (discFiltered.length ? `<div class="news-list news-mini">${discFiltered.map(discItemHtml).join('')}</div>` : '<div class="muted">選択した種類の開示はありません</div>')
+    : '<div class="muted">なし</div>';
+  el.innerHTML = `
+    <div class="sec-news-cols">
+      <div class="sec-news-col">
+        <h4 class="sec-news-h">📰 ニュース</h4>
+        <div class="sec-news-scroll">${newsHtml}</div>
+      </div>
+      <div class="sec-news-col">
+        <h4 class="sec-news-h">📄 開示・決算</h4>
+        <div class="sec-news-scroll">${discHtml}</div>
+      </div>
+    </div>`;
 }
 
 function renderReport() {
@@ -7360,21 +7391,18 @@ function openSecurityDetail(secId) {
       <p class="muted" style="margin:6px 0 0;font-size:11px">青=終値 / 赤破線=次回購入(トリガー) / 緑破線=現在値${typeof sec.prevBuyPrice === 'number' || lb.price != null ? ' / 橙破線=前回購入' : ''} / ◆高値・安値（クリックで拡大）</p>
     </fieldset>
     ${sectionBox('ファンダ', fund)}
-    ${sectionBox('ニュース', `<div id="sec-news" class="muted">読み込み中…</div>`)}
-    ${sectionBox('開示・決算', `<div id="sec-disc" class="muted">読み込み中…</div>`)}
     ${sectionBox('評価', evalBox)}
     ${sectionBox('判定', judge)}
     ${sectionBox('保有', holdRows + (holdSummary || '') + (origCostRow || '') + (principalSoldRow || ''))}
     ${sec.memo ? sectionBox('メモ', `<div style="white-space:pre-wrap;word-break:break-word">${esc(sec.memo)}</div>`) : ''}
     ${sectionBox('購入・取引履歴', txnRows)}
     ${sectionBox('分析メタ', metaBox)}`, `
-    <button type="button" class="btn btn-brass" style="flex:1" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引</button>
+    <button type="button" class="btn" onclick="openSecNews(${sec.id})" title="この銘柄のニュース・開示を表示">${svgIcon('news', '')} ニュース・開示</button>
+    <button type="button" class="btn btn-brass" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引</button>
     <button type="button" class="btn" onclick="closeDrawer();openHoldingsForm(${sec.id})">保有</button>
     <button type="button" class="btn" onclick="closeDrawer();openSecurityForm(${sec.id})">${svgIcon('edit', '')} 編集</button>`, subHtml);
   _detailChartCtx = { sec, ev, price, lb };
   loadDetailChart(sec, ev, price, lb, detailChartRange);
-  loadSecNews(sec); // ニュース欄は非同期で埋める（フェーズN2）
-  loadSecDisc(sec); // 開示・決算欄（フェーズN4）
 }
 // 詳細チャートをクリックで拡大表示（画面いっぱいの専用オーバーレイ。viewBoxで自動スケール）
 // elId 省略時は保有/カルテの '#detail-chart'。分析タブは 'ana-detail-chart' を渡す。
@@ -8172,6 +8200,7 @@ function karteCardHtml(sec) {
       </div>
       <div class="kt-actions">
         <button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id}, undefined, { onDone: renderTradeEntry })">${svgIcon('trade', '')} 取引を記録</button>
+        <button class="btn btn-sm" onclick="openSecNews(${sec.id})">${svgIcon('news', '')} ニュース・開示</button>
         <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">${svgIcon('external', '')} 詳細</button>
         <button class="btn btn-sm" onclick="openSecurityForm(${sec.id})">${svgIcon('edit', '')} 編集</button>
         <button class="btn btn-sm" onclick="openHoldingsForm(${sec.id})">保有</button>
@@ -11132,6 +11161,9 @@ window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
 window.openNewsPrefs = openNewsPrefs;
 window.saveNewsPrefs = saveNewsPrefs;
+window.openSecNews = openSecNews;
+window.secNewsToggleType = secNewsToggleType;
+window.secNewsAllTypes = secNewsAllTypes;
 window.newsHideBtn = newsHideBtn;
 window.newsUnhideBtn = newsUnhideBtn;
 window.newsUnhideAll = newsUnhideAll;

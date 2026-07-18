@@ -1142,3 +1142,11 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .np-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px 12px; }
 .np-check { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 2px 0; cursor: pointer; }
 .np-check input { margin: 0; }
+
+/* 銘柄別ニュース・開示 専用画面（モーダル内・2カラム、狭い時は1カラム） */
+.sec-news-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 720px) { .sec-news-cols { grid-template-columns: 1fr; } }
+.sec-news-col { min-width: 0; }
+.sec-news-h { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 700; }
+.sec-news-scroll { max-height: 56vh; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+.sec-disc-filter button { font-size: 11px; }
