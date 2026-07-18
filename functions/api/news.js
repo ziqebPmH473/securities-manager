@@ -100,10 +100,14 @@ function parseRss(xml, source, splitSuffix) {
     // RSS1.0(RDF)/2.0はlinkが要素値、Atomは<link href=...>属性。両対応
     let link = clean(tag(chunk, 'link'));
     if (!link) { const lm = chunk.match(/<link[^>]*href=["']([^"']+)["']/); if (lm) link = lm[1]; }
-    const pub = tag(chunk, 'pubDate') || tag(chunk, 'dc:date') || tag(chunk, 'updated') || tag(chunk, 'published');
     if (!title || !link) continue;
+    const pub = tag(chunk, 'pubDate') || tag(chunk, 'dc:date') || tag(chunk, 'updated') || tag(chunk, 'published');
     let iso = null;
     if (pub) { const d = new Date(pub.trim()); if (!isNaN(d)) iso = d.toISOString(); }
+    // 本文（要約）: description/summary/content から抜粋（銘柄・タグ判定を見出しだけでなく本文でも行うため）。
+    // ※RSSに入るのは記事全文ではなく要約スニペット。全文は取得しない（著作権・スクレイピング回避）。
+    let desc = clean(tag(chunk, 'description') || tag(chunk, 'summary') || tag(chunk, 'content:encoded') || tag(chunk, 'content'));
+    if (desc) desc = desc.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
     // Yahoo!の見出しだけ末尾に「(配信元)」が付く。表示用に分離し source を配信元名に置き換える
     // （日経ビジネス等はコラム名がカッコ書きされるので分離しない＝splitSuffix指定フィードのみ）
     let t = title, src = source;
@@ -111,7 +115,7 @@ function parseRss(xml, source, splitSuffix) {
       const pm = t.match(/^(.*)\(([^()]{2,20})\)$/);
       if (pm && !/^[0-9.,%美$¥]+$/.test(pm[2])) { t = pm[1].trim(); src = pm[2]; }
     }
-    items.push({ title: t, link, source: src, pubDate: iso });
+    items.push({ title: t, link, source: src, pubDate: iso, desc: desc || undefined });
   }
   return items;
 }

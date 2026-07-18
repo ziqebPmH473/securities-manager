@@ -762,3 +762,9 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - **マッチング強化（app.js）**: `newsSecHit` を searchNorm ベースに変更（NFKCで半角全角統一・カナ/かな吸収）。「ＮＴＴ/NTT」「９４３２/9432」等の表記ゆれを吸収。
   - 日本株通称辞書 `NEWS_JP_ALIAS`（9432→NTT、9022→JR東海、9984→ソフトバンクG/SBG 等・約60銘柄）。正式名と見出し通称が乖離する銘柄を補う。
 - **注目タグ `store.data.newsTags`**（フェーズN2）: 保有登録なしの企業/人物/テーマ名。見出し一致で保有銘柄（青）とは別色（グレー破線）チップを表示・**クリックしても銘柄画面は開かない**。ニュースタブの「注目タグ」ボタンで改行区切り一括編集。「関連のみ」絞り込みは銘柄＋注目タグの両方を対象。sync SCHEMA `newsTags:['records', name]` 登録済み（同期）。
+
+### 16.6 本文（要約）マッチング（フェーズN2追補2・2026-07-18）
+- `/api/news` の各記事に `desc`（description/summary/content から抽出・HTMLタグ除去・200字上限）を追加。RSSに入るのは**記事全文でなく要約スニペット**（全文はスクレイピングになるため取得しない）。
+- 本文が取れるフィード: NHK・東洋経済・ダイヤモンド・日経ビジネス・ブルームバーグ等（実測78/120件）。日経マーケット(RDF)・Yahooは本文なし＝見出しのみ。
+- クライアントのマッチングを見出し＋本文の合算テキスト（`newsText(it)`）で判定するよう変更（`newsSecHit`/`newsMatchSecs`/`newsMatchTags`）。見出しに社名が無くても本文言及で拾える（例:「逆襲のファーウェイ」見出しの記事を本文の"トヨタ"で拾う）。
+- 調査メモ（取得可否の実測）: ブルームバーグ**英語版**(feeds.bloomberg.com/markets|technology|economics)は200で取得可（本文付き・ただし英語）。**日本語版は不可**。株探・みんかぶは公式RSS無し（Yahoo配信も404）＝取得不可。TDnet適時開示は webapi.yanoshin.jp 経由でRSS取得可（N4候補・300件）。上場銘柄マスタはJPX公式がExcelバイナリで機械処理困難、手軽なJSON配布は未発見。

@@ -4523,8 +4523,11 @@ function _newsPat(sec) {
   _newsPatCache.set(k, p);
   return p;
 }
-function newsSecHit(title, sec) {
-  const raw = String(title || '');
+// 記事の判定対象テキスト＝見出し＋本文(要約)。本文が取れるフィード（NHK/東洋経済/ダイヤ/ブルームバーグ等）
+// では本文中の言及も拾える。日経マーケット/Yahoo等は本文なしなので見出しのみ。
+function newsText(it) { return typeof it === 'string' ? it : ((it && it.title) || '') + ' ' + ((it && it.desc) || ''); }
+function newsSecHit(itOrTitle, sec) {
+  const raw = newsText(itOrTitle);
   const norm = searchNorm(raw); // 半角全角・カナ差を吸収（NTT/ＮＴＴ・9432/９４３２ 等）
   const p = _newsPat(sec);
   if (p.jpNorm.some(n => norm.includes(n))) return true;       // 日本語名・通称（正規化して含有）
@@ -4532,14 +4535,14 @@ function newsSecHit(title, sec) {
   if (p.code && p.code.test(norm)) return true;                 // 証券コード/ティッカー（正規化後の半角数字で照合）
   return false;
 }
-function newsMatchSecs(title) {
-  return store.data.securities.filter(s => s.enabled !== false && (s.market === 'JP' || s.market === 'US') && newsSecHit(title, s));
+function newsMatchSecs(it) {
+  return store.data.securities.filter(s => s.enabled !== false && (s.market === 'JP' || s.market === 'US') && newsSecHit(it, s));
 }
-// 注目タグ（保有登録なしの企業/人物/テーマ名）の見出し一致。名前を searchNorm して含有判定
-function newsMatchTags(title) {
+// 注目タグ（保有登録なしの企業/人物/テーマ名）の見出し＋本文一致。名前を searchNorm して含有判定
+function newsMatchTags(it) {
   const tags = store.data.newsTags || [];
   if (!tags.length) return [];
-  const norm = searchNorm(String(title || ''));
+  const norm = searchNorm(newsText(it));
   return tags.filter(t => { const n = searchNorm(t.name || ''); return n.length >= 2 && norm.includes(n); });
 }
 function setNewsHeldOnly(v) { newsHeldOnly = v; renderNews(); }
@@ -4588,7 +4591,7 @@ function newsItemHtml(it, read, matches, opts = {}) {
   const secChips = (matches || []).slice(0, 3).map(s =>
     `<span class="news-sec" onclick="event.preventDefault();event.stopPropagation();openSecurityDetail(${s.id})" title="${esc(calc.displayName(s))}">${esc(nameAbbr(calc.displayName(s)))}</span>`).join('');
   // 注目タグのチップ（別色・クリックしても開かない）。mini（ドロワー）では出さない
-  const tagChips = opts.mini ? '' : (newsMatchTags(it.title)).slice(0, 3).map(t =>
+  const tagChips = opts.mini ? '' : (newsMatchTags(it)).slice(0, 3).map(t =>
     `<span class="news-tag">${esc(t.name)}</span>`).join('');
   const catChip = opts.mini ? '' : `<span class="news-cat cat-${cat}">${catLbl}</span>`;
   return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" onclick="newsReadLink(this)">
@@ -4610,8 +4613,8 @@ function renderNews() {
     // カテゴリ→関連（銘柄 or 注目タグ）の順に絞り込み。一致銘柄は行チップ表示に使うので [item, matches] で持つ
     let entries = cache.items
       .filter(it => newsCat === 'all' || newsCategory(it.title) === newsCat)
-      .map(it => [it, newsMatchSecs(it.title)]);
-    if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it.title).length);
+      .map(it => [it, newsMatchSecs(it)]);
+    if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it).length);
     body = entries.length
       ? `<div class="table-wrap news-wrap"><div class="news-list">${entries.map(([it, ms]) => newsItemHtml(it, read, ms)).join('')}</div></div>`
       : '<div class="empty">記事がありません。「更新」で再取得できます。</div>';
@@ -4645,7 +4648,7 @@ async function newsEnsure() {
 async function loadSecNews(sec) {
   if (!document.getElementById('sec-news')) return;
   const pool = await newsEnsure();
-  let items = pool ? pool.items.filter(it => newsSecHit(it.title, sec)) : [];
+  let items = pool ? pool.items.filter(it => newsSecHit(it, sec)) : [];
   if (sec.market === 'US') {
     try {
       const res = await fetch('/api/news?symbol=' + encodeURIComponent(sec.ticker));
