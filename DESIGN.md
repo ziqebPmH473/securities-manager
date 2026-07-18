@@ -795,3 +795,17 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - **翻訳バッチ化（EN残り対策）**: `/api/translate` を複数q対応に（clients5 dict-chrome-ex＝1リクエストで全件翻訳→gtx単体フォールバック）。**見出しは1リクエストで一括翻訳**しレート制限を回避（本番でENが残る＝逐次呼びで弾かれていた対策）。本文(要約)はパネルを開いた時に遅延翻訳（上限を下げる）。
 - **非表示のスクロール維持**: ✕押下時は全体再描画せず**該当行だけDOMから削除**＋ヘッダ件数のみ更新（`_newsUpdateHeaderCounts`）。一覧が上に戻らない。
 - **期間フィルタ**: 全期間/24時間/3日/7日（`newsDays`・pubDateで絞り込み）。
+
+## 17. 開示・決算（フェーズN4・2026-07-18）
+N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英語のため日本語ラベル化。
+
+### 17.1 取得（functions/api/disclosure.js）
+- `GET /api/disclosure?recent=1[&limit]` → TDnet直近の適時開示（日本株・全社）。yanoshin webapi(JSON)。
+- `GET /api/disclosure?market=JP&code=7203` → TDnet 銘柄別（company_codeは5桁=末尾0付きなので先頭4桁に正規化）。
+- `GET /api/disclosure?market=US&ticker=AAPL` → SEC EDGAR 銘柄別（browse-edgar ATOM・ティッカー直指定可）。**form種別を日本語ラベル化**（10-Q→四半期報告書 等・`EDGAR_FORM_JP`）。内部者取引(3/4/5)/144/SD等の定型ノイズは除外し、決算/重要事象/年次・四半期/株主総会/登録届出のみ採用（`KEEP`）。
+- 正規化アイテム: `{code, company, title, link, pubDate, form, market, kind}`。kind='earnings'(決算/業績/配当) | 'disclosure'。日付は TDnet=JST / EDGAR=日付のみ を吸収（`isoOf`）。UA・8秒タイムアウト・エッジ5分キャッシュ。
+
+### 17.2 表示
+- **銘柄詳細ドロワー**: 「開示・決算」欄を新設（`loadSecDisc`）。JP=TDnet銘柄別 / US=EDGAR銘柄別。決算=橙/開示=グレーのチップ、クリックで原本(PDF/EDGAR)。
+- **ニュースタブ**: TDnet直近開示のうち**登録銘柄(JP)に一致するものだけ**を一覧に合流（`_newsDiscForHoldings`・source='適時開示'）。カテゴリ「開示」を新設（`newsCategory`は開示アイテムの `cat` を優先）。保有銘柄が開示した時に自動で一覧・「開示」絞り込みに出る。
+- 銘柄マッチングはコード一致で確実（見出しの表記ゆれに依存しない）。

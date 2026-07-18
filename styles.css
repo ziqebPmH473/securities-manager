@@ -1133,3 +1133,6 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .news-panel .np-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .news-panel .np-body { font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
 .news-panel .np-note { font-size: 11px; margin: 12px 0 0; }
+
+/* ニュース: 開示・決算アイテム（ドロワー内） */
+.disc-item .news-cat { border-color: var(--border-strong, #cbd5e1); }

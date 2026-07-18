@@ -4412,10 +4412,12 @@ let newsShowHidden = false; // 非表示にした記事の一覧（復元用）�
 let newsDays = 0; // 期間フィルタ（0=全て / 1 / 3 / 7 日以内）
 const NEWS_DAYS = [[0, '全期間'], [1, '24時間'], [3, '3日'], [7, '7日']];
 function setNewsDays(d) { newsDays = d; renderNews(); }
-const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['macro', '為替・金利'], ['other', 'その他']];
-// 見出しキーワードでカテゴリ判定。判定順は特異度順（決算→為替・金利→市況→その他）
-function newsCategory(title) {
-  const t = title || '';
+const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['disclosure', '開示'], ['macro', '為替・金利'], ['other', 'その他']];
+// 見出しキーワードでカテゴリ判定。判定順は特異度順（決算→為替・金利→市況→その他）。
+// 開示アイテム(TDnet/EDGAR)は item.cat を持つのでそれを優先
+function newsCategory(itOrTitle) {
+  if (itOrTitle && typeof itOrTitle === 'object') { if (itOrTitle.cat) return itOrTitle.cat; return newsCategory(itOrTitle.title); }
+  const t = itOrTitle || '';
   if (/決算|上方修正|下方修正|業績予想|増益|減益|営業利益|純利益|増配|減配|自社株買い|株式分割/.test(t)) return 'earnings';
   if (/円安|円高|ドル円|為替|金利|日銀|FRB|FOMC|利上げ|利下げ|国債|インフレ|物価|CPI|関税/.test(t)) return 'macro';
   if (/日経平均|東証|TOPIX|株式市場|株価|続伸|続落|反発|反落|急騰|急落|ダウ|ナスダック|S&P|米国株|米株|プライム市場|グロース市場|半導体株/.test(t)) return 'market';
@@ -4431,9 +4433,19 @@ async function newsRefresh(auto) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 25000);
     try {
-      const res = await fetch('/api/news', { signal: ctrl.signal });
+      // ニュース(RSS)と適時開示(TDnet)を並行取得。開示は登録銘柄のぶんだけ一覧に合流
+      const [res, dres] = await Promise.all([
+        fetch('/api/news', { signal: ctrl.signal }),
+        fetch('/api/disclosure?recent=1&limit=120', { signal: ctrl.signal }).catch(() => null),
+      ]);
       const data = await res.json();
-      if (data && Array.isArray(data.items)) _newsCache = { items: data.items, at: data.at || new Date().toISOString() };
+      let items = (data && Array.isArray(data.items)) ? data.items : [];
+      items = items.concat(await _newsDiscForHoldings(dres));
+      // リンク重複排除・新しい順
+      const seen = new Set();
+      items = items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link))
+        .sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
+      if (items.length) _newsCache = { items, at: (data && data.at) || new Date().toISOString() };
     } finally { clearTimeout(timer); }
   } catch (_) { /* 失敗時は既存キャッシュのまま。キャッシュ無しなら empty 表示になる */ }
   finally { newsBusy = false; }
@@ -4724,7 +4736,7 @@ function _newsCurrentEntries() {
   const hidden = store.data.newsHidden || {};
   const since = newsDays ? Date.now() - newsDays * 86400 * 1000 : 0;
   let entries = (_newsCache ? _newsCache.items : [])
-    .filter(it => newsCat === 'all' || newsCategory(it.title) === newsCat)
+    .filter(it => newsCat === 'all' || newsCategory(it) === newsCat)
     .filter(it => !hidden[it.link])
     .filter(it => !since || (it.pubDate && new Date(it.pubDate).getTime() >= since))
     .map(it => [it, newsMatchSecs(it)]);
@@ -4770,7 +4782,7 @@ function newsTime(iso) {
 // 記事1行のHTML。opts.mini=銘柄詳細ドロワー用（カテゴリ・銘柄チップなし）
 function newsItemHtml(it, read, matches, opts = {}) {
   const unread = !read[it.link];
-  const cat = newsCategory(it.title);
+  const cat = newsCategory(it);
   const catLbl = (NEWS_CATS.find(c => c[0] === cat) || [])[1] || '';
   // 一致した登録銘柄のチップ（最大3件）。クリックで銘柄詳細（リンク遷移はさせない）
   const matchSecs = matches || [];
@@ -4853,6 +4865,19 @@ function renderNews() {
   if (cache) newsTranslatePending(); // 英語記事の未翻訳分を裏で翻訳→完了後に再描画（非同期・多重起動はガード済み）
 }
 
+// TDnet直近開示のうち、登録銘柄（JP）に一致するものだけをニュース一覧アイテム化して返す
+async function _newsDiscForHoldings(dres) {
+  if (!dres) return [];
+  let discs = [];
+  try { const d = await dres.json(); if (d && Array.isArray(d.items)) discs = d.items; } catch (_) { return []; }
+  if (!discs.length) return [];
+  const codes = new Set(store.data.securities.filter(s => s.market === 'JP' && s.enabled !== false).map(s => String(s.ticker || '').toUpperCase()));
+  if (!codes.size) return [];
+  return discs.filter(d => d.code && codes.has(String(d.code).toUpperCase())).map(d => ({
+    title: d.title, link: d.link, pubDate: d.pubDate, source: '適時開示',
+    cat: d.kind === 'earnings' ? 'earnings' : 'disclosure', // カテゴリ絞り込み用
+  }));
+}
 // ニュースプールを確保（10分以内のキャッシュがあればそれ・なければ取得）。描画はしない（ドロワー用）
 async function newsEnsure() {
   if (_newsCache && Date.now() - new Date(_newsCache.at).getTime() < 10 * 60 * 1000) return _newsCache;
@@ -4886,6 +4911,33 @@ async function loadSecNews(sec) {
   el.innerHTML = items.length
     ? `<div class="news-list news-mini">${items.map(it => newsItemHtml(it, read, null, { mini: true })).join('')}</div>`
     : '<div class="muted">関連ニュースは見つかりませんでした（直近の見出しに銘柄名の一致なし）</div>';
+}
+
+// 開示・決算1行（TDnet/EDGAR）。kindで色分け、クリックで原本(PDF/EDGAR)を開く
+function discItemHtml(d) {
+  const kindLbl = d.kind === 'earnings' ? '決算' : '開示';
+  return `<a class="news-item disc-item" href="${esc(d.link)}" target="_blank" rel="noopener">
+      <span class="news-title">${esc(d.title)}</span>
+      <span class="news-meta"><span class="news-cat ${d.kind === 'earnings' ? 'cat-earnings' : ''}">${kindLbl}</span><span>${d.market === 'US' ? 'SEC EDGAR' : 'TDnet'}</span><span>${newsTime(d.pubDate)}</span></span>
+    </a>`;
+}
+// 銘柄詳細ドロワーの「開示・決算」欄（フェーズN4）。JP=TDnet銘柄別 / US=SEC EDGAR銘柄別（日本語ラベル）
+async function loadSecDisc(sec) {
+  if (!document.getElementById('sec-disc')) return;
+  let items = [];
+  try {
+    const q = sec.market === 'US' ? 'market=US&ticker=' + encodeURIComponent(sec.ticker) : 'market=JP&code=' + encodeURIComponent(sec.ticker);
+    const res = await fetch('/api/disclosure?' + q);
+    const d = await res.json();
+    if (d && Array.isArray(d.items)) items = d.items;
+  } catch (_) { /* 失敗時は空 */ }
+  items = items.slice(0, 10);
+  const el = document.getElementById('sec-disc'); // 閉じられた/切替後は描画しない
+  if (!el) return;
+  el.classList.remove('muted');
+  el.innerHTML = items.length
+    ? `<div class="news-list news-mini">${items.map(discItemHtml).join('')}</div>`
+    : `<div class="muted">${sec.market === 'US' ? 'SEC EDGAR' : 'TDnet'}に直近の開示は見つかりませんでした</div>`;
 }
 
 function renderReport() {
@@ -7223,6 +7275,7 @@ function openSecurityDetail(secId) {
     </fieldset>
     ${sectionBox('ファンダ', fund)}
     ${sectionBox('ニュース', `<div id="sec-news" class="muted">読み込み中…</div>`)}
+    ${sectionBox('開示・決算', `<div id="sec-disc" class="muted">読み込み中…</div>`)}
     ${sectionBox('評価', evalBox)}
     ${sectionBox('判定', judge)}
     ${sectionBox('保有', holdRows + (holdSummary || '') + (origCostRow || '') + (principalSoldRow || ''))}
@@ -7235,6 +7288,7 @@ function openSecurityDetail(secId) {
   _detailChartCtx = { sec, ev, price, lb };
   loadDetailChart(sec, ev, price, lb, detailChartRange);
   loadSecNews(sec); // ニュース欄は非同期で埋める（フェーズN2）
+  loadSecDisc(sec); // 開示・決算欄（フェーズN4）
 }
 // 詳細チャートをクリックで拡大表示（画面いっぱいの専用オーバーレイ。viewBoxで自動スケール）
 // elId 省略時は保有/カルテの '#detail-chart'。分析タブは 'ana-detail-chart' を渡す。
@@ -10983,6 +11037,7 @@ window.cfApplyTplSel = cfApplyTplSel;
 window.cfCopyToCol = cfCopyToCol;
 window.setNewsCat = setNewsCat;
 window.setNewsDays = setNewsDays;
+window.loadSecDisc = loadSecDisc;
 window.newsRefresh = newsRefresh;
 window.newsReadLink = newsReadLink;
 window.newsOpenArticle = newsOpenArticle;
