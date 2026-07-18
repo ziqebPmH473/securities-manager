@@ -12,6 +12,15 @@ export async function onRequestGet(context) {
       const limit = Math.min(150, Math.max(10, parseInt(url.searchParams.get('limit') || '100', 10)));
       return json({ items: await tdnetRecent(limit) });
     }
+    // 複数銘柄一括（保有JP銘柄の開示をまとめて。各コードのTDnetを並行取得しマージ）
+    const codes = url.searchParams.get('codes');
+    if (codes) {
+      const list = codes.split(',').map(c => c.trim()).filter(Boolean).slice(0, 40);
+      const per = parseInt(url.searchParams.get('per') || '5', 10);
+      const arrs = await Promise.all(list.map(c => tdnetByCode(c, per).catch(() => [])));
+      const merged = [].concat(...arrs).sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
+      return json({ items: merged });
+    }
     const market = (url.searchParams.get('market') || 'JP').toUpperCase();
     if (market === 'US') return json({ items: await edgar(url.searchParams.get('ticker')) });
     return json({ items: await tdnetByCode(url.searchParams.get('code')) });
@@ -25,10 +34,10 @@ async function tdnetRecent(limit) {
   const u = `https://webapi.yanoshin.jp/webapi/tdnet/list/recent.json?limit=${limit}`;
   return tdnetParse(await fetchJson(u, 8000));
 }
-async function tdnetByCode(code) {
+async function tdnetByCode(code, limit) {
   const c = String(code || '').trim();
   if (!/^[0-9A-Za-z]{4}$/.test(c)) return [];
-  const u = `https://webapi.yanoshin.jp/webapi/tdnet/list/${encodeURIComponent(c)}.json?limit=20`;
+  const u = `https://webapi.yanoshin.jp/webapi/tdnet/list/${encodeURIComponent(c)}.json?limit=${Math.min(20, Math.max(1, limit || 20))}`;
   return tdnetParse(await fetchJson(u, 8000));
 }
 function tdnetParse(data) {

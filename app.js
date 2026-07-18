@@ -4433,14 +4433,14 @@ async function newsRefresh(auto) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 25000);
     try {
-      // ニュース(RSS)と適時開示(TDnet)を並行取得。開示は登録銘柄のぶんだけ一覧に合流
-      const [res, dres] = await Promise.all([
+      // ニュース(RSS)と登録銘柄の適時開示(TDnet)を並行取得し合流
+      const [res, discItems] = await Promise.all([
         fetch('/api/news', { signal: ctrl.signal }),
-        fetch('/api/disclosure?recent=1&limit=120', { signal: ctrl.signal }).catch(() => null),
+        _newsDiscForHoldings().catch(() => []),
       ]);
       const data = await res.json();
       let items = (data && Array.isArray(data.items)) ? data.items : [];
-      items = items.concat(await _newsDiscForHoldings(dres));
+      items = items.concat(discItems);
       // リンク重複排除・新しい順
       const seen = new Set();
       items = items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link))
@@ -4480,7 +4480,8 @@ function newsOpenArticle(ev, el) {
   for (const k in store.data.newsRead) { const d = new Date(store.data.newsRead[k]); if (isNaN(d) || d.getTime() < lim) delete store.data.newsRead[k]; }
   store.save(); el.classList.remove('unread');
   const it = newsFindItem(link);
-  if (!it) { window.open(link, '_blank'); return; }
+  // 要約が無い記事（開示・日経マーケット・Yahoo等）はパネルを出さず一発で元記事を開く
+  if (!it || !it.desc) { window.open(link, '_blank'); return; }
   const secs = newsMatchSecs(it), tags = newsMatchTags(it);
   const chips = [
     ...secs.map(s => `<span class="news-sec" onclick="closeModal();openSecurityDetail(${s.id})">${esc(nameAbbr(calc.displayName(s)))}</span>`),
@@ -4638,24 +4639,31 @@ async function _newsTranslateBatch(texts) {
     return Array.isArray(d.translated) ? d.translated : [];
   } catch (_) { return []; }
 }
-// 未翻訳の英語記事の「見出し」をまとめて翻訳→キャッシュ→再描画（本文は重いのでパネルを開いた時に遅延翻訳）
+// 未翻訳の英語記事の「見出し＋本文」を1リクエストでまとめて翻訳→キャッシュ→再描画。
+// 見出しと要約を同じバッチに入れる（パネルを開いた時の個別翻訳失敗を無くすため）。
 async function newsTranslatePending() {
   if (_newsTransBusy) return;
-  const pend = (_newsCache ? _newsCache.items : []).filter(it => it.lang === 'en' && !(store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t));
+  const pend = (_newsCache ? _newsCache.items : []).filter(it => it.lang === 'en' && !(store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t)).slice(0, 15);
   if (!pend.length) return;
   _newsTransBusy = true;
   try {
-    const batch = pend.slice(0, 30);
-    const tr = await _newsTranslateBatch(batch.map(it => it.title));
+    // [t0,d0,t1,d1,...] の順で1リクエスト（descが無い記事は空文字送らずスキップ管理）
+    const reqs = []; const idx = [];
+    pend.forEach((it, i) => { reqs.push(it.title); idx.push([i, 't']); if (it.desc) { reqs.push(it.desc); idx.push([i, 'd']); } });
+    const tr = await _newsTranslateBatch(reqs);
     let any = false;
-    batch.forEach((it, i) => {
-      const t = tr[i];
-      if (t) { const cur = store.data.newsTrans[it.link] || {}; store.data.newsTrans[it.link] = { t, d: cur.d || '', at: new Date().toISOString() }; any = true; }
+    const acc = {};
+    idx.forEach(([i, k], j) => { if (tr[j]) { (acc[i] = acc[i] || {})[k] = tr[j]; } });
+    pend.forEach((it, i) => {
+      const a = acc[i]; if (!a || !a.t) return;
+      const cur = store.data.newsTrans[it.link] || {};
+      store.data.newsTrans[it.link] = { t: a.t, d: a.d || cur.d || '', at: new Date().toISOString() };
+      any = true;
     });
     if (any) { _newsPruneTrans(); store.save(); if (currentView === 'news') renderNews(); }
   } finally { _newsTransBusy = false; }
 }
-// 本文（要約）の遅延翻訳: パネルを開いた英語記事の desc を翻訳してキャッシュ（未翻訳時のみ）
+// パネル用: 万一 desc が未翻訳なら単発で翻訳（フォールバック。通常は上のバッチで済む）
 async function newsTranslateDesc(link) {
   const it = newsFindItem(link);
   if (!it || it.lang !== 'en' || !it.desc) return;
@@ -4681,7 +4689,13 @@ function newsSecHit(itOrTitle, sec) {
   return false;
 }
 function newsMatchSecs(it) {
-  return store.data.securities.filter(s => s.enabled !== false && (s.market === 'JP' || s.market === 'US') && newsSecHit(it, s));
+  // 開示アイテムは it.code（証券コード）で確実に紐付け。通常記事は見出し＋本文マッチ
+  const code = (it && typeof it === 'object' && it.code) ? String(it.code).toUpperCase() : null;
+  return store.data.securities.filter(s => {
+    if (s.enabled === false || (s.market !== 'JP' && s.market !== 'US')) return false;
+    if (code && String(s.ticker || '').toUpperCase() === code) return true;
+    return code ? false : newsSecHit(it, s); // 開示アイテムはコード一致のみ（本文マッチは使わない）
+  });
 }
 // 注目タグ（保有登録なしの企業/人物/テーマ名）の見出し＋本文一致。名前を searchNorm して含有判定
 function newsMatchTags(it) {
@@ -4716,15 +4730,6 @@ function newsUnhideBtn(ev, el) { // 非表示一覧の「戻す」
   ev.preventDefault(); ev.stopPropagation();
   const link = el.dataset.link; if (!link) return;
   delete store.data.newsHidden[link]; store.save(); renderNews();
-}
-function newsHideAllShown() { // 表示中（現在の絞り込み結果）をまとめて非表示
-  if (!_newsCache) return;
-  const shown = _newsCurrentEntries().map(([it]) => it);
-  if (!shown.length) return;
-  if (!confirm(`表示中の ${shown.length} 件を非表示にします。よろしいですか？（あとで「非表示」から戻せます）`)) return;
-  const now = new Date().toISOString();
-  for (const it of shown) store.data.newsHidden[it.link] = now;
-  _newsPruneHidden(); store.save(); renderNews();
 }
 function newsUnhideAll() {
   if (!confirm('非表示をすべて解除して一覧に戻します。よろしいですか？')) return;
@@ -4847,7 +4852,6 @@ function renderNews() {
   const unreadN = cache ? cache.items.filter(it => !read[it.link] && !hidden[it.link]).length : 0;
   // ヘッダ右のアクション。非表示ボタン・一括非表示
   const headActions = newsShowHidden ? '' : `
-    <button class="btn btn-sm" onclick="newsHideAllShown()" title="表示中の記事をまとめて非表示（あとで戻せます）">表示中を非表示</button>
     <button class="btn btn-sm" id="news-hidden-btn" onclick="toggleNewsHiddenView()" title="非表示にした記事を確認・復元">非表示${hiddenN ? ` ${hiddenN}` : ''}</button>`;
   app.innerHTML = `
     <div class="section">
@@ -4865,17 +4869,22 @@ function renderNews() {
   if (cache) newsTranslatePending(); // 英語記事の未翻訳分を裏で翻訳→完了後に再描画（非同期・多重起動はガード済み）
 }
 
-// TDnet直近開示のうち、登録銘柄（JP）に一致するものだけをニュース一覧アイテム化して返す
-async function _newsDiscForHoldings(dres) {
-  if (!dres) return [];
-  let discs = [];
-  try { const d = await dres.json(); if (d && Array.isArray(d.items)) discs = d.items; } catch (_) { return []; }
-  if (!discs.length) return [];
-  const codes = new Set(store.data.securities.filter(s => s.market === 'JP' && s.enabled !== false).map(s => String(s.ticker || '').toUpperCase()));
-  if (!codes.size) return [];
-  return discs.filter(d => d.code && codes.has(String(d.code).toUpperCase())).map(d => ({
-    title: d.title, link: d.link, pubDate: d.pubDate, source: '適時開示',
-    cat: d.kind === 'earnings' ? 'earnings' : 'disclosure', // カテゴリ絞り込み用
+// 登録JP銘柄の適時開示（TDnet）をまとめて取得し、ニュース一覧アイテム化して返す。
+// 保有銘柄ごとに直近開示を引くので「直近全社120件に入っていない銘柄」も漏れなく出る。
+async function _newsDiscForHoldings() {
+  const secs = store.data.securities.filter(s => s.enabled !== false);
+  const jpCodes = [...new Set(secs.filter(s => s.market === 'JP').map(s => String(s.ticker || '').trim()).filter(c => /^[0-9A-Za-z]{4}$/.test(c)))].slice(0, 40);
+  const usTickers = [...new Set(secs.filter(s => s.market === 'US').map(s => String(s.ticker || '').trim().toUpperCase()).filter(t => /^[A-Z.\-]{1,8}$/.test(t)))].slice(0, 12);
+  const jobs = [];
+  // 日本株: TDnetをまとめて1リクエスト（銘柄別に直近5件）
+  if (jpCodes.length) jobs.push(fetch('/api/disclosure?per=5&codes=' + encodeURIComponent(jpCodes.join(','))).then(r => r.json()).then(d => (d.items || []).map(x => ({ ...x, market: 'JP' }))).catch(() => []));
+  // 米国株: EDGARは銘柄ごとに取得（並行・件数上限）
+  for (const t of usTickers) jobs.push(fetch('/api/disclosure?market=US&ticker=' + encodeURIComponent(t)).then(r => r.json()).then(d => (d.items || []).slice(0, 4)).catch(() => []));
+  const arrs = await Promise.all(jobs);
+  return [].concat(...arrs).map(d => ({
+    title: d.title, link: d.link, pubDate: d.pubDate, source: d.market === 'US' ? 'SEC EDGAR' : '適時開示',
+    code: d.code, company: d.company, // 銘柄チップ表示用（コードで登録銘柄に紐付く）
+    cat: d.kind === 'earnings' ? 'earnings' : 'disclosure',
   }));
 }
 // ニュースプールを確保（10分以内のキャッシュがあればそれ・なければ取得）。描画はしない（ドロワー用）
@@ -11046,7 +11055,6 @@ window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
 window.newsHideBtn = newsHideBtn;
 window.newsUnhideBtn = newsUnhideBtn;
-window.newsHideAllShown = newsHideAllShown;
 window.newsUnhideAll = newsUnhideAll;
 window.toggleNewsHiddenView = toggleNewsHiddenView;
 window.setMktMarket = setMktMarket;
