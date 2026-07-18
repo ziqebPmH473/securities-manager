@@ -321,6 +321,7 @@ const store = {
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     this.data.newsRead ||= {};        // ニュース既読（記事リンク→既読日時ISO）。Google同期対象（sync-merge SCHEMA登録済み）
     this.data.newsTags ||= [];        // ニュース注目タグ（保有登録なしの企業/人物/テーマ名）[{id,name}]。見出し一致で別色チップ表示・Google同期
+    this.data.newsHidden ||= {};      // ニュース非表示（記事リンク→非表示日時ISO）。一覧から除外・復元可・Google同期
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -4406,6 +4407,7 @@ let _newsCache = null;   // { items:[{title,link,source,pubDate}], at }
 let newsBusy = false;
 let newsCat = 'all';
 let newsHeldOnly = false; // 関連銘柄（登録銘柄に見出し一致）のみ表示
+let newsShowHidden = false; // 非表示にした記事の一覧（復元用）を表示中か
 const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['macro', '為替・金利'], ['other', 'その他']];
 // 見出しキーワードでカテゴリ判定。判定順は特異度順（決算→為替・金利→市況→その他）
 function newsCategory(title) {
@@ -4577,6 +4579,46 @@ function newsMatchTags(it) {
   return tags.filter(t => { const n = searchNorm(t.name || ''); return n.length >= 2 && norm.includes(n); });
 }
 function setNewsHeldOnly(v) { newsHeldOnly = v; renderNews(); }
+// ===== 非表示（除外）: 既読とは別。一覧から消し、非表示一覧から復元できる =====
+function _newsPruneHidden() { // 45日より古い非表示は掃除（同期データ肥大防止）
+  const lim = Date.now() - 45 * 86400 * 1000;
+  for (const k in store.data.newsHidden) { const d = new Date(store.data.newsHidden[k]); if (isNaN(d) || d.getTime() < lim) delete store.data.newsHidden[k]; }
+}
+function newsHideBtn(ev, el) { // 行の✕（非表示化）。リンク遷移させず一覧から消す
+  ev.preventDefault(); ev.stopPropagation();
+  const link = el.dataset.link; if (!link) return;
+  store.data.newsHidden[link] = new Date().toISOString();
+  _newsPruneHidden(); store.save(); renderNews();
+}
+function newsUnhideBtn(ev, el) { // 非表示一覧の「戻す」
+  ev.preventDefault(); ev.stopPropagation();
+  const link = el.dataset.link; if (!link) return;
+  delete store.data.newsHidden[link]; store.save(); renderNews();
+}
+function newsHideAllShown() { // 表示中（現在の絞り込み結果）をまとめて非表示
+  if (!_newsCache) return;
+  const shown = _newsCurrentEntries().map(([it]) => it);
+  if (!shown.length) return;
+  if (!confirm(`表示中の ${shown.length} 件を非表示にします。よろしいですか？（あとで「非表示」から戻せます）`)) return;
+  const now = new Date().toISOString();
+  for (const it of shown) store.data.newsHidden[it.link] = now;
+  _newsPruneHidden(); store.save(); renderNews();
+}
+function newsUnhideAll() {
+  if (!confirm('非表示をすべて解除して一覧に戻します。よろしいですか？')) return;
+  store.data.newsHidden = {}; store.save(); newsShowHidden = false; renderNews();
+}
+function toggleNewsHiddenView() { newsShowHidden = !newsShowHidden; renderNews(); }
+// 現在の絞り込み（カテゴリ／関連のみ／非表示除外）を適用した表示対象 [item, matchedSecs] の配列
+function _newsCurrentEntries() {
+  const hidden = store.data.newsHidden || {};
+  let entries = (_newsCache ? _newsCache.items : [])
+    .filter(it => newsCat === 'all' || newsCategory(it.title) === newsCat)
+    .filter(it => !hidden[it.link])
+    .map(it => [it, newsMatchSecs(it)]);
+  if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it).length);
+  return entries;
+}
 // 注目タグ管理モーダル（1行1名。改行区切りで一括編集）
 function openNewsTagsEditor() {
   const cur = (store.data.newsTags || []).map(t => t.name).join('\n');
@@ -4635,7 +4677,12 @@ function newsItemHtml(it, read, matches, opts = {}) {
       `<span class="news-listed" onclick="event.preventDefault();event.stopPropagation();window.open('${mktKabutan(mj.code, mj.market)}','_blank')" title="${esc(mj.label)}（未登録の上場銘柄・クリックで株探）">${esc(mj.label)}</span>`).join('');
   }
   const catChip = opts.mini ? '' : `<span class="news-cat cat-${cat}">${catLbl}</span>`;
+  // 行の右上ボタン: 通常=✕（非表示）／非表示一覧=戻す。ドロワー(mini)では出さない
+  const hideBtn = opts.mini ? ''
+    : opts.restore ? `<button class="news-restore" data-link="${esc(it.link)}" onclick="newsUnhideBtn(event,this)" title="一覧に戻す">戻す</button>`
+    : `<button class="news-hide" data-link="${esc(it.link)}" onclick="newsHideBtn(event,this)" title="この記事を非表示にする">✕</button>`;
   return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" onclick="newsReadLink(this)">
+      ${hideBtn}
       <span class="news-title">${esc(it.title)}</span>
       <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
     </a>`;
@@ -4644,27 +4691,41 @@ function renderNews() {
   if (currentView !== 'news') return;
   const cache = _newsCache;
   const read = store.data.newsRead || {};
-  const seg = `<div class="seg">${NEWS_CATS.map(([v, l]) => `<button class="${newsCat === v ? 'active' : ''}" onclick="setNewsCat('${v}')">${l}</button>`).join('')}</div>
-    <div class="seg" style="margin-left:6px"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
-    <button class="btn btn-sm" style="margin-left:auto" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>`;
-  let body;
-  if (!cache) {
-    body = '<div class="empty">読み込み中…</div>';
+  const hidden = store.data.newsHidden || {};
+  const hiddenN = Object.keys(hidden).length;
+  let body, seg;
+  if (newsShowHidden) {
+    // 非表示一覧（復元用）。非表示にした記事だけを新しい順で表示、各行「戻す」
+    seg = `<button class="btn btn-sm" onclick="toggleNewsHiddenView()">${svgIcon('external', '')} 一覧に戻る</button>
+      ${hiddenN ? `<button class="btn btn-sm" style="margin-left:auto" onclick="newsUnhideAll()">すべて解除</button>` : ''}`;
+    const hitems = (cache ? cache.items : []).filter(it => hidden[it.link])
+      .sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
+    body = hitems.length
+      ? `<div class="table-wrap news-wrap"><div class="news-list">${hitems.map(it => newsItemHtml(it, read, newsMatchSecs(it), { restore: true })).join('')}</div></div>`
+      : '<div class="empty">非表示にした記事はありません。<br><span class="muted">（このセッションの取得分のうち非表示中のものを表示します）</span></div>';
   } else {
-    // カテゴリ→関連（銘柄 or 注目タグ）の順に絞り込み。一致銘柄は行チップ表示に使うので [item, matches] で持つ
-    let entries = cache.items
-      .filter(it => newsCat === 'all' || newsCategory(it.title) === newsCat)
-      .map(it => [it, newsMatchSecs(it)]);
-    if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it).length);
-    body = entries.length
-      ? `<div class="table-wrap news-wrap"><div class="news-list">${entries.map(([it, ms]) => newsItemHtml(it, read, ms)).join('')}</div></div>`
-      : '<div class="empty">記事がありません。「更新」で再取得できます。</div>';
+    seg = `<div class="seg">${NEWS_CATS.map(([v, l]) => `<button class="${newsCat === v ? 'active' : ''}" onclick="setNewsCat('${v}')">${l}</button>`).join('')}</div>
+      <div class="seg" style="margin-left:6px"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
+      <button class="btn btn-sm" style="margin-left:auto" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>`;
+    if (!cache) {
+      body = '<div class="empty">読み込み中…</div>';
+    } else {
+      const entries = _newsCurrentEntries();
+      body = entries.length
+        ? `<div class="table-wrap news-wrap"><div class="news-list">${entries.map(([it, ms]) => newsItemHtml(it, read, ms)).join('')}</div></div>`
+        : '<div class="empty">記事がありません。「更新」で再取得できます。</div>';
+    }
   }
-  const unreadN = cache ? cache.items.filter(it => !read[it.link]).length : 0;
+  const unreadN = cache ? cache.items.filter(it => !read[it.link] && !hidden[it.link]).length : 0;
+  // ヘッダ右のアクション。非表示ボタン・一括非表示
+  const headActions = newsShowHidden ? '' : `
+    <button class="btn btn-sm" onclick="newsHideAllShown()" title="表示中の記事をまとめて非表示（あとで戻せます）">表示中を非表示</button>
+    <button class="btn btn-sm" onclick="toggleNewsHiddenView()" title="非表示にした記事を確認・復元">非表示${hiddenN ? ` ${hiddenN}` : ''}</button>`;
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>マーケットニュース${unreadN ? `<span class="news-unread-n">未読 ${unreadN}</span>` : ''}</h2>
-        <div style="display:flex;align-items:center;gap:10px">
+      <div class="section-head"><h2>${newsShowHidden ? '非表示の記事' : 'マーケットニュース'}${!newsShowHidden && unreadN ? `<span class="news-unread-n">未読 ${unreadN}</span>` : ''}</h2>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${headActions}
           <span class="muted" style="font-size:11px">${cache && cache.at ? '取得：' + mktFetchedAt(cache.at) : ''}</span>
           <button class="btn btn-sm btn-primary" onclick="newsRefresh()" ${newsBusy ? 'disabled' : ''}>${newsBusy ? '取得中…' : '更新'}</button></div></div>
       <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${seg}</div>
@@ -10809,6 +10870,11 @@ window.newsReadLink = newsReadLink;
 window.setNewsHeldOnly = setNewsHeldOnly;
 window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
+window.newsHideBtn = newsHideBtn;
+window.newsUnhideBtn = newsUnhideBtn;
+window.newsHideAllShown = newsHideAllShown;
+window.newsUnhideAll = newsUnhideAll;
+window.toggleNewsHiddenView = toggleNewsHiddenView;
 window.setMktMarket = setMktMarket;
 window.setMktSub = setMktSub;
 window.setMktKind = setMktKind;

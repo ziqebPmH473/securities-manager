@@ -52,6 +52,7 @@
     importAliases:   ['map', null],
     newsRead:        ['map', null],   // ニュース既読（記事リンク→既読日時ISO）。キー単位3-way・両在はlocal
     newsTags:        ['records', (t) => `ntag:${t.name}`], // ニュース注目タグ。名前キーで3-way（削除も伝播）
+    newsHidden:      ['map', null],   // ニュース非表示（記事リンク→非表示日時ISO）。キー単位3-way・両在はlocal
 
     fx:              ['single'],
     settings:        ['singleTs'],

@@ -1113,3 +1113,13 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 /* ニュース: 自動タグ（保有外の主要上場銘柄・クリックで株探） */
 .news-listed { padding: 1px 7px; border-radius: 999px; font-size: 10px; background: transparent; color: var(--accent); border: 1px solid var(--accent); cursor: pointer; white-space: nowrap; opacity: .85; }
 .news-listed:hover { background: var(--accent); color: #fff; opacity: 1; }
+
+/* ニュース: 非表示(除外)ボタン・復元 */
+.news-item { position: relative; }
+.news-hide, .news-restore { position: absolute; top: 8px; right: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 6px; cursor: pointer; line-height: 1; }
+.news-hide { width: 22px; height: 22px; font-size: 12px; padding: 0; opacity: 0; }
+.news-item:hover .news-hide { opacity: .7; }
+.news-hide:hover { opacity: 1; color: var(--red); border-color: var(--red); }
+.news-restore { font-size: 11px; padding: 3px 8px; }
+.news-restore:hover { color: var(--accent); border-color: var(--accent); }
+.news-title { padding-right: 26px; }
