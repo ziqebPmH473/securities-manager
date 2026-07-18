@@ -1123,3 +1123,13 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .news-restore { font-size: 11px; padding: 3px 8px; }
 .news-restore:hover { color: var(--accent); border-color: var(--accent); }
 .news-title { padding-right: 26px; }
+
+/* ニュース: 翻訳バッジ・要約パネル */
+.news-trans-badge { display: inline-block; font-size: 9px; font-weight: 700; padding: 0 5px; margin-right: 6px; border-radius: 4px; background: var(--accent); color: #fff; vertical-align: 1px; }
+.news-panel { max-width: 640px; }
+.news-panel .np-meta { display: flex; gap: 10px; align-items: center; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.news-panel .np-title { font-size: 18px; line-height: 1.5; margin: 0 0 8px; }
+.news-panel .np-orig { font-size: 12px; margin-bottom: 8px; }
+.news-panel .np-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.news-panel .np-body { font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
+.news-panel .np-note { font-size: 11px; margin: 12px 0 0; }

@@ -19,8 +19,8 @@ const FEEDS = [
   { url: 'https://news.yahoo.co.jp/rss/categories/business.xml', source: 'Yahoo!経済', broad: true, splitSuffix: true },
   { url: 'https://www3.nhk.or.jp/rss/news/cat5.xml', source: 'NHK' },
   // ブルームバーグ英語版（米国株・マクロ。英語見出し）。頻繁に更新されるため max で件数を抑え日本語ソースを圧迫しない
-  { url: 'https://feeds.bloomberg.com/markets/news.rss', source: 'Bloomberg', max: 8 },
-  { url: 'https://feeds.bloomberg.com/economics/news.rss', source: 'Bloomberg', max: 6 },
+  { url: 'https://feeds.bloomberg.com/markets/news.rss', source: 'Bloomberg', max: 8, lang: 'en' },
+  { url: 'https://feeds.bloomberg.com/economics/news.rss', source: 'Bloomberg', max: 6, lang: 'en' },
 ];
 
 export async function onRequestGet(context) {
@@ -81,7 +81,7 @@ async function fetchFeed(f) {
   } finally { clearTimeout(timer); }
   if (!res.ok) throw new Error(`${f.source} ${res.status}`);
   const xml = await res.text();
-  let items = parseRss(xml, f.source, f.splitSuffix);
+  let items = parseRss(xml, f.source, f.splitSuffix, f.lang);
   // 広域フィード（Yahoo!経済カテゴリ等）は車・生活・エンタメ系が大量に混ざる。
   // マーケット・経済関連キーワードに一致する見出しだけ通す（トピックス/NHKは編集済みなので全通し）
   if (f.broad) items = items.filter(it => MARKET_RE.test(it.title));
@@ -92,7 +92,7 @@ async function fetchFeed(f) {
 const MARKET_RE = /株|投資|市場|市況|経済|景気|金利|為替|円安|円高|ドル円|日銀|FRB|FOMC|決算|業績|増益|減益|赤字|黒字|配当|上場|IPO|証券|債券|国債|インフレ|物価|関税|増税|減税|消費税|GDP|雇用|賃金|資産|銀行|金融|保険|不動産価格|原油|金価格|半導体|輸出|輸入|貿易|買収|合併|TOB|倒産|日経平均|TOPIX|ダウ|ナスダック/;
 
 // RSS 2.0 の <item> を正規表現で抽出（Workers に DOMParser は無い）。title/link/pubDate のみ使用
-function parseRss(xml, source, splitSuffix) {
+function parseRss(xml, source, splitSuffix, lang) {
   const items = [];
   const re = /<item[\s>][\s\S]*?<\/item>/g;
   let m;
@@ -120,7 +120,7 @@ function parseRss(xml, source, splitSuffix) {
       const pm = t.match(/^(.*)\(([^()]{2,20})\)$/);
       if (pm && !/^[0-9.,%美$¥]+$/.test(pm[2])) { t = pm[1].trim(); src = pm[2]; }
     }
-    items.push({ title: t, link, source: src, pubDate: iso, desc: desc || undefined });
+    items.push({ title: t, link, source: src, pubDate: iso, desc: desc || undefined, lang: lang || undefined });
   }
   return items;
 }

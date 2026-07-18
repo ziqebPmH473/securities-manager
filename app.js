@@ -322,6 +322,7 @@ const store = {
     this.data.newsRead ||= {};        // ニュース既読（記事リンク→既読日時ISO）。Google同期対象（sync-merge SCHEMA登録済み）
     this.data.newsTags ||= [];        // ニュース注目タグ（保有登録なしの企業/人物/テーマ名）[{id,name}]。見出し一致で別色チップ表示・Google同期
     this.data.newsHidden ||= {};      // ニュース非表示（記事リンク→非表示日時ISO）。一覧から除外・復元可・Google同期
+    this.data.newsTrans ||= {};       // ニュース翻訳キャッシュ（記事リンク→{t:訳題,d:訳要約,at}）。1記事1回だけ翻訳・Google同期
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -4452,6 +4453,45 @@ function newsReadLink(el) {
   el.classList.remove('unread');
 }
 
+// 記事をリンクから探す（要約パネル用）
+function newsFindItem(link) { return (_newsCache ? _newsCache.items : []).find(it => it.link === link); }
+// 記事クリック→アプリ内の要約パネル（元記事へは直接飛ばない。全文はRSSに無いので要約まで＋元記事リンク）
+function newsOpenArticle(ev, el) {
+  ev.preventDefault();
+  const link = el.dataset.link; if (!link) return;
+  // 既読を記録（クラスも落とす）
+  store.data.newsRead[link] = new Date().toISOString();
+  const lim = Date.now() - 45 * 86400 * 1000;
+  for (const k in store.data.newsRead) { const d = new Date(store.data.newsRead[k]); if (isNaN(d) || d.getTime() < lim) delete store.data.newsRead[k]; }
+  store.save(); el.classList.remove('unread');
+  const it = newsFindItem(link);
+  if (!it) { window.open(link, '_blank'); return; }
+  const secs = newsMatchSecs(it), tags = newsMatchTags(it);
+  const chips = [
+    ...secs.map(s => `<span class="news-sec" onclick="closeModal();openSecurityDetail(${s.id})">${esc(nameAbbr(calc.displayName(s)))}</span>`),
+    ...tags.map(t => `<span class="news-tag">${esc(t.name)}</span>`),
+    ...newsMatchMajors(it, new Set([...secs.map(s => searchNorm(calc.displayName(s))), ...tags.map(t => searchNorm(t.name))]))
+      .map(mj => `<span class="news-listed" onclick="window.open('${mktKabutan(mj.code, mj.market)}','_blank')">${esc(mj.label)}</span>`),
+  ].join(' ');
+  const isEn = it.lang === 'en';
+  const jaTitle = newsDispTitle(it), jaDesc = newsDispDesc(it);
+  const hasTrans = isEn && store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t;
+  const body = `
+    <div class="news-panel">
+      <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>${isEn ? `<span class="news-trans-badge">${hasTrans ? '自動翻訳' : 'EN'}</span>` : ''}</div>
+      <h3 class="np-title">${esc(jaTitle)}</h3>
+      ${hasTrans ? `<div class="np-orig muted">原題: ${esc(it.title)}</div>` : ''}
+      ${chips ? `<div class="np-chips">${chips}</div>` : ''}
+      <div class="np-body">${jaDesc ? esc(jaDesc) : '<span class="muted">この記事は要約が配信されていません。元記事でご確認ください。</span>'}</div>
+      <p class="np-note muted">※ アプリ内に表示できるのは配信元の要約までです（記事全文は著作権のため取得しません）。${isEn && !hasTrans ? '翻訳は取得できませんでした（原文表示）。' : ''}</p>
+      <div class="form-actions" style="margin-top:14px">
+        <button type="button" class="btn btn-primary" onclick="window.open('${esc(it.link)}','_blank')">元記事を開く ↗</button>
+        <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+      </div>
+    </div>`;
+  showModal('ニュース', body);
+}
+
 // ===== 銘柄マッチング（フェーズN2） =====
 // 見出しに登録銘柄（JP/US）の名前・コード・ティッカーが含まれるかを判定する。
 // 照合パターンは銘柄ごとに生成してキャッシュ（storeに保存しないよう Map。銘柄編集/名称取得で作り直し）
@@ -4556,6 +4596,37 @@ function _newsPat(sec) {
   _newsPatCache.set(k, p);
   return p;
 }
+// ===== 翻訳（英語ニュースの日本語化。無料エンドポイント経由・1記事1回だけ翻訳して同期キャッシュ） =====
+let _newsTransBusy = false;
+function _newsPruneTrans() { // 30日より古い翻訳キャッシュを掃除
+  const lim = Date.now() - 30 * 86400 * 1000;
+  for (const k in store.data.newsTrans) { const d = new Date((store.data.newsTrans[k] || {}).at); if (isNaN(d) || d.getTime() < lim) delete store.data.newsTrans[k]; }
+}
+async function _newsTranslate(text) {
+  if (!text) return '';
+  try { const r = await fetch('/api/translate?sl=en&tl=ja&text=' + encodeURIComponent(text)); const d = await r.json(); return d.translated || ''; }
+  catch (_) { return ''; }
+}
+// 未翻訳の英語記事をまとめて翻訳→キャッシュ→再描画（順次・最大20件。壊れたら原文フォールバック）
+async function newsTranslatePending() {
+  if (_newsTransBusy) return;
+  const pend = (_newsCache ? _newsCache.items : []).filter(it => it.lang === 'en' && !(store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t));
+  if (!pend.length) return;
+  _newsTransBusy = true;
+  try {
+    let any = false;
+    for (const it of pend.slice(0, 20)) {
+      const t = await _newsTranslate(it.title);
+      const d = it.desc ? await _newsTranslate(it.desc) : '';
+      if (t) { store.data.newsTrans[it.link] = { t, d: d || '', at: new Date().toISOString() }; any = true; }
+    }
+    if (any) { _newsPruneTrans(); store.save(); if (currentView === 'news') renderNews(); }
+  } finally { _newsTransBusy = false; }
+}
+// 表示用の見出し/要約（英語記事は翻訳があれば日本語、なければ原文）
+function newsDispTitle(it) { const tr = store.data.newsTrans[it.link]; return (it.lang === 'en' && tr && tr.t) ? tr.t : it.title; }
+function newsDispDesc(it) { const tr = store.data.newsTrans[it.link]; return (it.lang === 'en' && tr && tr.d) ? tr.d : (it.desc || ''); }
+
 // 記事の判定対象テキスト＝見出し＋本文(要約)。本文が取れるフィード（NHK/東洋経済/ダイヤ/ブルームバーグ等）
 // では本文中の言及も拾える。日経マーケット/Yahoo等は本文なしなので見出しのみ。
 function newsText(it) { return typeof it === 'string' ? it : ((it && it.title) || '') + ' ' + ((it && it.desc) || ''); }
@@ -4681,9 +4752,12 @@ function newsItemHtml(it, read, matches, opts = {}) {
   const hideBtn = opts.mini ? ''
     : opts.restore ? `<button class="news-restore" data-link="${esc(it.link)}" onclick="newsUnhideBtn(event,this)" title="一覧に戻す">戻す</button>`
     : `<button class="news-hide" data-link="${esc(it.link)}" onclick="newsHideBtn(event,this)" title="この記事を非表示にする">✕</button>`;
-  return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" onclick="newsReadLink(this)">
+  // 英語記事は翻訳（あれば）を表示し、翻訳済みなら「訳」バッジ。クリックで要約パネル（元記事へは行かない）
+  const dispTitle = newsDispTitle(it);
+  const trBadge = it.lang === 'en' ? `<span class="news-trans-badge">${store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t ? '訳' : 'EN'}</span>` : '';
+  return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
-      <span class="news-title">${esc(it.title)}</span>
+      <span class="news-title">${trBadge}${esc(dispTitle)}</span>
       <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
     </a>`;
 }
@@ -4734,6 +4808,7 @@ function renderNews() {
   scheduleFit(); // 一覧を枠内スクロールに（ページ全体をスクロールさせない）
   if (!newsBusy && !cache) newsRefresh(true); // タブを開いた時に自動取得
   else if (!newsBusy && cache && Date.now() - new Date(cache.at).getTime() > 5 * 60 * 1000) newsRefresh(true); // 5分超は裏で自動更新
+  if (cache) newsTranslatePending(); // 英語記事の未翻訳分を裏で翻訳→完了後に再描画（非同期・多重起動はガード済み）
 }
 
 // ニュースプールを確保（10分以内のキャッシュがあればそれ・なければ取得）。描画はしない（ドロワー用）
@@ -10867,6 +10942,7 @@ window.cfCopyToCol = cfCopyToCol;
 window.setNewsCat = setNewsCat;
 window.newsRefresh = newsRefresh;
 window.newsReadLink = newsReadLink;
+window.newsOpenArticle = newsOpenArticle;
 window.setNewsHeldOnly = setNewsHeldOnly;
 window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
