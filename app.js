@@ -336,6 +336,7 @@ const store = {
       this.data.settings.masterUsdJpy = (mx != null && isFinite(mx)) ? mx : DEFAULT_MATRIX_USDJPY;
     }
     if (this.data.settings.ytModel === undefined) this.data.settings.ytModel = 'gemini-3.1-flash-lite'; // 動画要約の既定モデル（500回/日）。未設定時のみ
+    if (this.data.settings.ytAutoSummary === undefined) this.data.settings.ytAutoSummary = true; // 新着動画の要約を裏で自動生成（一覧を開いた時）
     this.data.cfRules = migrateCfRules(this.data.cfRules); // 列の背景色ルール（マスタ管理）。未定義は既定シード／旧フラット型は移行
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
       this.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k], ...(this.data.importMappings[k] || {}) };
@@ -4685,6 +4686,31 @@ async function generateVideoSummary(videoId, showInPanel) {
     return '';
   }
 }
+// 新着動画の要約を裏で先に生成（一覧を開いた時）。開いた時に要約が出来ている状態にする＝待ち時間の解消。
+// 消費を抑えるため新しい順に最大3件・順次。生成済み/試行済みはスキップ。
+let _ytAutoBusy = false;
+const _ytTried = new Set();
+async function newsAutoSummarizeVideos() {
+  if (!(store.data.settings && store.data.settings.ytAutoSummary)) return;
+  if (_ytAutoBusy || !_newsCache) return;
+  const sums = store.data.ytSummaries || {};
+  const pend = _newsCache.items.filter(it => it.cat === 'video' && it.videoId && !(sums[it.videoId] && sums[it.videoId].summary) && !_ytTried.has(it.videoId)).slice(0, 3);
+  if (!pend.length) return;
+  _ytAutoBusy = true;
+  try {
+    let any = false;
+    for (const it of pend) {
+      _ytTried.add(it.videoId);
+      const s = await generateVideoSummary(it.videoId, false); // パネル無し（裏で生成）
+      if (s) any = true;
+    }
+    if (any && currentView === 'news') {
+      // 生成した要約を一覧アイテムの desc に反映（スニペット表示・パネル即表示）してから再描画
+      for (const v of _newsCache.items) { if (v.cat === 'video' && store.data.ytSummaries[v.videoId]) v.desc = store.data.ytSummaries[v.videoId].summary; }
+      renderNews();
+    }
+  } finally { _ytAutoBusy = false; }
+}
 function regenVideoSummary(videoId) {
   const el = document.getElementById('np-video-summary'); if (el) el.innerHTML = '<span class="muted">AIで要約を生成しています…</span>';
   const rb = document.getElementById('np-video-regen'); if (rb) rb.remove();
@@ -5043,9 +5069,17 @@ function newsItemHtml(it, read, matches, opts = {}) {
   // 英語記事は翻訳（あれば）を表示し、翻訳済みなら「訳」バッジ。動画は▶マーク。クリックで要約パネル（元記事へは行かない）
   const dispTitle = (it.cat === 'video' ? '▶ ' : '') + newsDispTitle(it);
   const trBadge = it.lang === 'en' ? `<span class="news-trans-badge">${store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t ? '訳' : 'EN'}</span>` : '';
+  // 動画で要約がある時は冒頭スニペットを1行表示（Yahooニュース風の見出し＋抜粋）。生成中は控えめに表示
+  let vidPreview = '';
+  if (!opts.mini && it.cat === 'video') {
+    const sum = (store.data.ytSummaries[it.videoId] || {}).summary;
+    if (sum) vidPreview = `<span class="news-preview">${esc(sum.replace(/\s+/g, ' ').slice(0, 90))}…</span>`;
+    else if (store.data.settings && store.data.settings.ytAutoSummary) vidPreview = `<span class="news-preview muted">要約を準備中…</span>`;
+  }
   return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
       <span class="news-title">${trBadge}${esc(dispTitle)}</span>
+      ${vidPreview}
       <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
     </a>`;
 }
@@ -5110,6 +5144,7 @@ function renderNews() {
   if (!newsBusy && !cache) newsRefresh(true); // タブを開いた時に自動取得
   else if (!newsBusy && cache && Date.now() - new Date(cache.at).getTime() > 5 * 60 * 1000) newsRefresh(true); // 5分超は裏で自動更新
   if (cache) newsTranslatePending(); // 英語記事の未翻訳分を裏で翻訳→完了後に再描画（非同期・多重起動はガード済み）
+  if (cache) newsAutoSummarizeVideos(); // 新着動画の要約を裏で先に生成（設定ONのとき・多重起動ガード済み）
 }
 
 // 購読YouTubeチャンネルの新着動画をニュース一覧アイテム化（カテゴリ=動画）。要約があればdescに載せる（後でGemini）。
@@ -6173,6 +6208,8 @@ function openYtChannelMaster() {
     <fieldset class="form-group" style="margin-top:14px"><legend>要約に使うAIモデル（Gemini）</legend>
       <select id="yt-model" style="min-width:280px">${modelOpts}</select>
       <p class="muted" style="font-size:11px;margin:6px 0 0">上限（回数超過）に達したら、どのモデルを選んでも自動で他モデルへ降格して要約を続けます。<br>「自動」＝高精度なモデルから順に試行／モデル固定＝そのモデルを優先し、上限時のみ他へ降格。</p>
+      <label class="np-check" style="margin-top:10px"><input type="checkbox" id="yt-auto" ${(store.data.settings && store.data.settings.ytAutoSummary) ? 'checked' : ''}> 新着動画の要約を裏で自動生成する（ニュースを開いた時／新しい順に最大3件）</label>
+      <p class="muted" style="font-size:11px;margin:4px 0 0">ONにすると、開いた時には要約が出来ている状態になります（待ち時間の解消）。OFFにすると、動画をクリックした時に都度生成します。</p>
     </fieldset>
     <div class="form-actions" style="margin-top:12px">
       <button type="button" class="btn btn-primary" onclick="saveYtChannelMaster()">保存</button>
@@ -6191,7 +6228,9 @@ function saveYtChannelMaster() {
     defs.push({ id, name: name || id });
   }
   store.data.ytChannels = defs;
-  const msel = document.getElementById('yt-model'); if (msel) { store.data.settings = store.data.settings || {}; store.data.settings.ytModel = msel.value || ''; }
+  store.data.settings = store.data.settings || {};
+  const msel = document.getElementById('yt-model'); if (msel) store.data.settings.ytModel = msel.value || '';
+  const auto = document.getElementById('yt-auto'); if (auto) store.data.settings.ytAutoSummary = !!auto.checked;
   store.save();
   closeModal(); if (currentView === 'news') { _newsCache = null; newsRefresh(); }
   toast('YouTubeチャンネルを保存しました');

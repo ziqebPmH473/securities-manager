@@ -1161,3 +1161,6 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .news-wrap, .sec-news-scroll { cursor: grab; }
 .news-wrap.drag-scrolling, .sec-news-scroll.drag-scrolling { cursor: grabbing; user-select: none; }
 .news-wrap.drag-scrolling a, .sec-news-scroll.drag-scrolling a { cursor: grabbing; }
+
+/* ニュース: 動画の要約スニペット（Yahooニュース風の見出し＋抜粋） */
+.news-preview { display: block; font-size: 12px; color: var(--muted); line-height: 1.5; margin: 2px 0 0; overflow: hidden; }
