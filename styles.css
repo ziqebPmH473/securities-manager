@@ -1152,8 +1152,9 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .sec-news-h { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 700; }
 .sec-news-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
 .sec-disc-filter button { font-size: 11px; }
-/* この専用画面のモーダルは高さも固定（読み込み中でも同じ大きさ） */
-.modal.wide.modal-fixh { height: min(78vh, 820px); display: flex; flex-direction: column; }
+/* この専用画面のモーダルは幅・高さとも固定（読み込み中でも・件数が変わっても同じ大きさで開く）。
+   モーダルはグリッド中央寄せで content 幅になりがちなので、幅を明示して開いた瞬間から一定にする。 */
+.modal.wide.modal-fixh { width: min(1000px, 94vw); height: min(78vh, 820px); display: flex; flex-direction: column; }
 .modal.wide.modal-fixh .modal-body { flex: 1; min-height: 0; overflow: hidden; }
 
 /* ドラッグでスクロール（スクロールバーが掴みにくい/中ボタンautoscrollがリンクに奪われる対策） */

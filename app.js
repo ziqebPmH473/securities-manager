@@ -4423,6 +4423,23 @@ function newsToggleCat(c) {
   p._updatedAt = new Date().toISOString();
   store.save(); renderNews();
 }
+// プールに存在する開示の細分類（インライン・トグル用。存在する種類だけ出す）
+function newsPresentDiscTypes() {
+  const set = new Set();
+  for (const it of (_newsCache ? _newsCache.items : [])) if (isDiscItem(it)) set.add(disclosureType(it));
+  return NEWS_DISC_TYPES.map(t => t[0]).concat(['other_disc']).filter(id => set.has(id));
+}
+function newsDiscTypeShown(id) { return !((store.data.newsPrefs && store.data.newsPrefs.hideDiscTypes) || []).includes(id); }
+function newsToggleDiscType(id) {
+  const p = store.data.newsPrefs || (store.data.newsPrefs = { hideCats: [], hideDiscTypes: [] });
+  p.hideDiscTypes = p.hideDiscTypes || [];
+  const present = newsPresentDiscTypes();
+  if (id === 'all') p.hideDiscTypes = p.hideDiscTypes.filter(x => !present.includes(x)); // 表示中の種類を全部オンに（他は保持）
+  else if (p.hideDiscTypes.includes(id)) p.hideDiscTypes = p.hideDiscTypes.filter(x => x !== id);
+  else p.hideDiscTypes = [...p.hideDiscTypes, id];
+  p._updatedAt = new Date().toISOString();
+  store.save(); renderNews();
+}
 let newsShowHidden = false; // 非表示にした記事の一覧（復元用）を表示中か
 let newsDays = 0; // 期間フィルタ（0=全て / 1 / 3 / 7 日以内）
 let newsMkt = 'all'; // 市場フィルタ（all / JP / US）。関連銘柄・開示の市場で絞る（一般ニュースは市場情報がないので常に表示）
@@ -4957,12 +4974,18 @@ function renderNews() {
   } else {
     // カテゴリは複数選択トグル（クリックで即切替＝設定モーダル不要）。「すべて」で全表示
     const catSeg = `<div class="seg seg-toggle"><button class="${newsAllCatsShown() ? 'active' : ''}" onclick="newsToggleCat('all')">すべて</button>${NEWS_REAL_CATS.map(v => { const l = (NEWS_CATS.find(c => c[0] === v) || [])[1]; return `<button class="${newsCatShown(v) ? 'active' : ''}" onclick="newsToggleCat('${v}')">${l}</button>`; }).join('')}</div>`;
+    // 開示の細分類も複数選択トグル（プールに存在する種類だけ・別行）
+    const dts = newsPresentDiscTypes();
+    const discSeg = dts.length ? `<div class="seg seg-toggle" style="flex-basis:100%;flex-wrap:wrap">
+      <span class="muted" style="align-self:center;font-size:11px;margin-right:2px">開示:</span>
+      <button class="${dts.every(newsDiscTypeShown) ? 'active' : ''}" onclick="newsToggleDiscType('all')">すべて</button>
+      ${dts.map(id => `<button class="${newsDiscTypeShown(id) ? 'active' : ''}" onclick="newsToggleDiscType('${id}')">${disclosureTypeLabel(id)}</button>`).join('')}</div>` : '';
     seg = `${catSeg}
       <div class="seg">${NEWS_MKTS.map(([v, l]) => `<button class="${newsMkt === v ? 'active' : ''}" onclick="setNewsMkt('${v}')" title="関連銘柄の市場で絞り込み">${l}</button>`).join('')}</div>
       <div class="seg">${NEWS_DAYS.map(([v, l]) => `<button class="${newsDays === v ? 'active' : ''}" onclick="setNewsDays(${v})" title="この期間に配信された記事のみ">${l}</button>`).join('')}</div>
       <div class="seg"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
       <button class="btn btn-sm" style="margin-left:auto" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>
-      <button class="btn btn-sm" onclick="openNewsPrefs()" title="表示する開示の種類（決算/自己株取得 等）を設定">${svgIcon('settings', '')} 開示の種類</button>`;
+      ${discSeg}`;
     if (!cache) {
       body = '<div class="empty">読み込み中…</div>';
     } else {
@@ -5044,15 +5067,28 @@ async function openSecNews(secId) {
   _secNewsCtx.news = news; _secNewsCtx.disc = disc;
   _secNewsCtx.typeSel = new Set(disc.map(disclosureType)); // 初期＝存在する全種類を選択
   renderSecNewsScreen();
+  // 英語ニュース（Bloomberg/Finnhub）を翻訳して再描画
+  if (await _secNewsTranslate(news) && _secNewsCtx && _secNewsCtx.sec.id === secId) renderSecNewsScreen();
 }
 async function _secNewsFetch(sec) {
   const pool = await newsEnsure();
   let items = pool ? pool.items.filter(it => newsSecHit(it, sec)) : [];
   if (sec.market === 'US') {
-    try { const d = await (await fetch('/api/news?symbol=' + encodeURIComponent(sec.ticker))).json(); if (d && Array.isArray(d.items)) items = items.concat(d.items); } catch (_) {}
+    // Finnhubの銘柄別ニュースは英語なので lang:'en' を付与（翻訳対象にする）
+    try { const d = await (await fetch('/api/news?symbol=' + encodeURIComponent(sec.ticker))).json(); if (d && Array.isArray(d.items)) items = items.concat(d.items.map(it => ({ ...it, lang: 'en' }))); } catch (_) {}
   }
   const seen = new Set();
   return items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link)).sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1).slice(0, 20);
+}
+// 専用画面の英語ニュースを翻訳してキャッシュ（見出し。1リクエストでまとめて）
+async function _secNewsTranslate(items) {
+  const pend = (items || []).filter(it => it.lang === 'en' && !(store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t));
+  if (!pend.length) return false;
+  const tr = await _newsTranslateBatch(pend.map(it => it.title));
+  let any = false;
+  pend.forEach((it, i) => { if (tr[i]) { const cur = store.data.newsTrans[it.link] || {}; store.data.newsTrans[it.link] = { t: tr[i], d: cur.d || '', at: new Date().toISOString() }; any = true; } });
+  if (any) store.save();
+  return any;
 }
 async function _secDiscFetch(sec) {
   try {
@@ -11200,6 +11236,7 @@ window.cfDelRangeRow = cfDelRangeRow;
 window.cfApplyTplSel = cfApplyTplSel;
 window.cfCopyToCol = cfCopyToCol;
 window.newsToggleCat = newsToggleCat;
+window.newsToggleDiscType = newsToggleDiscType;
 window.setNewsMkt = setNewsMkt;
 window.setNewsDays = setNewsDays;
 window.newsRefresh = newsRefresh;
