@@ -4880,13 +4880,15 @@ function _newsCurrentEntries() {
     // 非表示にした開示グループ（決算/自己株 等）はどのカテゴリでも隠す
     .filter(it => !(isDiscItem(it) && hideDiscTypes.includes(disclosureGroup(it))))
     .map(it => [it, newsMatchSecs(it)]);
-  // 銘柄フィルタ（保有銘柄と同じ機構）: 条件に合う銘柄の記事だけに絞る（一致銘柄なしの一般記事は除外）
+  // 銘柄フィルタ（保有銘柄と同じ機構）: 銘柄に紐づく記事のうち、条件に合う銘柄のものだけ残す。
+  // 一般ニュース（銘柄一致なし）はここでは落とさない＝一般記事の除外は「保有・注目のみ」トグルの役割（両者はAND）。
   if (fltActiveCount('news')) {
     const base = store.data.securities.filter(s => s.market === 'JP' || s.market === 'US');
     const allow = new Set(applyColFilters(base, 'news').map(s => s.id));
-    entries = entries.filter(([, ms]) => ms.some(s => allow.has(s.id)));
+    entries = entries.filter(([, ms]) => ms.length === 0 || ms.some(s => allow.has(s.id)));
   }
   if (newsMkt !== 'all') entries = entries.filter(([it, ms]) => { const mk = newsItemMarkets(it, ms); return mk.size === 0 || mk.has(newsMkt); });
+  // 「保有・注目のみ」: 保有銘柄・注目タグに関連しない記事（一般ニュース）を除外
   if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it).length);
   return entries;
 }
@@ -4990,8 +4992,8 @@ function renderNews() {
     seg = `${catSeg}
       <div class="seg">${NEWS_MKTS.map(([v, l]) => `<button class="${newsMkt === v ? 'active' : ''}" onclick="setNewsMkt('${v}')" title="関連銘柄の市場で絞り込み">${l}</button>`).join('')}</div>
       <div class="seg">${NEWS_DAYS.map(([v, l]) => `<button class="${newsDays === v ? 'active' : ''}" onclick="setNewsDays(${v})" title="この期間に配信された記事のみ">${l}</button>`).join('')}</div>
-      <div class="seg"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
-      <span title="保有銘柄と同じ条件で銘柄を絞り、その銘柄の記事だけ表示">${filterBtnHtml('news')}</span>
+      <div class="seg"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="保有銘柄・注目タグに関連しない記事（一般ニュース）を除外。銘柄フィルタとAND">保有・注目のみ</button></div>
+      <span title="保有銘柄と同じ条件で銘柄を絞り込む。一般ニュースは残る（一般ニュースの除外は「保有・注目のみ」と併用）">${filterBtnHtml('news')}</span>
       <button class="btn btn-sm" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>
       ${discSeg}
       <div id="flt-host-news" style="flex-basis:100%">${fltState.news.open ? filterPanelHtml('news') : ''}</div>`;
@@ -6040,17 +6042,24 @@ const MASTER_LAUNCH = [
 // ---------- 開示種別マスタ（分類・キーワード編集） ----------
 function discTypeRowHtml(d) {
   return `<tr>
+    <td class="nowrap"><button class="btn btn-sm" onclick="discTypeMoveRow(this,-1)" title="上へ">▲</button><button class="btn btn-sm" onclick="discTypeMoveRow(this,1)" title="下へ">▼</button></td>
     <td class="l"><input class="dt-name" value="${esc(d.name || '')}" placeholder="決算" style="width:110px"></td>
     <td class="l"><input class="dt-group" value="${esc(d.group || '')}" placeholder="決算" style="width:110px"></td>
     <td class="l"><input class="dt-kw" value="${esc(d.keywords || '')}" placeholder="決算短信|四半期報告書" style="width:100%;min-width:220px"></td>
     <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()" title="削除">×</button></td></tr>`;
+}
+// 行を上下に移動（入力値はDOMごと動かすので再入力不要。保存時はDOM順で読む）
+function discTypeMoveRow(btn, dir) {
+  const tr = btn.closest('tr'); if (!tr) return;
+  if (dir < 0) { const p = tr.previousElementSibling; if (p) tr.parentNode.insertBefore(tr, p); }
+  else { const n = tr.nextElementSibling; if (n) tr.parentNode.insertBefore(n, tr); }
 }
 function openDiscTypeMaster() {
   const rows = discDefs().map(discTypeRowHtml).join('');
   showModal('開示種別マスタ（分類・キーワード）', `
     <p class="muted" style="margin:0 0 8px;font-size:12px">開示の見出しに含まれる<strong>キーワード</strong>（正規表現・<code>|</code> 区切り）で種別を判定します。<strong>上から順に最初に一致</strong>した種別のタグが付きます。<br>「まとめ（フィルタタブ）」が同じ種別は、ニュースの絞り込みタブで束ねられます（タグは種別ごとに表示）。どれにも一致しないものは「その他開示」。</p>
     <div class="table-wrap"><table class="holdings dense">
-      <thead><tr><th class="l">種別（タグ名）</th><th class="l">まとめ（フィルタタブ）</th><th class="l">キーワード（| 区切り・正規表現可）</th><th></th></tr></thead>
+      <thead><tr><th>並び</th><th class="l">種別（タグ名）</th><th class="l">まとめ（フィルタタブ）</th><th class="l">キーワード（| 区切り・正規表現可）</th><th></th></tr></thead>
       <tbody id="disc-type-rows">${rows}</tbody></table></div>
     <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" onclick="discTypeAddRow()">＋ 種別を追加</button><span style="flex:1"></span><button class="btn btn-sm" onclick="discTypeResetDefault()">既定に戻す</button></div>
     <div class="form-actions" style="margin-top:12px">
@@ -11303,6 +11312,7 @@ window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
 window.openDiscTypeMaster = openDiscTypeMaster;
 window.discTypeAddRow = discTypeAddRow;
+window.discTypeMoveRow = discTypeMoveRow;
 window.discTypeResetDefault = discTypeResetDefault;
 window.saveDiscTypeMaster = saveDiscTypeMaster;
 window.openSecNews = openSecNews;
