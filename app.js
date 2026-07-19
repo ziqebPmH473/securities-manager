@@ -326,6 +326,7 @@ const store = {
     this.data.newsPrefs ||= {};       // ニュース表示設定（hideCats:「すべて」から除外するカテゴリ / hideDiscTypes:非表示にする開示種類）・同期
     this.data.newsPrefs.hideCats ||= [];
     this.data.newsPrefs.hideDiscTypes ||= [];
+    this.data.discTypeDefs ||= structuredClone(DEFAULT_DISC_TYPES); // 開示種別マスタ（分類・キーワード）。ユーザー編集可・同期
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -4433,7 +4434,7 @@ function newsToggleCat(c) {
 function newsPresentDiscTypes() {
   const set = new Set();
   for (const it of (_newsCache ? _newsCache.items : [])) if (isDiscItem(it)) set.add(disclosureGroup(it));
-  return NEWS_DISC_GROUPS.map(t => t[0]).filter(id => set.has(id));
+  return discGroupsOrdered().filter(id => set.has(id));
 }
 function newsDiscTypeShown(id) { return !((store.data.newsPrefs && store.data.newsPrefs.hideDiscTypes) || []).includes(id); }
 function newsToggleDiscType(id) {
@@ -4467,33 +4468,38 @@ const NEWS_DAYS = [[0, '全期間'], [1, '24時間'], [3, '3日'], [7, '7日']];
 function setNewsDays(d) { newsDays = d; renderNews(); }
 const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['disclosure', '開示'], ['macro', '為替・金利'], ['other', 'その他']];
 // 開示の細分類（TDnet/EDGARの見出し・書類種別から判定）。表示設定で種類ごとに除外できる
-const NEWS_DISC_TYPES = [
-  ['monthly', '月次', /月次|月度/],
-  ['kessan', '決算', /決算短信|四半期報告書|年次報告書|決算説明|決算報告/],
-  ['forecast', '業績修正', /業績予想|業績修正|上方修正|下方修正|通期予想|配当予想の修正/],
-  ['dividend', '配当', /配当(?!予想の修正)|剰余金の配当|増配|減配/],
-  ['buyback', '自己株取得', /自己株式.{0,6}(取得|買付|公開買付)|自社株買/],
-  ['treasury', '自己株処分', /自己株式.{0,6}処分/],
-  ['split', '株式分割', /株式分割|併合/],
-  ['comp', '株式報酬', /譲渡制限付株式|ＲＳＵ|RSU|新株予約権|ストックオプション|従業員持株/],
-  ['jinji', '人事', /役員.{0,4}異動|人事異動|代表取締役|取締役.{0,4}(選任|異動)|社長/],
-  ['ma', 'M&A・組織', /買収|合併|子会社.{0,4}(取得|異動|設立)|事業譲渡|会社分割|ＴＯＢ|TOB|株式交換|株式移転/],
-  ['event', '重要事象(8-K)', /重要事象/],
-  ['meeting', '株主総会', /株主総会|招集通知/],
-  ['fix', '訂正・変更', /開示事項の(変更|訂正)|（訂正）|の一部変更/],
+// 開示種別マスタ（既定）。name=タグ名（＝ID） / group=フィルタタブのまとめ名 / keywords=見出し判定（正規表現・| 区切り）。
+// 上から順に最初に一致した種別のタグが付く。groupが同じ種別はニュースの絞り込みタブで束ねられる（タグは種別ごと）。
+// ユーザーがマスタ・設定＞開示種別マスタで編集可能（store.data.discTypeDefs）。編集内容はタグ付け・分類の両方に反映される。
+const DEFAULT_DISC_TYPES = [
+  { name: '月次', group: '決算', keywords: '月次|月度' },
+  { name: '決算', group: '決算', keywords: '決算短信|四半期報告書|年次報告書|決算説明|決算報告' },
+  { name: '業績修正', group: '決算', keywords: '業績予想|業績修正|上方修正|下方修正|通期予想|配当予想の修正' },
+  { name: '配当', group: '決算', keywords: '配当|剰余金の配当|増配|減配' },
+  { name: '自己株取得', group: '自己株', keywords: '自己株式.{0,6}(取得|買付|公開買付)|自社株買' },
+  { name: '自己株処分', group: '自己株', keywords: '自己株式.{0,6}処分' },
+  { name: '株式分割', group: '株式分割', keywords: '株式分割|併合' },
+  { name: '株式報酬', group: '株式報酬', keywords: '譲渡制限付株式|ＲＳＵ|RSU|新株予約権|ストックオプション|従業員持株' },
+  { name: '人事', group: '人事', keywords: '役員.{0,4}異動|人事異動|代表取締役|取締役.{0,4}(選任|異動)|社長' },
+  { name: 'M&A・組織', group: 'M&A・組織', keywords: '買収|合併|子会社.{0,4}(取得|異動|設立)|事業譲渡|会社分割|ＴＯＢ|TOB|株式交換|株式移転' },
+  { name: '重要事象(8-K)', group: '重要事象(8-K)', keywords: '重要事象' },
+  { name: '株主総会', group: '株主総会', keywords: '株主総会|招集通知' },
+  { name: '訂正・変更', group: '訂正・変更', keywords: '開示事項の(変更|訂正)|（訂正）|の一部変更' },
 ];
-function disclosureType(it) {
+const _discReCache = new Map(); // キーワード文字列→コンパイル済み正規表現（マスタ編集時に clear）
+function _discRe(kw) { if (_discReCache.has(kw)) return _discReCache.get(kw); let r = null; try { r = new RegExp(kw); } catch (_) { r = null; } _discReCache.set(kw, r); return r; }
+function discDefs() { const d = store.data.discTypeDefs; return (Array.isArray(d) && d.length) ? d : DEFAULT_DISC_TYPES; }
+function disclosureDef(it) {
   const t = (it && it.title) || '';
-  for (const [id, , re] of NEWS_DISC_TYPES) if (re.test(t)) return id;
-  return 'other_disc';
+  for (const d of discDefs()) { if (!d.keywords) continue; const re = _discRe(d.keywords); if (re && re.test(t)) return d; }
+  return { name: 'その他開示', group: 'その他開示' };
 }
-function disclosureTypeLabel(id) { const d = NEWS_DISC_TYPES.find(x => x[0] === id); return d ? d[1] : 'その他開示'; }
-// フィルタ用の「まとめ種別（グループ）」: タグ（チップ）は細かいまま、絞り込みタブだけ束ねる。
-//   決算グループ = 決算/業績修正/配当/月次 ／ 自己株グループ = 取得/処分
-const NEWS_DISC_GROUP_OF = { monthly: 'kessan', kessan: 'kessan', forecast: 'kessan', dividend: 'kessan', buyback: 'buyback', treasury: 'buyback' };
-const NEWS_DISC_GROUPS = [['kessan', '決算'], ['buyback', '自己株'], ['split', '株式分割'], ['comp', '株式報酬'], ['jinji', '人事'], ['ma', 'M&A・組織'], ['event', '重要事象(8-K)'], ['meeting', '株主総会'], ['fix', '訂正・変更'], ['other_disc', 'その他開示']];
-function disclosureGroup(it) { const t = disclosureType(it); return NEWS_DISC_GROUP_OF[t] || t; }
-function disclosureGroupLabel(id) { const d = NEWS_DISC_GROUPS.find(x => x[0] === id); return d ? d[1] : 'その他開示'; }
+function disclosureType(it) { return disclosureDef(it).name; }          // 名前＝タグ＝ID
+function disclosureTypeLabel(name) { return name; }                     // 名前がそのままラベル
+function disclosureGroup(it) { return disclosureDef(it).group || 'その他開示'; }
+function disclosureGroupLabel(g) { return g; }                          // グループ名がそのままラベル
+// 定義順のグループ一覧（フィルタタブの並び）＋末尾に「その他開示」
+function discGroupsOrdered() { const out = []; for (const d of discDefs()) { const g = d.group || 'その他開示'; if (!out.includes(g)) out.push(g); } if (!out.includes('その他開示')) out.push('その他開示'); return out; }
 // 記事が開示アイテムか（TDnet/EDGAR合流分）
 function isDiscItem(it) { return it && (it.source === '適時開示' || it.source === 'SEC EDGAR'); }
 // 見出しキーワードでカテゴリ判定。判定順は特異度順（決算→為替・金利→市況→その他）。
@@ -4895,27 +4901,6 @@ function openNewsTagsEditor() {
       <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
     </div>`);
 }
-// 表示設定モーダル（「すべて」に出すカテゴリ／表示する開示の種類）
-function openNewsPrefs() {
-  const prefs = store.data.newsPrefs || { hideCats: [], hideDiscTypes: [] };
-  const typeRows = NEWS_DISC_TYPES.concat([['other_disc', 'その他開示']]).map(([id, l]) =>
-    `<label class="np-check"><input type="checkbox" data-dtype="${id}" ${(prefs.hideDiscTypes || []).includes(id) ? '' : 'checked'}> ${l}</label>`).join('');
-  showModal('表示する開示の種類', `
-    <p class="muted" style="margin:0 0 8px;font-size:12px">チェックを外すと、決算・開示からその種類が消えます（端末間で同期）。例：自己株取得を外すと自社株買い関連が非表示。</p>
-    <div class="np-checks">${typeRows}</div>
-    <div class="form-actions" style="margin-top:12px">
-      <button type="button" class="btn btn-primary" onclick="saveNewsPrefs()">保存</button>
-      <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
-    </div>`);
-}
-function saveNewsPrefs() {
-  const hideDiscTypes = [...document.querySelectorAll('#modal-body input[data-dtype]')].filter(c => !c.checked).map(c => c.dataset.dtype);
-  const p = store.data.newsPrefs || {};
-  store.data.newsPrefs = { hideCats: p.hideCats || [], hideDiscTypes, _updatedAt: new Date().toISOString() };
-  store.save();
-  closeModal();
-  renderNews();
-}
 function saveNewsTags() {
   const ta = document.getElementById('news-tags-ta');
   if (!ta) return;
@@ -5001,7 +4986,7 @@ function renderNews() {
     const discSeg = dts.length ? `<div class="seg seg-toggle" style="flex-basis:100%;flex-wrap:wrap">
       <span class="muted" style="align-self:center;font-size:11px;margin-right:2px">開示:</span>
       <button class="${dts.every(newsDiscTypeShown) ? 'active' : ''}" onclick="newsToggleDiscType('all')">すべて</button>
-      ${dts.map(id => `<button class="${newsDiscTypeShown(id) ? 'active' : ''}" onclick="newsToggleDiscType('${id}')">${disclosureGroupLabel(id)}</button>`).join('')}</div>` : '';
+      ${dts.map(id => `<button class="${newsDiscTypeShown(id) ? 'active' : ''}" onclick="newsToggleDiscType('${jsq(id)}')">${esc(disclosureGroupLabel(id))}</button>`).join('')}</div>` : '';
     seg = `${catSeg}
       <div class="seg">${NEWS_MKTS.map(([v, l]) => `<button class="${newsMkt === v ? 'active' : ''}" onclick="setNewsMkt('${v}')" title="関連銘柄の市場で絞り込み">${l}</button>`).join('')}</div>
       <div class="seg">${NEWS_DAYS.map(([v, l]) => `<button class="${newsDays === v ? 'active' : ''}" onclick="setNewsDays(${v})" title="この期間に配信された記事のみ">${l}</button>`).join('')}</div>
@@ -5144,10 +5129,10 @@ function renderSecNewsScreen() {
     : '<div class="muted">なし</div>';
   // 開示欄: 存在する「まとめ種別（グループ）」だけボタン表示（複数選択・初期全部）。チップは細分類のまま。ボタンはスクロール領域の外（固定）
   const presentTypes = [...new Set((disc || []).map(disclosureGroup))];
-  const orderedTypes = NEWS_DISC_GROUPS.map(t => t[0]).filter(id => presentTypes.includes(id));
+  const orderedTypes = discGroupsOrdered().filter(id => presentTypes.includes(id));
   const filterBtns = orderedTypes.length ? `<div class="seg seg-toggle sec-disc-filter" style="flex-wrap:wrap;margin-bottom:8px">
       <button class="${typeSel && orderedTypes.every(id => typeSel.has(id)) ? 'active' : ''}" onclick="secNewsAllTypes(${!(typeSel && orderedTypes.every(id => typeSel.has(id)))})">すべて</button>
-      ${orderedTypes.map(id => `<button class="${typeSel && typeSel.has(id) ? 'active' : ''}" onclick="secNewsToggleType('${id}')">${disclosureGroupLabel(id)}</button>`).join('')}
+      ${orderedTypes.map(id => `<button class="${typeSel && typeSel.has(id) ? 'active' : ''}" onclick="secNewsToggleType('${jsq(id)}')">${esc(disclosureGroupLabel(id))}</button>`).join('')}
     </div>` : '';
   const discFiltered = (disc || []).filter(d => !typeSel || typeSel.has(disclosureGroup(d)));
   const discListHtml = disc && disc.length
@@ -6050,7 +6035,51 @@ const MASTER_LAUNCH = [
   { v: 'alias',    label: '取込変換マスタ',         open: () => openImportAliasMaster(), note: '取込時の「マスタに無い値」の変換対応（カテゴリ/格付/詳細種別/ルール）。' },
   { v: 'cf',       label: '列の背景色ルール',       open: () => openCfRulesMaster(),  note: '数値列の値の範囲ごとの背景色。適用画面（保有/サイン/マスタ/マーケット）を複数選択可。' },
   { v: 'notify',   label: '通知メール設定',         open: () => openNotifyMaster(),   note: '買い増しサイン通知メールの件名・本文をテンプレート（差し込み記号）で自由に編集。日本株/米国株・到達/接近で別々に設定可。' },
+  { v: 'disctype', label: '開示種別マスタ（分類・キーワード）', open: () => openDiscTypeMaster(), note: 'ニュースの開示（TDnet/EDGAR）を見出しキーワードで種別分類。種別名（タグ）・まとめ（フィルタタブ）・キーワードを編集可。' },
 ];
+// ---------- 開示種別マスタ（分類・キーワード編集） ----------
+function discTypeRowHtml(d) {
+  return `<tr>
+    <td class="l"><input class="dt-name" value="${esc(d.name || '')}" placeholder="決算" style="width:110px"></td>
+    <td class="l"><input class="dt-group" value="${esc(d.group || '')}" placeholder="決算" style="width:110px"></td>
+    <td class="l"><input class="dt-kw" value="${esc(d.keywords || '')}" placeholder="決算短信|四半期報告書" style="width:100%;min-width:220px"></td>
+    <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()" title="削除">×</button></td></tr>`;
+}
+function openDiscTypeMaster() {
+  const rows = discDefs().map(discTypeRowHtml).join('');
+  showModal('開示種別マスタ（分類・キーワード）', `
+    <p class="muted" style="margin:0 0 8px;font-size:12px">開示の見出しに含まれる<strong>キーワード</strong>（正規表現・<code>|</code> 区切り）で種別を判定します。<strong>上から順に最初に一致</strong>した種別のタグが付きます。<br>「まとめ（フィルタタブ）」が同じ種別は、ニュースの絞り込みタブで束ねられます（タグは種別ごとに表示）。どれにも一致しないものは「その他開示」。</p>
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr><th class="l">種別（タグ名）</th><th class="l">まとめ（フィルタタブ）</th><th class="l">キーワード（| 区切り・正規表現可）</th><th></th></tr></thead>
+      <tbody id="disc-type-rows">${rows}</tbody></table></div>
+    <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" onclick="discTypeAddRow()">＋ 種別を追加</button><span style="flex:1"></span><button class="btn btn-sm" onclick="discTypeResetDefault()">既定に戻す</button></div>
+    <div class="form-actions" style="margin-top:12px">
+      <button type="button" class="btn btn-primary" onclick="saveDiscTypeMaster()">保存</button>
+      <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+    </div>`, { wide: true });
+}
+function discTypeAddRow() { const tb = document.getElementById('disc-type-rows'); if (tb) tb.insertAdjacentHTML('beforeend', discTypeRowHtml({ name: '', group: '', keywords: '' })); }
+function discTypeResetDefault() {
+  if (!confirm('開示種別・キーワードを既定に戻します。編集内容は失われます。よろしいですか？')) return;
+  store.data.discTypeDefs = structuredClone(DEFAULT_DISC_TYPES); store.save(); _discReCache.clear();
+  openDiscTypeMaster();
+}
+function saveDiscTypeMaster() {
+  const defs = [];
+  for (const tr of document.querySelectorAll('#disc-type-rows tr')) {
+    const name = tr.querySelector('.dt-name').value.trim();
+    if (!name) continue;
+    const group = tr.querySelector('.dt-group').value.trim() || name;
+    const keywords = tr.querySelector('.dt-kw').value.trim();
+    if (keywords) { try { new RegExp(keywords); } catch (_) { toast(`キーワードの正規表現が不正です: ${name}`); return; } }
+    defs.push({ name, group, keywords });
+  }
+  if (!defs.length) { toast('少なくとも1種別は必要です'); return; }
+  store.data.discTypeDefs = defs;
+  store.save(); _discReCache.clear();
+  closeModal(); if (currentView === 'news') renderNews();
+  toast('開示種別を保存しました');
+}
 function openMasterPick() {
   const el = document.getElementById('master-pick'); if (!el) return;
   const m = MASTER_LAUNCH.find(x => x.v === el.value); if (m) m.open();
@@ -10784,6 +10813,8 @@ function setHoldingsMarket(m) {
   render();
 }
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+// onclick 等のインライン属性内の単一引用符JS文字列に値を埋める用（\と'をJSエスケープ→HTMLエスケープ）
+function jsq(s) { return esc(String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")); }
 function num(n) { return n == null ? '—' : Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 2 }); }
 function yen(n) { return n == null ? '—' : '¥' + Math.round(n).toLocaleString('ja-JP'); }
 function money(n, ccy) { return n == null ? '—' : ccy + Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 2 }); }
@@ -11270,8 +11301,10 @@ window.newsOpenArticle = newsOpenArticle;
 window.setNewsHeldOnly = setNewsHeldOnly;
 window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
-window.openNewsPrefs = openNewsPrefs;
-window.saveNewsPrefs = saveNewsPrefs;
+window.openDiscTypeMaster = openDiscTypeMaster;
+window.discTypeAddRow = discTypeAddRow;
+window.discTypeResetDefault = discTypeResetDefault;
+window.saveDiscTypeMaster = saveDiscTypeMaster;
 window.openSecNews = openSecNews;
 window.secNewsToggleType = secNewsToggleType;
 window.secNewsAllTypes = secNewsAllTypes;

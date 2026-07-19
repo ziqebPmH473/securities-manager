@@ -55,6 +55,7 @@
     newsHidden:      ['map', null],   // ニュース非表示（記事リンク→非表示日時ISO）。キー単位3-way・両在はlocal
     newsTrans:       ['map', null],   // ニュース翻訳キャッシュ（記事リンク→{t,d,at}）。キー単位3-way・両在はlocal
     newsPrefs:       ['singleTs'],    // ニュース表示設定（除外カテゴリ/開示種類）。両方編集時は _updatedAt の新しい方
+    discTypeDefs:    ['single'],      // 開示種別マスタ（順序つき配列・一括編集）。base から変わった側を採用（両方編集は local 優先）
 
     fx:              ['single'],
     settings:        ['singleTs'],
