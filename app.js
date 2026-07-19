@@ -329,6 +329,7 @@ const store = {
     this.data.discTypeDefs ||= structuredClone(DEFAULT_DISC_TYPES); // 開示種別マスタ（分類・キーワード）。ユーザー編集可・同期
     this.data.ytChannels ||= structuredClone(DEFAULT_YT_CHANNELS); // YouTube購読チャンネル（動画取得元）。ユーザー編集可・同期
     this.data.ytSummaries ||= {};     // 動画要約キャッシュ（videoId→{summary,at}）。1動画1回だけ生成・同期
+    this.data.listedMaster ||= [];    // 全上場銘柄マスタ（自動タグ用）[{code,name}]。JPX一覧を取込・同期
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -4784,28 +4785,65 @@ const NEWS_US_ALIAS = {
 // 主要上場銘柄の自動タグ用リスト（保有外でも見出し/本文に出たら別色チップ）。
 // 辞書は上の NEWS_JP_ALIAS / NEWS_US_ALIAS を再利用（コード付き＝クリックで株探へ）。将来は全上場マスタ取込で拡張予定。
 // 誤検知抑制: 照合語は「3文字以上」または「2文字以上かつ非ASCII（日立・東芝等の漢字2字）」のみ採用（JT/au等の短いASCIIは除外）。
-const NEWS_MAJORS = (() => {
+// 銘柄名から照合用の正規化名を生成（会社種別除去＋略称）。マスタ取込銘柄用（誤検知抑制で3文字以上）
+function _masterNorms(name) {
+  const base = String(name || '').replace(/株式会社|\(株\)|（株）/g, '').replace(/\s+/g, '').trim();
+  if (!base) return [];
+  const cands = [base, base.replace(/ホールディングス/g, 'HD'), base.replace(/(ホールディングス|HD)$/, ''), base.replace(/グループ$/, ''), base.replace(/グループ$/, 'G')];
+  const kat = base.match(/^[ァ-ヶー]{3,}/); if (kat && kat[0].length < base.length) cands.push(kat[0]);
+  return [...new Set(cands.map(searchNorm).filter(x => x.length >= 3))]; // 3文字以上のみ（誤検知抑制）
+}
+// 自動タグ対象リスト（組込み主要辞書＋取込マスタ）。マスタ変更時のみ再構築してキャッシュ。
+let _majorsListCache = null, _majorsListVer = -1;
+const _majorsMemo = new Map();   // 見出しテキスト→一致エントリ（保有除外済み）。大量マスタ対策の見出し単位キャッシュ
+let _majorsMemoVer = '';
+function newsMajorsList() {
+  const master = store.data.listedMaster || [];
+  if (_majorsListCache && _majorsListVer === master.length) return _majorsListCache;
   const okNorm = x => x.length >= 3 || (x.length >= 2 && /[^\x00-\x7f]/.test(x));
-  const build = (dict, market) => Object.entries(dict).map(([code, s]) => {
+  const buildAlias = (dict, market) => Object.entries(dict).map(([code, s]) => {
     const names = s.split('|').filter(Boolean);
-    return { market, code, label: names[0], norms: names.map(searchNorm).filter(okNorm) };
+    return { market, code, label: names[0], norms: names.map(searchNorm).filter(okNorm), code4: (market === 'JP' && /^\d{4}$/.test(code)) ? code : null };
   }).filter(e => e.norms.length);
-  return [...build(NEWS_JP_ALIAS, 'JP'), ...build(NEWS_US_ALIAS, 'US')];
-})();
-// 記事に出現する主要上場銘柄（保有外・手動タグ外）。excludeNorms=既に別チップで表示済みの正規化名の集合
-function newsMatchMajors(it, excludeNorms) {
-  const norm = searchNorm(newsText(it));
-  const out = [], seen = new Set();
-  for (const e of NEWS_MAJORS) {
-    // 保有登録済みは青チップで出るので除外
-    if (store.data.securities.some(s => s.market === e.market && String(s.ticker || '').toUpperCase() === e.code.toUpperCase())) continue;
-    if (!e.norms.some(n => norm.includes(n))) continue;
-    if (excludeNorms && e.norms.some(n => excludeNorms.has(n))) continue;
-    const key = e.market + e.code;
-    if (seen.has(key)) continue; seen.add(key);
-    out.push({ market: e.market, code: e.code, label: e.label });
+  const list = [...buildAlias(NEWS_JP_ALIAS, 'JP'), ...buildAlias(NEWS_US_ALIAS, 'US')];
+  const seen = new Set(list.map(e => e.market + e.code));
+  for (const m of master) {
+    const code = String(m.code || '').trim(), name = String(m.name || '').trim();
+    if (!/^[0-9A-Za-z]{4}$/.test(code) || !name || seen.has('JP' + code)) continue; // 組込みと重複はスキップ
+    const norms = _masterNorms(name);
+    if (!norms.length) continue;
+    list.push({ market: 'JP', code, label: name, norms, code4: /^\d{4}$/.test(code) ? code : null });
+    seen.add('JP' + code);
   }
+  _majorsListCache = list; _majorsListVer = master.length; _majorsMemo.clear();
+  return list;
+}
+// 記事に出現する自動タグ銘柄（保有外）。見出し単位でキャッシュ（保有除外まで）。
+function newsMatchMajorsRaw(it) {
+  const list = newsMajorsList();
+  const ver = _majorsListVer + '|' + (store.data.securities || []).length;
+  if (_majorsMemoVer !== ver) { _majorsMemo.clear(); _majorsMemoVer = ver; }
+  const text = newsText(it);
+  const key = text.slice(0, 300);
+  if (_majorsMemo.has(key)) return _majorsMemo.get(key);
+  const norm = searchNorm(text);
+  const held = new Set((store.data.securities || []).filter(s => s.enabled !== false).map(s => s.market + ':' + String(s.ticker || '').toUpperCase()));
+  const codeSet = new Set((text.match(/(?<![0-9])[0-9]{4}(?![0-9円万億兆株])/g) || []));
+  const out = [], seen = new Set();
+  for (const e of list) {
+    if (held.has(e.market + ':' + e.code.toUpperCase())) continue;   // 保有は青チップで出す
+    if (!(e.norms.some(n => norm.includes(n)) || (e.code4 && codeSet.has(e.code4)))) continue;
+    const k = e.market + e.code; if (seen.has(k)) continue; seen.add(k);
+    out.push(e);
+  }
+  _majorsMemo.set(key, out);
   return out;
+}
+// excludeNorms=既に別チップで表示済みの正規化名の集合（重複表示を避ける）
+function newsMatchMajors(it, excludeNorms) {
+  return newsMatchMajorsRaw(it)
+    .filter(e => !(excludeNorms && e.norms.some(n => excludeNorms.has(n))))
+    .map(e => ({ market: e.market, code: e.code, label: e.label }));
 }
 function _newsPat(sec) {
   const metaName = (store.data.meta[priceKey(sec)] || {}).name || '';
@@ -6210,7 +6248,63 @@ const MASTER_LAUNCH = [
   { v: 'notify',   label: '通知メール設定',         open: () => openNotifyMaster(),   note: '買い増しサイン通知メールの件名・本文をテンプレート（差し込み記号）で自由に編集。日本株/米国株・到達/接近で別々に設定可。' },
   { v: 'disctype', label: '開示種別マスタ（分類・キーワード）', open: () => openDiscTypeMaster(), note: 'ニュースの開示（TDnet/EDGAR）を見出しキーワードで種別分類。種別名（タグ）・まとめ（フィルタタブ）・キーワードを編集可。' },
   { v: 'ytchannel', label: 'YouTubeチャンネル（動画取得元）', open: () => openYtChannelMaster(), note: 'ニュースの「動画」に出す購読チャンネル。チャンネルID（UCで始まる）と表示名を登録。' },
+  { v: 'listed', label: '上場銘柄マスタ（自動タグ用）', open: () => openListedMaster(), note: 'JPXの上場銘柄一覧（コード＋銘柄名）を取り込むと、保有外の全上場銘柄もニュース見出しで自動タグ。' },
 ];
+// ---------- 上場銘柄マスタ（自動タグ用・JPX一覧の取込） ----------
+// JPXの「東証上場銘柄一覧(data_j.xls)」をExcelで開き、全体をコピペ（またはCSV貼付）→取込。コード列/銘柄名列を自動判定。
+function parseListedMaster(text) {
+  const lines = String(text).replace(/\r/g, '').split('\n').filter(l => l.trim());
+  if (!lines.length) return [];
+  const split = (l) => l.includes('\t') ? l.split('\t') : l.split(',');
+  let codeIdx = -1, nameIdx = -1, start = 0;
+  const head = split(lines[0]);
+  head.forEach((h, i) => { const c = h.trim(); if (codeIdx < 0 && /^(コード|銘柄コード|証券コード|code)$/i.test(c)) codeIdx = i; if (nameIdx < 0 && /^(銘柄名|会社名|名称|name)$/i.test(c)) nameIdx = i; });
+  if (codeIdx >= 0 && nameIdx >= 0) start = 1;
+  const out = [], seen = new Set();
+  for (let r = start; r < lines.length; r++) {
+    const row = split(lines[r]); let code, name;
+    if (codeIdx >= 0) { code = (row[codeIdx] || '').trim(); name = (row[nameIdx] || '').trim(); }
+    else { const ci = row.findIndex(c => /^[0-9]{4}[0-9A-Za-z]?$/.test((c || '').trim())); if (ci < 0) continue; code = (row[ci] || '').trim(); name = (row[ci + 1] || '').trim(); }
+    code = code.replace(/[^0-9A-Za-z]/g, '').slice(0, 5);
+    if (/^[0-9]{4}[0-9A-Za-z]?$/.test(code)) code = code.slice(0, 4);
+    if (!/^[0-9A-Za-z]{4}$/.test(code) || !name || seen.has(code)) continue;
+    seen.add(code); out.push({ code, name });
+  }
+  return out;
+}
+function openListedMaster() {
+  const cur = store.data.listedMaster || [];
+  showModal('上場銘柄マスタ（自動タグ用）', `
+    <p class="muted" style="margin:0 0 8px;font-size:12px">現在の登録: <b>${cur.length.toLocaleString('ja-JP')} 銘柄</b>。ここに登録した銘柄は、保有していなくてもニュース見出し・本文に社名/コードが出れば自動でタグ（枠線・クリックで株探）されます。</p>
+    <fieldset class="form-group"><legend>取り込み方（JPXの公式一覧）</legend>
+      <ol class="muted" style="margin:0;padding-left:18px;font-size:12px;line-height:1.7">
+        <li>JPX「東証上場銘柄一覧」ページを開く → <b>data_j.xls</b> をダウンロード（<code>jpx.co.jp/markets/statistics-equities/misc/01.html</code>）</li>
+        <li>Excelで開き、全体を選択してコピー（またはCSVで保存）</li>
+        <li>下の欄に貼り付けて「取り込む」。「コード」列と「銘柄名」列を自動で判定します（ETF/REIT等も含めてOK）</li>
+      </ol></fieldset>
+    <textarea id="listed-ta" rows="8" style="width:100%;font-size:12px" placeholder="コード	銘柄名 … を貼り付け（タブ区切り/カンマ区切り）"></textarea>
+    <div class="form-actions" style="margin-top:12px">
+      <button type="button" class="btn btn-primary" onclick="importListedMaster()">取り込む</button>
+      ${cur.length ? `<button type="button" class="btn btn-danger" onclick="clearListedMaster()">全消去</button>` : ''}
+      <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+    </div>`, { wide: true });
+}
+function importListedMaster() {
+  const ta = document.getElementById('listed-ta'); if (!ta) return;
+  const parsed = parseListedMaster(ta.value);
+  if (!parsed.length) { toast('コード・銘柄名を読み取れませんでした（貼り付け内容をご確認ください）'); return; }
+  store.data.listedMaster = parsed; store.save();
+  _majorsListCache = null; _majorsMemo.clear(); // 照合リスト再構築
+  closeModal(); if (currentView === 'news') renderNews();
+  toast(`${parsed.length.toLocaleString('ja-JP')} 銘柄を取り込みました`);
+}
+function clearListedMaster() {
+  if (!confirm('上場銘柄マスタを全消去します。よろしいですか？')) return;
+  store.data.listedMaster = []; store.save();
+  _majorsListCache = null; _majorsMemo.clear();
+  closeModal(); if (currentView === 'news') renderNews();
+  toast('上場銘柄マスタを消去しました');
+}
 // ---------- YouTubeチャンネル マスタ ----------
 function ytChannelRowHtml(c) {
   return `<tr>
@@ -11534,6 +11628,9 @@ window.saveNewsTags = saveNewsTags;
 window.openYtChannelMaster = openYtChannelMaster;
 window.ytChannelAddRow = ytChannelAddRow;
 window.saveYtChannelMaster = saveYtChannelMaster;
+window.openListedMaster = openListedMaster;
+window.importListedMaster = importListedMaster;
+window.clearListedMaster = clearListedMaster;
 window.openDiscTypeMaster = openDiscTypeMaster;
 window.discTypeAddRow = discTypeAddRow;
 window.discTypeMoveRow = discTypeMoveRow;
