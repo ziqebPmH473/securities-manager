@@ -4483,8 +4483,15 @@ const YT_MODELS = [
   ['gemini-2.5-flash', 'Gemini 2.5 Flash（20回/日）'],
   ['gemini-2.5-flash-lite', 'Gemini 2.5 Flash Lite（20回/日）'],
 ];
-const YT_MODEL_CHAIN = ['gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.5-flash']; // 自動時の降格チェーン
+// 品質優先の並び（自動時のチェーン／固定選択時の降格先の順序）。上ほど高精度、下ほど回数上限が大きい。
+const YT_QUALITY_ORDER = ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
 function ytModelSetting() { return (store.data.settings && store.data.settings.ytModel) || ''; }
+// 要約リクエストに渡すモデル配列。自動＝品質優先の全チェーン／固定＝選択モデルを先頭に置き上限時は他へ降格。
+function ytModelChainForRequest() {
+  const sel = ytModelSetting();
+  if (!sel) return YT_QUALITY_ORDER.slice();
+  return [sel, ...YT_QUALITY_ORDER.filter(m => m !== sel)];
+}
 // 開示の細分類（TDnet/EDGARの見出し・書類種別から判定）。表示設定で種類ごとに除外できる
 // 開示種別マスタ（既定）。name=タグ名（＝ID） / group=フィルタタブのまとめ名 / keywords=見出し判定（正規表現・| 区切り）。
 // 上から順に最初に一致した種別のタグが付く。groupが同じ種別はニュースの絞り込みタブで束ねられる（タグは種別ごと）。
@@ -4654,8 +4661,8 @@ function openVideoPanel(it) {
   if (!has) generateVideoSummary(it.videoId, true);
 }
 async function generateVideoSummary(videoId, showInPanel) {
-  // モデルは設定があればそれ1つ、無ければ降格チェーンを優先順で送る（東証振り返りと同仕様）
-  const models = ytModelSetting() ? [ytModelSetting()] : YT_MODEL_CHAIN;
+  // 固定選択でも上限時は他モデルへ降格させる（選択モデルを先頭にした降格チェーンを送る）
+  const models = ytModelChainForRequest();
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 130000); // 降格で複数モデル試すため長め
@@ -6165,7 +6172,7 @@ function openYtChannelMaster() {
     <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" onclick="ytChannelAddRow()">＋ チャンネルを追加</button></div>
     <fieldset class="form-group" style="margin-top:14px"><legend>要約に使うAIモデル（Gemini）</legend>
       <select id="yt-model" style="min-width:280px">${modelOpts}</select>
-      <p class="muted" style="font-size:11px;margin:6px 0 0">「自動」は無料枠に強い順に試し、上限に達したら自動で次のモデルへ降格します（東証マーケット振り返りツールと同じ挙動）。</p>
+      <p class="muted" style="font-size:11px;margin:6px 0 0">上限（回数超過）に達したら、どのモデルを選んでも自動で他モデルへ降格して要約を続けます。<br>「自動」＝高精度なモデルから順に試行／モデル固定＝そのモデルを優先し、上限時のみ他へ降格。</p>
     </fieldset>
     <div class="form-actions" style="margin-top:12px">
       <button type="button" class="btn btn-primary" onclick="saveYtChannelMaster()">保存</button>

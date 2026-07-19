@@ -894,3 +894,7 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 - 参照: `C:\work\stock-slide-generator`（東証マーケット振り返りツール）の `functions/api/analyze.js` ＋ モデルセレクタ。
 - **モデル選択**: マスタ・設定＞YouTubeチャンネル・要約設定にモデル選択を追加。`store.data.settings.ytModel`（空=自動）。選択肢＝YT_MODELS（gemini-3.5-flash / gemini-3-flash-preview / gemini-3.1-flash-lite / gemini-2.5-flash / gemini-2.5-flash-lite）。
 - **上限時の挙動（同仕様）**: `/api/youtube-summary?models=m1,m2,...` が優先順にモデルを試行。一時エラー（429/5xx/quota/rate/overload等 `isTransient`）は同モデルで1回リトライ（800ms）→次モデルへ**降格**。全滅なら「全モデルが混雑/上限のようです。少し待って…」。自動時の降格チェーン＝`YT_MODEL_CHAIN`（lite優先で無料枠に強い順）。使用モデル・降格有無はパネルに表示（`d.model`/`fellBack`）。
+
+### 19.3 モデル固定でも上限時は降格（東証より一歩進めた挙動・2026-07-19）
+- 東証ツールは「モデル固定選択時は降格しない（[選択1つ]のみ）」。本ツールは**固定選択でも上限時に他モデルへ降格**する。
+- `ytModelChainForRequest()`: 自動＝`YT_QUALITY_ORDER`（品質優先の全チェーン）／固定＝選択モデルを先頭に置き、残りを品質順で降格先に。生成時は常にこのチェーンを送るので、どのモデルでも上限で自動継続。
