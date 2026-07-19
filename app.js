@@ -4675,6 +4675,9 @@ async function generateVideoSummary(videoId, showInPanel) {
     if (d && d.summary) {
       store.data.ytSummaries[videoId] = { headline: d.headline || '', summary: d.summary, at: new Date().toISOString(), model: d.model };
       store.save();
+      // 一覧の該当動画1行だけ即更新（クリック生成・裏生成どちらも）。画面全体・他行には触れない
+      const it = _newsCache && _newsCache.items.find(x => x.videoId === videoId);
+      if (it) { it.desc = d.summary; if (currentView === 'news') _patchVideoItemDom(it); }
       if (showInPanel) {
         const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary;
         const ht = document.getElementById('np-video-headline'); if (ht && d.headline) ht.textContent = d.headline;
@@ -4697,15 +4700,16 @@ async function newsAutoSummarizeVideos() {
   if (!(store.data.settings && store.data.settings.ytAutoSummary)) return;
   if (_ytAutoBusy || !_newsCache) return;
   const sums = store.data.ytSummaries || {};
-  const pend = _newsCache.items.filter(it => it.cat === 'video' && it.videoId && !(sums[it.videoId] && sums[it.videoId].summary) && !_ytTried.has(it.videoId)).slice(0, 3);
+  const pend = _newsCache.items.filter(it => it.cat === 'video' && it.videoId && !(sums[it.videoId] && sums[it.videoId].summary) && !_ytTried.has(it.videoId)).slice(0, 2);
   if (!pend.length) return;
   _ytAutoBusy = true;
   try {
+    // 順次生成（generateVideoSummary が完了時に該当行だけ差し替える。全体再描画はしない）。
+    // TPM(1分あたりトークン)を分散させるため各生成の間に少し待つ。
     for (const it of pend) {
       _ytTried.add(it.videoId);
-      const s = await generateVideoSummary(it.videoId, false); // パネル無し（裏で生成）
-      // 完了しても全体再描画はしない＝開いている条件・スクロールに触れない。該当の動画行だけ差し替える
-      if (s) { const c = store.data.ytSummaries[it.videoId]; if (c) it.desc = c.summary; if (currentView === 'news') _patchVideoItemDom(it); }
+      await generateVideoSummary(it.videoId, false);
+      await new Promise(r => setTimeout(r, 3000));
     }
   } finally { _ytAutoBusy = false; }
 }

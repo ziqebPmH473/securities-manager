@@ -35,7 +35,8 @@ export async function onRequestGet(context) {
   const body = {
     contents: [{ role: 'user', parts: [
       { text: PROMPT },
-      { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '2700s' } },
+      // 前半15分に制限＋低解像度＝トークンを無料枠のTPM上限(25万/分)内に収める（45分だと約49万で2倍超過するため）。長尺は前半のみ要約。
+      { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '900s' } },
     ] }],
     generationConfig: { temperature: 0.3, maxOutputTokens: 900, mediaResolution: 'MEDIA_RESOLUTION_LOW' },
   };
@@ -62,7 +63,9 @@ export async function onRequestGet(context) {
         lastStatus = res.status;
         lastRaw = (data && data.error && data.error.message) || ('HTTP ' + res.status);
         if (!isTransient(res.status, lastRaw)) return json({ error: jpError(res.status, lastRaw), detail: String(lastRaw).slice(0, 300), model: m });
-        if (attempt === 0) { await delay(800); continue; } // 同モデルで1回リトライ
+        // 上限(TPM/回数)超過は同モデルで再試行しても同じ上限に当たり無駄にトークンを食う→即次モデルへ。過負荷/5xxのみ再試行
+        const isQuota = res.status === 429 || /quota|exhaust|rate|limit/i.test(lastRaw);
+        if (attempt === 0 && !isQuota) { await delay(800); continue; }
       } catch (e) {
         lastRaw = (e && e.name === 'AbortError') ? 'timeout' : ((e && e.message) || String(e));
         if (attempt === 0 && lastRaw !== 'timeout') { await delay(800); continue; }
