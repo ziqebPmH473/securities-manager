@@ -35,8 +35,9 @@ export async function onRequestGet(context) {
   const body = {
     contents: [{ role: 'user', parts: [
       { text: PROMPT },
-      // 前半15分に制限＋低解像度＝トークンを無料枠のTPM上限(25万/分)内に収める（45分だと約49万で2倍超過するため）。長尺は前半のみ要約。
-      { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '900s' } },
+      // 低解像度＋フレームレートを大きく下げる(0.2fps=5秒に1コマ)＝映像トークンを激減させ音声(ナレーション)は維持。
+      // これで無料枠TPM上限(25万/分)内のまま前半45分まで読める（解説系は音声主体なので実用上ほぼカバー）。長尺は前半のみ。
+      { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '2700s', fps: 0.2 } },
     ] }],
     generationConfig: { temperature: 0.3, maxOutputTokens: 900, mediaResolution: 'MEDIA_RESOLUTION_LOW' },
   };
