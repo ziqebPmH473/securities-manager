@@ -840,3 +840,8 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 - **開示の細分類もインラインのトグル化**: ツールバー別行に「開示: すべて/決算/自己株取得/…」を表示（プールに存在する種類だけ）。選択状態は `newsPrefs.hideDiscTypes` に永続保存＆同期。旧「開示の種類」設定モーダルのボタンは撤去（`openNewsPrefs` は残置・未使用）。
 - **銘柄別専用画面の英語ニュースを翻訳**: Finnhub銘柄別ニュース（US）に `lang:'en'` を付与し、`_secNewsTranslate` で見出しをバッチ翻訳→再描画。Bloomberg同様に日本語表示。
 - **専用画面モーダルの幅も固定**: `.modal.wide.modal-fixh` に `width: min(1000px,94vw)` を追加。グリッド中央寄せで content 幅になり「小さく開いて広がる」問題を解消（開いた瞬間から一定サイズ）。
+
+## 18. ニュース: 銘柄フィルタ（保有銘柄フィルタ流用）＋開示グルーピング＋翻訳先行（2026-07-19）
+- **銘柄フィルタ（`news` スコープ）**: 共通フィルタ機構（`fltState`/`applyColFilters`/`filterPanelHtml`/`filterBtnHtml`）に `news` スコープを追加。ニュースツールバーに「パターン選択＋詳細」を設置し、`filterableCols('news')`＝`NEWS_FILTER_KEYS`（市場/カテゴリ/投資カテゴリ/ラベル/格付/セクター/業種/ルール/種別）で絞れる。条件が有効なとき、`applyColFilters(全JP/US銘柄,'news')` を通った銘柄の記事だけ表示（一致銘柄なしの一般記事は除外）。状態は localStorage 保存・パターンは保有銘柄と共通。
+- **開示のグルーピング（タグは細分類・フィルタタブは束ねる）**: `disclosureGroup`＝決算グループ(決算/業績修正/配当/月次)・自己株グループ(取得/処分)・他は個別。フィルタのトグルは `NEWS_DISC_GROUPS`（決算/自己株/…）で束ね、チップ（`disclosureTypeLabel`）は細分類のまま。`月次`種別を新設。`hideDiscTypes` はグループIDで保存。
+- **専用画面の英語ニュースを先に翻訳してから描画**（英語のちらつき解消）。Finnhub(US)は `lang:'en'` 付与済み。
