@@ -4487,6 +4487,13 @@ const YT_MODELS = [
 // 品質優先の並び（自動時のチェーン／固定選択時の降格先の順序）。上ほど高精度、下ほど回数上限が大きい。
 const YT_QUALITY_ORDER = ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
 function ytModelSetting() { return (store.data.settings && store.data.settings.ytModel) || ''; }
+// パネルの「モデル: … ・ 12,345 tok」表記
+function ytModelNote(model, tokens, fellBack) {
+  if (!model) return '';
+  let s = 'モデル: ' + model + (fellBack ? '（降格）' : '');
+  if (tokens != null) s += ' ・ ' + Number(tokens).toLocaleString('ja-JP') + ' tok';
+  return s;
+}
 // 要約リクエストに渡すモデル配列。自動＝品質優先の全チェーン／固定＝選択モデルを先頭に置き上限時は他へ降格。
 function ytModelChainForRequest() {
   const sel = ytModelSetting();
@@ -4652,7 +4659,7 @@ function openVideoPanel(it) {
       <div class="np-orig muted">動画タイトル: ${esc(it.title)}</div>
       ${chips ? `<div class="np-chips">${chips}</div>` : ''}
       <div class="np-body" id="np-video-summary">${has ? esc(cached.summary) : '<span class="muted">AIで要約を生成しています…（動画が長いと1分ほどかかります）</span>'}</div>
-      <p class="np-note muted"><span id="np-video-model">${has && cached.model ? 'モデル: ' + esc(cached.model) : ''}</span></p>
+      <p class="np-note muted"><span id="np-video-model">${has && cached.model ? esc(ytModelNote(cached.model, cached.tokens, false)) : ''}</span></p>
       <p class="np-note muted">※ AIによる自動要約です。誤り（銘柄名・数値の取り違え等）が含まれる場合があります。長い動画は前半を要約する場合があります。正確な内容は動画をご確認ください。</p>
       <div class="form-actions" style="margin-top:14px">
         <button type="button" class="btn btn-primary" onclick="window.open('${esc(it.link)}','_blank')">▶ 動画を開く</button>
@@ -4673,7 +4680,8 @@ async function generateVideoSummary(videoId, showInPanel) {
     try { const r = await fetch('/api/youtube-summary?v=' + encodeURIComponent(videoId) + '&models=' + encodeURIComponent(models.join(',')), { signal: ctrl.signal }); d = await r.json(); }
     finally { clearTimeout(timer); }
     if (d && d.summary) {
-      store.data.ytSummaries[videoId] = { headline: d.headline || '', summary: d.summary, at: new Date().toISOString(), model: d.model };
+      const tokens = (d.usage && d.usage.totalTokenCount) || null;
+      store.data.ytSummaries[videoId] = { headline: d.headline || '', summary: d.summary, at: new Date().toISOString(), model: d.model, tokens };
       store.save();
       // 一覧の該当動画1行だけ即更新（クリック生成・裏生成どちらも）。画面全体・他行には触れない
       const it = _newsCache && _newsCache.items.find(x => x.videoId === videoId);
@@ -4681,7 +4689,7 @@ async function generateVideoSummary(videoId, showInPanel) {
       if (showInPanel) {
         const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary;
         const ht = document.getElementById('np-video-headline'); if (ht && d.headline) ht.textContent = d.headline;
-        const mn = document.getElementById('np-video-model'); if (mn) mn.textContent = d.model ? `モデル: ${d.model}${d.fellBack ? '（降格）' : ''}` : '';
+        const mn = document.getElementById('np-video-model'); if (mn) mn.textContent = ytModelNote(d.model, tokens, d.fellBack);
       }
       return d.summary;
     }
