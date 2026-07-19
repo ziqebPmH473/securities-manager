@@ -2052,19 +2052,20 @@ function filterScopeBase(scope) {
   if (scope === 'analysis') return 'ANALYSIS';
   return holdingsMarket === 'JP' ? 'JP' : holdingsMarket === 'FUND' ? 'FUND' : 'US';
 }
-const NEWS_FILTER_KEYS = ['held', 'market', 'category', 'investCategory', 'labels', 'rating', 'sector', 'industry', 'ruleName', 'detailType']; // ニュースの銘柄フィルタ（日米横断）
-const NEWS_KEY_LABELS = { held: '保有状況（保有/未保有）' }; // MASTER_COLSに無いフィルタ項目の表示名
 function filterableCols(scope) {
   let keys;
-  if (scope === 'secmaster' || scope === 'news') {
-    const src = scope === 'news' ? NEWS_FILTER_KEYS : SECMASTER_FILTER_KEYS;
-    keys = src.map(k => { const mc = MASTER_COLS.find(c => c.key === k); return { key: k, label: mc ? mc.label : (NEWS_KEY_LABELS[k] || k) }; });
+  if (scope === 'secmaster') {
+    keys = SECMASTER_FILTER_KEYS.map(k => { const mc = MASTER_COLS.find(c => c.key === k); return { key: k, label: mc ? mc.label : k }; });
   } else {
-    const base = filterScopeBase(scope);
-    keys = [];
+    // holdings / analysis / news は同じ列セット（＝保有銘柄フィルタのパターンをニュースでもそのまま適用できる）。
+    // news は日米どちらの列も対象（横断）。全スコープ共通で「保有状況（保有/未保有）」も使える。
+    keys = [{ key: 'held', label: '保有状況（保有/未保有）' }];
+    const seen = new Set(['held']);
     for (const c of MASTER_COLS) {
-      if (!c.markets.includes(base) || c.key === 'ticker' || c.key === 'name') continue;
-      keys.push({ key: c.key, label: c.label });
+      if (c.key === 'ticker' || c.key === 'name' || seen.has(c.key)) continue;
+      if (scope === 'news') { if (!(c.markets.includes('JP') || c.markets.includes('US'))) continue; }
+      else if (!c.markets.includes(filterScopeBase(scope))) continue;
+      keys.push({ key: c.key, label: c.label }); seen.add(c.key);
     }
   }
   const sample = store.data.securities.find(s => s.market === 'US' || s.market === 'JP');
