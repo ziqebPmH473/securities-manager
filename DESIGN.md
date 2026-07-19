@@ -781,6 +781,8 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
     - **SheetJSは同梱を優先**（`xlsx.full.min.js` をリポジトリに同梱＝同一オリジンから読込）。取得失敗時のみCDNへフォールバック（`_loadScriptOnce`）。本番でCDN遮断/オフラインでも取り込めるようにするため（旧: CDN直参照で取込エラーになった事象への対処）。data_j.xls はOLE2/BIFF8バイナリだがSheetJS full版がShift-JIS込みで正しく読める（実測4,430件・約180ms）。
   - **ドラッグ&ドロップ対応**: 取込モーダルにドロップゾーン（`listed-dz`）。`data_j.xls` を枠にD&D、またはクリックで選択。選択/ドロップとも `importListedFromFile(file)` に集約。
   - **取込日を保持**: ファイル内「日付」列（JPXの基準日。無ければ先頭行の8桁YYYYMMDDを探索）を `store.data.listedMasterInfo = {date,importedAt,count,fileName}` に保存。モーダル冒頭に「現在の登録: N銘柄 ・ YYYY-MM-DD 時点のデータ（取込日時）」を表示＝いつ時点の一覧か一目でわかる。`listedMasterInfo` も sync SCHEMA(`single`)登録。
+  - **保存容量対策（localStorage約5MB）**: 4,430社を配列JSON(`[{code,name}]`≈152KB)で持つと満杯環境で `QuotaExceededError`（setItem failed: exceeded the quota）になる。対策として `store.data.listedMaster` は **`CODE\tNAME\n…` のコンパクト文字列**で保持（≈74KB・約半分）。読み出しは `listedMasterArr()`（パースをメモ化）、件数は `listedMasterCount()`、保存は `setListedMaster()`。旧配列形式も後方互換で読める。
+  - **save() のクォータ自動回復**: `store.save()` は超過時に**再取得できるキャッシュ（市場ランキング mktRanking／参考指数 indices／ニュース翻訳 newsTrans）だけを破棄して再保存**を試みる（`_freeCacheSpace()`）。動画要約(ytSummaries)はGeminiのAPIコストがかかる再生成のため消さない。再保存も失敗したら「上場銘柄マスタを全消去 か 不要データ整理を」を促すトースト。
 - **ランキングタブ銘柄も自動タグ（2026-07-20）**: マーケットの**時価総額/売買代金/値上がり/値下がり**ランキングのキャッシュ（`store.data.mktRanking`）の構成銘柄も `newsMajorsList()` に合成（`_rankingEntries()`）。US=ティッカー＋日本語化名称、JP=4桁コード＋名称。**米国株はランキング取得ぶんが主要辞書(NEWS_US_ALIAS 約46社)を補完**する形で対象拡大。照合リストのキャッシュ鍵は `listedMaster件数 + ランキング署名(_rankingSig)`（ランキング更新で自動失効）。
 - **社名→照合語**: `_masterNorms(name)` が「株式会社」除去・ホールディングス⇔HD・グループ⇔G・先頭カタカナ抽出などの正規化別名を生成（`searchNorm`でNFKC＋カナ→かな）。誤検知抑制のため**3文字以上**の別名のみ採用。
 - **マッチ**: 見出し＋本文の正規化テキストに社名別名が含まれる／または本文に**4桁コード**（前後が数字や円・株でない）が出れば該当。保有済み銘柄は自動タグから除外（青チップ側で表示）。
