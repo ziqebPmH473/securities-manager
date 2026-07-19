@@ -2037,6 +2037,7 @@ function fltSelectSpec(key) {
     case 'buyGrade': return { opts: [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']], val: s => s.buyGrade || '' };
     case 'reachKind': return { opts: [['新', '新規到達'], ['続', '継続中'], ['－', '未到達']], val: s => calc.reachKind(s) || '－' };
     case 'principalSold': return { opts: [['1', '売却済み'], ['0', '未売却']], val: s => s.principalSold ? '1' : '0' };
+    case 'held': return { opts: [['1', '保有'], ['0', '未保有']], val: s => (calc.totalHolding(s.id).qty > 0 ? '1' : '0') };
     case 'anaMACD': return { opts: [['golden', 'GC'], ['dead', 'DC'], ['none', '—']], val: s => { const r = techOf(s); return r ? (r.macdCross || 'none') : ''; } };
     case 'anaStatus': return { opts: [['1', '形成中'], ['2', '完成間近'], ['3', 'ブレイク済み'], ['4', '失敗']], val: s => { const r = techOf(s); return r && r.best ? String(r.best.status) : ''; } };
     case 'anaMa200': return { opts: [['above', '上'], ['below', '下']], val: s => { const r = techOf(s); return r ? (r.ma200Pos || '') : ''; } };
@@ -2051,12 +2052,13 @@ function filterScopeBase(scope) {
   if (scope === 'analysis') return 'ANALYSIS';
   return holdingsMarket === 'JP' ? 'JP' : holdingsMarket === 'FUND' ? 'FUND' : 'US';
 }
-const NEWS_FILTER_KEYS = ['market', 'category', 'investCategory', 'labels', 'rating', 'sector', 'industry', 'ruleName', 'detailType']; // ニュースの銘柄フィルタ（日米横断）
+const NEWS_FILTER_KEYS = ['held', 'market', 'category', 'investCategory', 'labels', 'rating', 'sector', 'industry', 'ruleName', 'detailType']; // ニュースの銘柄フィルタ（日米横断）
+const NEWS_KEY_LABELS = { held: '保有状況（保有/未保有）' }; // MASTER_COLSに無いフィルタ項目の表示名
 function filterableCols(scope) {
   let keys;
   if (scope === 'secmaster' || scope === 'news') {
     const src = scope === 'news' ? NEWS_FILTER_KEYS : SECMASTER_FILTER_KEYS;
-    keys = src.map(k => { const mc = MASTER_COLS.find(c => c.key === k); return { key: k, label: mc ? mc.label : k }; });
+    keys = src.map(k => { const mc = MASTER_COLS.find(c => c.key === k); return { key: k, label: mc ? mc.label : (NEWS_KEY_LABELS[k] || k) }; });
   } else {
     const base = filterScopeBase(scope);
     keys = [];
@@ -4992,7 +4994,7 @@ function renderNews() {
     seg = `${catSeg}
       <div class="seg">${NEWS_MKTS.map(([v, l]) => `<button class="${newsMkt === v ? 'active' : ''}" onclick="setNewsMkt('${v}')" title="関連銘柄の市場で絞り込み">${l}</button>`).join('')}</div>
       <div class="seg">${NEWS_DAYS.map(([v, l]) => `<button class="${newsDays === v ? 'active' : ''}" onclick="setNewsDays(${v})" title="この期間に配信された記事のみ">${l}</button>`).join('')}</div>
-      <div class="seg"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="保有銘柄・注目タグに関連しない記事（一般ニュース）を除外。銘柄フィルタとAND">保有・注目のみ</button></div>
+      <div class="seg"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="保有銘柄・注目タグに関連しない一般ニュースを除外。銘柄フィルタとAND">一般ニュース除外</button></div>
       <span title="保有銘柄と同じ条件で銘柄を絞り込む。一般ニュースは残る（一般ニュースの除外は「保有・注目のみ」と併用）">${filterBtnHtml('news')}</span>
       <button class="btn btn-sm" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>
       ${discSeg}
