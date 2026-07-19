@@ -4409,10 +4409,34 @@ function renderMarketTab() {
 // store.data.newsRead（リンク→既読日時）に保存し Google同期する（sync-merge.js SCHEMA 登録済み）。
 let _newsCache = null;   // { items:[{title,link,source,pubDate}], at }
 let newsBusy = false;
-let newsCat = 'all';
 let newsHeldOnly = false; // 関連銘柄（登録銘柄に見出し一致）のみ表示
+const NEWS_REAL_CATS = ['market', 'earnings', 'disclosure', 'macro', 'other']; // 「すべて」以外の実カテゴリ
+// 表示するカテゴリは newsPrefs.hideCats（非表示カテゴリ）で管理＝インラインのトグルで即切替＆同期保存
+function newsCatShown(c) { return !((store.data.newsPrefs && store.data.newsPrefs.hideCats) || []).includes(c); }
+function newsAllCatsShown() { return NEWS_REAL_CATS.every(newsCatShown); }
+function newsToggleCat(c) {
+  const p = store.data.newsPrefs || (store.data.newsPrefs = { hideCats: [], hideDiscTypes: [] });
+  p.hideCats = p.hideCats || [];
+  if (c === 'all') { p.hideCats = []; }               // 「すべて」＝全カテゴリ表示
+  else if (p.hideCats.includes(c)) p.hideCats = p.hideCats.filter(x => x !== c);
+  else { p.hideCats = [...p.hideCats, c]; if (p.hideCats.length >= NEWS_REAL_CATS.length) p.hideCats = []; } // 全部外したら全表示に戻す
+  p._updatedAt = new Date().toISOString();
+  store.save(); renderNews();
+}
 let newsShowHidden = false; // 非表示にした記事の一覧（復元用）を表示中か
 let newsDays = 0; // 期間フィルタ（0=全て / 1 / 3 / 7 日以内）
+let newsMkt = 'all'; // 市場フィルタ（all / JP / US）。関連銘柄・開示の市場で絞る（一般ニュースは市場情報がないので常に表示）
+const NEWS_MKTS = [['all', '全市場'], ['JP', '日本株'], ['US', '米国株']];
+function setNewsMkt(m) { newsMkt = m; renderNews(); }
+// 記事の市場（関連銘柄の市場＋開示元＋英語＝米国寄り）。空＝市場情報なし（一般ニュース）
+function newsItemMarkets(it, ms) {
+  const set = new Set();
+  for (const s of (ms || [])) set.add(s.market);
+  if (it.source === '適時開示') set.add('JP');
+  if (it.source === 'SEC EDGAR') set.add('US');
+  if (it.lang === 'en') set.add('US');
+  return set;
+}
 const NEWS_DAYS = [[0, '全期間'], [1, '24時間'], [3, '3日'], [7, '7日']];
 function setNewsDays(d) { newsDays = d; renderNews(); }
 const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['disclosure', '開示'], ['macro', '為替・金利'], ['other', 'その他']];
@@ -4449,7 +4473,6 @@ function newsCategory(itOrTitle) {
   if (/日経平均|東証|TOPIX|株式市場|株価|続伸|続落|反発|反落|急騰|急落|ダウ|ナスダック|S&P|米国株|米株|プライム市場|グロース市場|半導体株/.test(t)) return 'market';
   return 'other';
 }
-function setNewsCat(c) { newsCat = c; renderNews(); }
 async function newsRefresh(auto) {
   if (newsBusy) return;
   newsBusy = true;
@@ -4715,6 +4738,35 @@ async function newsTranslateDesc(link) {
 function newsDispTitle(it) { const tr = store.data.newsTrans[it.link]; return (it.lang === 'en' && tr && tr.t) ? tr.t : it.title; }
 function newsDispDesc(it) { const tr = store.data.newsTrans[it.link]; return (it.lang === 'en' && tr && tr.d) ? tr.d : (it.desc || ''); }
 
+// マウス左ドラッグでニュース一覧をスクロール（スクロールバーが掴みにくい/中ボタンautoscrollがリンクに奪われる対策）。
+// 4pxを超えて動いた時だけスクロール扱いにし、その直後のクリック（リンク遷移）は抑止する。ページ全体に一度だけ設定。
+let _newsDragScrollInit = false;
+function initNewsDragScroll() {
+  if (_newsDragScrollInit) return; _newsDragScrollInit = true;
+  const SEL = '.news-wrap, .sec-news-scroll';
+  let ds = null;
+  document.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const w = e.target.closest(SEL); if (!w) return;
+    ds = { w, y: e.pageY, top: w.scrollTop, moved: false };
+  });
+  document.addEventListener('mousemove', e => {
+    if (!ds) return;
+    const dy = e.pageY - ds.y;
+    if (!ds.moved && Math.abs(dy) > 4) { ds.moved = true; ds.w.classList.add('drag-scrolling'); }
+    if (ds.moved) { ds.w.scrollTop = ds.top - dy; e.preventDefault(); }
+  });
+  document.addEventListener('mouseup', () => {
+    if (!ds) return;
+    const w = ds.w, moved = ds.moved; ds = null;
+    if (!moved) return;
+    w.classList.remove('drag-scrolling');
+    const sup = ev => { ev.preventDefault(); ev.stopPropagation(); w.removeEventListener('click', sup, true); };
+    w.addEventListener('click', sup, true);            // ドラッグ直後のクリック（リンク遷移）を1回だけ抑止
+    setTimeout(() => w.removeEventListener('click', sup, true), 60);
+  });
+}
+
 // 記事の判定対象テキスト＝見出し＋本文(要約)。本文が取れるフィード（NHK/東洋経済/ダイヤ/ブルームバーグ等）
 // では本文中の言及も拾える。日経マーケット/Yahoo等は本文なしなので見出しのみ。
 function newsText(it) { return typeof it === 'string' ? it : ((it && it.title) || '') + ' ' + ((it && it.desc) || ''); }
@@ -4782,14 +4834,14 @@ function _newsCurrentEntries() {
   const prefs = store.data.newsPrefs || {};
   const hideCats = prefs.hideCats || [], hideDiscTypes = prefs.hideDiscTypes || [];
   let entries = (_newsCache ? _newsCache.items : [])
-    .filter(it => newsCat === 'all' || newsCategory(it) === newsCat)
     .filter(it => !hidden[it.link])
     .filter(it => !since || (it.pubDate && new Date(it.pubDate).getTime() >= since))
-    // 「すべて」表示のとき、設定で除外したカテゴリを隠す（他のカテゴリを直接選べば見える）
-    .filter(it => !(newsCat === 'all' && hideCats.includes(newsCategory(it))))
+    // 表示カテゴリ（インラインのトグルで選択・非選択カテゴリは隠す）
+    .filter(it => !hideCats.includes(newsCategory(it)))
     // 非表示にした開示種類（決算/自己株取得 等）はどのカテゴリでも隠す
     .filter(it => !(isDiscItem(it) && hideDiscTypes.includes(disclosureType(it))))
     .map(it => [it, newsMatchSecs(it)]);
+  if (newsMkt !== 'all') entries = entries.filter(([it, ms]) => { const mk = newsItemMarkets(it, ms); return mk.size === 0 || mk.has(newsMkt); });
   if (newsHeldOnly) entries = entries.filter(([it, ms]) => ms.length || newsMatchTags(it).length);
   return entries;
 }
@@ -4807,29 +4859,20 @@ function openNewsTagsEditor() {
 // 表示設定モーダル（「すべて」に出すカテゴリ／表示する開示の種類）
 function openNewsPrefs() {
   const prefs = store.data.newsPrefs || { hideCats: [], hideDiscTypes: [] };
-  const catRows = NEWS_CATS.filter(([v]) => v !== 'all').map(([v, l]) =>
-    `<label class="np-check"><input type="checkbox" data-cat="${v}" ${prefs.hideCats.includes(v) ? '' : 'checked'}> ${l}</label>`).join('');
   const typeRows = NEWS_DISC_TYPES.concat([['other_disc', 'その他開示']]).map(([id, l]) =>
-    `<label class="np-check"><input type="checkbox" data-dtype="${id}" ${prefs.hideDiscTypes.includes(id) ? '' : 'checked'}> ${l}</label>`).join('');
-  showModal('ニュース表示設定', `
-    <p class="muted" style="margin:0 0 6px;font-size:12px">チェックを外すと非表示になります（設定は端末間で同期）。</p>
-    <fieldset class="form-group"><legend>「すべて」タブに表示するカテゴリ</legend>
-      <div class="np-checks">${catRows}</div>
-      <p class="muted" style="font-size:11px;margin:6px 0 0">※外しても、そのカテゴリのボタンを直接押せば表示できます。</p>
-    </fieldset>
-    <fieldset class="form-group"><legend>表示する開示の種類（決算・開示）</legend>
-      <div class="np-checks">${typeRows}</div>
-      <p class="muted" style="font-size:11px;margin:6px 0 0">例：自己株取得を外すと、決算・開示から自社株買い関連が消えます。</p>
-    </fieldset>
+    `<label class="np-check"><input type="checkbox" data-dtype="${id}" ${(prefs.hideDiscTypes || []).includes(id) ? '' : 'checked'}> ${l}</label>`).join('');
+  showModal('表示する開示の種類', `
+    <p class="muted" style="margin:0 0 8px;font-size:12px">チェックを外すと、決算・開示からその種類が消えます（端末間で同期）。例：自己株取得を外すと自社株買い関連が非表示。</p>
+    <div class="np-checks">${typeRows}</div>
     <div class="form-actions" style="margin-top:12px">
       <button type="button" class="btn btn-primary" onclick="saveNewsPrefs()">保存</button>
       <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
     </div>`);
 }
 function saveNewsPrefs() {
-  const hideCats = [...document.querySelectorAll('#modal-body input[data-cat]')].filter(c => !c.checked).map(c => c.dataset.cat);
   const hideDiscTypes = [...document.querySelectorAll('#modal-body input[data-dtype]')].filter(c => !c.checked).map(c => c.dataset.dtype);
-  store.data.newsPrefs = { hideCats, hideDiscTypes, _updatedAt: new Date().toISOString() };
+  const p = store.data.newsPrefs || {};
+  store.data.newsPrefs = { hideCats: p.hideCats || [], hideDiscTypes, _updatedAt: new Date().toISOString() };
   store.save();
   closeModal();
   renderNews();
@@ -4912,11 +4955,14 @@ function renderNews() {
       ? `<div class="table-wrap news-wrap"><div class="news-list">${hitems.map(it => newsItemHtml(it, read, newsMatchSecs(it), { restore: true })).join('')}</div></div>`
       : '<div class="empty">非表示にした記事はありません。<br><span class="muted">（このセッションの取得分のうち非表示中のものを表示します）</span></div>';
   } else {
-    seg = `<div class="seg">${NEWS_CATS.map(([v, l]) => `<button class="${newsCat === v ? 'active' : ''}" onclick="setNewsCat('${v}')">${l}</button>`).join('')}</div>
+    // カテゴリは複数選択トグル（クリックで即切替＝設定モーダル不要）。「すべて」で全表示
+    const catSeg = `<div class="seg seg-toggle"><button class="${newsAllCatsShown() ? 'active' : ''}" onclick="newsToggleCat('all')">すべて</button>${NEWS_REAL_CATS.map(v => { const l = (NEWS_CATS.find(c => c[0] === v) || [])[1]; return `<button class="${newsCatShown(v) ? 'active' : ''}" onclick="newsToggleCat('${v}')">${l}</button>`; }).join('')}</div>`;
+    seg = `${catSeg}
+      <div class="seg">${NEWS_MKTS.map(([v, l]) => `<button class="${newsMkt === v ? 'active' : ''}" onclick="setNewsMkt('${v}')" title="関連銘柄の市場で絞り込み">${l}</button>`).join('')}</div>
       <div class="seg">${NEWS_DAYS.map(([v, l]) => `<button class="${newsDays === v ? 'active' : ''}" onclick="setNewsDays(${v})" title="この期間に配信された記事のみ">${l}</button>`).join('')}</div>
       <div class="seg"><button class="${newsHeldOnly ? 'active' : ''}" onclick="setNewsHeldOnly(${newsHeldOnly ? 'false' : 'true'})" title="登録銘柄・注目タグが見出しに含まれる記事のみ">関連のみ</button></div>
       <button class="btn btn-sm" style="margin-left:auto" onclick="openNewsTagsEditor()" title="保有していない企業・人物・テーマ名で色付けする">${svgIcon('filter', '')} 注目タグ</button>
-      <button class="btn btn-sm" onclick="openNewsPrefs()" title="「すべて」に出すカテゴリ・表示する開示の種類を設定">${svgIcon('settings', '')} 表示設定</button>`;
+      <button class="btn btn-sm" onclick="openNewsPrefs()" title="表示する開示の種類（決算/自己株取得 等）を設定">${svgIcon('settings', '')} 開示の種類</button>`;
     if (!cache) {
       body = '<div class="empty">読み込み中…</div>';
     } else {
@@ -4941,6 +4987,7 @@ function renderNews() {
       <div class="section-body" style="padding:12px 16px 16px">${body}</div>
     </div>`;
   scheduleFit(); // 一覧を枠内スクロールに（ページ全体をスクロールさせない）
+  initNewsDragScroll(); // ドラッグでスクロール（初回のみ設定）
   if (!newsBusy && !cache) newsRefresh(true); // タブを開いた時に自動取得
   else if (!newsBusy && cache && Date.now() - new Date(cache.at).getTime() > 5 * 60 * 1000) newsRefresh(true); // 5分超は裏で自動更新
   if (cache) newsTranslatePending(); // 英語記事の未翻訳分を裏で翻訳→完了後に再描画（非同期・多重起動はガード済み）
@@ -4989,7 +5036,8 @@ let _secNewsCtx = null; // { sec, news:[], disc:[], typeSel:Set|null }
 async function openSecNews(secId) {
   const sec = store.data.securities.find(s => s.id === secId); if (!sec) return;
   _secNewsCtx = { sec, news: null, disc: null, typeSel: null };
-  showModal(`ニュース・開示 — ${calc.displayName(sec)}`, `<div id="sec-news-screen" class="muted" style="padding:8px 0">読み込み中…</div>`, { wide: true });
+  showModal(`ニュース・開示 — ${calc.displayName(sec)}`, `<div id="sec-news-screen" class="muted" style="padding:8px 0">読み込み中…</div>`, { wide: true, fixHeight: true });
+  initNewsDragScroll();
   // ニュースと開示を並行取得
   const [news, disc] = await Promise.all([_secNewsFetch(sec), _secDiscFetch(sec)]);
   if (!_secNewsCtx || _secNewsCtx.sec.id !== secId) return; // 別銘柄に切替/閉じたら中断
@@ -5033,16 +5081,16 @@ function renderSecNewsScreen() {
   const newsHtml = news && news.length
     ? `<div class="news-list news-mini">${news.map(it => newsItemHtml(it, read, null, { mini: true })).join('')}</div>`
     : '<div class="muted">なし</div>';
-  // 開示欄: 存在する種類だけボタン表示（細分類・複数選択・初期全部）
+  // 開示欄: 存在する種類だけボタン表示（細分類・複数選択・初期全部）。ボタンはスクロール領域の外（固定）
   const presentTypes = [...new Set((disc || []).map(disclosureType))];
   const orderedTypes = NEWS_DISC_TYPES.map(t => t[0]).concat(['other_disc']).filter(id => presentTypes.includes(id));
-  const filterBtns = orderedTypes.length ? `<div class="seg sec-disc-filter" style="flex-wrap:wrap;margin-bottom:8px">
+  const filterBtns = orderedTypes.length ? `<div class="seg seg-toggle sec-disc-filter" style="flex-wrap:wrap;margin-bottom:8px">
       <button class="${typeSel && orderedTypes.every(id => typeSel.has(id)) ? 'active' : ''}" onclick="secNewsAllTypes(true)">すべて</button>
       ${orderedTypes.map(id => `<button class="${typeSel && typeSel.has(id) ? 'active' : ''}" onclick="secNewsToggleType('${id}')">${disclosureTypeLabel(id)}</button>`).join('')}
     </div>` : '';
   const discFiltered = (disc || []).filter(d => !typeSel || typeSel.has(disclosureType(d)));
-  const discHtml = disc && disc.length
-    ? filterBtns + (discFiltered.length ? `<div class="news-list news-mini">${discFiltered.map(discItemHtml).join('')}</div>` : '<div class="muted">選択した種類の開示はありません</div>')
+  const discListHtml = disc && disc.length
+    ? (discFiltered.length ? `<div class="news-list news-mini">${discFiltered.map(discItemHtml).join('')}</div>` : '<div class="muted">選択した種類の開示はありません</div>')
     : '<div class="muted">なし</div>';
   el.innerHTML = `
     <div class="sec-news-cols">
@@ -5052,7 +5100,8 @@ function renderSecNewsScreen() {
       </div>
       <div class="sec-news-col">
         <h4 class="sec-news-h">📄 開示・決算</h4>
-        <div class="sec-news-scroll">${discHtml}</div>
+        ${filterBtns}
+        <div class="sec-news-scroll">${discListHtml}</div>
       </div>
     </div>`;
 }
@@ -6753,7 +6802,7 @@ function showModal(title, bodyHtml, opts = {}) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = bodyHtml;
   const m = document.querySelector('#modal-overlay .modal');
-  if (m) m.classList.toggle('wide', !!opts.wide);
+  if (m) { m.classList.toggle('wide', !!opts.wide); m.classList.toggle('modal-fixh', !!opts.fixHeight); } // fixHeight=件数によらず高さ固定
   document.getElementById('modal-overlay').hidden = false;
 }
 function closeModal() { document.getElementById('modal-overlay').hidden = true; }
@@ -11150,7 +11199,8 @@ window.cfAddRangeRow = cfAddRangeRow;
 window.cfDelRangeRow = cfDelRangeRow;
 window.cfApplyTplSel = cfApplyTplSel;
 window.cfCopyToCol = cfCopyToCol;
-window.setNewsCat = setNewsCat;
+window.newsToggleCat = newsToggleCat;
+window.setNewsMkt = setNewsMkt;
 window.setNewsDays = setNewsDays;
 window.newsRefresh = newsRefresh;
 window.newsReadLink = newsReadLink;
