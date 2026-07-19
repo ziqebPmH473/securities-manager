@@ -5043,7 +5043,7 @@ async function _newsDiscForHoldings() {
   for (const t of usTickers) jobs.push(fetch('/api/disclosure?market=US&ticker=' + encodeURIComponent(t)).then(r => r.json()).then(d => (d.items || []).slice(0, 4)).catch(() => []));
   const arrs = await Promise.all(jobs);
   return [].concat(...arrs).map(d => ({
-    title: d.title, link: d.link, pubDate: d.pubDate, source: d.market === 'US' ? 'SEC EDGAR' : '適時開示',
+    title: d.title, link: discLink(d), pubDate: d.pubDate, source: d.market === 'US' ? 'SEC EDGAR' : '適時開示',
     code: d.code, company: d.company, // 銘柄チップ表示用（コードで登録銘柄に紐付く）
     cat: d.kind === 'earnings' ? 'earnings' : 'disclosure',
   }));
@@ -5059,11 +5059,21 @@ async function newsEnsure() {
   return _newsCache;
 }
 // 開示・決算1行（TDnet/EDGAR）。細分類ラベルで色分け、クリックで原本(PDF/EDGAR)を開く
+// 開示のリンク先。TDnet(日本株)のPDFは公開期間が約1か月で、それを過ぎると404になる。
+// 30日より古い日本株の開示は、恒久的なYahoo!ファイナンスの適時開示ページへ切替える（リンク切れ回避）。
+function discIsJp(d) { return d.market === 'JP' || d.source === '適時開示'; }
+function discExpired(d) { return d.pubDate && (Date.now() - new Date(d.pubDate).getTime()) > 30 * 86400 * 1000; }
+function discLink(d) {
+  if (discIsJp(d) && d.code && discExpired(d)) return `https://finance.yahoo.co.jp/quote/${encodeURIComponent(d.code)}.T/disclosure`;
+  return d.link;
+}
 function discItemHtml(d) {
   const typeLbl = disclosureTypeLabel(disclosureType(d));
-  return `<a class="news-item disc-item" href="${esc(d.link)}" target="_blank" rel="noopener" draggable="false">
+  const expired = discIsJp(d) && d.code && discExpired(d);
+  const src = d.market === 'US' ? 'SEC EDGAR' : (expired ? 'Yahoo開示' : 'TDnet');
+  return `<a class="news-item disc-item" href="${esc(discLink(d))}" target="_blank" rel="noopener" draggable="false" title="${expired ? 'PDFは公開終了。Yahoo!ファイナンスの開示一覧を開きます' : ''}">
       <span class="news-title">${esc(d.title)}</span>
-      <span class="news-meta"><span class="news-cat ${d.kind === 'earnings' ? 'cat-earnings' : ''}">${typeLbl}</span><span>${d.market === 'US' ? 'SEC EDGAR' : 'TDnet'}</span><span>${newsTime(d.pubDate)}</span></span>
+      <span class="news-meta"><span class="news-cat ${d.kind === 'earnings' ? 'cat-earnings' : ''}">${typeLbl}</span><span>${src}</span><span>${newsTime(d.pubDate)}</span></span>
     </a>`;
 }
 
