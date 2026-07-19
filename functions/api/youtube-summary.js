@@ -4,19 +4,17 @@
 //   モデルは優先順の配列で受け取り、上限(429)・一時エラーはリトライ→次の下位モデルへ降格。全滅なら再試行を促す。
 // Gemini に YouTube URL を fileData で渡す。長尺対策で低解像度＋前半45分に制限。結果はクライアントが ytSummaries にキャッシュ&同期。
 const DEFAULT_CHAIN = ['gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
-const PROMPT = `あなたは投資メディアの編集者です。次のYouTube動画を視聴し、投資・株式・マーケットの観点で日本語のニュース記事風にまとめてください。
-出力は必ず次の形式（1行目＝見出し、空行、3行目以降＝本文）:
+const PROMPT = `次のYouTube動画を視聴し、投資・株式・マーケットの観点で日本語のニュース記事風にまとめてください。
 
-<見出し>
-（1行だけ。この動画の投資的な中身を要約したYahooニュース風の見出し。25〜45字程度。体言止め可。動画タイトルをそのまま書かない＝中身を要約する。記号や「見出し:」等のラベルは付けない）
-
-<本文>
-・箇条書き5〜8点。具体的な銘柄名・数値・相場観・売買判断・注目テーマを含める。
+出力形式（この形だけを出力し、ラベルや記号<>は絶対に書かない）:
+1行目: この動画の投資的な中身を25〜45字で要約したニュース見出し（Yahooニュース風・体言止め可）。動画タイトルの丸写しは禁止し、中身を要約する。
+2行目: 空行
+3行目以降: 要点の箇条書き。各行を「・」で始め、5〜8点。具体的な銘柄名・数値・相場観・売買判断・注目テーマを含める。
 
 ルール:
 - 投資に無関係な雑談・挨拶・宣伝は省く。
-- 動画に投資・マーケットの話題がほとんど無い場合は、見出しを「投資に関する内容なし」とし、本文に「投資に関する内容は見当たりませんでした。」とだけ書く。
-- 前置きや「以下にまとめます」等は不要。`;
+- 動画に投資・マーケットの話題がほとんど無い場合は、1行目を「投資に関する内容なし」とし、3行目に「投資に関する内容は見当たりませんでした。」とだけ書く。
+- 「見出し」「本文」等のラベルや <>【】 などの記号は書かない。要素そのものだけを出力する。前置き・後書きも不要。`;
 
 const ENDPOINT = (model, key) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
 const isTransient = (status, raw) => status === 429 || status >= 500 || /quota|rate|exhaust|limit:\s*0|overload|high demand|unavailable|temporarily|try again|resource has been exhausted/i.test(raw || '');
@@ -39,7 +37,8 @@ export async function onRequestGet(context) {
       // これで無料枠TPM上限(25万/分)内のまま前半45分まで読める（解説系は音声主体なので実用上ほぼカバー）。長尺は前半のみ。
       { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '2700s', fps: 0.2 } },
     ] }],
-    generationConfig: { temperature: 0.3, maxOutputTokens: 900, mediaResolution: 'MEDIA_RESOLUTION_LOW' },
+    // thinkingBudget:0＝思考を無効化（思考が出力トークンを食って本文が途中で切れるのを防ぐ）。出力上限も余裕を持たせる。
+    generationConfig: { temperature: 0.3, maxOutputTokens: 1500, mediaResolution: 'MEDIA_RESOLUTION_LOW', thinkingConfig: { thinkingBudget: 0 } },
   };
 
   let lastStatus = 0, lastRaw = '';
@@ -78,13 +77,13 @@ export async function onRequestGet(context) {
   return json({ error: '全モデルが混雑/上限のようです。少し待って「要約し直す」でお試しください。（最後のエラー: ' + jpError(lastStatus, lastRaw) + '）', detail: String(lastRaw).slice(0, 300) });
 }
 
-// 出力を「見出し（1行目）」と「本文（残り）」に分割。ラベルや記号は除去。
+// 出力を「見出し（最初の実質行）」と「本文（残り）」に分割。
+// モデルが <見出し>/<本文> 等のラベルを出力しても除去する（空行・ラベル行を捨てて最初の実文を見出しに）。
 function splitHeadline(text) {
-  const lines = String(text).split('\n');
-  let hi = 0;
-  while (hi < lines.length && !lines[hi].trim()) hi++;         // 先頭の空行を飛ばす
-  let headline = (lines[hi] || '').trim().replace(/^(見出し|タイトル)\s*[:：]\s*/, '').replace(/^[・\-*#>「」\s]+/, '').replace(/[「」]/g, '').trim();
-  const summary = lines.slice(hi + 1).join('\n').replace(/^\s*本文\s*[:：]?\s*/i, '').trim();
+  const isLabel = (l) => /^[<【[(]?\s*(見出し|本文|タイトル|要約|概要|headline|summary|title|body)\s*[>】\])]?\s*[:：]?\s*$/i.test(l);
+  const lines = String(text).split('\n').map(l => l.trim()).filter(l => l && !isLabel(l)); // 空行・ラベル行を除去
+  const headline = (lines[0] || '').replace(/^[・\-*#>「」\s]+/, '').replace(/^(見出し|タイトル)\s*[:：]\s*/, '').replace(/[「」]/g, '').trim();
+  const summary = lines.slice(1).join('\n').trim();
   return { headline: headline.slice(0, 60), summary: summary || String(text).trim() };
 }
 // Geminiの英語エラーを日本語のわかりやすい文言に変換
