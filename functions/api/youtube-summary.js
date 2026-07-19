@@ -34,8 +34,8 @@ export async function onRequestGet(context) {
     contents: [{ role: 'user', parts: [
       { text: PROMPT },
       // 低解像度＋フレームレートを大きく下げる(0.2fps=5秒に1コマ)＝映像トークンを激減させ音声(ナレーション)は維持。
-      // これで無料枠TPM上限(25万/分)内のまま前半45分まで読める（解説系は音声主体なので実用上ほぼカバー）。長尺は前半のみ。
-      { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '2700s', fps: 0.2 } },
+      // 実測 約39トークン/秒 なので前半60分でも約14万トークンでTPM上限(25万/分)内。長尺は前半60分のみ要約。
+      { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '3600s', fps: 0.2 } },
     ] }],
     // thinkingBudget:0＝思考を無効化（思考が出力トークンを食って本文が途中で切れるのを防ぐ）。出力上限も余裕を持たせる。
     generationConfig: { temperature: 0.3, maxOutputTokens: 1500, mediaResolution: 'MEDIA_RESOLUTION_LOW', thinkingConfig: { thinkingBudget: 0 } },
