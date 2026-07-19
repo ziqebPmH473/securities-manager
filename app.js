@@ -4793,13 +4793,35 @@ function _masterNorms(name) {
   const kat = base.match(/^[ァ-ヶー]{3,}/); if (kat && kat[0].length < base.length) cands.push(kat[0]);
   return [...new Set(cands.map(searchNorm).filter(x => x.length >= 3))]; // 3文字以上のみ（誤検知抑制）
 }
-// 自動タグ対象リスト（組込み主要辞書＋取込マスタ）。マスタ変更時のみ再構築してキャッシュ。
-let _majorsListCache = null, _majorsListVer = -1;
+// 自動タグ対象リスト（組込み主要辞書＋取込マスタ＋ランキングタブ銘柄）。構成変更時のみ再構築してキャッシュ。
+let _majorsListCache = null, _majorsListVer = '';
 const _majorsMemo = new Map();   // 見出しテキスト→一致エントリ（保有除外済み）。大量マスタ対策の見出し単位キャッシュ
 let _majorsMemoVer = '';
+// マーケット（時価総額/売買代金/値上がり/値下がり）ランキングのキャッシュから {market,code,name} を集める。
+// key = `${market}:${sub}:${kind}`。時価総額・売買代金上位の保有外銘柄もニュースで自動タグしたいため。
+function _rankingEntries() {
+  const cache = store.data.mktRanking || {};
+  const out = [];
+  for (const key of Object.keys(cache)) {
+    const market = String(key).split(':')[0] === 'US' ? 'US' : 'JP';
+    const items = (cache[key] && cache[key].items) || [];
+    for (const it of items) {
+      const code = String(it.code || '').trim(), name = String(it.name || '').trim();
+      if (code && name) out.push({ market, code, name });
+    }
+  }
+  return out;
+}
+function _rankingSig() {
+  const cache = store.data.mktRanking || {};
+  const keys = Object.keys(cache); let n = 0;
+  for (const k of keys) n += ((cache[k] && cache[k].items) || []).length;
+  return keys.length + 'x' + n;
+}
 function newsMajorsList() {
   const master = store.data.listedMaster || [];
-  if (_majorsListCache && _majorsListVer === master.length) return _majorsListCache;
+  const ver = master.length + '|' + _rankingSig();
+  if (_majorsListCache && _majorsListVer === ver) return _majorsListCache;
   const okNorm = x => x.length >= 3 || (x.length >= 2 && /[^\x00-\x7f]/.test(x));
   const buildAlias = (dict, market) => Object.entries(dict).map(([code, s]) => {
     const names = s.split('|').filter(Boolean);
@@ -4807,6 +4829,7 @@ function newsMajorsList() {
   }).filter(e => e.norms.length);
   const list = [...buildAlias(NEWS_JP_ALIAS, 'JP'), ...buildAlias(NEWS_US_ALIAS, 'US')];
   const seen = new Set(list.map(e => e.market + e.code));
+  // 取込マスタ（JPX全上場） … JPコード4桁/4英数字
   for (const m of master) {
     const code = String(m.code || '').trim(), name = String(m.name || '').trim();
     if (!/^[0-9A-Za-z]{4}$/.test(code) || !name || seen.has('JP' + code)) continue; // 組込みと重複はスキップ
@@ -4815,7 +4838,16 @@ function newsMajorsList() {
     list.push({ market: 'JP', code, label: name, norms, code4: /^\d{4}$/.test(code) ? code : null });
     seen.add('JP' + code);
   }
-  _majorsListCache = list; _majorsListVer = master.length; _majorsMemo.clear();
+  // ランキングタブ銘柄（JP=4桁コード / US=ティッカー。名称は日本語化済み）
+  for (const e of _rankingEntries()) {
+    if (seen.has(e.market + e.code)) continue; // 組込み辞書・マスタと重複はスキップ
+    const norms = _masterNorms(e.name);
+    const code4 = (e.market === 'JP' && /^\d{4}$/.test(e.code)) ? e.code : null;
+    if (!norms.length && !code4) continue; // 照合できる手掛かりが無いものは除外
+    list.push({ market: e.market, code: e.code, label: e.name, norms, code4 });
+    seen.add(e.market + e.code);
+  }
+  _majorsListCache = list; _majorsListVer = ver; _majorsMemo.clear();
   return list;
 }
 // 記事に出現する自動タグ銘柄（保有外）。見出し単位でキャッシュ（保有除外まで）。
@@ -6252,25 +6284,68 @@ const MASTER_LAUNCH = [
 ];
 // ---------- 上場銘柄マスタ（自動タグ用・JPX一覧の取込） ----------
 // JPXの「東証上場銘柄一覧(data_j.xls)」をExcelで開き、全体をコピペ（またはCSV貼付）→取込。コード列/銘柄名列を自動判定。
-function parseListedMaster(text) {
-  const lines = String(text).replace(/\r/g, '').split('\n').filter(l => l.trim());
-  if (!lines.length) return [];
-  const split = (l) => l.includes('\t') ? l.split('\t') : l.split(',');
+// 行配列（[[セル,…],…]）から {code,name} を抽出。貼付テキスト・Excel(SheetJS)双方の共通処理。
+// 先頭行に「コード/銘柄名」ヘッダがあれば列を特定、無ければ各行から4桁(＋1英数)コード列を探して隣を名称にフォールバック。
+function parseListedRows(rows) {
+  rows = (rows || []).map(r => (Array.isArray(r) ? r : [r]).map(c => (c == null ? '' : String(c)))).filter(r => r.some(c => c.trim()));
+  if (!rows.length) return [];
   let codeIdx = -1, nameIdx = -1, start = 0;
-  const head = split(lines[0]);
-  head.forEach((h, i) => { const c = h.trim(); if (codeIdx < 0 && /^(コード|銘柄コード|証券コード|code)$/i.test(c)) codeIdx = i; if (nameIdx < 0 && /^(銘柄名|会社名|名称|name)$/i.test(c)) nameIdx = i; });
+  rows[0].forEach((h, i) => { const c = h.trim(); if (codeIdx < 0 && /^(コード|銘柄コード|証券コード|code)$/i.test(c)) codeIdx = i; if (nameIdx < 0 && /^(銘柄名|会社名|名称|name)$/i.test(c)) nameIdx = i; });
   if (codeIdx >= 0 && nameIdx >= 0) start = 1;
   const out = [], seen = new Set();
-  for (let r = start; r < lines.length; r++) {
-    const row = split(lines[r]); let code, name;
+  for (let r = start; r < rows.length; r++) {
+    const row = rows[r]; let code, name;
     if (codeIdx >= 0) { code = (row[codeIdx] || '').trim(); name = (row[nameIdx] || '').trim(); }
-    else { const ci = row.findIndex(c => /^[0-9]{4}[0-9A-Za-z]?$/.test((c || '').trim())); if (ci < 0) continue; code = (row[ci] || '').trim(); name = (row[ci + 1] || '').trim(); }
-    code = code.replace(/[^0-9A-Za-z]/g, '').slice(0, 5);
-    if (/^[0-9]{4}[0-9A-Za-z]?$/.test(code)) code = code.slice(0, 4);
-    if (!/^[0-9A-Za-z]{4}$/.test(code) || !name || seen.has(code)) continue;
+    else { const ci = row.findIndex(c => /^[0-9]{3}[0-9A-Za-z][0-9A-Za-z]?$/.test((c || '').trim())); if (ci < 0) continue; code = (row[ci] || '').trim(); name = (row[ci + 1] || '').trim(); }
+    // JPXコードは4文字（4桁=7203 / 3桁+英字=130A）。ファイルによっては末尾0埋めの5桁(13010・130A0)なので先頭4文字へ丸める
+    code = code.replace(/[^0-9A-Za-z]/g, '');
+    const m = code.match(/^([0-9]{3}[0-9A-Za-z])[0-9]?$/); if (m) code = m[1];
+    if (!/^[0-9]{3}[0-9A-Za-z]$/.test(code) || !name || seen.has(code)) continue;
     seen.add(code); out.push({ code, name });
   }
   return out;
+}
+function parseListedMaster(text) {
+  const lines = String(text).replace(/\r/g, '').split('\n');
+  return parseListedRows(lines.map(l => l.includes('\t') ? l.split('\t') : l.split(',')));
+}
+// SheetJS(xlsx) を必要時のみCDNから遅延読込（通常のページ表示は軽いまま。.xls/.xlsx 双方に対応）。
+let _xlsxLoading = null;
+function ensureXlsx() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (_xlsxLoading) return _xlsxLoading;
+  _xlsxLoading = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    s.onload = () => window.XLSX ? res(window.XLSX) : rej(new Error('XLSX読込に失敗しました'));
+    s.onerror = () => rej(new Error('Excel読込ライブラリの取得に失敗（オフライン等）。CSVでお試しください'));
+    document.head.appendChild(s);
+  });
+  return _xlsxLoading;
+}
+// data_j.xls などをそのまま取り込む。CSVはSheetJS不要で即パース、.xls/.xlsxはSheetJSで先頭シートを行配列化。
+async function importListedFile(input) {
+  const file = input.files && input.files[0]; if (!file) return;
+  input.value = '';
+  try {
+    const n = await withBusy('ファイルを読み込み中…', async () => {
+      let parsed;
+      if (/\.csv$/i.test(file.name)) parsed = parseListedMaster(await file.text());
+      else {
+        const XLSX = await ensureXlsx();
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        parsed = parseListedRows(XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' }));
+      }
+      if (!parsed.length) throw new Error('コード・銘柄名を読み取れませんでした（ファイルをご確認ください）');
+      store.data.listedMaster = parsed; store.save();
+      _majorsListCache = null; _majorsMemo.clear();
+      return parsed.length;
+    }, null);
+    closeModal();
+    if (currentView === 'news') renderNews();
+    toast(`${n.toLocaleString('ja-JP')} 銘柄を取り込みました`);
+  } catch (_) { /* エラーは busyDone が表示 */ }
 }
 function openListedMaster() {
   const cur = store.data.listedMaster || [];
@@ -6279,12 +6354,18 @@ function openListedMaster() {
     <fieldset class="form-group"><legend>取り込み方（JPXの公式一覧）</legend>
       <ol class="muted" style="margin:0;padding-left:18px;font-size:12px;line-height:1.7">
         <li>JPX「東証上場銘柄一覧」ページを開く → <b>data_j.xls</b> をダウンロード（<code>jpx.co.jp/markets/statistics-equities/misc/01.html</code>）</li>
-        <li>Excelで開き、全体を選択してコピー（またはCSVで保存）</li>
-        <li>下の欄に貼り付けて「取り込む」。「コード」列と「銘柄名」列を自動で判定します（ETF/REIT等も含めてOK）</li>
+        <li>下の「ファイルを選択」で <b>data_j.xls をそのまま選ぶ</b>だけ（Excelで開き直す必要なし）。「コード」列と「銘柄名」列を自動判定します（ETF/REIT等も含めてOK）</li>
       </ol></fieldset>
-    <textarea id="listed-ta" rows="8" style="width:100%;font-size:12px" placeholder="コード	銘柄名 … を貼り付け（タブ区切り/カンマ区切り）"></textarea>
+    <div style="margin:10px 0">
+      <label class="btn btn-primary" style="cursor:pointer">📁 ファイルを選択（.xls / .xlsx / .csv）
+        <input type="file" accept=".xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="importListedFile(this)" hidden></label>
+      <span class="muted" style="font-size:12px;margin-left:8px">data_j.xls をダウンロードしたまま選択できます</span>
+    </div>
+    <details style="margin-top:6px"><summary class="muted" style="font-size:12px;cursor:pointer">またはコピーして貼り付けで取り込む</summary>
+      <textarea id="listed-ta" rows="6" style="width:100%;font-size:12px;margin-top:6px" placeholder="コード	銘柄名 … を貼り付け（タブ区切り/カンマ区切り）"></textarea>
+      <div style="margin-top:6px"><button type="button" class="btn btn-sm btn-primary" onclick="importListedMaster()">貼り付け内容を取り込む</button></div>
+    </details>
     <div class="form-actions" style="margin-top:12px">
-      <button type="button" class="btn btn-primary" onclick="importListedMaster()">取り込む</button>
       ${cur.length ? `<button type="button" class="btn btn-danger" onclick="clearListedMaster()">全消去</button>` : ''}
       <button type="button" class="btn" onclick="closeModal()">閉じる</button>
     </div>`, { wide: true });
@@ -11630,6 +11711,7 @@ window.ytChannelAddRow = ytChannelAddRow;
 window.saveYtChannelMaster = saveYtChannelMaster;
 window.openListedMaster = openListedMaster;
 window.importListedMaster = importListedMaster;
+window.importListedFile = importListedFile;
 window.clearListedMaster = clearListedMaster;
 window.openDiscTypeMaster = openDiscTypeMaster;
 window.discTypeAddRow = discTypeAddRow;
