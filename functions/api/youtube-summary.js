@@ -28,15 +28,16 @@ export async function onRequestGet(context) {
       body: JSON.stringify({
         contents: [{ parts: [
           { text: PROMPT },
-          { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` } },
+          // 動画は低解像度で読み込み＋前半45分に制限＝トークン消費を大幅削減（無料枠対策）。長尺は前半のみ要約になる。
+          { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '2700s' } },
         ] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 900 },
+        generationConfig: { temperature: 0.3, maxOutputTokens: 900, mediaResolution: 'MEDIA_RESOLUTION_LOW' },
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const msg = (data && data.error && data.error.message) || ('HTTP ' + res.status);
-      return json({ error: 'Gemini: ' + String(msg).slice(0, 300) });
+      const raw = (data && data.error && data.error.message) || ('HTTP ' + res.status);
+      return json({ error: jpError(res.status, raw), detail: String(raw).slice(0, 300) });
     }
     const cand = data.candidates && data.candidates[0];
     const parts = cand && cand.content && cand.content.parts;
@@ -52,6 +53,18 @@ export async function onRequestGet(context) {
   } finally { clearTimeout(timer); }
 }
 
+// Geminiの英語エラーを日本語のわかりやすい文言に変換
+function jpError(status, raw) {
+  const m = String(raw || '').toLowerCase();
+  if (status === 429 || m.includes('quota') || m.includes('rate limit') || m.includes('exceeded')) {
+    return 'Geminiの無料枠の上限に達しました。しばらく待って「要約し直す」か、短い動画でお試しください（多用する場合は課金の有効化を検討）。';
+  }
+  if (status === 400 && (m.includes('api key') || m.includes('api_key'))) return 'APIキーが不正です。Cloudflareの GEMINI_API_KEY を確認してください。';
+  if (status === 403 || m.includes('permission') || m.includes('forbidden')) return 'APIキーの権限がありません（Generative Language APIの有効化・キーの制限をご確認ください）。';
+  if (status === 404 || m.includes('not found') || m.includes('is not found')) return 'モデルが見つかりませんでした（モデル名の可能性）。';
+  if (m.includes('unsupported') || m.includes('invalid')) return '動画を処理できませんでした（非公開/限定公開/年齢制限などの可能性）。';
+  return '要約を生成できませんでした（' + String(raw).slice(0, 120) + '）';
+}
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 }

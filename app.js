@@ -4631,7 +4631,7 @@ function openVideoPanel(it) {
       <h3 class="np-title">${esc(it.title)}</h3>
       ${chips ? `<div class="np-chips">${chips}</div>` : ''}
       <div class="np-body" id="np-video-summary">${has ? esc(cached.summary) : '<span class="muted">AIで要約を生成しています…（動画が長いと1分ほどかかります）</span>'}</div>
-      <p class="np-note muted">※ AIによる自動要約です。誤り（銘柄名・数値の取り違え等）が含まれる場合があります。正確な内容は動画をご確認ください。</p>
+      <p class="np-note muted">※ AIによる自動要約です。誤り（銘柄名・数値の取り違え等）が含まれる場合があります。長い動画は前半を要約する場合があります。正確な内容は動画をご確認ください。</p>
       <div class="form-actions" style="margin-top:14px">
         <button type="button" class="btn btn-primary" onclick="window.open('${esc(it.link)}','_blank')">▶ 動画を開く</button>
         ${has ? `<button type="button" class="btn" id="np-video-regen" onclick="regenVideoSummary('${esc(it.videoId)}')">要約し直す</button>` : ''}
