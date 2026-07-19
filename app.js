@@ -4474,6 +4474,16 @@ function setNewsDays(d) { newsDays = d; renderNews(); }
 const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['disclosure', '開示'], ['video', '動画'], ['macro', '為替・金利'], ['other', 'その他']];
 // YouTube購読チャンネル既定（テスタ公式）。マスタ・設定＞YouTubeチャンネルで編集可
 const DEFAULT_YT_CHANNELS = [{ id: 'UCfJEDCUlzQl4-atLp6Z9DcQ', name: 'テスタ' }];
+// 要約に使えるGeminiモデル（東証マーケット振り返りツールと同一）。空=自動（優先順に試し上限時は次へ降格）
+const YT_MODELS = [
+  ['gemini-3.5-flash', 'Gemini 3.5 Flash（20回/日）'],
+  ['gemini-3-flash-preview', 'Gemini 3 Flash（20回/日）'],
+  ['gemini-3.1-flash-lite', 'Gemini 3.1 Flash Lite（500回/日）'],
+  ['gemini-2.5-flash', 'Gemini 2.5 Flash（20回/日）'],
+  ['gemini-2.5-flash-lite', 'Gemini 2.5 Flash Lite（20回/日）'],
+];
+const YT_MODEL_CHAIN = ['gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.5-flash']; // 自動時の降格チェーン
+function ytModelSetting() { return (store.data.settings && store.data.settings.ytModel) || ''; }
 // 開示の細分類（TDnet/EDGARの見出し・書類種別から判定）。表示設定で種類ごとに除外できる
 // 開示種別マスタ（既定）。name=タグ名（＝ID） / group=フィルタタブのまとめ名 / keywords=見出し判定（正規表現・| 区切り）。
 // 上から順に最初に一致した種別のタグが付く。groupが同じ種別はニュースの絞り込みタブで束ねられる（タグは種別ごと）。
@@ -4631,6 +4641,7 @@ function openVideoPanel(it) {
       <h3 class="np-title">${esc(it.title)}</h3>
       ${chips ? `<div class="np-chips">${chips}</div>` : ''}
       <div class="np-body" id="np-video-summary">${has ? esc(cached.summary) : '<span class="muted">AIで要約を生成しています…（動画が長いと1分ほどかかります）</span>'}</div>
+      <p class="np-note muted"><span id="np-video-model">${has && cached.model ? 'モデル: ' + esc(cached.model) : ''}</span></p>
       <p class="np-note muted">※ AIによる自動要約です。誤り（銘柄名・数値の取り違え等）が含まれる場合があります。長い動画は前半を要約する場合があります。正確な内容は動画をご確認ください。</p>
       <div class="form-actions" style="margin-top:14px">
         <button type="button" class="btn btn-primary" onclick="window.open('${esc(it.link)}','_blank')">▶ 動画を開く</button>
@@ -4642,17 +4653,21 @@ function openVideoPanel(it) {
   if (!has) generateVideoSummary(it.videoId, true);
 }
 async function generateVideoSummary(videoId, showInPanel) {
+  // モデルは設定があればそれ1つ、無ければ降格チェーンを優先順で送る（東証振り返りと同仕様）
+  const models = ytModelSetting() ? [ytModelSetting()] : YT_MODEL_CHAIN;
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 90000);
+    const timer = setTimeout(() => ctrl.abort(), 130000); // 降格で複数モデル試すため長め
     let d;
-    try { const r = await fetch('/api/youtube-summary?v=' + encodeURIComponent(videoId), { signal: ctrl.signal }); d = await r.json(); }
+    try { const r = await fetch('/api/youtube-summary?v=' + encodeURIComponent(videoId) + '&models=' + encodeURIComponent(models.join(',')), { signal: ctrl.signal }); d = await r.json(); }
     finally { clearTimeout(timer); }
     if (d && d.summary) {
-      store.data.ytSummaries[videoId] = { summary: d.summary, at: new Date().toISOString() };
+      store.data.ytSummaries[videoId] = { summary: d.summary, at: new Date().toISOString(), model: d.model };
       store.save();
-      if (showInPanel) { const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary; }
-      if (currentView === 'news') { /* 一覧のdesc反映は次回描画時 */ }
+      if (showInPanel) {
+        const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary;
+        const mn = document.getElementById('np-video-model'); if (mn) mn.textContent = d.model ? `モデル: ${d.model}${d.fellBack ? '（降格）' : ''}` : '';
+      }
       return d.summary;
     }
     if (showInPanel) { const el = document.getElementById('np-video-summary'); if (el) el.innerHTML = `<span class="muted">${esc((d && d.error) || '要約を生成できませんでした')}<br>動画をご確認ください。</span>`; }
@@ -6138,12 +6153,19 @@ function ytChannelRowHtml(c) {
 }
 function openYtChannelMaster() {
   const rows = (store.data.ytChannels || []).map(ytChannelRowHtml).join('');
-  showModal('YouTubeチャンネル（動画取得元）', `
+  const cur = ytModelSetting();
+  const modelOpts = `<option value="">自動（推奨・混雑/上限時は自動で次のモデルへ）</option>` +
+    YT_MODELS.map(([v, l]) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  showModal('YouTubeチャンネル・要約設定', `
     <p class="muted" style="margin:0 0 8px;font-size:12px">ニュースの「動画」カテゴリに新着動画を表示するチャンネルです。<strong>チャンネルID</strong>（<code>UC</code>で始まる24文字）を登録してください。<br>調べ方: チャンネルページを開き、URLが <code>youtube.com/channel/UC…</code> ならその <code>UC…</code>。<code>@ハンドル</code> 形式の場合は、チャンネルの「概要」→「チャンネルを共有」→「チャンネルIDをコピー」で取得できます。</p>
     <div class="table-wrap"><table class="holdings dense">
       <thead><tr><th class="l">表示名</th><th class="l">チャンネルID（UC…）</th><th></th></tr></thead>
       <tbody id="yt-ch-rows">${rows}</tbody></table></div>
     <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" onclick="ytChannelAddRow()">＋ チャンネルを追加</button></div>
+    <fieldset class="form-group" style="margin-top:14px"><legend>要約に使うAIモデル（Gemini）</legend>
+      <select id="yt-model" style="min-width:280px">${modelOpts}</select>
+      <p class="muted" style="font-size:11px;margin:6px 0 0">「自動」は無料枠に強い順に試し、上限に達したら自動で次のモデルへ降格します（東証マーケット振り返りツールと同じ挙動）。</p>
+    </fieldset>
     <div class="form-actions" style="margin-top:12px">
       <button type="button" class="btn btn-primary" onclick="saveYtChannelMaster()">保存</button>
       <button type="button" class="btn" onclick="closeModal()">閉じる</button>
@@ -6160,7 +6182,9 @@ function saveYtChannelMaster() {
     if (!/^UC[\w-]{20,}$/.test(id)) { toast(`チャンネルIDの形式が不正です: ${name || id}`); return; }
     defs.push({ id, name: name || id });
   }
-  store.data.ytChannels = defs; store.save();
+  store.data.ytChannels = defs;
+  const msel = document.getElementById('yt-model'); if (msel) { store.data.settings = store.data.settings || {}; store.data.settings.ytModel = msel.value || ''; }
+  store.save();
   closeModal(); if (currentView === 'news') { _newsCache = null; newsRefresh(); }
   toast('YouTubeチャンネルを保存しました');
 }

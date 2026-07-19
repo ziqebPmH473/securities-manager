@@ -1,8 +1,9 @@
 // Cloudflare Pages Function: YouTube動画のAI要約（フェーズN3・Gemini）
-//   GET /api/youtube-summary?v=VIDEOID → { summary } または { error }
-// Google Gemini API（GEMINI_API_KEY 必須）に YouTube URL を渡し、投資関連の要点を日本語で要約させる。
-// 長時間動画はトークン/時間を要するため 55秒でタイムアウト。結果はクライアントが ytSummaries にキャッシュ＆同期＝1動画1回。
-const MODEL = 'gemini-2.0-flash'; // 動画(YouTube URL)入力対応モデル
+//   GET /api/youtube-summary?v=VIDEOID[&models=m1,m2,...] → { summary, model, fellBack } または { error }
+// 「東証マーケット振り返り」ツール(stock-slide-generator/analyze.js)と同仕様:
+//   モデルは優先順の配列で受け取り、上限(429)・一時エラーはリトライ→次の下位モデルへ降格。全滅なら再試行を促す。
+// Gemini に YouTube URL を fileData で渡す。長尺対策で低解像度＋前半45分に制限。結果はクライアントが ytSummaries にキャッシュ&同期。
+const DEFAULT_CHAIN = ['gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
 const PROMPT = `あなたは投資情報の編集者です。次のYouTube動画を視聴し、投資・株式・マーケットに関係する要点だけを日本語で簡潔にまとめてください。
 - 箇条書き5〜8点。各行は簡潔に。
 - 具体的な銘柄名・数値・相場観・売買判断・注目テーマがあれば必ず含める。
@@ -10,60 +11,71 @@ const PROMPT = `あなたは投資情報の編集者です。次のYouTube動画
 - 動画に投資・マーケットの話題がほとんど無い場合は「投資に関する内容は見当たりませんでした。」とだけ書く。
 - 前置きや「以下に要約します」等は不要。要点のみ。`;
 
+const ENDPOINT = (model, key) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+const isTransient = (status, raw) => status === 429 || status >= 500 || /quota|rate|exhaust|limit:\s*0|overload|high demand|unavailable|temporarily|try again|resource has been exhausted/i.test(raw || '');
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
 export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   const v = (url.searchParams.get('v') || '').trim();
   if (!/^[\w-]{6,20}$/.test(v)) return json({ error: 'invalid video id' }, 400);
   const key = context.env && context.env.GEMINI_API_KEY;
-  if (!key) return json({ error: 'GEMINI_API_KEY が未設定です（Cloudflareの環境変数に設定してください）' });
+  if (!key || key === 'xxxxx') return json({ error: 'APIキーが未設定です（Cloudflareの環境変数 GEMINI_API_KEY を設定してください）' });
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 55000);
-  try {
-    const api = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(key)}`;
-    const res = await fetch(api, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: ctrl.signal,
-      body: JSON.stringify({
-        contents: [{ parts: [
-          { text: PROMPT },
-          // 動画は低解像度で読み込み＋前半45分に制限＝トークン消費を大幅削減（無料枠対策）。長尺は前半のみ要約になる。
-          { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '2700s' } },
-        ] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 900, mediaResolution: 'MEDIA_RESOLUTION_LOW' },
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const raw = (data && data.error && data.error.message) || ('HTTP ' + res.status);
-      return json({ error: jpError(res.status, raw), detail: String(raw).slice(0, 300) });
+  const models = (url.searchParams.get('models') || '').split(',').map(s => s.trim()).filter(Boolean);
+  const chain = models.length ? models.slice(0, 6) : DEFAULT_CHAIN;
+
+  const body = {
+    contents: [{ role: 'user', parts: [
+      { text: PROMPT },
+      { fileData: { fileUri: `https://www.youtube.com/watch?v=${v}` }, videoMetadata: { startOffset: '0s', endOffset: '2700s' } },
+    ] }],
+    generationConfig: { temperature: 0.3, maxOutputTokens: 900, mediaResolution: 'MEDIA_RESOLUTION_LOW' },
+  };
+
+  let lastStatus = 0, lastRaw = '';
+  for (let i = 0; i < chain.length; i++) {
+    const m = chain[i];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 55000);
+      try {
+        const res = await fetch(ENDPOINT(m, key), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctrl.signal });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const cand = data.candidates && data.candidates[0];
+          const parts = cand && cand.content && cand.content.parts;
+          const text = Array.isArray(parts) ? parts.map(p => p.text || '').join('').trim() : '';
+          if (text) return json({ summary: text, model: m, fellBack: i > 0, usage: data.usageMetadata || null });
+          // 空応答（安全ブロック等）は一時エラー扱いにせず次モデルへ
+          lastRaw = (cand && cand.finishReason) || (data.promptFeedback && data.promptFeedback.blockReason) || 'empty';
+          lastStatus = 200;
+          break;
+        }
+        lastStatus = res.status;
+        lastRaw = (data && data.error && data.error.message) || ('HTTP ' + res.status);
+        if (!isTransient(res.status, lastRaw)) return json({ error: jpError(res.status, lastRaw), detail: String(lastRaw).slice(0, 300), model: m });
+        if (attempt === 0) { await delay(800); continue; } // 同モデルで1回リトライ
+      } catch (e) {
+        lastRaw = (e && e.name === 'AbortError') ? 'timeout' : ((e && e.message) || String(e));
+        if (attempt === 0 && lastRaw !== 'timeout') { await delay(800); continue; }
+      } finally { clearTimeout(timer); }
+      break; // 次モデルへ
     }
-    const cand = data.candidates && data.candidates[0];
-    const parts = cand && cand.content && cand.content.parts;
-    const text = Array.isArray(parts) ? parts.map(p => p.text || '').join('').trim() : '';
-    if (!text) {
-      const reason = (cand && cand.finishReason) || (data.promptFeedback && data.promptFeedback.blockReason) || 'empty';
-      return json({ error: '要約を取得できませんでした（' + reason + '）' });
-    }
-    return json({ summary: text });
-  } catch (e) {
-    const aborted = e && (e.name === 'AbortError');
-    return json({ error: aborted ? '要約がタイムアウトしました（動画が長すぎる可能性）' : ('取得失敗: ' + String(e && e.message || e).slice(0, 200)) });
-  } finally { clearTimeout(timer); }
+  }
+  if (lastRaw === 'timeout') return json({ error: '要約がタイムアウトしました（動画が長すぎる可能性）。' });
+  return json({ error: '全モデルが混雑/上限のようです。少し待って「要約し直す」でお試しください。（最後のエラー: ' + jpError(lastStatus, lastRaw) + '）', detail: String(lastRaw).slice(0, 300) });
 }
 
 // Geminiの英語エラーを日本語のわかりやすい文言に変換
 function jpError(status, raw) {
   const m = String(raw || '').toLowerCase();
-  if (status === 429 || m.includes('quota') || m.includes('rate limit') || m.includes('exceeded')) {
-    return 'Geminiの無料枠の上限に達しました。しばらく待って「要約し直す」か、短い動画でお試しください（多用する場合は課金の有効化を検討）。';
-  }
-  if (status === 400 && (m.includes('api key') || m.includes('api_key'))) return 'APIキーが不正です。Cloudflareの GEMINI_API_KEY を確認してください。';
-  if (status === 403 || m.includes('permission') || m.includes('forbidden')) return 'APIキーの権限がありません（Generative Language APIの有効化・キーの制限をご確認ください）。';
-  if (status === 404 || m.includes('not found') || m.includes('is not found')) return 'モデルが見つかりませんでした（モデル名の可能性）。';
-  if (m.includes('unsupported') || m.includes('invalid')) return '動画を処理できませんでした（非公開/限定公開/年齢制限などの可能性）。';
-  return '要約を生成できませんでした（' + String(raw).slice(0, 120) + '）';
+  if (status === 429 || m.includes('quota') || m.includes('rate limit') || m.includes('exceeded') || m.includes('exhaust')) return 'Geminiの無料枠の上限に達しました';
+  if (status === 400 && (m.includes('api key') || m.includes('api_key'))) return 'APIキーが不正です';
+  if (status === 403 || m.includes('permission') || m.includes('forbidden')) return 'APIキーの権限がありません（Generative Language APIの有効化を確認）';
+  if (status === 404 || m.includes('not found')) return 'モデルが見つかりません（モデル名の可能性）';
+  if (m.includes('unsupported') || m.includes('invalid argument')) return '動画を処理できませんでした（非公開/限定公開/年齢制限などの可能性）';
+  return String(raw || 'unknown').slice(0, 120);
 }
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });

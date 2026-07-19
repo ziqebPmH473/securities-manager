@@ -889,3 +889,8 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 - **表示**: 動画クリック→`openVideoPanel`。キャッシュ（`store.data.ytSummaries[videoId]`）があれば即表示、無ければ `generateVideoSummary` で生成→キャッシュ＆同期（1動画1回）。「要約し直す」で再生成。生成中はローディング、失敗時はエラー文言＋「▶動画を開く」。
 - **注意**: 要約はAI自動生成で誤りうる旨をパネルに明記。長時間動画はタイムアウト/失敗し得る（その場合は動画を開く導線）。
 - ローカル(キー無し)ではAPIが no-key エラーを返す→パネルがエラー表示に切替わるところまで確認。本番はキー設定済みのため実要約を要検証。
+
+### 19.2 動画要約のモデル設定・降格チェーン（東証振り返りと同仕様・2026-07-19）
+- 参照: `C:\work\stock-slide-generator`（東証マーケット振り返りツール）の `functions/api/analyze.js` ＋ モデルセレクタ。
+- **モデル選択**: マスタ・設定＞YouTubeチャンネル・要約設定にモデル選択を追加。`store.data.settings.ytModel`（空=自動）。選択肢＝YT_MODELS（gemini-3.5-flash / gemini-3-flash-preview / gemini-3.1-flash-lite / gemini-2.5-flash / gemini-2.5-flash-lite）。
+- **上限時の挙動（同仕様）**: `/api/youtube-summary?models=m1,m2,...` が優先順にモデルを試行。一時エラー（429/5xx/quota/rate/overload等 `isTransient`）は同モデルで1回リトライ（800ms）→次モデルへ**降格**。全滅なら「全モデルが混雑/上限のようです。少し待って…」。自動時の降格チェーン＝`YT_MODEL_CHAIN`（lite優先で無料枠に強い順）。使用モデル・降格有無はパネルに表示（`d.model`/`fellBack`）。
