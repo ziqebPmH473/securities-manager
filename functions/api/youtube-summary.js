@@ -4,12 +4,19 @@
 //   モデルは優先順の配列で受け取り、上限(429)・一時エラーはリトライ→次の下位モデルへ降格。全滅なら再試行を促す。
 // Gemini に YouTube URL を fileData で渡す。長尺対策で低解像度＋前半45分に制限。結果はクライアントが ytSummaries にキャッシュ&同期。
 const DEFAULT_CHAIN = ['gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
-const PROMPT = `あなたは投資情報の編集者です。次のYouTube動画を視聴し、投資・株式・マーケットに関係する要点だけを日本語で簡潔にまとめてください。
-- 箇条書き5〜8点。各行は簡潔に。
-- 具体的な銘柄名・数値・相場観・売買判断・注目テーマがあれば必ず含める。
+const PROMPT = `あなたは投資メディアの編集者です。次のYouTube動画を視聴し、投資・株式・マーケットの観点で日本語のニュース記事風にまとめてください。
+出力は必ず次の形式（1行目＝見出し、空行、3行目以降＝本文）:
+
+<見出し>
+（1行だけ。この動画の投資的な中身を要約したYahooニュース風の見出し。25〜45字程度。体言止め可。動画タイトルをそのまま書かない＝中身を要約する。記号や「見出し:」等のラベルは付けない）
+
+<本文>
+・箇条書き5〜8点。具体的な銘柄名・数値・相場観・売買判断・注目テーマを含める。
+
+ルール:
 - 投資に無関係な雑談・挨拶・宣伝は省く。
-- 動画に投資・マーケットの話題がほとんど無い場合は「投資に関する内容は見当たりませんでした。」とだけ書く。
-- 前置きや「以下に要約します」等は不要。要点のみ。`;
+- 動画に投資・マーケットの話題がほとんど無い場合は、見出しを「投資に関する内容なし」とし、本文に「投資に関する内容は見当たりませんでした。」とだけ書く。
+- 前置きや「以下にまとめます」等は不要。`;
 
 const ENDPOINT = (model, key) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
 const isTransient = (status, raw) => status === 429 || status >= 500 || /quota|rate|exhaust|limit:\s*0|overload|high demand|unavailable|temporarily|try again|resource has been exhausted/i.test(raw || '');
@@ -46,7 +53,7 @@ export async function onRequestGet(context) {
           const cand = data.candidates && data.candidates[0];
           const parts = cand && cand.content && cand.content.parts;
           const text = Array.isArray(parts) ? parts.map(p => p.text || '').join('').trim() : '';
-          if (text) return json({ summary: text, model: m, fellBack: i > 0, usage: data.usageMetadata || null });
+          if (text) { const { headline, summary } = splitHeadline(text); return json({ headline, summary, model: m, fellBack: i > 0, usage: data.usageMetadata || null }); }
           // 空応答（安全ブロック等）は一時エラー扱いにせず次モデルへ
           lastRaw = (cand && cand.finishReason) || (data.promptFeedback && data.promptFeedback.blockReason) || 'empty';
           lastStatus = 200;
@@ -67,6 +74,15 @@ export async function onRequestGet(context) {
   return json({ error: '全モデルが混雑/上限のようです。少し待って「要約し直す」でお試しください。（最後のエラー: ' + jpError(lastStatus, lastRaw) + '）', detail: String(lastRaw).slice(0, 300) });
 }
 
+// 出力を「見出し（1行目）」と「本文（残り）」に分割。ラベルや記号は除去。
+function splitHeadline(text) {
+  const lines = String(text).split('\n');
+  let hi = 0;
+  while (hi < lines.length && !lines[hi].trim()) hi++;         // 先頭の空行を飛ばす
+  let headline = (lines[hi] || '').trim().replace(/^(見出し|タイトル)\s*[:：]\s*/, '').replace(/^[・\-*#>「」\s]+/, '').replace(/[「」]/g, '').trim();
+  const summary = lines.slice(hi + 1).join('\n').replace(/^\s*本文\s*[:：]?\s*/i, '').trim();
+  return { headline: headline.slice(0, 60), summary: summary || String(text).trim() };
+}
 // Geminiの英語エラーを日本語のわかりやすい文言に変換
 function jpError(status, raw) {
   const m = String(raw || '').toLowerCase();

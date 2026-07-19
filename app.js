@@ -4644,10 +4644,12 @@ function openVideoPanel(it) {
     ...secs.map(s => `<span class="news-sec" onclick="closeModal();openSecurityDetail(${s.id})">${esc(nameAbbr(calc.displayName(s)))}</span>`),
     ...tags.map(t => `<span class="news-tag">${esc(t.name)}</span>`),
   ].join(' ');
+  const headline = (has && cached.headline) ? cached.headline : it.title;
   const body = `
     <div class="news-panel">
       <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span><span class="news-cat">動画</span></div>
-      <h3 class="np-title">${esc(it.title)}</h3>
+      <h3 class="np-title" id="np-video-headline">${esc(headline)}</h3>
+      <div class="np-orig muted">動画タイトル: ${esc(it.title)}</div>
       ${chips ? `<div class="np-chips">${chips}</div>` : ''}
       <div class="np-body" id="np-video-summary">${has ? esc(cached.summary) : '<span class="muted">AIで要約を生成しています…（動画が長いと1分ほどかかります）</span>'}</div>
       <p class="np-note muted"><span id="np-video-model">${has && cached.model ? 'モデル: ' + esc(cached.model) : ''}</span></p>
@@ -4671,10 +4673,11 @@ async function generateVideoSummary(videoId, showInPanel) {
     try { const r = await fetch('/api/youtube-summary?v=' + encodeURIComponent(videoId) + '&models=' + encodeURIComponent(models.join(',')), { signal: ctrl.signal }); d = await r.json(); }
     finally { clearTimeout(timer); }
     if (d && d.summary) {
-      store.data.ytSummaries[videoId] = { summary: d.summary, at: new Date().toISOString(), model: d.model };
+      store.data.ytSummaries[videoId] = { headline: d.headline || '', summary: d.summary, at: new Date().toISOString(), model: d.model };
       store.save();
       if (showInPanel) {
         const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary;
+        const ht = document.getElementById('np-video-headline'); if (ht && d.headline) ht.textContent = d.headline;
         const mn = document.getElementById('np-video-model'); if (mn) mn.textContent = d.model ? `モデル: ${d.model}${d.fellBack ? '（降格）' : ''}` : '';
       }
       return d.summary;
@@ -4698,18 +4701,26 @@ async function newsAutoSummarizeVideos() {
   if (!pend.length) return;
   _ytAutoBusy = true;
   try {
-    let any = false;
     for (const it of pend) {
       _ytTried.add(it.videoId);
       const s = await generateVideoSummary(it.videoId, false); // パネル無し（裏で生成）
-      if (s) any = true;
-    }
-    if (any && currentView === 'news') {
-      // 生成した要約を一覧アイテムの desc に反映（スニペット表示・パネル即表示）してから再描画
-      for (const v of _newsCache.items) { if (v.cat === 'video' && store.data.ytSummaries[v.videoId]) v.desc = store.data.ytSummaries[v.videoId].summary; }
-      renderNews();
+      // 完了しても全体再描画はしない＝開いている条件・スクロールに触れない。該当の動画行だけ差し替える
+      if (s) { const c = store.data.ytSummaries[it.videoId]; if (c) it.desc = c.summary; if (currentView === 'news') _patchVideoItemDom(it); }
     }
   } finally { _ytAutoBusy = false; }
+}
+// 一覧内の該当動画1件だけを差し替え（見出し＝AI見出し／2行目＝動画タイトル）。全体再描画しない＝フィルタ・スクロールを維持。
+function _patchVideoItemDom(it) {
+  let el = null;
+  try { el = document.querySelector(`#app .news-item[data-link="${CSS.escape(it.link)}"]`); } catch (_) {}
+  if (!el) return;
+  const c = store.data.ytSummaries[it.videoId] || {};
+  if (!c.headline) return;
+  const titleEl = el.querySelector('.news-title');
+  if (titleEl) titleEl.textContent = '▶ ' + c.headline;
+  let sub = el.querySelector('.news-preview');
+  if (!sub) { sub = document.createElement('span'); sub.className = 'news-preview'; if (titleEl) titleEl.after(sub); }
+  sub.classList.remove('muted'); sub.textContent = it.title;
 }
 function regenVideoSummary(videoId) {
   const el = document.getElementById('np-video-summary'); if (el) el.innerHTML = '<span class="muted">AIで要約を生成しています…</span>';
@@ -5069,17 +5080,18 @@ function newsItemHtml(it, read, matches, opts = {}) {
   // 英語記事は翻訳（あれば）を表示し、翻訳済みなら「訳」バッジ。動画は▶マーク。クリックで要約パネル（元記事へは行かない）
   const dispTitle = (it.cat === 'video' ? '▶ ' : '') + newsDispTitle(it);
   const trBadge = it.lang === 'en' ? `<span class="news-trans-badge">${store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t ? '訳' : 'EN'}</span>` : '';
-  // 動画で要約がある時は冒頭スニペットを1行表示（Yahooニュース風の見出し＋抜粋）。生成中は控えめに表示
-  let vidPreview = '';
-  if (!opts.mini && it.cat === 'video') {
-    const sum = (store.data.ytSummaries[it.videoId] || {}).summary;
-    if (sum) vidPreview = `<span class="news-preview">${esc(sum.replace(/\s+/g, ' ').slice(0, 90))}…</span>`;
-    else if (store.data.settings && store.data.settings.ytAutoSummary) vidPreview = `<span class="news-preview muted">要約を準備中…</span>`;
+  // 動画は「見出し＝AI生成のニュース見出し（内容の要約）」を1行目、動画タイトルを2行目に（Yahooニュース風）。
+  // 見出しが未生成なら動画タイトルを見出しに使い、2行目は出さない（準備中表示）。
+  let titleLine = `${trBadge}${esc(dispTitle)}`, subLine = '';
+  if (it.cat === 'video') {
+    const cached = store.data.ytSummaries[it.videoId] || {};
+    if (cached.headline) { titleLine = `▶ ${esc(cached.headline)}`; subLine = `<span class="news-preview">${esc(it.title)}</span>`; }
+    else if (store.data.settings && store.data.settings.ytAutoSummary) subLine = `<span class="news-preview muted">要約を準備中…</span>`;
   }
   return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
-      <span class="news-title">${trBadge}${esc(dispTitle)}</span>
-      ${vidPreview}
+      <span class="news-title">${titleLine}</span>
+      ${subLine}
       <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
     </a>`;
 }
