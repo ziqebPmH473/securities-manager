@@ -4417,9 +4417,11 @@ function newsAllCatsShown() { return NEWS_REAL_CATS.every(newsCatShown); }
 function newsToggleCat(c) {
   const p = store.data.newsPrefs || (store.data.newsPrefs = { hideCats: [], hideDiscTypes: [] });
   p.hideCats = p.hideCats || [];
-  if (c === 'all') { p.hideCats = []; }               // 「すべて」＝全カテゴリ表示
-  else if (p.hideCats.includes(c)) p.hideCats = p.hideCats.filter(x => x !== c);
-  else { p.hideCats = [...p.hideCats, c]; if (p.hideCats.length >= NEWS_REAL_CATS.length) p.hideCats = []; } // 全部外したら全表示に戻す
+  if (c === 'all') {
+    // 全部表示中に押したら全部解除（1つだけ選びやすく）／そうでなければ全部表示
+    p.hideCats = newsAllCatsShown() ? [...NEWS_REAL_CATS] : [];
+  } else if (p.hideCats.includes(c)) p.hideCats = p.hideCats.filter(x => x !== c);
+  else p.hideCats = [...p.hideCats, c];                // 自動リセットしない（0個でもそのまま）
   p._updatedAt = new Date().toISOString();
   store.save(); renderNews();
 }
@@ -4434,9 +4436,12 @@ function newsToggleDiscType(id) {
   const p = store.data.newsPrefs || (store.data.newsPrefs = { hideCats: [], hideDiscTypes: [] });
   p.hideDiscTypes = p.hideDiscTypes || [];
   const present = newsPresentDiscTypes();
-  if (id === 'all') p.hideDiscTypes = p.hideDiscTypes.filter(x => !present.includes(x)); // 表示中の種類を全部オンに（他は保持）
-  else if (p.hideDiscTypes.includes(id)) p.hideDiscTypes = p.hideDiscTypes.filter(x => x !== id);
-  else p.hideDiscTypes = [...p.hideDiscTypes, id];
+  if (id === 'all') {
+    // 全部表示中に押したら（表示中の種類を）全部解除／そうでなければ全部表示
+    const allShown = present.every(newsDiscTypeShown);
+    p.hideDiscTypes = allShown ? [...new Set([...p.hideDiscTypes, ...present])] : p.hideDiscTypes.filter(x => !present.includes(x));
+  } else if (p.hideDiscTypes.includes(id)) p.hideDiscTypes = p.hideDiscTypes.filter(x => x !== id);
+  else p.hideDiscTypes = [...p.hideDiscTypes, id];    // 自動リセットしない
   p._updatedAt = new Date().toISOString();
   store.save(); renderNews();
 }
@@ -5121,7 +5126,7 @@ function renderSecNewsScreen() {
   const presentTypes = [...new Set((disc || []).map(disclosureType))];
   const orderedTypes = NEWS_DISC_TYPES.map(t => t[0]).concat(['other_disc']).filter(id => presentTypes.includes(id));
   const filterBtns = orderedTypes.length ? `<div class="seg seg-toggle sec-disc-filter" style="flex-wrap:wrap;margin-bottom:8px">
-      <button class="${typeSel && orderedTypes.every(id => typeSel.has(id)) ? 'active' : ''}" onclick="secNewsAllTypes(true)">すべて</button>
+      <button class="${typeSel && orderedTypes.every(id => typeSel.has(id)) ? 'active' : ''}" onclick="secNewsAllTypes(${!(typeSel && orderedTypes.every(id => typeSel.has(id)))})">すべて</button>
       ${orderedTypes.map(id => `<button class="${typeSel && typeSel.has(id) ? 'active' : ''}" onclick="secNewsToggleType('${id}')">${disclosureTypeLabel(id)}</button>`).join('')}
     </div>` : '';
   const discFiltered = (disc || []).filter(d => !typeSel || typeSel.has(disclosureType(d)));
