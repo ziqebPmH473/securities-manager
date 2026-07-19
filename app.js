@@ -330,6 +330,7 @@ const store = {
     this.data.ytChannels ||= structuredClone(DEFAULT_YT_CHANNELS); // YouTube購読チャンネル（動画取得元）。ユーザー編集可・同期
     this.data.ytSummaries ||= {};     // 動画要約キャッシュ（videoId→{summary,at}）。1動画1回だけ生成・同期
     this.data.listedMaster ||= [];    // 全上場銘柄マスタ（自動タグ用）[{code,name}]。JPX一覧を取込・同期
+    this.data.listedMasterInfo ||= null; // 上場マスタの取込メタ {date:'YYYYMMDD',importedAt,count,fileName}（いつ時点のデータか）
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -6283,15 +6284,25 @@ const MASTER_LAUNCH = [
   { v: 'listed', label: '上場銘柄マスタ（自動タグ用）', open: () => openListedMaster(), note: 'JPXの上場銘柄一覧（コード＋銘柄名）を取り込むと、保有外の全上場銘柄もニュース見出しで自動タグ。' },
 ];
 // ---------- 上場銘柄マスタ（自動タグ用・JPX一覧の取込） ----------
-// JPXの「東証上場銘柄一覧(data_j.xls)」をExcelで開き、全体をコピペ（またはCSV貼付）→取込。コード列/銘柄名列を自動判定。
-// 行配列（[[セル,…],…]）から {code,name} を抽出。貼付テキスト・Excel(SheetJS)双方の共通処理。
+// JPXの「東証上場銘柄一覧(data_j.xls)」をそのままドラッグ&ドロップ/選択（またはCSV貼付）→取込。コード列/銘柄名列/日付列を自動判定。
+// 行配列（[[セル,…],…]）から {code,name} を抽出し、ファイル内の「日付」（いつ時点の一覧か）も拾う。貼付テキスト・Excel(SheetJS)共通。
 // 先頭行に「コード/銘柄名」ヘッダがあれば列を特定、無ければ各行から4桁(＋1英数)コード列を探して隣を名称にフォールバック。
+// 返り値: { list:[{code,name}], date:'YYYYMMDD'|'' }
 function parseListedRows(rows) {
   rows = (rows || []).map(r => (Array.isArray(r) ? r : [r]).map(c => (c == null ? '' : String(c)))).filter(r => r.some(c => c.trim()));
-  if (!rows.length) return [];
-  let codeIdx = -1, nameIdx = -1, start = 0;
-  rows[0].forEach((h, i) => { const c = h.trim(); if (codeIdx < 0 && /^(コード|銘柄コード|証券コード|code)$/i.test(c)) codeIdx = i; if (nameIdx < 0 && /^(銘柄名|会社名|名称|name)$/i.test(c)) nameIdx = i; });
+  if (!rows.length) return { list: [], date: '' };
+  let codeIdx = -1, nameIdx = -1, dateIdx = -1, start = 0;
+  rows[0].forEach((h, i) => {
+    const c = h.trim();
+    if (codeIdx < 0 && /^(コード|銘柄コード|証券コード|code)$/i.test(c)) codeIdx = i;
+    if (nameIdx < 0 && /^(銘柄名|会社名|名称|name)$/i.test(c)) nameIdx = i;
+    if (dateIdx < 0 && /^(日付|基準日|date)$/i.test(c)) dateIdx = i;
+  });
   if (codeIdx >= 0 && nameIdx >= 0) start = 1;
+  const pickDate = (v) => { const s = String(v || '').replace(/[^0-9]/g, ''); return /^\d{8}$/.test(s) ? s : ''; };
+  let date = '';
+  if (dateIdx >= 0 && rows[start]) date = pickDate(rows[start][dateIdx]);
+  if (!date) for (const c of (rows[start] || [])) { const d = pickDate(c); if (d) { date = d; break; } } // ヘッダ無し時は先頭行の8桁日付を探す
   const out = [], seen = new Set();
   for (let r = start; r < rows.length; r++) {
     const row = rows[r]; let code, name;
@@ -6303,63 +6314,82 @@ function parseListedRows(rows) {
     if (!/^[0-9]{3}[0-9A-Za-z]$/.test(code) || !name || seen.has(code)) continue;
     seen.add(code); out.push({ code, name });
   }
-  return out;
+  return { list: out, date };
 }
 function parseListedMaster(text) {
   const lines = String(text).replace(/\r/g, '').split('\n');
   return parseListedRows(lines.map(l => l.includes('\t') ? l.split('\t') : l.split(',')));
 }
-// SheetJS(xlsx) を必要時のみCDNから遅延読込（通常のページ表示は軽いまま。.xls/.xlsx 双方に対応）。
+// SheetJS(xlsx) を必要時のみ遅延読込（通常のページ表示は軽いまま。.xls/.xlsx 双方に対応）。
+// まず同一オリジンの同梱ファイルを読み、失敗時のみCDNへフォールバック（本番でCDNが不通/遮断でも取り込めるように同梱を優先）。
 let _xlsxLoading = null;
+function _loadScriptOnce(src) {
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = () => res(); s.onerror = () => rej(new Error('load fail: ' + src)); document.head.appendChild(s); });
+}
 function ensureXlsx() {
   if (window.XLSX) return Promise.resolve(window.XLSX);
   if (_xlsxLoading) return _xlsxLoading;
-  _xlsxLoading = new Promise((res, rej) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
-    s.onload = () => window.XLSX ? res(window.XLSX) : rej(new Error('XLSX読込に失敗しました'));
-    s.onerror = () => rej(new Error('Excel読込ライブラリの取得に失敗（オフライン等）。CSVでお試しください'));
-    document.head.appendChild(s);
-  });
+  _xlsxLoading = (async () => {
+    try { await _loadScriptOnce('xlsx.full.min.js?v=0.18.5'); }
+    catch (_) { await _loadScriptOnce('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'); }
+    if (!window.XLSX) throw new Error('Excel読込ライブラリを読み込めませんでした。CSVでお試しください');
+    return window.XLSX;
+  })();
   return _xlsxLoading;
 }
-// data_j.xls などをそのまま取り込む。CSVはSheetJS不要で即パース、.xls/.xlsxはSheetJSで先頭シートを行配列化。
-async function importListedFile(input) {
-  const file = input.files && input.files[0]; if (!file) return;
-  input.value = '';
+// data_j.xls などをそのまま取り込む（選択/ドロップ共通）。CSVはSheetJS不要で即パース、.xls/.xlsxはSheetJSで先頭シートを行配列化。
+async function importListedFromFile(file) {
+  if (!file) return;
   try {
-    const n = await withBusy('ファイルを読み込み中…', async () => {
+    const res = await withBusy('ファイルを読み込み中…', async () => {
       let parsed;
-      if (/\.csv$/i.test(file.name)) parsed = parseListedMaster(await file.text());
+      if (/\.csv$/i.test(file.name || '')) parsed = parseListedMaster(await file.text());
       else {
         const XLSX = await ensureXlsx();
         const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
         const ws = wb.Sheets[wb.SheetNames[0]];
         parsed = parseListedRows(XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' }));
       }
-      if (!parsed.length) throw new Error('コード・銘柄名を読み取れませんでした（ファイルをご確認ください）');
-      store.data.listedMaster = parsed; store.save();
+      if (!parsed.list.length) throw new Error('コード・銘柄名を読み取れませんでした（ファイルをご確認ください）');
+      store.data.listedMaster = parsed.list;
+      store.data.listedMasterInfo = { date: parsed.date || '', importedAt: store._now ? store._now() : Date.now(), count: parsed.list.length, fileName: file.name || '' };
+      store.save();
       _majorsListCache = null; _majorsMemo.clear();
-      return parsed.length;
+      return parsed;
     }, null);
     closeModal();
     if (currentView === 'news') renderNews();
-    toast(`${n.toLocaleString('ja-JP')} 銘柄を取り込みました`);
+    toast(`${res.list.length.toLocaleString('ja-JP')} 銘柄を取り込みました${res.date ? `（${fmtListedDate(res.date)} 時点）` : ''}`);
   } catch (_) { /* エラーは busyDone が表示 */ }
 }
+function importListedFile(input) { const f = input.files && input.files[0]; input.value = ''; return importListedFromFile(f); }
+// ドラッグ&ドロップ
+function listedDragOver(ev) { ev.preventDefault(); const dz = document.getElementById('listed-dz'); if (dz) { dz.style.borderColor = 'var(--accent, #4a90d9)'; dz.style.background = 'rgba(74,144,217,.08)'; } }
+function listedDragLeave(ev) { if (ev) ev.preventDefault(); const dz = document.getElementById('listed-dz'); if (dz) { dz.style.borderColor = ''; dz.style.background = ''; } }
+function listedDrop(ev) { ev.preventDefault(); listedDragLeave(); const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0]; if (f) importListedFromFile(f); }
+function fmtListedDate(d) { return /^\d{8}$/.test(d || '') ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : (d || ''); }
 function openListedMaster() {
   const cur = store.data.listedMaster || [];
+  const info = store.data.listedMasterInfo || {};
+  const dateStr = fmtListedDate(info.date);
+  const impStr = info.importedAt ? new Date(info.importedAt).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  const curLine = cur.length
+    ? `現在の登録: <b>${cur.length.toLocaleString('ja-JP')} 銘柄</b>${dateStr ? ` ・ <b>${dateStr}</b> 時点のデータ` : ''}${impStr ? ` <span class="muted">（${impStr} 取込）</span>` : ''}`
+    : '現在の登録: <b>未登録</b>';
   showModal('上場銘柄マスタ（自動タグ用）', `
-    <p class="muted" style="margin:0 0 8px;font-size:12px">現在の登録: <b>${cur.length.toLocaleString('ja-JP')} 銘柄</b>。ここに登録した銘柄は、保有していなくてもニュース見出し・本文に社名/コードが出れば自動でタグ（枠線・クリックで株探）されます。</p>
+    <p class="muted" style="margin:0 0 8px;font-size:12px">${curLine}。ここに登録した銘柄は、保有していなくてもニュース見出し・本文に社名/コードが出れば自動でタグ（枠線・クリックで株探）されます。</p>
     <fieldset class="form-group"><legend>取り込み方（JPXの公式一覧）</legend>
       <ol class="muted" style="margin:0;padding-left:18px;font-size:12px;line-height:1.7">
         <li>JPX「東証上場銘柄一覧」ページを開く → <b>data_j.xls</b> をダウンロード（<code>jpx.co.jp/markets/statistics-equities/misc/01.html</code>）</li>
-        <li>下の「ファイルを選択」で <b>data_j.xls をそのまま選ぶ</b>だけ（Excelで開き直す必要なし）。「コード」列と「銘柄名」列を自動判定します（ETF/REIT等も含めてOK）</li>
+        <li>下の枠に <b>data_j.xls をドラッグ＆ドロップ</b>（またはクリックで選択）するだけ。Excelで開き直す必要はありません。「コード」「銘柄名」「日付」列を自動判定します（ETF/REIT等も含めてOK）</li>
       </ol></fieldset>
-    <div style="margin:10px 0">
-      <label class="btn btn-primary" style="cursor:pointer">📁 ファイルを選択（.xls / .xlsx / .csv）
+    <div id="listed-dz" ondragover="listedDragOver(event)" ondragleave="listedDragLeave(event)" ondrop="listedDrop(event)"
+      style="border:2px dashed var(--border,#ccc); border-radius:10px; padding:22px 14px; text-align:center; transition:.15s; margin:10px 0">
+      <div style="font-size:26px; line-height:1">📥</div>
+      <div style="font-size:13px; margin-top:4px">ここに <b>data_j.xls</b> をドラッグ＆ドロップ</div>
+      <div class="muted" style="font-size:12px; margin:6px 0">または</div>
+      <label class="btn btn-primary btn-sm" style="cursor:pointer">ファイルを選択（.xls / .xlsx / .csv）
         <input type="file" accept=".xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="importListedFile(this)" hidden></label>
-      <span class="muted" style="font-size:12px;margin-left:8px">data_j.xls をダウンロードしたまま選択できます</span>
     </div>
     <details style="margin-top:6px"><summary class="muted" style="font-size:12px;cursor:pointer">またはコピーして貼り付けで取り込む</summary>
       <textarea id="listed-ta" rows="6" style="width:100%;font-size:12px;margin-top:6px" placeholder="コード	銘柄名 … を貼り付け（タブ区切り/カンマ区切り）"></textarea>
@@ -6373,15 +6403,17 @@ function openListedMaster() {
 function importListedMaster() {
   const ta = document.getElementById('listed-ta'); if (!ta) return;
   const parsed = parseListedMaster(ta.value);
-  if (!parsed.length) { toast('コード・銘柄名を読み取れませんでした（貼り付け内容をご確認ください）'); return; }
-  store.data.listedMaster = parsed; store.save();
+  if (!parsed.list.length) { toast('コード・銘柄名を読み取れませんでした（貼り付け内容をご確認ください）'); return; }
+  store.data.listedMaster = parsed.list;
+  store.data.listedMasterInfo = { date: parsed.date || '', importedAt: store._now ? store._now() : Date.now(), count: parsed.list.length, fileName: '' };
+  store.save();
   _majorsListCache = null; _majorsMemo.clear(); // 照合リスト再構築
   closeModal(); if (currentView === 'news') renderNews();
-  toast(`${parsed.length.toLocaleString('ja-JP')} 銘柄を取り込みました`);
+  toast(`${parsed.list.length.toLocaleString('ja-JP')} 銘柄を取り込みました${parsed.date ? `（${fmtListedDate(parsed.date)} 時点）` : ''}`);
 }
 function clearListedMaster() {
   if (!confirm('上場銘柄マスタを全消去します。よろしいですか？')) return;
-  store.data.listedMaster = []; store.save();
+  store.data.listedMaster = []; store.data.listedMasterInfo = null; store.save();
   _majorsListCache = null; _majorsMemo.clear();
   closeModal(); if (currentView === 'news') renderNews();
   toast('上場銘柄マスタを消去しました');
@@ -11712,6 +11744,9 @@ window.saveYtChannelMaster = saveYtChannelMaster;
 window.openListedMaster = openListedMaster;
 window.importListedMaster = importListedMaster;
 window.importListedFile = importListedFile;
+window.listedDragOver = listedDragOver;
+window.listedDragLeave = listedDragLeave;
+window.listedDrop = listedDrop;
 window.clearListedMaster = clearListedMaster;
 window.openDiscTypeMaster = openDiscTypeMaster;
 window.discTypeAddRow = discTypeAddRow;

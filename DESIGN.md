@@ -777,7 +777,10 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 ### 16.7.1 全上場銘柄マスタの自動タグ（フェーズN2追補・2026-07-20）
 - 静的定数 `NEWS_MAJORS` を廃止し、**`store.data.listedMaster`（JPX上場一覧の取込データ [{code,name}]）＋ 組込辞書（NEWS_JP_ALIAS/NEWS_US_ALIAS）** を合成した照合リスト `newsMajorsList()` に置換。これで**保有外の全上場約3900社**を自動タグ対象にできる。
 - **取込UI**: マスタ一覧に「上場銘柄マスタ（自動タグ用）」（`openListedMaster`）。JPX「東証上場銘柄一覧(data_j.xls)」を**ダウンロードしたファイルをそのまま選択**（`importListedFile`）できる（貼付も併存）。`parseListedRows()` が「コード/銘柄名」ヘッダを自動判定（無ければ4桁数字列＋隣接列でフォールバック）、4桁数字＋グロース新形式（`130A`等）＋ファイルの5桁0埋め（`13010`→`1301`, `130A0`→`130A`）に対応、コード重複は除外。
-  - **Excel直読み**: `.xls/.xlsx` は SheetJS(xlsx) を**必要時のみCDNから遅延読込**（`ensureXlsx`。通常ページ表示は軽いまま）→先頭シートを行配列化して同じパーサへ。`.csv` はSheetJS不要で即パース。読込は `withBusy` オーバーレイでフィードバック。
+  - **Excel直読み**: `.xls/.xlsx` は SheetJS(xlsx) を**必要時のみ遅延読込**（`ensureXlsx`。通常ページ表示は軽いまま）→先頭シートを行配列化して同じパーサへ。`.csv` はSheetJS不要で即パース。読込は `withBusy` オーバーレイでフィードバック。
+    - **SheetJSは同梱を優先**（`xlsx.full.min.js` をリポジトリに同梱＝同一オリジンから読込）。取得失敗時のみCDNへフォールバック（`_loadScriptOnce`）。本番でCDN遮断/オフラインでも取り込めるようにするため（旧: CDN直参照で取込エラーになった事象への対処）。data_j.xls はOLE2/BIFF8バイナリだがSheetJS full版がShift-JIS込みで正しく読める（実測4,430件・約180ms）。
+  - **ドラッグ&ドロップ対応**: 取込モーダルにドロップゾーン（`listed-dz`）。`data_j.xls` を枠にD&D、またはクリックで選択。選択/ドロップとも `importListedFromFile(file)` に集約。
+  - **取込日を保持**: ファイル内「日付」列（JPXの基準日。無ければ先頭行の8桁YYYYMMDDを探索）を `store.data.listedMasterInfo = {date,importedAt,count,fileName}` に保存。モーダル冒頭に「現在の登録: N銘柄 ・ YYYY-MM-DD 時点のデータ（取込日時）」を表示＝いつ時点の一覧か一目でわかる。`listedMasterInfo` も sync SCHEMA(`single`)登録。
 - **ランキングタブ銘柄も自動タグ（2026-07-20）**: マーケットの**時価総額/売買代金/値上がり/値下がり**ランキングのキャッシュ（`store.data.mktRanking`）の構成銘柄も `newsMajorsList()` に合成（`_rankingEntries()`）。US=ティッカー＋日本語化名称、JP=4桁コード＋名称。**米国株はランキング取得ぶんが主要辞書(NEWS_US_ALIAS 約46社)を補完**する形で対象拡大。照合リストのキャッシュ鍵は `listedMaster件数 + ランキング署名(_rankingSig)`（ランキング更新で自動失効）。
 - **社名→照合語**: `_masterNorms(name)` が「株式会社」除去・ホールディングス⇔HD・グループ⇔G・先頭カタカナ抽出などの正規化別名を生成（`searchNorm`でNFKC＋カナ→かな）。誤検知抑制のため**3文字以上**の別名のみ採用。
 - **マッチ**: 見出し＋本文の正規化テキストに社名別名が含まれる／または本文に**4桁コード**（前後が数字や円・株でない）が出れば該当。保有済み銘柄は自動タグから除外（青チップ側で表示）。

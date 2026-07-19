@@ -59,6 +59,7 @@
     ytChannels:      ['single'],      // YouTube購読チャンネル（配列・一括編集）。base から変わった側を採用
     ytSummaries:     ['map', null],   // 動画要約キャッシュ（videoId→{summary,at}）。キー単位3-way・両在はlocal
     listedMaster:    ['single'],      // 全上場銘柄マスタ（自動タグ用・配列）。一括取込なので base から変わった側を採用
+    listedMasterInfo: ['single'],     // 上場マスタの取込メタ（日付・件数）。listedMasterと一緒に更新
 
     fx:              ['single'],
     settings:        ['singleTs'],
