@@ -883,3 +883,9 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 - **チャンネルマスタ**: `store.data.ytChannels`（既定=テスタ公式 `UCfJEDCUlzQl4-atLp6Z9DcQ`）。マスタ・設定＞YouTubeチャンネルで表示名・チャンネルID編集（URL貼付でもID抽出）。sync `['single']`。
 - **ニュース合流**: `_newsVideos()` が購読チャンネルの新着を取得し、カテゴリ「動画」でニュース一覧へ合流（▶マーク・チャンネル名を配信元表示）。カテゴリトグルに「動画」追加。
 - **要約キャッシュ枠**: `store.data.ytSummaries`（videoId→{summary,at}）を用意（sync `['map']`）。要約があれば記事descに載せパネル表示。**生成（Gemini）は次段**（GEMINI_API_KEY設定後）。
+
+### 19.1 YouTube動画のAI要約（フェーズN3・第2段・Gemini・2026-07-19）
+- **要約API（functions/api/youtube-summary.js）**: `GET /api/youtube-summary?v=VIDEOID` → Gemini（`GEMINI_API_KEY`必須・モデル gemini-2.0-flash）に YouTube URL を fileData で渡し、投資関連の要点を日本語で箇条書き要約。55秒タイムアウト。Geminiのエラーは本文に載せて返す（デバッグ用）。
+- **表示**: 動画クリック→`openVideoPanel`。キャッシュ（`store.data.ytSummaries[videoId]`）があれば即表示、無ければ `generateVideoSummary` で生成→キャッシュ＆同期（1動画1回）。「要約し直す」で再生成。生成中はローディング、失敗時はエラー文言＋「▶動画を開く」。
+- **注意**: 要約はAI自動生成で誤りうる旨をパネルに明記。長時間動画はタイムアウト/失敗し得る（その場合は動画を開く導線）。
+- ローカル(キー無し)ではAPIが no-key エラーを返す→パネルがエラー表示に切替わるところまで確認。本番はキー設定済みのため実要約を要検証。

@@ -4576,6 +4576,7 @@ function newsOpenArticle(ev, el) {
   for (const k in store.data.newsRead) { const d = new Date(store.data.newsRead[k]); if (isNaN(d) || d.getTime() < lim) delete store.data.newsRead[k]; }
   store.save(); el.classList.remove('unread');
   const it = newsFindItem(link);
+  if (it && it.cat === 'video') { openVideoPanel(it); return; } // 動画はAI要約パネル
   // 要約が無い記事（開示・日経マーケット・Yahoo等）はパネルを出さず一発で元記事を開く
   if (!it || !it.desc) { window.open(link, '_blank'); return; }
   const secs = newsMatchSecs(it), tags = newsMatchTags(it);
@@ -4613,6 +4614,59 @@ function newsOpenArticle(ev, el) {
     if (el && tr && tr.d) el.textContent = tr.d;
     else if (el) el.innerHTML = '<span class="muted">翻訳を取得できませんでした。' + (it.desc ? '原文: ' + esc(it.desc) : '') + '</span>';
   });
+}
+
+// 動画のAI要約パネル。キャッシュ済みなら表示、無ければGeminiで生成→キャッシュ＆同期（1動画1回）。
+function openVideoPanel(it) {
+  const cached = (store.data.ytSummaries || {})[it.videoId];
+  const has = cached && cached.summary;
+  const secs = newsMatchSecs(it), tags = newsMatchTags(it);
+  const chips = [
+    ...secs.map(s => `<span class="news-sec" onclick="closeModal();openSecurityDetail(${s.id})">${esc(nameAbbr(calc.displayName(s)))}</span>`),
+    ...tags.map(t => `<span class="news-tag">${esc(t.name)}</span>`),
+  ].join(' ');
+  const body = `
+    <div class="news-panel">
+      <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span><span class="news-cat">動画</span></div>
+      <h3 class="np-title">${esc(it.title)}</h3>
+      ${chips ? `<div class="np-chips">${chips}</div>` : ''}
+      <div class="np-body" id="np-video-summary">${has ? esc(cached.summary) : '<span class="muted">AIで要約を生成しています…（動画が長いと1分ほどかかります）</span>'}</div>
+      <p class="np-note muted">※ AIによる自動要約です。誤り（銘柄名・数値の取り違え等）が含まれる場合があります。正確な内容は動画をご確認ください。</p>
+      <div class="form-actions" style="margin-top:14px">
+        <button type="button" class="btn btn-primary" onclick="window.open('${esc(it.link)}','_blank')">▶ 動画を開く</button>
+        ${has ? `<button type="button" class="btn" id="np-video-regen" onclick="regenVideoSummary('${esc(it.videoId)}')">要約し直す</button>` : ''}
+        <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+      </div>
+    </div>`;
+  showModal('動画', body);
+  if (!has) generateVideoSummary(it.videoId, true);
+}
+async function generateVideoSummary(videoId, showInPanel) {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90000);
+    let d;
+    try { const r = await fetch('/api/youtube-summary?v=' + encodeURIComponent(videoId), { signal: ctrl.signal }); d = await r.json(); }
+    finally { clearTimeout(timer); }
+    if (d && d.summary) {
+      store.data.ytSummaries[videoId] = { summary: d.summary, at: new Date().toISOString() };
+      store.save();
+      if (showInPanel) { const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary; }
+      if (currentView === 'news') { /* 一覧のdesc反映は次回描画時 */ }
+      return d.summary;
+    }
+    if (showInPanel) { const el = document.getElementById('np-video-summary'); if (el) el.innerHTML = `<span class="muted">${esc((d && d.error) || '要約を生成できませんでした')}<br>動画をご確認ください。</span>`; }
+    return '';
+  } catch (e) {
+    if (showInPanel) { const el = document.getElementById('np-video-summary'); if (el) el.innerHTML = '<span class="muted">要約の生成に失敗しました（通信エラーまたはタイムアウト）。</span>'; }
+    return '';
+  }
+}
+function regenVideoSummary(videoId) {
+  const el = document.getElementById('np-video-summary'); if (el) el.innerHTML = '<span class="muted">AIで要約を生成しています…</span>';
+  const rb = document.getElementById('np-video-regen'); if (rb) rb.remove();
+  delete store.data.ytSummaries[videoId]; store.save();
+  generateVideoSummary(videoId, true);
 }
 
 // ===== 銘柄マッチング（フェーズN2） =====
@@ -11378,6 +11432,7 @@ window.setNewsDays = setNewsDays;
 window.newsRefresh = newsRefresh;
 window.newsReadLink = newsReadLink;
 window.newsOpenArticle = newsOpenArticle;
+window.regenVideoSummary = regenVideoSummary;
 window.setNewsHeldOnly = setNewsHeldOnly;
 window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
