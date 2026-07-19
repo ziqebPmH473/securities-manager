@@ -335,6 +335,7 @@ const store = {
       const mx = this.data.matrixSettings && this.data.matrixSettings.usdJpy;
       this.data.settings.masterUsdJpy = (mx != null && isFinite(mx)) ? mx : DEFAULT_MATRIX_USDJPY;
     }
+    if (this.data.settings.ytModel === undefined) this.data.settings.ytModel = 'gemini-3.1-flash-lite'; // 動画要約の既定モデル（500回/日）。未設定時のみ
     this.data.cfRules = migrateCfRules(this.data.cfRules); // 列の背景色ルール（マスタ管理）。未定義は既定シード／旧フラット型は移行
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
       this.data.importMappings[k] = { ...DEFAULT_IMPORT_MAPPINGS[k], ...(this.data.importMappings[k] || {}) };
