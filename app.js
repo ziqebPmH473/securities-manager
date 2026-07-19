@@ -327,6 +327,8 @@ const store = {
     this.data.newsPrefs.hideCats ||= [];
     this.data.newsPrefs.hideDiscTypes ||= [];
     this.data.discTypeDefs ||= structuredClone(DEFAULT_DISC_TYPES); // 開示種別マスタ（分類・キーワード）。ユーザー編集可・同期
+    this.data.ytChannels ||= structuredClone(DEFAULT_YT_CHANNELS); // YouTube購読チャンネル（動画取得元）。ユーザー編集可・同期
+    this.data.ytSummaries ||= {};     // 動画要約キャッシュ（videoId→{summary,at}）。1動画1回だけ生成・同期
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -4418,7 +4420,7 @@ function renderMarketTab() {
 let _newsCache = null;   // { items:[{title,link,source,pubDate}], at }
 let newsBusy = false;
 let newsHeldOnly = false; // 関連銘柄（登録銘柄に見出し一致）のみ表示
-const NEWS_REAL_CATS = ['market', 'earnings', 'disclosure', 'macro', 'other']; // 「すべて」以外の実カテゴリ
+const NEWS_REAL_CATS = ['market', 'earnings', 'disclosure', 'video', 'macro', 'other']; // 「すべて」以外の実カテゴリ
 // 表示するカテゴリは newsPrefs.hideCats（非表示カテゴリ）で管理＝インラインのトグルで即切替＆同期保存
 function newsCatShown(c) { return !((store.data.newsPrefs && store.data.newsPrefs.hideCats) || []).includes(c); }
 function newsAllCatsShown() { return NEWS_REAL_CATS.every(newsCatShown); }
@@ -4469,7 +4471,9 @@ function newsItemMarkets(it, ms) {
 }
 const NEWS_DAYS = [[0, '全期間'], [1, '24時間'], [3, '3日'], [7, '7日']];
 function setNewsDays(d) { newsDays = d; renderNews(); }
-const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['disclosure', '開示'], ['macro', '為替・金利'], ['other', 'その他']];
+const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決算'], ['disclosure', '開示'], ['video', '動画'], ['macro', '為替・金利'], ['other', 'その他']];
+// YouTube購読チャンネル既定（テスタ公式）。マスタ・設定＞YouTubeチャンネルで編集可
+const DEFAULT_YT_CHANNELS = [{ id: 'UCfJEDCUlzQl4-atLp6Z9DcQ', name: 'テスタ' }];
 // 開示の細分類（TDnet/EDGARの見出し・書類種別から判定）。表示設定で種類ごとに除外できる
 // 開示種別マスタ（既定）。name=タグ名（＝ID） / group=フィルタタブのまとめ名 / keywords=見出し判定（正規表現・| 区切り）。
 // 上から順に最初に一致した種別のタグが付く。groupが同じ種別はニュースの絞り込みタブで束ねられる（タグは種別ごと）。
@@ -4524,14 +4528,15 @@ async function newsRefresh(auto) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 25000);
     try {
-      // ニュース(RSS)と登録銘柄の適時開示(TDnet)を並行取得し合流
-      const [res, discItems] = await Promise.all([
+      // ニュース(RSS)・登録銘柄の適時開示(TDnet)・購読YouTube動画を並行取得し合流
+      const [res, discItems, videoItems] = await Promise.all([
         fetch('/api/news', { signal: ctrl.signal }),
         _newsDiscForHoldings().catch(() => []),
+        _newsVideos().catch(() => []),
       ]);
       const data = await res.json();
       let items = (data && Array.isArray(data.items)) ? data.items : [];
-      items = items.concat(discItems);
+      items = items.concat(discItems).concat(videoItems);
       // リンク重複排除・新しい順
       const seen = new Set();
       items = items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link))
@@ -4958,8 +4963,8 @@ function newsItemHtml(it, read, matches, opts = {}) {
   const hideBtn = opts.mini ? ''
     : opts.restore ? `<button class="news-restore" data-link="${esc(it.link)}" onclick="newsUnhideBtn(event,this)" title="一覧に戻す">戻す</button>`
     : `<button class="news-hide" data-link="${esc(it.link)}" onclick="newsHideBtn(event,this)" title="この記事を非表示にする">✕</button>`;
-  // 英語記事は翻訳（あれば）を表示し、翻訳済みなら「訳」バッジ。クリックで要約パネル（元記事へは行かない）
-  const dispTitle = newsDispTitle(it);
+  // 英語記事は翻訳（あれば）を表示し、翻訳済みなら「訳」バッジ。動画は▶マーク。クリックで要約パネル（元記事へは行かない）
+  const dispTitle = (it.cat === 'video' ? '▶ ' : '') + newsDispTitle(it);
   const trBadge = it.lang === 'en' ? `<span class="news-trans-badge">${store.data.newsTrans[it.link] && store.data.newsTrans[it.link].t ? '訳' : 'EN'}</span>` : '';
   return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
@@ -5030,6 +5035,23 @@ function renderNews() {
   if (cache) newsTranslatePending(); // 英語記事の未翻訳分を裏で翻訳→完了後に再描画（非同期・多重起動はガード済み）
 }
 
+// 購読YouTubeチャンネルの新着動画をニュース一覧アイテム化（カテゴリ=動画）。要約があればdescに載せる（後でGemini）。
+async function _newsVideos() {
+  const chs = (store.data.ytChannels || []).map(c => String(c.id || '').trim()).filter(id => /^UC[\w-]{20,}$/.test(id));
+  if (!chs.length) return [];
+  let vids = [];
+  try {
+    const res = await fetch('/api/youtube?max=6&channels=' + encodeURIComponent(chs.join(',')));
+    const d = await res.json();
+    if (d && Array.isArray(d.items)) vids = d.items;
+  } catch (_) { return []; }
+  const sums = store.data.ytSummaries || {};
+  return vids.map(v => ({
+    title: v.title, link: v.link, pubDate: v.published, source: v.channel || 'YouTube',
+    cat: 'video', videoId: v.videoId, thumb: v.thumb,
+    desc: (sums[v.videoId] && sums[v.videoId].summary) || undefined, // 要約があれば本文に（パネル表示・翻訳不要）
+  }));
+}
 // 登録JP銘柄の適時開示（TDnet）をまとめて取得し、ニュース一覧アイテム化して返す。
 // 保有銘柄ごとに直近開示を引くので「直近全社120件に入っていない銘柄」も漏れなく出る。
 async function _newsDiscForHoldings() {
@@ -6051,7 +6073,43 @@ const MASTER_LAUNCH = [
   { v: 'cf',       label: '列の背景色ルール',       open: () => openCfRulesMaster(),  note: '数値列の値の範囲ごとの背景色。適用画面（保有/サイン/マスタ/マーケット）を複数選択可。' },
   { v: 'notify',   label: '通知メール設定',         open: () => openNotifyMaster(),   note: '買い増しサイン通知メールの件名・本文をテンプレート（差し込み記号）で自由に編集。日本株/米国株・到達/接近で別々に設定可。' },
   { v: 'disctype', label: '開示種別マスタ（分類・キーワード）', open: () => openDiscTypeMaster(), note: 'ニュースの開示（TDnet/EDGAR）を見出しキーワードで種別分類。種別名（タグ）・まとめ（フィルタタブ）・キーワードを編集可。' },
+  { v: 'ytchannel', label: 'YouTubeチャンネル（動画取得元）', open: () => openYtChannelMaster(), note: 'ニュースの「動画」に出す購読チャンネル。チャンネルID（UCで始まる）と表示名を登録。' },
 ];
+// ---------- YouTubeチャンネル マスタ ----------
+function ytChannelRowHtml(c) {
+  return `<tr>
+    <td class="l"><input class="yt-name" value="${esc(c.name || '')}" placeholder="テスタ" style="width:130px"></td>
+    <td class="l"><input class="yt-id" value="${esc(c.id || '')}" placeholder="UCfJEDCUlzQl4-atLp6Z9DcQ" style="width:100%;min-width:260px"></td>
+    <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()" title="削除">×</button></td></tr>`;
+}
+function openYtChannelMaster() {
+  const rows = (store.data.ytChannels || []).map(ytChannelRowHtml).join('');
+  showModal('YouTubeチャンネル（動画取得元）', `
+    <p class="muted" style="margin:0 0 8px;font-size:12px">ニュースの「動画」カテゴリに新着動画を表示するチャンネルです。<strong>チャンネルID</strong>（<code>UC</code>で始まる24文字）を登録してください。<br>調べ方: チャンネルページを開き、URLが <code>youtube.com/channel/UC…</code> ならその <code>UC…</code>。<code>@ハンドル</code> 形式の場合は、チャンネルの「概要」→「チャンネルを共有」→「チャンネルIDをコピー」で取得できます。</p>
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr><th class="l">表示名</th><th class="l">チャンネルID（UC…）</th><th></th></tr></thead>
+      <tbody id="yt-ch-rows">${rows}</tbody></table></div>
+    <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" onclick="ytChannelAddRow()">＋ チャンネルを追加</button></div>
+    <div class="form-actions" style="margin-top:12px">
+      <button type="button" class="btn btn-primary" onclick="saveYtChannelMaster()">保存</button>
+      <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+    </div>`, { wide: true });
+}
+function ytChannelAddRow() { const tb = document.getElementById('yt-ch-rows'); if (tb) tb.insertAdjacentHTML('beforeend', ytChannelRowHtml({ name: '', id: '' })); }
+function saveYtChannelMaster() {
+  const defs = [];
+  for (const tr of document.querySelectorAll('#yt-ch-rows tr')) {
+    const name = tr.querySelector('.yt-name').value.trim();
+    let id = tr.querySelector('.yt-id').value.trim();
+    const m = id.match(/UC[\w-]{20,}/); if (m) id = m[0]; // URLを貼られてもID部分を抽出
+    if (!id) continue;
+    if (!/^UC[\w-]{20,}$/.test(id)) { toast(`チャンネルIDの形式が不正です: ${name || id}`); return; }
+    defs.push({ id, name: name || id });
+  }
+  store.data.ytChannels = defs; store.save();
+  closeModal(); if (currentView === 'news') { _newsCache = null; newsRefresh(); }
+  toast('YouTubeチャンネルを保存しました');
+}
 // ---------- 開示種別マスタ（分類・キーワード編集） ----------
 function discTypeRowHtml(d) {
   return `<tr>
@@ -11323,6 +11381,9 @@ window.newsOpenArticle = newsOpenArticle;
 window.setNewsHeldOnly = setNewsHeldOnly;
 window.openNewsTagsEditor = openNewsTagsEditor;
 window.saveNewsTags = saveNewsTags;
+window.openYtChannelMaster = openYtChannelMaster;
+window.ytChannelAddRow = ytChannelAddRow;
+window.saveYtChannelMaster = saveYtChannelMaster;
 window.openDiscTypeMaster = openDiscTypeMaster;
 window.discTypeAddRow = discTypeAddRow;
 window.discTypeMoveRow = discTypeMoveRow;

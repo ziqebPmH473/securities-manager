@@ -876,3 +876,10 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 - **対策**: `discLink()` で、日本株の開示が**30日より古い**場合は直接PDFではなく**恒久的なYahoo!ファイナンスの適時開示ページ**（`finance.yahoo.co.jp/quote/{code}.T/disclosure`・200確認済み）へ切替。最近の開示はこれまで通り直接PDF。米国株(EDGAR)は恒久のため変更なし。
 - 表示元ラベルも「TDnet」/「Yahoo開示」で切替、古い開示にはtooltipで「PDF公開終了」を明示。
 - 制約: 期限切れの特定PDFは無料では取得不可のため、リンク先は銘柄の開示一覧ページ（404は回避されるが、その特定文書がYahooの一覧に無ければ辿れない）。
+
+## 19. YouTube動画（フェーズN3・第1段: 一覧＋チャンネルマスタ・2026-07-19）
+要約（Gemini）は次段。まず新着動画の取得・表示・チャンネル管理を実装。
+- **取得（functions/api/youtube.js）**: `GET /api/youtube?channels=UC…,UC…&max=6` → YouTube公式チャンネルRSS（無料・キー不要）。{title,videoId,link,published,channel,channelId,thumb}。エッジ10分キャッシュ・8秒タイムアウト。
+- **チャンネルマスタ**: `store.data.ytChannels`（既定=テスタ公式 `UCfJEDCUlzQl4-atLp6Z9DcQ`）。マスタ・設定＞YouTubeチャンネルで表示名・チャンネルID編集（URL貼付でもID抽出）。sync `['single']`。
+- **ニュース合流**: `_newsVideos()` が購読チャンネルの新着を取得し、カテゴリ「動画」でニュース一覧へ合流（▶マーク・チャンネル名を配信元表示）。カテゴリトグルに「動画」追加。
+- **要約キャッシュ枠**: `store.data.ytSummaries`（videoId→{summary,at}）を用意（sync `['map']`）。要約があれば記事descに載せパネル表示。**生成（Gemini）は次段**（GEMINI_API_KEY設定後）。
