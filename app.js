@@ -1792,6 +1792,9 @@ const api = {
       if (!res) continue;
       for (const [sym, d] of Object.entries(res)) {
         const k = keyBySym.get(sym); if (!k) continue;
+        // 前回も次回も取れなかった＝ソース側の同時アクセス制限で弾かれた可能性→「取得済み」にせず次回の更新に持ち越す
+        // （既存の値があればそれは消さない）。at を今日にしないので、次の価格更新でまた取りに行く。
+        if (!d.prev && !d.next) continue;
         store.data.earnings[k] = { next: d.next || null, nextEstimate: !!d.nextEstimate, exDiv: d.exDiv || null, prev: d.prev || null, prev2: d.prev2 || null, at: td };
       }
     }

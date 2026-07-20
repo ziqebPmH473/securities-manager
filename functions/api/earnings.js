@@ -10,7 +10,8 @@ export async function onRequestGet(context) {
   const syms = (url.searchParams.get('symbols') || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 20);
   if (!syms.length) return json({});
   const out = {};
-  await Promise.all(syms.map(async (sym) => {
+  // 同時アクセスを絞る（NasdaqやYahoo日本版の同時接続制限で一部が弾かれるのを防ぐ）。銘柄は最大3並列で処理。
+  await pool(syms, 3, async (sym) => {
     const [next, prev] = await Promise.all([
       fetchNext(sym).catch(() => null),
       fetchPrev(sym).catch(() => null),
@@ -22,9 +23,16 @@ export async function onRequestGet(context) {
       prev: prev ? prev.prev : null,
       prev2: prev ? prev.prev2 : null, // 直近2回目の決算日（決算間隔＝四半期/半期/通期の推定に使う）
     };
-  }));
+  });
   return json(out);
 }
+// 並列数を limit に絞って items を処理
+async function pool(items, limit, fn) {
+  let i = 0;
+  const worker = async () => { while (i < items.length) { const idx = i++; await fn(items[idx], idx); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ---------- 次回決算日 ----------
 // JP: Yahoo!ファイナンス日本版の個別ページ（本番Cloudflareから到達可＝ファンダ取得で実績あり）の「次回決算発表予定日」。
@@ -41,9 +49,8 @@ const _MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8
 async function fetchNextUs(symbol) {
   const s = String(symbol || '').trim().toUpperCase();
   if (!/^[A-Z.\-]{1,8}$/.test(s)) return null;
-  const r = await fetchGuard(`https://api.nasdaq.com/api/analyst/${encodeURIComponent(s)}/earnings-date`, 8000);
-  if (!r.ok) return null;
-  const d = await r.json().catch(() => null);
+  const d = await nasdaqJson(`https://api.nasdaq.com/api/analyst/${encodeURIComponent(s)}/earnings-date`);
+  if (!d) return null;
   const txt = `${(d && d.data && d.data.reportText) || ''} ${(d && d.data && d.data.announcement) || ''}`;
   let m = txt.match(/report earnings on\s+(\d{1,2})\/(\d{1,2})\/(20\d{2})/i); // MM/DD/YYYY
   if (m) return { date: `${m[3]}-${_pad(m[1])}-${_pad(m[2])}`, estimate: false, exDiv: null };
@@ -137,9 +144,8 @@ async function prevUs(ticker) {
 }
 // Nasdaq earnings-surprise の Date Reported（実際の決算発表日）を新しい順に上位2つ。
 async function prevUsNasdaq(t) {
-  const r = await fetchGuard(`https://api.nasdaq.com/api/company/${encodeURIComponent(t)}/earnings-surprise?assetclass=stocks`, 8000);
-  if (!r.ok) return null;
-  const d = await r.json().catch(() => null);
+  const d = await nasdaqJson(`https://api.nasdaq.com/api/company/${encodeURIComponent(t)}/earnings-surprise?assetclass=stocks`);
+  if (!d) return null;
   const rows = (d && d.data && d.data.earningsSurpriseTable && d.data.earningsSurpriseTable.rows) || [];
   const dates = rows.map(x => usDate(x && x.dateReported)).filter(Boolean);
   return topTwo(dates);
@@ -175,6 +181,17 @@ async function fetchGuard(u, ms, extraHeaders) {
   try {
     return await fetch(u, { headers: { 'User-Agent': UA, 'Accept': 'application/json,text/plain,*/*', ...(extraHeaders || {}) }, signal: ctrl.signal, cf: { cacheTtl: 0 } });
   } finally { clearTimeout(timer); }
+}
+// Nasdaq用: 失敗/429/空応答なら1回だけ待って再試行（同時アクセス制限で弾かれた時の取りこぼしを減らす）
+async function nasdaqJson(u) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetchGuard(u, 8000, { 'Accept': 'application/json, text/plain, */*' });
+      if (r.ok) { const d = await r.json().catch(() => null); if (d && d.data) return d; }
+    } catch (_) {}
+    if (attempt === 0) await delay(600);
+  }
+  return null;
 }
 // TDnet pubdate（"YYYY-MM-DD HH:MM:SS" JST）を ISO へ
 function isoOf(s) {
