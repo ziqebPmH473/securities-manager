@@ -912,7 +912,17 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 ## 19. YouTube動画（フェーズN3・第1段: 一覧＋チャンネルマスタ・2026-07-19）
 要約（Gemini）は次段。まず新着動画の取得・表示・チャンネル管理を実装。
 - **取得（functions/api/youtube.js）**: `GET /api/youtube?channels=UC…,UC…&max=6` → YouTube公式チャンネルRSS（無料・キー不要）。{title,videoId,link,published,channel,channelId,thumb}。エッジ10分キャッシュ・8秒タイムアウト。
-- **チャンネルマスタ**: `store.data.ytChannels`（既定=テスタ公式 `UCfJEDCUlzQl4-atLp6Z9DcQ`）。マスタ・設定＞YouTubeチャンネルで表示名・チャンネルID編集（URL貼付でもID抽出）。sync `['single']`。
+- **チャンネルマスタ**: `store.data.ytChannels`（既定=テスタ公式 `UCfJEDCUlzQl4-atLp6Z9DcQ`）。マスタ・設定＞YouTubeチャンネルで表示名・チャンネルID編集（URL貼付でもID抽出）。sync `['records', c=>'yt:'+c.id]`（後述の消失事故対応で `['single']` から変更）。
+
+### 19.9 既定値シード付きマスタの消失事故と、レコード＋トンボストン化（2026-07-20）
+**事象**: 登録済みのYouTubeチャンネルが消えた（別端末で開いたのが引き金）。
+**原因**: `ytChannels` / `discTypeDefs` は `store.load()` で**既定値が自動シード**される（`||= structuredClone(DEFAULT_…)`）のに、同期規則が `['single']`（＝baseから変わった側を採用・両方変わったら local 優先）だった。データを持たない端末で開くと **local=再シードされた既定値** となり、base から変化した扱いになる。remote（本物の登録内容）も base から変化しているため「両方変更→local優先」が働き、**既定値が本物の登録内容を上書き**して消える。
+**対策**: 行ごとに `updatedAt` を持たせ、削除は要素除去ではなく **`{deleted:true}` のトンボストン**で表現し、SCHEMA を `['records']` に変更（`cfRules`/`grades` が既に採用している方式に統一）。
+- `masterRowsSave(prevArr, nextRows, keyOf)` … 保存時に `sortOrder`/`updatedAt` を付与し、画面から消えた行をトンボストン化。内容が不変なら `updatedAt` は据え置き（無意味な上書き合戦の回避）。
+- `masterRowsLive(arr)` … トンボストンを除き `sortOrder` 順で取り出す。表示・判定はすべてこれ経由（`ytChannelList()` / `discDefs()`）。
+- 既定に戻す操作（`discTypeResetDefault`）も `masterRowsSave` 経由＝消した行の削除が同期で伝わり、別端末の編集が復活しない。
+- 既定値シードは `updatedAt` を持たないため、実編集（`updatedAt`あり）に**常に負ける**＝再シードで上書きされない。
+- **検証**: 旧 `single` 方式で事故を再現（本物2件→既定1件に上書き＝消失）し、`records` 方式では3件が保持されること、更新の後勝ち・削除の伝播・トンボストン非表示を実測確認。
 - **ニュース合流**: `_newsVideos()` が購読チャンネルの新着を取得し、カテゴリ「動画」でニュース一覧へ合流（▶マーク・チャンネル名を配信元表示）。カテゴリトグルに「動画」追加。
 - **要約キャッシュ枠**: `store.data.ytSummaries`（videoId→{summary,at}）を用意（sync `['map']`）。要約があれば記事descに載せパネル表示。**生成（Gemini）は次段**（GEMINI_API_KEY設定後）。
 

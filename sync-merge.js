@@ -55,8 +55,12 @@
     newsHidden:      ['map', null],   // ニュース非表示（記事リンク→非表示日時ISO）。キー単位3-way・両在はlocal
     newsTrans:       ['map', null],   // ニュース翻訳キャッシュ（記事リンク→{t,d,at}）。キー単位3-way・両在はlocal
     newsPrefs:       ['singleTs'],    // ニュース表示設定（除外カテゴリ/開示種類）。両方編集時は _updatedAt の新しい方
-    discTypeDefs:    ['single'],      // 開示種別マスタ（順序つき配列・一括編集）。base から変わった側を採用（両方編集は local 優先）
-    ytChannels:      ['single'],      // YouTube購読チャンネル（配列・一括編集）。base から変わった側を採用
+    // 開示種別マスタ / YouTube購読チャンネル。以前は ['single'] だったが、既定値が自動シードされる
+    // マスタなので「別端末で再シードされた既定値」が本物の登録内容を上書きして消える事故が起きた
+    // （実際に登録済みのYouTubeチャンネルが消失）。行ごとの updatedAt ＋ 削除のトンボストン（deleted:true）で
+    // 3-wayマージし、新しい更新・新しい削除が後勝ちするようにする（cfRules/grades と同じ方式）。
+    discTypeDefs:    ['records', (d) => `dt:${d && d.name}`],
+    ytChannels:      ['records', (c) => `yt:${c && c.id}`],
     ytSummaries:     ['map', null],   // 動画要約キャッシュ（videoId→{summary,at}）。キー単位3-way・両在はlocal
     listedMaster:    ['single'],      // 全上場銘柄マスタ（自動タグ用・配列）。一括取込なので base から変わった側を採用
     listedMasterInfo: ['single'],     // 上場マスタの取込メタ（日付・件数）。listedMasterと一緒に更新

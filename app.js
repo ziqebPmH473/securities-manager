@@ -4594,7 +4594,7 @@ const DEFAULT_DISC_TYPES = [
 ];
 const _discReCache = new Map(); // キーワード文字列→コンパイル済み正規表現（マスタ編集時に clear）
 function _discRe(kw) { if (_discReCache.has(kw)) return _discReCache.get(kw); let r = null; try { r = new RegExp(kw); } catch (_) { r = null; } _discReCache.set(kw, r); return r; }
-function discDefs() { const d = store.data.discTypeDefs; return (Array.isArray(d) && d.length) ? d : DEFAULT_DISC_TYPES; }
+function discDefs() { const d = masterRowsLive(store.data.discTypeDefs); return d.length ? d : DEFAULT_DISC_TYPES; }
 function disclosureDef(it) {
   const t = (it && it.title) || '';
   for (const d of discDefs()) { if (!d.keywords) continue; const re = _discRe(d.keywords); if (re && re.test(t)) return d; }
@@ -5350,7 +5350,7 @@ function renderNews() {
 
 // 購読YouTubeチャンネルの新着動画をニュース一覧アイテム化（カテゴリ=動画）。要約があればdescに載せる（後でGemini）。
 async function _newsVideos() {
-  const chs = (store.data.ytChannels || []).map(c => String(c.id || '').trim()).filter(id => /^UC[\w-]{20,}$/.test(id));
+  const chs = ytChannelList().map(c => String(c.id || '').trim()).filter(id => /^UC[\w-]{20,}$/.test(id));
   if (!chs.length) return [];
   let vids = [];
   try {
@@ -6539,7 +6539,39 @@ function clearListedMaster() {
   closeModal(); if (currentView === 'news') renderNews();
   toast('上場銘柄マスタを消去しました');
 }
+// ---------- 一括編集マスタの同期セーフな保存（レコード＋更新日時＋トンボストン） ----------
+// 配列マスタを sync の ['single'] で同期すると、別端末で「既定値が再シードされた」時に
+// その既定値が本物の登録内容を上書きして消える事故が起きる（実際にYouTubeチャンネルが消失した）。
+// 行ごとに updatedAt を持たせ、削除は要素の除去ではなく {deleted:true} のトンボストンで表現する。
+// これで sync-merge の 'records' が「新しい更新・新しい削除」を後勝ちで正しくマージできる
+// （cfRules/grades が既に採用している方式に合わせた）。
+function masterRowsSave(prevArr, nextRows, keyOf) {
+  const now = new Date().toISOString();
+  const norm = (r) => { const o = { ...(r || {}) }; delete o.updatedAt; delete o.deleted; return JSON.stringify(o); };
+  const prev = new Map();
+  for (const r of prevArr || []) { const k = keyOf(r); if (k) prev.set(k, r); }
+  const out = [], seen = new Set();
+  nextRows.forEach((row, i) => {
+    const k = keyOf(row); if (!k || seen.has(k)) return; seen.add(k);
+    const next = { ...row, sortOrder: i };
+    const old = prev.get(k);
+    // 中身が変わっていなければ updatedAt を据え置き（無意味な上書き合戦を避ける）
+    next.updatedAt = (old && !old.deleted && norm(old) === norm(next)) ? (old.updatedAt || now) : now;
+    out.push(next);
+  });
+  for (const [k, old] of prev) { // 画面から消えた行はトンボストン化（削除も同期で伝わる）
+    if (seen.has(k)) continue;
+    out.push(old.deleted ? old : { ...old, deleted: true, updatedAt: now });
+  }
+  return out;
+}
+// トンボストンを除き、並び順で取り出す（表示・判定はすべてこれ経由）
+function masterRowsLive(arr) {
+  return (Array.isArray(arr) ? arr : []).filter(r => r && !r.deleted)
+    .slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+}
 // ---------- YouTubeチャンネル マスタ ----------
+function ytChannelList() { return masterRowsLive(store.data.ytChannels); }
 function ytChannelRowHtml(c) {
   return `<tr>
     <td class="l"><input class="yt-name" value="${esc(c.name || '')}" placeholder="テスタ" style="width:130px"></td>
@@ -6547,7 +6579,7 @@ function ytChannelRowHtml(c) {
     <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()" title="削除">×</button></td></tr>`;
 }
 function openYtChannelMaster() {
-  const rows = (store.data.ytChannels || []).map(ytChannelRowHtml).join('');
+  const rows = ytChannelList().map(ytChannelRowHtml).join('');
   const cur = ytModelSetting();
   const modelOpts = `<option value="">自動（推奨・混雑/上限時は自動で次のモデルへ）</option>` +
     YT_MODELS.map(([v, l]) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
@@ -6579,7 +6611,7 @@ function saveYtChannelMaster() {
     if (!/^UC[\w-]{20,}$/.test(id)) { toast(`チャンネルIDの形式が不正です: ${name || id}`); return; }
     defs.push({ id, name: name || id });
   }
-  store.data.ytChannels = defs;
+  store.data.ytChannels = masterRowsSave(store.data.ytChannels, defs, c => 'yt:' + String(c.id || ''));
   store.data.settings = store.data.settings || {};
   const msel = document.getElementById('yt-model'); if (msel) store.data.settings.ytModel = msel.value || '';
   const auto = document.getElementById('yt-auto'); if (auto) store.data.settings.ytAutoSummary = !!auto.checked;
@@ -6618,7 +6650,9 @@ function openDiscTypeMaster() {
 function discTypeAddRow() { const tb = document.getElementById('disc-type-rows'); if (tb) tb.insertAdjacentHTML('beforeend', discTypeRowHtml({ name: '', group: '', keywords: '' })); }
 function discTypeResetDefault() {
   if (!confirm('開示種別・キーワードを既定に戻します。編集内容は失われます。よろしいですか？')) return;
-  store.data.discTypeDefs = structuredClone(DEFAULT_DISC_TYPES); store.save(); _discReCache.clear();
+  // 既定に戻す場合もトンボストン経由（消した行の削除を同期で伝え、別端末の編集が復活しないように）
+  store.data.discTypeDefs = masterRowsSave(store.data.discTypeDefs, structuredClone(DEFAULT_DISC_TYPES), d => 'dt:' + String(d.name || ''));
+  store.save(); _discReCache.clear();
   openDiscTypeMaster();
 }
 function saveDiscTypeMaster() {
@@ -6632,7 +6666,7 @@ function saveDiscTypeMaster() {
     defs.push({ name, group, keywords });
   }
   if (!defs.length) { toast('少なくとも1種別は必要です'); return; }
-  store.data.discTypeDefs = defs;
+  store.data.discTypeDefs = masterRowsSave(store.data.discTypeDefs, defs, d => 'dt:' + String(d.name || ''));
   store.save(); _discReCache.clear();
   closeModal(); if (currentView === 'news') renderNews();
   toast('開示種別を保存しました');
