@@ -1559,6 +1559,19 @@ function earnLabelHtml(sec, opts) {
 // 決算情報セクション用の値（推定は出さない。予定日不明は「-」）
 function earnPrevText(sec) { const i = earnInfo(sec); return i && i.prev ? fmtEarnYMD(i.prev) : '-'; }
 function earnNextText(sec) { const i = earnInfo(sec); return i && i.confirmedNext ? fmtEarnYMD(i.confirmedNext) : '-'; }
+// 次回決算の「実効日」（確定予定＞推定）。列・上部表示・ソート用。{ date, kind:'予定'|'ごろ' } or null
+function earnEffNext(sec) { const i = earnInfo(sec); if (!i) return null; if (i.confirmedNext) return { date: i.confirmedNext, kind: '予定' }; if (i.estNext) return { date: i.estNext, kind: 'ごろ' }; return null; }
+// 詳細ドロワー・カルテ上部の決算日表示（株探風の日付テキスト。ラベル/ピルにはしない）
+function earnTopHtml(sec) {
+  const i = earnInfo(sec); if (!i) return '';
+  const eff = earnEffNext(sec);
+  const prevS = i.prev ? fmtEarnYMD(i.prev) : '-';
+  const nextS = eff ? (eff.kind === '予定' ? `${fmtEarnYMD(eff.date)}（予定）` : `${fmtEarnYMD(eff.date)}ごろ`) : '-';
+  if (prevS === '-' && nextS === '-') return '';
+  return `<span class="earn-top" title="決算発表日"><span class="muted">決算</span> 前回 <b>${esc(prevS)}</b> ／ 次回 <b>${esc(nextS)}</b></span>`;
+}
+// 次回決算までの日数（実効日基準。ソート用。無ければ大きな値で末尾へ）
+function earnNextDays(sec) { const eff = earnEffNext(sec); if (!eff) return null; const d = _diffDays(_todayYmd(), eff.date); return d; }
 // Yahoo Finance シンボル変換:
 //   JP株  → 7203.T
 //   投信  → 0131103C.T（ファンドコード.T形式）
@@ -1650,9 +1663,13 @@ const api = {
     for (let i = 0; i < holdSymbols.length; i += BATCH) batches.push(holdSymbols.slice(i, i + BATCH));
     let quotes = {}, lightQuotes = {};
     try {
+      // バッチが終わるたびに件数を進める（並行取得なので完了順に加算）。初回/日次は重いので進捗が動くと安心。
+      let doneSym = 0; const totalSym = holdSymbols.length;
+      if (totalSym) busyMsg(`${withHighs ? '株価・5年高値' : '株価'}を取得中… 0/${totalSym}件`);
       const reqs = batches.map(b =>
         fetch(`/api/price?symbols=${encodeURIComponent(b.join(','))}${withHighs ? '&highs=1' : ''}`)
-          .then(r => r.ok ? r.json() : {}).catch(() => ({})));
+          .then(r => r.ok ? r.json() : {}).catch(() => ({}))
+          .then(res => { doneSym = Math.min(doneSym + b.length, totalSym); busyMsg(`${withHighs ? '株価・5年高値' : '株価'}を取得中… ${doneSym}/${totalSym}件`); return res; }));
       const lightIdx = reqs.length;
       reqs.push(fetch(`/api/price?mode=light&symbols=${encodeURIComponent(lightSymbols.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({})));
       const results = await Promise.all(reqs);
@@ -1729,16 +1746,17 @@ const api = {
     {
       const staleHigh = allSecs.filter(s => (store.data.prices[priceKey(s)] || {}).highsAt !== today());
       // highs=1 は5年日足も取るためサブリクエストが重い。10件ずつに分割して上限内に収める
-      for (let i = 0; i < staleHigh.length; i += 10) { try { await this.refreshPrice(staleHigh.slice(i, i + 10)); } catch (_) {} }
+      for (let i = 0; i < staleHigh.length; i += 10) { busyMsg(`5年高値を取得中… ${Math.min(i + 10, staleHigh.length)}/${staleHigh.length}件`); try { await this.refreshPrice(staleHigh.slice(i, i + 10)); } catch (_) {} }
     }
-    // 名前未取得の銘柄だけ銘柄情報を取得
+    // 名前未取得の銘柄だけ銘柄情報を取得（refreshMeta が「銘柄情報を取得中… n/m件」を表示）
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
     if (need.length) await this.refreshMeta(need);
     // 決算日（前回/次回）を1日1回取得（銘柄ごとの成功日 earnings[k].at で判定＝高値と同方式）
     try { await this.refreshEarnings(allSecs); } catch (_) {}
-    toast('価格を更新しました');
     // ランキング順位バッジは「株価更新時だけ」取得（タブ表示のたびの取得をやめ、保有銘柄タブの引っかかりを解消）。
     // 1日1回のキャッシュを尊重（force無し）。取得後にバッジだけ反映するため再描画。
+    busyMsg('ランキング順位を取得中…');
+    toast('価格を更新しました');
     loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); });
   },
 
@@ -1753,6 +1771,7 @@ const api = {
     const keyBySym = new Map(stale.map(s => [symOf(s), priceKey(s)]));
     // US=最大4サブリクエスト/銘柄。Cloudflareのサブリクエスト上限を避け8件ずつ
     for (let i = 0; i < stale.length; i += 8) {
+      busyMsg(`決算日を取得中… ${Math.min(i + 8, stale.length)}/${stale.length}件`);
       const batch = stale.slice(i, i + 8);
       const q = batch.map(symOf).join(',');
       let res = null;
@@ -2747,7 +2766,8 @@ const COL_RENDERERS = {
   // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
   prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
   earnPrev: (s,c) => { const t = earnPrevText(s); return `<td class="l" title="前回決算発表日">${t === '-' ? muted : esc(t)}</td>`; },
-  earnNext: (s,c) => { const t = earnNextText(s); return `<td class="l" title="次回決算予定日（確定分のみ）">${t === '-' ? muted : esc(t)}</td>`; },
+  // 次回決算（予定＝確定 / ごろ＝前回+4ヶ月の推定を含む）。ソートは実効日で近い順。
+  earnNext: (s,c) => { const eff = earnEffNext(s); if (!eff) return `<td class="l" title="次回決算">${muted}</td>`; const days = earnNextDays(s); const dtxt = (days != null && days >= 0 && days <= 60) ? ` <span class="muted">(あと${days}日)</span>` : ''; return `<td class="l" title="次回決算（予定/推定込み）">${esc(fmtEarnYMD(eff.date))} <span class="muted">${eff.kind}</span>${dtxt}</td>`; },
   dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(jpInd(v)) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(jpInd(v)) : muted}</td>`; },
@@ -3516,8 +3536,9 @@ function sortValue(sec, key) {
     case 'prevBuyPrice': return calc.lastBuyPrice(sec) ?? -Infinity;
     case 'extPrice': { const p = store.data.prices[priceKey(sec)]; return (p && p.extPrice != null) ? p.extPrice : -Infinity; }
     case 'prevBuyDate': return calc.lastBuyInfo(sec).date || '';
-    case 'earnPrev': { const i = earnInfo(sec); return (i && i.prev) || ''; }
-    case 'earnNext': { const i = earnInfo(sec); return (i && i.confirmedNext) || ''; }
+    case 'earnPrev': { const i = earnInfo(sec); return (i && i.prev) || '9999-99-99'; } // 未取得は末尾へ
+    case 'earnNext': { const eff = earnEffNext(sec); return eff ? eff.date : '9999-99-99'; } // 実効日（予定/推定）で近い順。未取得は末尾
+
     case 'dropFromPrev': return calc.dropFromPrev(sec) ?? Infinity;
     case 'dropFrom5y': return calc.dropFrom5y(sec) ?? Infinity;
     case 'dropFrom52w': return calc.dropFrom52w(sec) ?? Infinity;
@@ -8154,7 +8175,7 @@ function openSecurityDetail(secId) {
   const qtyDisp = th.qty != null ? Number(th.qty).toLocaleString('ja-JP', { maximumFractionDigits: 8 }) : '—';
   const gradeTag = g => { if (!g) return '<span class="muted">—</span>'; const gm = (store.data.grades || []).find(x => x.grade === String(g).toUpperCase()); const st = gm && gm.color ? labelColorStyle(gm.color) : ''; return `<span class="grade grade-${esc(String(g).toLowerCase())}"${st ? ` style="${st}"` : ''}>${esc(g)}</span>`; };
   const starsFmt = n => n == null ? '<span class="muted">—</span>' : `<span style="color:var(--brass);letter-spacing:1px">${'★'.repeat(n)}<span style="color:var(--border-strong)">${'☆'.repeat(Math.max(0, 5 - n))}</span></span>`;
-  const earnHdr = earnLabelHtml(sec, { withSub: true }); // 格付けの右に右寄せで決算ラベル（推定時は前回決算日も併記）
+  const earnHdr = earnTopHtml(sec); // 格付けの右に右寄せで決算日（株探風の日付テキスト。ラベルにはしない）
   const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${detailTypeOf(sec) === 'ETF' ? '<span class="tag detail-etf">ETF</span>' : ''}${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}${earnHdr ? `<span style="margin-left:auto">${earnHdr}</span>` : ''}`;
   // 評価（格付＝銘柄格付のみ。総合/買い時は出さない）＋☆＋分析メモ
   const evalBox = [
@@ -9011,7 +9032,7 @@ function karteCardHtml(sec) {
         <div class="kt-chg ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></div>
       </div>
       <div class="kt-actions">
-        ${(function(){ const h = earnLabelHtml(sec, { withSub: true }); return h ? `<span class="kt-earn">${h}</span>` : ''; })()}
+        ${(function(){ const h = earnTopHtml(sec); return h ? `<span class="kt-earn">${h}</span>` : ''; })()}
         <button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id}, undefined, { onDone: renderTradeEntry })">${svgIcon('trade', '')} 取引を記録</button>
         <button class="btn btn-sm" onclick="openSecNews(${sec.id})">${svgIcon('news', '')} ニュース・開示</button>
         <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">${svgIcon('external', '')} 詳細</button>
@@ -11845,6 +11866,11 @@ function busyShow(msg) {
   ov.classList.remove('done', 'error');
   document.getElementById('busy-msg').textContent = msg || '処理中…';
   ov.hidden = false; clearTimeout(_busyTimer);
+}
+// 処理中オーバーレイが表示中のときだけメッセージを差し替える（段階の進捗表示に使う）
+function busyMsg(msg) {
+  const ov = document.getElementById('busy-overlay'); const bm = document.getElementById('busy-msg');
+  if (ov && bm && !ov.hidden) bm.textContent = msg;
 }
 function busyDone(msg, state = 'done') {
   const ov = document.getElementById('busy-overlay'); if (!ov || ov.hidden) return;
