@@ -1527,13 +1527,13 @@ function _diffDays(a, b) { const da = _parseYmd(a), db = _parseYmd(b); if (!da |
 function fmtEarnMD(ymd) { const d = _parseYmd(ymd); return d ? `${d.getMonth() + 1}/${d.getDate()}` : ''; }   // 8/6
 function fmtEarnYMD(ymd) { const d = _parseYmd(ymd); return d ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '-'; } // 2026/8/6
 
-// 決算日の整理: prev(実績) / 確定予定(confirmedNext) / 推定(estNext=前回+4ヶ月)
+// 決算日の整理: prev(実績) / 確定予定(confirmedNext) / 推定(estNext=前回+3ヶ月)
 function earnInfo(sec) {
   const e = earnOf(sec);
   if (!e) return null;
   const prev = e.prev || null;
   const confirmedNext = (e.next && !e.nextEstimate) ? e.next : null; // Yahoo確定の予定日のみ「予定日」扱い
-  const estNext = confirmedNext ? null : (prev ? _addMonths(prev, 4) : (e.next || null)); // 予定日が無ければ 前回+4ヶ月 を推定
+  const estNext = confirmedNext ? null : (prev ? _addMonths(prev, 3) : (e.next || null)); // 予定日が無ければ 前回+3ヶ月 を推定
   return { prev, confirmedNext, estNext };
 }
 // 銘柄名の横／上部に出すラベル。近い決算・直近発表のときだけ返す（無ければ null）。
@@ -1546,7 +1546,7 @@ function earnLabel(sec) {
   if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' }; }
   // 2) 確定した次回予定日が近い（予定日の1週間前～当日）
   if (confirmedNext) { const g = _diffDays(today, confirmedNext); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(confirmedNext)}予定`, cls: 'earn-soon' }; }
-  // 3) 推定（前回+4ヶ月）が近い（2週間前～。実開示が来るまで ごろ 表示。推定時は前回決算日も併記）
+  // 3) 推定（前回+3ヶ月）が近い（2週間前～。実開示が来るまで ごろ 表示。推定時は前回決算日も併記）
   if (estNext) { const g = _diffDays(today, estNext); if (g !== null && g >= -14 && g <= 45) return { text: `${fmtEarnMD(estNext)}ごろ`, cls: 'earn-est', sub: prev ? `前回${fmtEarnMD(prev)}` : '' }; }
   return null;
 }
