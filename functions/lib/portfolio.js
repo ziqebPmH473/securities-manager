@@ -38,7 +38,7 @@ export function evalSecurity(bundle, sec) {
   return evaluateSignal({
     market: sec.market, enabled: sec.enabled, price: p.price == null ? null : p.price,
     fixedBuyPrice: sec.fixedBuyPrice, baseHighMode: sec.baseHighMode, baseHighManual: sec.baseHighManual,
-    prevBuyPrice: sec.prevBuyPrice, prevBuyDate: sec.prevBuyDate,
+    prevBuyPrice: sec.prevBuyPrice, prevBuyDate: sec.prevBuyDate, addonFromHigh: sec.addonFromHigh,
     rule: { initialDropPct: rule.initialDropPct, addonDropPct: rule.addonDropPct, baseHighMode: rule.baseHighMode, highResetMode: rule.highResetMode },
     highs: p, holding: th, buys, recoAmount,
   });
@@ -99,7 +99,7 @@ export function computeSignals(bundle, opts = {}) {
     const yieldOnCost = (dividend != null && th.avgCost) ? dividend / th.avgCost * 100 : null;
     const marketCap = (meta.sharesOut && price != null) ? price * meta.sharesOut / 1e6 : numOrNull(meta.marketCap); // 単位:百万
     // 適用区分（初/増/高/固）
-    const trigBasis = ev.baseSource === '固定' ? '固' : ev.baseSource === '高値更新' ? '高' : ev.type === 'initial' ? '初' : '増';
+    const trigBasis = ev.baseSource === '固定' ? '固' : ev.baseSource === '高値更新' ? '高' : ev.baseSource === '初回固定' ? '初' : ev.type === 'initial' ? '初' : '増';
     // 到達区分（新/続）: 本日=到達 かつ 前営業日(前日終値)では未到達 → 新、両日とも到達 → 続。前日終値が無ければ新扱い。未到達は null。
     const reachedPrev = (p.prevClose != null) ? (p.prevClose <= ev.trigger) : false;
     const reachKind = ev.reached ? (reachedPrev ? '続' : '新') : null;

@@ -53,7 +53,7 @@ export function resolveBaseHighDate({ baseHighMode, ruleBaseHighMode, highs }) {
 export function evaluateSignal(input) {
   const {
     market, enabled, price, fixedBuyPrice,
-    baseHighMode, baseHighManual, prevBuyPrice, prevBuyDate,
+    baseHighMode, baseHighManual, prevBuyPrice, prevBuyDate, addonFromHigh,
     rule, highs, holding, buys, recoAmount,
   } = input || {};
   if (market === 'FUND' || enabled === false) return null;
@@ -72,6 +72,12 @@ export function evaluateSignal(input) {
     base = resolveBaseHigh({ baseHighMode, ruleBaseHighMode, baseHighManual, highs }); baseSource = 'high';
     if (base == null) return null;
     trigger = base * (1 - rule.initialDropPct / 100);
+  } else if (addonFromHigh) {
+    // 「買い増しも初回基準」フラグ: 買い増しでも常に初回と同じ判定＝基準高値×(1−初回下落率)。
+    // 前回購入単価に依らずトリガーが動かない。買い増し下落率(addonDropPct)は使わない。（原典: app.js _evaluate）
+    const bh = resolveBaseHigh({ baseHighMode, ruleBaseHighMode, baseHighManual, highs });
+    if (bh == null) return null;
+    base = bh; baseSource = '初回固定'; trigger = base * (1 - rule.initialDropPct / 100);
   } else {
     const bh = resolveBaseHigh({ baseHighMode, ruleBaseHighMode, baseHighManual, highs });
     const bhDate = resolveBaseHighDate({ baseHighMode, ruleBaseHighMode, highs });
