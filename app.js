@@ -151,6 +151,8 @@ const MASTER_COLS = [
   { key: 'riseFrom3y',  label: '3年安値からの上昇率', left: false, markets: STKM, noSort: false },
   { key: 'prevBuyPrice', label: '前回購入単価',     left: false, markets: STKM, noSort: false },
   { key: 'prevBuyDate',  label: '前回購入日',       left: true,  markets: STKM, noSort: false },
+  { key: 'earnPrev',     label: '前回決算',          left: true,  markets: STKM, noSort: false },
+  { key: 'earnNext',     label: '次回決算',          left: true,  markets: STKM, noSort: false },
   { key: 'dropFromPrev', label: '前回からの下落率', left: false, markets: STKM, noSort: false },
   { key: 'sector',      label: 'セクター',         left: true,  markets: STKM, noSort: false },
   { key: 'industry',    label: '業種',             left: true,  markets: STKM, noSort: false },
@@ -322,6 +324,7 @@ const store = {
     this.data.lastHighsDate ||= null; // 5年/52週高値を取得した日（YYYY-MM-DD）。その日初回の価格更新で高値も取得
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
+    this.data.earnings ||= {};        // 決算日キャッシュ priceKey→{prev,next,nextEstimate,exDiv,at}。1日1回取得・同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     this.data.newsRead ||= {};        // ニュース既読（記事リンク→既読日時ISO）。Google同期対象（sync-merge SCHEMA登録済み）
     this.data.newsTags ||= [];        // ニュース注目タグ（保有登録なしの企業/人物/テーマ名）[{id,name}]。見出し一致で別色チップ表示・Google同期
@@ -1511,6 +1514,51 @@ const calc = {
 };
 
 function priceKey(sec) { return `${sec.market}:${sec.ticker}`; }
+
+// ===== 決算日（前回/次回）ヘルパ =====
+// キャッシュ: store.data.earnings[priceKey] = { prev, next, nextEstimate, exDiv, at }
+//   prev = 実際の発表日（TDnet決算短信 / EDGAR 10-Q等の提出日）, next = Yahooの次回決算予定日, nextEstimate = Yahooが推定した日か
+function earnOf(sec) { return (store.data.earnings && store.data.earnings[priceKey(sec)]) || null; }
+function _ymd(d) { const y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate(); return `${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`; }
+function _parseYmd(s) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; }
+function _todayYmd() { const d = new Date(); return _ymd(d); }
+function _addMonths(ymd, n) { const d = _parseYmd(ymd); if (!d) return null; d.setMonth(d.getMonth() + n); return _ymd(d); }
+function _diffDays(a, b) { const da = _parseYmd(a), db = _parseYmd(b); if (!da || !db) return null; return Math.round((db - da) / 86400000); }
+function fmtEarnMD(ymd) { const d = _parseYmd(ymd); return d ? `${d.getMonth() + 1}/${d.getDate()}` : ''; }   // 8/6
+function fmtEarnYMD(ymd) { const d = _parseYmd(ymd); return d ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '-'; } // 2026/8/6
+
+// 決算日の整理: prev(実績) / 確定予定(confirmedNext) / 推定(estNext=前回+4ヶ月)
+function earnInfo(sec) {
+  const e = earnOf(sec);
+  if (!e) return null;
+  const prev = e.prev || null;
+  const confirmedNext = (e.next && !e.nextEstimate) ? e.next : null; // Yahoo確定の予定日のみ「予定日」扱い
+  const estNext = confirmedNext ? null : (prev ? _addMonths(prev, 4) : (e.next || null)); // 予定日が無ければ 前回+4ヶ月 を推定
+  return { prev, confirmedNext, estNext };
+}
+// 銘柄名の横／上部に出すラベル。近い決算・直近発表のときだけ返す（無ければ null）。
+//   { text, cls, sub }  cls: earn-soon(予定) / earn-done(発表) / earn-est(ごろ)
+function earnLabel(sec) {
+  const info = earnInfo(sec); if (!info) return null;
+  const today = _todayYmd();
+  const { prev, confirmedNext, estNext } = info;
+  // 1) 直近に発表があった（前回発表から7日以内）
+  if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' }; }
+  // 2) 確定した次回予定日が近い（予定日の1週間前～当日）
+  if (confirmedNext) { const g = _diffDays(today, confirmedNext); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(confirmedNext)}予定`, cls: 'earn-soon' }; }
+  // 3) 推定（前回+4ヶ月）が近い（2週間前～。実開示が来るまで ごろ 表示。推定時は前回決算日も併記）
+  if (estNext) { const g = _diffDays(today, estNext); if (g !== null && g >= -14 && g <= 45) return { text: `${fmtEarnMD(estNext)}ごろ`, cls: 'earn-est', sub: prev ? `前回${fmtEarnMD(prev)}` : '' }; }
+  return null;
+}
+// ラベルのHTML（一覧の銘柄名の横・上部共通）。size='sm' は一覧用の小型。
+function earnLabelHtml(sec, opts) {
+  const l = earnLabel(sec); if (!l) return '';
+  const sub = (opts && opts.withSub && l.sub) ? `<span class="earn-sub">${esc(l.sub)}</span>` : '';
+  return `<span class="earn-chip ${l.cls}" title="決算">${esc(l.text)}${sub ? ' ' + sub : ''}</span>`;
+}
+// 決算情報セクション用の値（推定は出さない。予定日不明は「-」）
+function earnPrevText(sec) { const i = earnInfo(sec); return i && i.prev ? fmtEarnYMD(i.prev) : '-'; }
+function earnNextText(sec) { const i = earnInfo(sec); return i && i.confirmedNext ? fmtEarnYMD(i.confirmedNext) : '-'; }
 // Yahoo Finance シンボル変換:
 //   JP株  → 7203.T
 //   投信  → 0131103C.T（ファンドコード.T形式）
@@ -1686,10 +1734,36 @@ const api = {
     // 名前未取得の銘柄だけ銘柄情報を取得
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
     if (need.length) await this.refreshMeta(need);
+    // 決算日（前回/次回）を1日1回取得（銘柄ごとの成功日 earnings[k].at で判定＝高値と同方式）
+    try { await this.refreshEarnings(allSecs); } catch (_) {}
     toast('価格を更新しました');
     // ランキング順位バッジは「株価更新時だけ」取得（タブ表示のたびの取得をやめ、保有銘柄タブの引っかかりを解消）。
     // 1日1回のキャッシュを尊重（force無し）。取得後にバッジだけ反映するため再描画。
     loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); });
+  },
+
+  // 決算日（前回/次回）を /api/earnings で取得し store.data.earnings にキャッシュ。
+  // 銘柄ごとの取得成功日 at で「その日1回だけ」に抑制（高値の highsAt と同方式）。Yahoo形式(JP=code.T)で問い合わせ。
+  async refreshEarnings(allSecs) {
+    const secs = (allSecs || store.data.securities).filter(s => s.ticker && (s.market === 'JP' || s.market === 'US'));
+    const td = today();
+    const stale = secs.filter(s => (store.data.earnings[priceKey(s)] || {}).at !== td);
+    if (!stale.length) return;
+    const symOf = (s) => s.market === 'JP' ? `${s.ticker}.T` : String(s.ticker).toUpperCase();
+    const keyBySym = new Map(stale.map(s => [symOf(s), priceKey(s)]));
+    // US=最大4サブリクエスト/銘柄。Cloudflareのサブリクエスト上限を避け8件ずつ
+    for (let i = 0; i < stale.length; i += 8) {
+      const batch = stale.slice(i, i + 8);
+      const q = batch.map(symOf).join(',');
+      let res = null;
+      try { res = await fetch(`/api/earnings?symbols=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : null); } catch (_) { res = null; }
+      if (!res) continue;
+      for (const [sym, d] of Object.entries(res)) {
+        const k = keyBySym.get(sym); if (!k) continue;
+        store.data.earnings[k] = { next: d.next || null, nextEstimate: !!d.nextEstimate, exDiv: d.exDiv || null, prev: d.prev || null, at: td };
+      }
+    }
+    store.save();
   },
 
   // 米株のプレ/アフター価格を「時間外」列(prices.extPrice/extType)に保存。
@@ -2322,6 +2396,7 @@ function colDefaultWidth(key) {
   if (key === 'prevClose') return 96; // 前日終値＋引け日(MM-DD)
   if (key === 'dayAmt') return 88;    // 前日比の値幅（符号つき金額）
   if (key === 'prevBuyDate') return 100; // YYYY-MM-DD
+  if (key === 'earnPrev' || key === 'earnNext') return 96; // YYYY/M/D
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
   if (key === 'analysisNote' || key === 'memo') return 160;
@@ -2619,7 +2694,7 @@ function nameAbbr(name) {
 function displayNameAbbr(sec) { return nameAbbr(calc.displayName(sec)); }
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
-  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`; },
+  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}${earnLabelHtml(s)}</td>`; },
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
@@ -2671,6 +2746,8 @@ const COL_RENDERERS = {
   prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
   // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
   prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
+  earnPrev: (s,c) => { const t = earnPrevText(s); return `<td class="l" title="前回決算発表日">${t === '-' ? muted : esc(t)}</td>`; },
+  earnNext: (s,c) => { const t = earnNextText(s); return `<td class="l" title="次回決算予定日（確定分のみ）">${t === '-' ? muted : esc(t)}</td>`; },
   dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
   sector:    (s,c) => { const v = calc.field(s,'sector'); return `<td class="l">${v ? esc(jpInd(v)) : muted}</td>`; },
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(jpInd(v)) : muted}</td>`; },
@@ -3439,6 +3516,8 @@ function sortValue(sec, key) {
     case 'prevBuyPrice': return calc.lastBuyPrice(sec) ?? -Infinity;
     case 'extPrice': { const p = store.data.prices[priceKey(sec)]; return (p && p.extPrice != null) ? p.extPrice : -Infinity; }
     case 'prevBuyDate': return calc.lastBuyInfo(sec).date || '';
+    case 'earnPrev': { const i = earnInfo(sec); return (i && i.prev) || ''; }
+    case 'earnNext': { const i = earnInfo(sec); return (i && i.confirmedNext) || ''; }
     case 'dropFromPrev': return calc.dropFromPrev(sec) ?? Infinity;
     case 'dropFrom5y': return calc.dropFrom5y(sec) ?? Infinity;
     case 'dropFrom52w': return calc.dropFrom52w(sec) ?? Infinity;
@@ -8061,6 +8140,7 @@ function openSecurityDetail(secId) {
     kv('時価総額 / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
     kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
+    kv('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
   ].join('');
   // 基本情報の派生値
   const held = th.qty > 0;
@@ -8074,7 +8154,8 @@ function openSecurityDetail(secId) {
   const qtyDisp = th.qty != null ? Number(th.qty).toLocaleString('ja-JP', { maximumFractionDigits: 8 }) : '—';
   const gradeTag = g => { if (!g) return '<span class="muted">—</span>'; const gm = (store.data.grades || []).find(x => x.grade === String(g).toUpperCase()); const st = gm && gm.color ? labelColorStyle(gm.color) : ''; return `<span class="grade grade-${esc(String(g).toLowerCase())}"${st ? ` style="${st}"` : ''}>${esc(g)}</span>`; };
   const starsFmt = n => n == null ? '<span class="muted">—</span>' : `<span style="color:var(--brass);letter-spacing:1px">${'★'.repeat(n)}<span style="color:var(--border-strong)">${'☆'.repeat(Math.max(0, 5 - n))}</span></span>`;
-  const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${detailTypeOf(sec) === 'ETF' ? '<span class="tag detail-etf">ETF</span>' : ''}${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}`;
+  const earnHdr = earnLabelHtml(sec, { withSub: true }); // 格付けの右に右寄せで決算ラベル（推定時は前回決算日も併記）
+  const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${detailTypeOf(sec) === 'ETF' ? '<span class="tag detail-etf">ETF</span>' : ''}${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}${earnHdr ? `<span style="margin-left:auto">${earnHdr}</span>` : ''}`;
   // 評価（格付＝銘柄格付のみ。総合/買い時は出さない）＋☆＋分析メモ
   const evalBox = [
     kv('銘柄格付', gradeTag(sec.rating)),
@@ -8909,6 +8990,7 @@ function karteCardHtml(sec) {
     row('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
     row('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     row('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
+    row('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
   ].join('');
   // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
@@ -8929,6 +9011,7 @@ function karteCardHtml(sec) {
         <div class="kt-chg ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></div>
       </div>
       <div class="kt-actions">
+        ${(function(){ const h = earnLabelHtml(sec, { withSub: true }); return h ? `<span class="kt-earn">${h}</span>` : ''; })()}
         <button class="btn btn-sm btn-primary" onclick="openTxnForm(${sec.id}, undefined, { onDone: renderTradeEntry })">${svgIcon('trade', '')} 取引を記録</button>
         <button class="btn btn-sm" onclick="openSecNews(${sec.id})">${svgIcon('news', '')} ニュース・開示</button>
         <button class="btn btn-sm" onclick="openSecurityDetail(${sec.id})">${svgIcon('external', '')} 詳細</button>

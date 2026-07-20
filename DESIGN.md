@@ -967,3 +967,26 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 - **`<見出し>`等の目印がそのまま出る不具合**: プロンプトで使った`<見出し>`/`<本文>`をモデルが echo していた。→ プロンプトからその形式マーカーを撤去（要素だけ出力させる）＋`splitHeadline`をラベル行（<見出し>/見出し:/本文 等）と空行を除去して最初の実文を見出しにするよう堅牢化。
 - **本文が途中で切れる不具合**: gemini-2.5/3系は思考(thinking)がONで、思考が出力トークンを食い本文が打ち切られていた。→ `generationConfig.thinkingConfig.thinkingBudget:0`（思考無効）＋`maxOutputTokens:1500`。
 - **モデルが選択と違う件**: キャッシュ済み要約は生成時のモデルのまま（1動画1回生成）。モデル変更前に裏の自動生成が「自動(3.5先頭)」で作った分が残っていたのが原因。→ 「要約し直す」で現在の設定モデルで再生成される（コードは既に現設定を送信）。
+
+## 20. 決算日（前回/次回）表示（2026-07-20）
+保有・登録銘柄の「前回決算日」「次回決算予定日」を取得し、一覧・詳細・カルテに表示する。
+
+### 20.1 取得（`functions/api/earnings.js`）
+`GET /api/earnings?symbols=AAPL,7203.T,...` → `{ SYM: {next,nextEstimate,exDiv,prev} }`。symbols は Yahoo 形式（日本株=コード.T / 米国株=ティッカー）。
+- **次回決算日 `next`**: Yahoo `quoteSummary?modules=calendarEvents`。**crumb ハンドシェイクが必要**（`fc.yahoo.com` 等で Cookie→`/v1/test/getcrumb` で crumb→本取得。crumb は約25分キャッシュ）。日米とも取得可。`isEarningsDateEstimate` を `nextEstimate` として返す（Yahooが推定した日か）。ex配当日 `exDiv` も同時取得。
+- **前回決算日 `prev`（＝実際の発表日）**: JP=TDnet(yanoshin) の「**決算短信**」の最新 pubdate（業績修正・配当・月次は除外）。US=SEC EDGAR を **`type=10-Q`/`10-K`/`6-K` で各1件**直接引き、最新提出日を採用（8-K/Form4 が多い銘柄で決算書類が取得窓外に押し出される問題を回避）。
+- サブリクエスト対策: 1リクエスト最大20 symbol。クライアントは8件ずつ問い合わせ（US=最大4サブリクエスト/銘柄）。
+
+### 20.2 保存・取得タイミング
+- `store.data.earnings[priceKey] = { prev, next, nextEstimate, exDiv, at }`。sync SCHEMA に `earnings: ['map', byAt]`（取得時刻の新しい方）。
+- `api.refreshEarnings()` を価格更新の末尾で実行。銘柄ごとの成功日 `at` で「その日1回だけ」に抑制（高値の highsAt と同方式）。
+
+### 20.3 表示ロジック（`earnInfo` / `earnLabel`）
+- `earnInfo`: `prev`（実績）/ `confirmedNext`（Yahoo確定の予定日＝`next && !nextEstimate`）/ `estNext`（予定日が無ければ **前回+4ヶ月** を推定）。
+- **銘柄名の横／詳細上部のラベル `earnLabel`**（近い/直近のときだけ）:
+  - 直近発表: 前回発表から**7日以内** → 「M/D発表」(緑)
+  - 予定が近い: 確定予定日の**1週間前〜当日** → 「M/D予定」(琥珀)
+  - 推定が近い: 推定日(前回+4ヶ月)の**2週間前〜** → 「M/Dごろ」(灰) ＋ **前回決算日を併記**（`前回M/D`）
+- 表示場所: ①一覧の銘柄名の横（`COL_RENDERERS.name`）②詳細ドロワー上部＝格付けの右に右寄せ ③銘柄カルテ＝「取引を記録」ボタンの左。
+- **決算情報セクション**（ドロワーのファンダ／カルテのファンダに「前回決算 / 次回決算」行）: ここは**推定を出さない**。前回=実績日、次回=確定予定日のみ、不明は「-」。
+- **列**: `earnPrev`(前回決算) / `earnNext`(次回決算・確定のみ) を選択可能な列として追加（MASTER_COLS/COL_RENDERERS/getSortVal/colDefaultWidth）。既定表示には入れない（列設定で任意に出す）。

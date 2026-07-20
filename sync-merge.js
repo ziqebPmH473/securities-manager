@@ -39,6 +39,7 @@
     grades:          ['records', (r) => `g:${r.grade}`],
     _filterPresets:  ['records', (r) => `fp:${r.id}`],
     mktRanking:      ['map', byAt],
+    earnings:        ['map', byAt],   // 決算日キャッシュ priceKey→{prev,next,...,at}。取得時刻 at の新しい方
     amountHistory:   ['records', (r) => `ah:${r.id}`],
     amountSnapshots: ['records', (r) => `as:${r.id}`],
     analyses:        ['records', (r) => `an:${r.securityId}|${r.analysisDate}`],

@@ -1040,6 +1040,18 @@ table.ie-on tbody tr:hover { background: transparent; }
 .rank-badge.rb-r2 { background: #b9c2cc; color: #29313a; }
 .rank-badge.rb-r3 { background: #cd7f32; color: #2a1600; }
 
+/* 決算日ラベル（一覧の銘柄名の横／詳細上部）。近い決算・直近発表のときだけ出る */
+.earn-chip {
+  display: inline-block; margin-left: 6px; padding: 1px 7px;
+  font-size: 10.5px; font-weight: 700; line-height: 1.6; border-radius: 999px;
+  white-space: nowrap; vertical-align: middle; border: 1px solid transparent;
+}
+.earn-chip.earn-soon { color: #b45309; background: #fef3c7; border-color: #f4d58a; }  /* 予定=琥珀 */
+.earn-chip.earn-done { color: #1d6f42; background: #dcf3e4; border-color: #b6e0c4; }  /* 発表済=緑 */
+.earn-chip.earn-est  { color: #4b5563; background: #eef1f4; border-color: #d5dbe1; }  /* 推定=グレー */
+.earn-chip .earn-sub { font-weight: 500; opacity: .8; font-size: 9.5px; }
+.kt-earn { display: inline-flex; align-items: center; margin-right: 6px; }
+
 /* ===== SEC-94: コード・銘柄名の列を横スクロール時に左端固定 ===== */
 table.holdings td.stick, table.holdings th.stick { position: sticky; z-index: 2; background: var(--panel); }
 /* 固定列のヘッダは通常th(z-index:5)より上に置く。低いと横スクロール時に隣の見出しに覆われて潰れる。 */
