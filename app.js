@@ -4809,13 +4809,45 @@ const NEWS_US_ALIAS = {
 // 主要上場銘柄の自動タグ用リスト（保有外でも見出し/本文に出たら別色チップ）。
 // 辞書は上の NEWS_JP_ALIAS / NEWS_US_ALIAS を再利用（コード付き＝クリックで株探へ）。将来は全上場マスタ取込で拡張予定。
 // 誤検知抑制: 照合語は「3文字以上」または「2文字以上かつ非ASCII（日立・東芝等の漢字2字）」のみ採用（JT/au等の短いASCIIは除外）。
-// 銘柄名から照合用の正規化名を生成（会社種別除去＋略称）。マスタ取込銘柄用（誤検知抑制で3文字以上）
-function _masterNorms(name) {
+// カタカナを保持したままの正規化（NFKC＋小文字化のみ）。カタカナ社名の「語境界」判定に使う。
+// ※ searchNorm はカタカナ→ひらがなに寄せるため、直後が「カタカナの続き」か「ひらがなの助詞」かを区別できない。
+function searchNormK(s) { let t = String(s == null ? '' : s); try { t = t.normalize('NFKC'); } catch (_) {} return t.toLowerCase(); }
+const _KATA_RE = /[ァ-ヶー]/;
+const _isKataWord = (s) => /^[ァ-ヶー]{2,}$/.test(s);
+// カタカナ社名が「より長いカタカナ語の一部」でない位置に出現するか。
+// 例: 「スーパー」は『スーパーマーケット』(直後がカタカナ)では不一致、『スーパー、値上げ』『スーパーは』では一致。
+function _kataHit(textK, alias) {
+  let i = textK.indexOf(alias);
+  while (i >= 0) {
+    const before = i > 0 ? textK[i - 1] : '';
+    const after = textK[i + alias.length] || '';
+    if (!_KATA_RE.test(before) && !_KATA_RE.test(after)) return true;
+    i = textK.indexOf(alias, i + 1);
+  }
+  return false;
+}
+// 銘柄名から照合候補（会社種別除去＋略称）を生成
+function _masterCands(name) {
   const base = String(name || '').replace(/株式会社|\(株\)|（株）/g, '').replace(/\s+/g, '').trim();
   if (!base) return [];
   const cands = [base, base.replace(/ホールディングス/g, 'HD'), base.replace(/(ホールディングス|HD)$/, ''), base.replace(/グループ$/, ''), base.replace(/グループ$/, 'G')];
-  const kat = base.match(/^[ァ-ヶー]{3,}/); if (kat && kat[0].length < base.length) cands.push(kat[0]);
-  return [...new Set(cands.map(searchNorm).filter(x => x.length >= 3))]; // 3文字以上のみ（誤検知抑制）
+  // カタカナ略称は「カタカナ＋漢字/ひらがな」の形のときだけ作る（例: トヨタ自動車→トヨタ）。
+  // 全カタカナ名（スーパー・マイクロ・コンピューター等）から先頭を切り出すと「スーパーマーケット」に
+  // 誤ヒットするため作らない（区切り「・」やカタカナが続く場合は不採用）。
+  const kat = base.match(/^([ァ-ヶー]{3,})(?=[^ァ-ヶー・])/);
+  if (kat) cands.push(kat[1]);
+  return [...new Set(cands.filter(Boolean))];
+}
+// 候補を「カタカナ語（語境界つき照合）」と「それ以外（部分一致）」に振り分ける。
+// lenient=true は組込み辞書（手作業で精査済み。漢字2字の日立・東芝等を許可）、false は取込マスタ/ランキング（3文字以上）。
+function _splitNorms(cands, lenient) {
+  const norms = [], kn = [];
+  const okPlain = (x) => lenient ? (x.length >= 3 || (x.length >= 2 && /[^\x00-\x7f]/.test(x))) : x.length >= 3;
+  for (const c of cands) {
+    if (_isKataWord(c)) { const k = searchNormK(c); if (k.length >= 3) kn.push(k); }
+    else { const n = searchNorm(c); if (okPlain(n)) norms.push(n); }
+  }
+  return { norms: [...new Set(norms)], kn: [...new Set(kn)] };
 }
 // 自動タグ対象リスト（組込み主要辞書＋取込マスタ＋ランキングタブ銘柄）。構成変更時のみ再構築してキャッシュ。
 let _majorsListCache = null, _majorsListVer = '';
@@ -4846,29 +4878,29 @@ function newsMajorsList() {
   const master = listedMasterArr();
   const ver = master.length + '|' + _rankingSig();
   if (_majorsListCache && _majorsListVer === ver) return _majorsListCache;
-  const okNorm = x => x.length >= 3 || (x.length >= 2 && /[^\x00-\x7f]/.test(x));
   const buildAlias = (dict, market) => Object.entries(dict).map(([code, s]) => {
     const names = s.split('|').filter(Boolean);
-    return { market, code, label: names[0], norms: names.map(searchNorm).filter(okNorm), code4: (market === 'JP' && /^\d{4}$/.test(code)) ? code : null };
-  }).filter(e => e.norms.length);
+    const { norms, kn } = _splitNorms(names, true);
+    return { market, code, label: names[0], norms, kn, code4: (market === 'JP' && /^\d{4}$/.test(code)) ? code : null };
+  }).filter(e => e.norms.length || e.kn.length);
   const list = [...buildAlias(NEWS_JP_ALIAS, 'JP'), ...buildAlias(NEWS_US_ALIAS, 'US')];
   const seen = new Set(list.map(e => e.market + e.code));
   // 取込マスタ（JPX全上場） … JPコード4桁/4英数字
   for (const m of master) {
     const code = String(m.code || '').trim(), name = String(m.name || '').trim();
     if (!/^[0-9A-Za-z]{4}$/.test(code) || !name || seen.has('JP' + code)) continue; // 組込みと重複はスキップ
-    const norms = _masterNorms(name);
-    if (!norms.length) continue;
-    list.push({ market: 'JP', code, label: name, norms, code4: /^\d{4}$/.test(code) ? code : null });
+    const { norms, kn } = _splitNorms(_masterCands(name), false);
+    if (!norms.length && !kn.length) continue;
+    list.push({ market: 'JP', code, label: name, norms, kn, code4: /^\d{4}$/.test(code) ? code : null });
     seen.add('JP' + code);
   }
   // ランキングタブ銘柄（JP=4桁コード / US=ティッカー。名称は日本語化済み）
   for (const e of _rankingEntries()) {
     if (seen.has(e.market + e.code)) continue; // 組込み辞書・マスタと重複はスキップ
-    const norms = _masterNorms(e.name);
+    const { norms, kn } = _splitNorms(_masterCands(e.name), false);
     const code4 = (e.market === 'JP' && /^\d{4}$/.test(e.code)) ? e.code : null;
-    if (!norms.length && !code4) continue; // 照合できる手掛かりが無いものは除外
-    list.push({ market: e.market, code: e.code, label: e.name, norms, code4 });
+    if (!norms.length && !kn.length && !code4) continue; // 照合できる手掛かりが無いものは除外
+    list.push({ market: e.market, code: e.code, label: e.name, norms, kn, code4 });
     seen.add(e.market + e.code);
   }
   _majorsListCache = list; _majorsListVer = ver; _majorsMemo.clear();
@@ -4883,12 +4915,14 @@ function newsMatchMajorsRaw(it) {
   const key = text.slice(0, 300);
   if (_majorsMemo.has(key)) return _majorsMemo.get(key);
   const norm = searchNorm(text);
+  const textK = searchNormK(text); // カタカナ保持版（カタカナ社名の語境界判定用）
   const held = new Set((store.data.securities || []).filter(s => s.enabled !== false).map(s => s.market + ':' + String(s.ticker || '').toUpperCase()));
   const codeSet = new Set((text.match(/(?<![0-9])[0-9]{4}(?![0-9円万億兆株])/g) || []));
   const out = [], seen = new Set();
   for (const e of list) {
     if (held.has(e.market + ':' + e.code.toUpperCase())) continue;   // 保有は青チップで出す
-    if (!(e.norms.some(n => norm.includes(n)) || (e.code4 && codeSet.has(e.code4)))) continue;
+    // 漢字等=部分一致 / カタカナ社名=語境界つき一致 / 日本株は本文中の4桁コード
+    if (!(e.norms.some(n => norm.includes(n)) || e.kn.some(k => _kataHit(textK, k)) || (e.code4 && codeSet.has(e.code4)))) continue;
     const k = e.market + e.code; if (seen.has(k)) continue; seen.add(k);
     out.push(e);
   }
@@ -4898,7 +4932,7 @@ function newsMatchMajorsRaw(it) {
 // excludeNorms=既に別チップで表示済みの正規化名の集合（重複表示を避ける）
 function newsMatchMajors(it, excludeNorms) {
   return newsMatchMajorsRaw(it)
-    .filter(e => !(excludeNorms && e.norms.some(n => excludeNorms.has(n))))
+    .filter(e => !(excludeNorms && (e.norms.some(n => excludeNorms.has(n)) || e.kn.some(k => excludeNorms.has(searchNorm(k))))))
     .map(e => ({ market: e.market, code: e.code, label: e.label }));
 }
 function _newsPat(sec) {
