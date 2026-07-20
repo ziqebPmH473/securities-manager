@@ -14,6 +14,10 @@
 
 // ---------- 定数・初期データ ----------
 const STORAGE_KEY = 'sm_data_v1';
+// テクニカル分析結果(techAnalysis)の保持上限（localStorage 約5MB対策。実測でここが全体の約8割を占めていた）
+const TECH_HISTORY_MAX = 52;   // スコア履歴の点数（週次1年相当）
+const TECH_UNREG_DAYS = 14;    // 未登録銘柄（分析タブのトップ50等）の分析結果を残す日数
+const TECH_UNREG_MAX = 30;     // 未登録銘柄の分析結果の最大保持件数（新しい順。実測54件→30件に圧縮）
 
 const DEFAULT_CATEGORIES = [
   { category: '王道・鉄板', label: '文明のインフラ', amountJpy: 80000, amountUsd: 800, sortOrder: 1, color: 'gold' },
@@ -351,6 +355,8 @@ const store = {
     for (const c of this.data.categories) {
       if (c.color == null) { const d = DEFAULT_CATEGORIES.find(x => x.category === c.category); if (d) c.color = d.color; }
     }
+    // 起動時にテクニカル分析結果を自動整理（容量超過の主因だったため）。減った分は次の保存で反映される
+    try { if (this._pruneTechAnalysis() > 0) this.save(); } catch (_) {}
     return this.data;
   },
   save() {
@@ -375,6 +381,36 @@ const store = {
     let freed = 0;
     const drop = (k) => { const v = this.data[k]; if (v && typeof v === 'object' && Object.keys(v).length) { freed += JSON.stringify(v).length; this.data[k] = {}; } };
     drop('mktRanking'); drop('indices'); drop('newsTrans');
+    freed += this._pruneTechAnalysis(true); // それでも足りなければ登録外の分析結果も強めに整理
+    return freed;
+  },
+  // テクニカル分析結果の自動整理（容量対策。localStorageの大半を占めていたため）。
+  //  - 登録していない銘柄（分析タブの売買代金トップ50は入れ替わるので orphan 化する）は TECH_UNREG_DAYS 日で破棄
+  //  - 登録外の保持件数は TECH_UNREG_MAX 件まで（新しい順）
+  //  - スコア履歴は TECH_HISTORY_MAX 点まで
+  // 保有・登録済み銘柄の分析結果は消さない。aggressive=true で登録外を当日分以外すべて破棄。
+  _pruneTechAnalysis(aggressive) {
+    const ta = this.data.techAnalysis;
+    if (!ta || typeof ta !== 'object') return 0;
+    const sizeOf = (v) => { try { return JSON.stringify(v).length; } catch (_) { return 0; } };
+    const reg = new Set();
+    for (const s of this.data.securities || []) { try { reg.add(priceKey(s)); } catch (_) {} }
+    const cutoff = new Date(Date.now() - (aggressive ? 0 : TECH_UNREG_DAYS) * 86400000).toISOString().slice(0, 10);
+    let freed = 0; const unreg = [];
+    for (const k of Object.keys(ta)) {
+      const r = ta[k] || {};
+      if (!reg.has(k)) {
+        const d = String(r.lastAnalyzed || '');
+        if (!d || d < cutoff) { freed += sizeOf(r); delete ta[k]; continue; }
+        unreg.push([k, d]);
+      }
+      const h = r.history;
+      if (Array.isArray(h) && h.length > TECH_HISTORY_MAX) { const b = sizeOf(h); r.history = h.slice(-TECH_HISTORY_MAX); freed += b - sizeOf(r.history); }
+    }
+    if (unreg.length > TECH_UNREG_MAX) { // 登録外が多すぎる分は新しい順に残す
+      unreg.sort((a, b) => String(b[1]).localeCompare(String(a[1])));
+      for (const [k] of unreg.slice(TECH_UNREG_MAX)) { freed += sizeOf(ta[k]); delete ta[k]; }
+    }
     return freed;
   },
   seed() {
@@ -4448,8 +4484,19 @@ let _newsCache = null;   // { items:[{title,link,source,pubDate}], at }
 let newsBusy = false;
 let newsHeldOnly = false; // 関連銘柄（登録銘柄に見出し一致）のみ表示
 const NEWS_REAL_CATS = ['market', 'earnings', 'disclosure', 'video', 'macro', 'other']; // 「すべて」以外の実カテゴリ
-// 表示するカテゴリは newsPrefs.hideCats（非表示カテゴリ）で管理＝インラインのトグルで即切替＆同期保存
-function newsCatShown(c) { return !((store.data.newsPrefs && store.data.newsPrefs.hideCats) || []).includes(c); }
+// 表示するカテゴリは newsPrefs.hideCats（非表示カテゴリ）で管理＝インラインのトグルで即切替＆同期保存。
+// ただし newsPrefs は Google同期対象のため、裏で同期が走ると「別端末の選択状態」で
+// 開いている画面のカテゴリが勝手に切り替わっていた（例: すべて→動画だけ）。
+// そこで開いている間はセッション側の選択(_newsHideCatsSession)を優先し、同期では画面を変えない。
+// 次回の読み込み時は同期された設定から始まる（＝端末間の引き継ぎ自体は従来どおり）。
+let _newsHideCatsSession = null;
+function newsHideCats() {
+  if (_newsHideCatsSession) return _newsHideCatsSession;
+  return (store.data.newsPrefs && store.data.newsPrefs.hideCats) || [];
+}
+// ニュース画面を開いた時点の選択をセッションに固定（以後、同期で書き換わっても画面は動かさない）
+function newsPinCatSession() { if (!_newsHideCatsSession) _newsHideCatsSession = [...((store.data.newsPrefs && store.data.newsPrefs.hideCats) || [])]; }
+function newsCatShown(c) { return !newsHideCats().includes(c); }
 function newsAllCatsShown() { return NEWS_REAL_CATS.every(newsCatShown); }
 function newsToggleCat(c) {
   const p = store.data.newsPrefs || (store.data.newsPrefs = { hideCats: [], hideDiscTypes: [] });
@@ -4457,9 +4504,10 @@ function newsToggleCat(c) {
   if (c === 'all') {
     // 全部表示中に押したら全部解除（1つだけ選びやすく）／そうでなければ全部表示
     p.hideCats = newsAllCatsShown() ? [...NEWS_REAL_CATS] : [];
-  } else if (p.hideCats.includes(c)) p.hideCats = p.hideCats.filter(x => x !== c);
-  else p.hideCats = [...p.hideCats, c];                // 自動リセットしない（0個でもそのまま）
+  } else if (newsHideCats().includes(c)) p.hideCats = newsHideCats().filter(x => x !== c);
+  else p.hideCats = [...newsHideCats(), c];            // 自動リセットしない（0個でもそのまま）
   p._updatedAt = new Date().toISOString();
+  _newsHideCatsSession = [...p.hideCats];              // 自分の操作をセッションにも反映
   store.save(); renderNews();
 }
 // プールに存在する開示の「まとめ種別（グループ）」（インライン・トグル用。存在するグループだけ出す）
@@ -5133,7 +5181,7 @@ function _newsCurrentEntries() {
   const hidden = store.data.newsHidden || {};
   const since = newsDays ? Date.now() - newsDays * 86400 * 1000 : 0;
   const prefs = store.data.newsPrefs || {};
-  const hideCats = prefs.hideCats || [], hideDiscTypes = prefs.hideDiscTypes || [];
+  const hideCats = newsHideCats(), hideDiscTypes = prefs.hideDiscTypes || []; // カテゴリは同期で画面が動かないようセッション優先
   let entries = (_newsCache ? _newsCache.items : [])
     .filter(it => !hidden[it.link])
     .filter(it => !since || (it.pubDate && new Date(it.pubDate).getTime() >= since))
@@ -5237,6 +5285,7 @@ function newsItemHtml(it, read, matches, opts = {}) {
 }
 function renderNews() {
   if (currentView !== 'news') return;
+  newsPinCatSession(); // 開いた時点のカテゴリ選択を固定（裏の同期で勝手に切り替わらないように）
   const cache = _newsCache;
   const read = store.data.newsRead || {};
   const hidden = store.data.newsHidden || {};
@@ -8402,7 +8451,7 @@ function saveTechResult(sec, result, today) {
   const history = Array.isArray(prev.history) ? prev.history.filter(h => h.date !== today) : [];
   const scores = {}; for (const p of Object.keys(result.patterns)) scores[p] = result.patterns[p].score;
   history.push({ date: today, best: result.best, scores }); // 1日1点
-  while (history.length > 104) history.shift();             // 上限104点（週次2年相当）で剪定（§5）
+  while (history.length > TECH_HISTORY_MAX) history.shift(); // 上限TECH_HISTORY_MAX点で剪定（§5・容量対策で104→52）
   store.data.techAnalysis[key] = {
     ver: MEASURE_VER, measureVer: MEASURE_VER, scoreVer: SCORE_VER, dataDate: today,
     lastAnalyzed: today, best: result.best, bestTrend: result.bestTrend, bestContra: result.bestContra, trendTotal: result.trendTotal, contraTotal: result.contraTotal, totalScore: result.totalScore, contraScore: result.contraScore, warn: result.warn, patterns: result.patterns,

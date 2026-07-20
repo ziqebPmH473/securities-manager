@@ -783,6 +783,19 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
   - **取込日を保持**: ファイル内「日付」列（JPXの基準日。無ければ先頭行の8桁YYYYMMDDを探索）を `store.data.listedMasterInfo = {date,importedAt,count,fileName}` に保存。モーダル冒頭に「現在の登録: N銘柄 ・ YYYY-MM-DD 時点のデータ（取込日時）」を表示＝いつ時点の一覧か一目でわかる。`listedMasterInfo` も sync SCHEMA(`single`)登録。
   - **保存容量対策（localStorage約5MB）**: 4,430社を配列JSON(`[{code,name}]`≈152KB)で持つと満杯環境で `QuotaExceededError`（setItem failed: exceeded the quota）になる。対策として `store.data.listedMaster` は **`CODE\tNAME\n…` のコンパクト文字列**で保持（≈74KB・約半分）。読み出しは `listedMasterArr()`（パースをメモ化）、件数は `listedMasterCount()`、保存は `setListedMaster()`。旧配列形式も後方互換で読める。
   - **save() のクォータ自動回復**: `store.save()` は超過時に**再取得できるキャッシュ（市場ランキング mktRanking／参考指数 indices／ニュース翻訳 newsTrans）だけを破棄して再保存**を試みる（`_freeCacheSpace()`）。動画要約(ytSummaries)はGeminiのAPIコストがかかる再生成のため消さない。再保存も失敗したら「上場銘柄マスタを全消去 か 不要データ整理を」を促すトースト。
+
+### 16.7.2 localStorage 容量の実測と techAnalysis の自動整理（2026-07-20）
+実機計測（合計2,462KB＝上限約2.5M文字にほぼ到達）で内訳が判明し、**`techAnalysis` が1,942KB＝全体の約79%**を占めていた（推測していた mktRanking は上位外）。211件・うち**登録外（分析タブの売買代金トップ50で入れ替わった銘柄）が54件**。項目別は metrics 647KB / marks 480KB / levels 326KB / patterns 150KB / history 107KB。
+- **自動整理 `store._pruneTechAnalysis()`**（`store.load()` で毎回実行。減っていれば即保存）:
+  - **登録していない銘柄**の分析結果は `TECH_UNREG_DAYS`(14日) を過ぎたら破棄。さらに保持は新しい順 `TECH_UNREG_MAX`(30件) まで。**保有・登録済み銘柄の結果は消さない**（古くても保持）。
+  - スコア履歴 `history` は `TECH_HISTORY_MAX`(52点＝週次1年相当) まで（従来104点）。`saveTechResult` の剪定も同じ定数を使用。
+  - 容量超過時は `_freeCacheSpace()` から `_pruneTechAnalysis(true)`（登録外を当日分以外すべて破棄）へエスカレーション。
+  - 実機構成を再現した実測で**約32%削減**（211→187件）＝1,942KB→約1,320KBの見込み。
+
+### 16.7.3 同期でニュースのカテゴリ選択が勝手に変わる問題（2026-07-20）
+`newsPrefs.hideCats`（表示カテゴリ）はGoogle同期対象のため、**裏の自動同期（25秒間隔）で別端末の選択状態を受け取ると、開いている画面のカテゴリが勝手に切り替わっていた**（「すべて」で見ていたら数十秒後に「動画だけ」になる）。
+- 対策: セッション変数 `_newsHideCatsSession` を導入。`renderNews()` の冒頭 `newsPinCatSession()` で**画面を開いた時点の選択を固定**し、以後の表示・絞り込みは `newsHideCats()` 経由でセッション値を優先する。同期は `store.data.newsPrefs` を更新するが**開いている画面は動かさない**。
+- 次回読み込み時はセッション値が空なので同期された設定から始まる＝**端末間の引き継ぎ自体は従来どおり**。自分でトグルした時は `_newsHideCatsSession` も更新。
 - **ランキングタブ銘柄も自動タグ（2026-07-20）**: マーケットの**時価総額/売買代金/値上がり/値下がり**ランキングのキャッシュ（`store.data.mktRanking`）の構成銘柄も `newsMajorsList()` に合成（`_rankingEntries()`）。US=ティッカー＋日本語化名称、JP=4桁コード＋名称。**米国株はランキング取得ぶんが主要辞書(NEWS_US_ALIAS 約46社)を補完**する形で対象拡大。照合リストのキャッシュ鍵は `listedMaster件数 + ランキング署名(_rankingSig)`（ランキング更新で自動失効）。
 - **社名→照合語**: `_masterCands(name)` が「株式会社」除去・ホールディングス⇔HD・グループ⇔G・先頭カタカナ略称などの別名を生成。`_splitNorms()` が別名を2系統に振り分ける。誤検知抑制のため取込マスタ/ランキング由来は**3文字以上**のみ採用。
 - **部分一致のルール（2026-07-20 改訂・誤検知対策）**:
