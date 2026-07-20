@@ -9,12 +9,10 @@ export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   const syms = (url.searchParams.get('symbols') || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 20);
   if (!syms.length) return json({});
-  let cr = null;
-  try { cr = await getCrumb(); } catch (_) { cr = null; }
   const out = {};
   await Promise.all(syms.map(async (sym) => {
     const [next, prev] = await Promise.all([
-      fetchNext(sym, cr).catch(() => null),
+      fetchNext(sym).catch(() => null),
       fetchPrev(sym).catch(() => null),
     ]);
     out[sym] = {
@@ -29,12 +27,31 @@ export async function onRequestGet(context) {
 }
 
 // ---------- 次回決算日 ----------
-// JP: Yahoo!ファイナンス日本版の個別ページ（本番Cloudflareから到達可＝ファンダ取得で実績あり）の
-//     「次回決算発表予定日」を採用。US: Yahoo米国API(calendarEvents)を crumb で取得（本番では弾かれがち）。
-async function fetchNext(symbol, cr) {
-  if (/\.T$/i.test(symbol)) { const jp = await fetchNextJp(symbol).catch(() => null); if (jp) return jp; }
+// JP: Yahoo!ファイナンス日本版の個別ページ（本番Cloudflareから到達可＝ファンダ取得で実績あり）の「次回決算発表予定日」。
+// US: Nasdaq API（本番Cloudflareから到達可）の予想決算日。ダメなら Yahoo米国API(crumb・本番では弾かれがち)にフォールバック。
+async function fetchNext(symbol) {
+  if (/\.T$/i.test(symbol)) return (await fetchNextJp(symbol).catch(() => null));
+  const us = await fetchNextUs(symbol).catch(() => null); if (us) return us;
+  // フォールバック: Yahoo米国API（crumbは必要時のみ遅延取得。本番では弾かれがち）
+  const cr = await getCrumb().catch(() => null);
   return fetchNextYahoo(symbol, cr).catch(() => null);
 }
+// US: Nasdaq の予想決算日。reportText「report earnings on MM/DD/YYYY」/ announcement「Mon DD, YYYY」から抽出。
+const _MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+async function fetchNextUs(symbol) {
+  const s = String(symbol || '').trim().toUpperCase();
+  if (!/^[A-Z.\-]{1,8}$/.test(s)) return null;
+  const r = await fetchGuard(`https://api.nasdaq.com/api/analyst/${encodeURIComponent(s)}/earnings-date`, 8000);
+  if (!r.ok) return null;
+  const d = await r.json().catch(() => null);
+  const txt = `${(d && d.data && d.data.reportText) || ''} ${(d && d.data && d.data.announcement) || ''}`;
+  let m = txt.match(/report earnings on\s+(\d{1,2})\/(\d{1,2})\/(20\d{2})/i); // MM/DD/YYYY
+  if (m) return { date: `${m[3]}-${_pad(m[1])}-${_pad(m[2])}`, estimate: false, exDiv: null };
+  m = txt.match(/([A-Z][a-z]{2})\s+(\d{1,2}),?\s*(20\d{2})/); // Mon DD, YYYY
+  if (m && _MONTHS[m[1]]) return { date: `${m[3]}-${_pad(_MONTHS[m[1]])}-${_pad(m[2])}`, estimate: false, exDiv: null };
+  return null;
+}
+function _pad(n) { return String(n).padStart(2, '0'); }
 // JP: finance.yahoo.co.jp の scheduleMessage（「次回決算発表予定日は YYYY年M月D日」）から日付を抽出。
 async function fetchNextJp(symbol) {
   const r = await fetchGuard(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}`, 8000, { 'Accept-Language': 'ja' });
@@ -108,16 +125,27 @@ async function prevJp(code) {
   }
   return topTwo(dates);
 }
-// US: EDGAR の決算書類の直近2回の提出日。8-K/Form4 等が多い銘柄(例 MSFT)だと一括取得では決算書類が
-// 取得窓の外に押し出されるため、決算に相当する書式を種別指定(type=)で直接引く。
-// 10-Q/10-K（米国企業）＋ 6-K（外国企業ADR＝半期決算が多い）をカバー。各書式2件ずつ取り、新しい順に上位2つ。
+// US: 前回決算日の直近2回。Nasdaq の実績（earnings-surprise の Date Reported）を優先＝1リクエストで確実。
+// ダメなら EDGAR（10-Q/10-K/6-K）にフォールバック（SECは同時アクセス制限で不安定なため副）。
 async function prevUs(ticker) {
   const t = String(ticker || '').trim().toUpperCase();
   if (!/^[A-Z.\-]{1,8}$/.test(t)) return { prev: null, prev2: null };
-  const forms = ['10-Q', '10-K', '6-K'];
-  const per = await Promise.all(forms.map(f => edgarDates(t, f, 2).catch(() => [])));
+  const nas = await prevUsNasdaq(t).catch(() => null);
+  if (nas && nas.prev) return nas;
+  const per = await Promise.all(['10-Q', '10-K', '6-K'].map(f => edgarDates(t, f, 2).catch(() => [])));
   return topTwo([].concat(...per));
 }
+// Nasdaq earnings-surprise の Date Reported（実際の決算発表日）を新しい順に上位2つ。
+async function prevUsNasdaq(t) {
+  const r = await fetchGuard(`https://api.nasdaq.com/api/company/${encodeURIComponent(t)}/earnings-surprise?assetclass=stocks`, 8000);
+  if (!r.ok) return null;
+  const d = await r.json().catch(() => null);
+  const rows = (d && d.data && d.data.earningsSurpriseTable && d.data.earningsSurpriseTable.rows) || [];
+  const dates = rows.map(x => usDate(x && x.dateReported)).filter(Boolean);
+  return topTwo(dates);
+}
+// "MM/DD/YYYY" → "YYYY-MM-DD"
+function usDate(s) { const m = String(s || '').match(/(\d{1,2})\/(\d{1,2})\/(20\d{2})/); return m ? `${m[3]}-${_pad(m[1])}-${_pad(m[2])}` : null; }
 async function edgarDates(ticker, type, count) {
   const u = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(ticker)}&type=${encodeURIComponent(type)}&count=${count}&output=atom`;
   // SEC EDGAR は User-Agent に連絡先が必要。既存の disclosure.js と同じヘッダに合わせる。
