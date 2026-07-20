@@ -973,7 +973,10 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 
 ### 20.1 取得（`functions/api/earnings.js`）
 `GET /api/earnings?symbols=AAPL,7203.T,...` → `{ SYM: {next,nextEstimate,exDiv,prev} }`。symbols は Yahoo 形式（日本株=コード.T / 米国株=ティッカー）。
-- **次回決算日 `next`**: Yahoo `quoteSummary?modules=calendarEvents`。**crumb ハンドシェイクが必要**（`fc.yahoo.com` 等で Cookie→`/v1/test/getcrumb` で crumb→本取得。crumb は約25分キャッシュ）。日米とも取得可。`isEarningsDateEstimate` を `nextEstimate` として返す（Yahooが推定した日か）。ex配当日 `exDiv` も同時取得。
+- **次回決算日 `next`**:
+  - **日本株 = Yahoo!ファイナンス日本版の個別ページ（`finance.yahoo.co.jp/quote/コード.T`）の「次回決算発表予定日」をスクレイプ**（`scheduleMessage` ブロックの `YYYY年M月D日`）。本番Cloudflareから到達可能（ファンダ取得で実績のある同一ページ）＝確実に取得できる。`nextEstimate=false`（確定の予定日）。
+  - **米国株 = Yahoo米国API `quoteSummary?modules=calendarEvents`**（crumb ハンドシェイク: `fc.yahoo.com` で Cookie→`/v1/test/getcrumb`→本取得、約25分キャッシュ）。`isEarningsDateEstimate` を `nextEstimate` として返す。ex配当日 `exDiv` も取得。
+  - ※ 当初は日米とも Yahoo米国API(crumb)だったが、**本番Cloudflareのサーバーからは Yahoo米国APIが弾かれ `next` が全部 null＝全銘柄が推定「ごろ」表示**になった（実測で判明）。日本株を日本版ページのスクレイプへ切替えて解消。米国株はcrumbが通れば確定予定日、弾かれれば推定（前回+間隔）にフォールバック。
 - **前回決算日 `prev`（＝実際の発表日）**: JP=TDnet(yanoshin) の「**決算短信**」の最新 pubdate（業績修正・配当・月次は除外）。US=SEC EDGAR を **`type=10-Q`/`10-K`/`6-K` で各1件**直接引き、最新提出日を採用（8-K/Form4 が多い銘柄で決算書類が取得窓外に押し出される問題を回避）。
 - サブリクエスト対策: 1リクエスト最大20 symbol。クライアントは8件ずつ問い合わせ（US=最大4サブリクエスト/銘柄）。
 

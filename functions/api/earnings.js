@@ -28,7 +28,29 @@ export async function onRequestGet(context) {
   return json(out);
 }
 
-// ---------- 次回決算日（Yahoo calendarEvents） ----------
+// ---------- 次回決算日 ----------
+// JP: Yahoo!ファイナンス日本版の個別ページ（本番Cloudflareから到達可＝ファンダ取得で実績あり）の
+//     「次回決算発表予定日」を採用。US: Yahoo米国API(calendarEvents)を crumb で取得（本番では弾かれがち）。
+async function fetchNext(symbol, cr) {
+  if (/\.T$/i.test(symbol)) { const jp = await fetchNextJp(symbol).catch(() => null); if (jp) return jp; }
+  return fetchNextYahoo(symbol, cr).catch(() => null);
+}
+// JP: finance.yahoo.co.jp の scheduleMessage（「次回決算発表予定日は YYYY年M月D日」）から日付を抽出。
+async function fetchNextJp(symbol) {
+  const r = await fetchGuard(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}`, 8000, { 'Accept-Language': 'ja' });
+  if (!r.ok) return null;
+  const html = await r.text();
+  const idx = html.indexOf('scheduleMessage'); // 予定日メッセージのブロック（結果サマリの summaryMessage より前）
+  if (idx < 0) return null;
+  // 年月日は日本語（年/月/日）区切り。文字化けしても数字間の非数字を数個許容して拾う。
+  const m = html.slice(idx, idx + 300).match(/(20\d{2})[^\d]{0,4}(\d{1,2})[^\d]{0,4}(\d{1,2})/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return { date: `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`, estimate: false, exDiv: null };
+}
+
+// ---------- 次回決算日（Yahoo米国 calendarEvents） ----------
 let _crumbCache = null; // { cookie, crumb, at }
 async function getCrumb() {
   if (_crumbCache && (Date.now() - _crumbCache.at) < 25 * 60 * 1000) return _crumbCache;
@@ -47,7 +69,7 @@ async function getCrumb() {
   _crumbCache = { cookie, crumb, at: Date.now() };
   return _crumbCache;
 }
-async function fetchNext(symbol, cr) {
+async function fetchNextYahoo(symbol, cr) {
   if (!cr) return null;
   const u = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=calendarEvents&crumb=${encodeURIComponent(cr.crumb)}`;
   const r = await fetchGuard(u, 8000, { Cookie: cr.cookie });
