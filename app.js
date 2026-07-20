@@ -1527,14 +1527,25 @@ function _diffDays(a, b) { const da = _parseYmd(a), db = _parseYmd(b); if (!da |
 function fmtEarnMD(ymd) { const d = _parseYmd(ymd); return d ? `${d.getMonth() + 1}/${d.getDate()}` : ''; }   // 8/6
 function fmtEarnYMD(ymd) { const d = _parseYmd(ymd); return d ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '-'; } // 2026/8/6
 
-// 決算日の整理: prev(実績) / 確定予定(confirmedNext) / 推定(estNext=前回+3ヶ月)
+// 決算間隔（月）。直近2回の決算日 prev2→prev の間隔から四半期(3)/半期(6)/通期(12)を推定。既定は四半期(3)。
+function _monthsBetween(a, b) { const da = _parseYmd(a), db = _parseYmd(b); if (!da || !db) return null; return (db.getFullYear() - da.getFullYear()) * 12 + (db.getMonth() - da.getMonth()); }
+function earnCadence(e) {
+  if (e && e.prev && e.prev2) { const mo = _monthsBetween(e.prev2, e.prev); if (mo != null && mo >= 1) { if (mo <= 4) return 3; if (mo <= 8) return 6; return 12; } }
+  return 3; // 既定は四半期
+}
+// 決算日の整理: prev(実績) / 確定予定(confirmedNext) / 推定(estNext=前回+決算間隔)。
+// 推定は「決算間隔+1ヶ月」を過ぎても発表が来ない＝間隔判定が外れ／不定期決算なので無効化（半期銘柄がソート上位に残り続けるのを防ぐ）。
 function earnInfo(sec) {
   const e = earnOf(sec);
   if (!e) return null;
   const prev = e.prev || null;
   const confirmedNext = (e.next && !e.nextEstimate) ? e.next : null; // Yahoo確定の予定日のみ「予定日」扱い
-  const estNext = confirmedNext ? null : (prev ? _addMonths(prev, 3) : (e.next || null)); // 予定日が無ければ 前回+3ヶ月 を推定
-  return { prev, confirmedNext, estNext };
+  let estNext = null;
+  if (!confirmedNext) {
+    const raw = prev ? _addMonths(prev, earnCadence(e)) : (e.next || null); // 予定日が無ければ 前回+決算間隔 を推定
+    if (raw && _diffDays(_todayYmd(), raw) >= -31) estNext = raw; // 推定日を1ヶ月以上過ぎたら「わからない」扱い
+  }
+  return { prev, prev2: e.prev2 || null, confirmedNext, estNext };
 }
 // 銘柄名の横／上部に出すラベル。近い決算・直近発表のときだけ返す（無ければ null）。
 //   { text, cls, sub }  cls: earn-soon(予定) / earn-done(発表) / earn-est(ごろ)
@@ -1546,8 +1557,8 @@ function earnLabel(sec) {
   if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' }; }
   // 2) 確定した次回予定日が近い（予定日の1週間前～当日）
   if (confirmedNext) { const g = _diffDays(today, confirmedNext); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(confirmedNext)}予定`, cls: 'earn-soon' }; }
-  // 3) 推定（前回+3ヶ月）が近い（2週間前～。実開示が来るまで ごろ 表示。推定時は前回決算日も併記）
-  if (estNext) { const g = _diffDays(today, estNext); if (g !== null && g >= -14 && g <= 45) return { text: `${fmtEarnMD(estNext)}ごろ`, cls: 'earn-est', sub: prev ? `前回${fmtEarnMD(prev)}` : '' }; }
+  // 3) 推定が近い（推定予定日の【2週間前】～当日）。推定時は前回決算日も併記
+  if (estNext) { const g = _diffDays(today, estNext); if (g !== null && g >= 0 && g <= 14) return { text: `${fmtEarnMD(estNext)}ごろ`, cls: 'earn-est', sub: prev ? `前回${fmtEarnMD(prev)}` : '' }; }
   return null;
 }
 // ラベルのHTML（一覧の銘柄名の横・上部共通）。size='sm' は一覧用の小型。
@@ -1561,8 +1572,10 @@ function earnPrevText(sec) { const i = earnInfo(sec); return i && i.prev ? fmtEa
 function earnNextText(sec) { const i = earnInfo(sec); return i && i.confirmedNext ? fmtEarnYMD(i.confirmedNext) : '-'; }
 // 次回決算の「実効日」（確定予定＞推定）。列・上部表示・ソート用。{ date, kind:'予定'|'ごろ' } or null
 function earnEffNext(sec) { const i = earnInfo(sec); if (!i) return null; if (i.confirmedNext) return { date: i.confirmedNext, kind: '予定' }; if (i.estNext) return { date: i.estNext, kind: 'ごろ' }; return null; }
-// 詳細ドロワー・カルテ上部の決算日表示（株探風の日付テキスト。ラベル/ピルにはしない）
+// 詳細ドロワー・カルテ上部の決算日表示（株探風の日付テキスト。ラベル/ピルにはしない）。
+// 上部に出すのは「決算が近い or 直近に発表があった」ときだけ（それ以外は下の決算情報セクションで確認）。
 function earnTopHtml(sec) {
+  if (!earnLabel(sec)) return '';
   const i = earnInfo(sec); if (!i) return '';
   const eff = earnEffNext(sec);
   const prevS = i.prev ? fmtEarnYMD(i.prev) : '-';
@@ -1779,7 +1792,7 @@ const api = {
       if (!res) continue;
       for (const [sym, d] of Object.entries(res)) {
         const k = keyBySym.get(sym); if (!k) continue;
-        store.data.earnings[k] = { next: d.next || null, nextEstimate: !!d.nextEstimate, exDiv: d.exDiv || null, prev: d.prev || null, at: td };
+        store.data.earnings[k] = { next: d.next || null, nextEstimate: !!d.nextEstimate, exDiv: d.exDiv || null, prev: d.prev || null, prev2: d.prev2 || null, at: td };
       }
     }
     store.save();

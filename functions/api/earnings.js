@@ -21,7 +21,8 @@ export async function onRequestGet(context) {
       next: next ? next.date : null,
       nextEstimate: next ? !!next.estimate : null,
       exDiv: next ? next.exDiv : null,
-      prev: prev || null,
+      prev: prev ? prev.prev : null,
+      prev2: prev ? prev.prev2 : null, // 直近2回目の決算日（決算間隔＝四半期/半期/通期の推定に使う）
     };
   }));
   return json(out);
@@ -66,49 +67,55 @@ async function fetchPrev(symbol) {
   if (/\.T$/i.test(symbol)) return prevJp(symbol.replace(/\.T$/i, ''));
   return prevUs(symbol);
 }
-// JP: TDnet の「決算短信」（四半期/通期）の最新 pubdate。業績修正・配当・自己株は除外して「決算そのもの」を拾う。
+// JP: TDnet の「決算短信」（四半期/通期）の直近2回の pubdate。業績修正・配当・自己株は除外して「決算そのもの」を拾う。
 async function prevJp(code) {
   const c = String(code || '').trim();
-  if (!/^[0-9A-Za-z]{4}$/.test(c)) return null;
-  const u = `https://webapi.yanoshin.jp/webapi/tdnet/list/${encodeURIComponent(c)}.json?limit=20`;
+  if (!/^[0-9A-Za-z]{4}$/.test(c)) return { prev: null, prev2: null };
+  const u = `https://webapi.yanoshin.jp/webapi/tdnet/list/${encodeURIComponent(c)}.json?limit=30`;
   const r = await fetchGuard(u, 8000);
-  if (!r.ok) return null;
+  if (!r.ok) return { prev: null, prev2: null };
   const data = await r.json().catch(() => null);
   const items = (data && data.items) || [];
-  let best = null;
+  const dates = [];
   for (const w of items) {
     const t = w.Tdnet || w;
     const title = t.title || '';
-    if (!/決算短信/.test(title)) continue; // 決算短信のみ（業績修正・配当予想の修正・月次は除外）
+    if (!/決算短信/.test(title) || /訂正/.test(title)) continue; // 決算短信のみ（訂正・業績修正・配当・月次は除外）
     const iso = isoOf(t.pubdate);
-    const dt = iso ? iso.slice(0, 10) : null;
-    if (dt && (!best || dt > best)) best = dt;
+    if (iso) dates.push(iso.slice(0, 10));
   }
-  return best;
+  return topTwo(dates);
 }
-// US: EDGAR の最新の決算書類の提出日。8-K/Form4 等が多い銘柄(例 MSFT)だと一括取得では決算書類が
-// 取得窓の外に押し出されるため、決算に相当する書式を種別指定(type=)で直接引き、最も新しい日付を採用する。
-// 10-Q/10-K（米国企業）＋ 6-K/20-F（外国企業ADR）をカバー。
+// US: EDGAR の決算書類の直近2回の提出日。8-K/Form4 等が多い銘柄(例 MSFT)だと一括取得では決算書類が
+// 取得窓の外に押し出されるため、決算に相当する書式を種別指定(type=)で直接引く。
+// 10-Q/10-K（米国企業）＋ 6-K（外国企業ADR＝半期決算が多い）をカバー。各書式2件ずつ取り、新しい順に上位2つ。
 async function prevUs(ticker) {
   const t = String(ticker || '').trim().toUpperCase();
-  if (!/^[A-Z.\-]{1,8}$/.test(t)) return null;
-  const forms = ['10-Q', '10-K', '6-K']; // 米国=10-Q/10-K、外国ADR=6-K。20-Fは頻度低のため省きサブリクエストを節約
-  const dates = await Promise.all(forms.map(f => edgarLatestDate(t, f).catch(() => null)));
-  let best = null;
-  for (const d of dates) if (d && (!best || d > best)) best = d;
-  return best;
+  if (!/^[A-Z.\-]{1,8}$/.test(t)) return { prev: null, prev2: null };
+  const forms = ['10-Q', '10-K', '6-K'];
+  const per = await Promise.all(forms.map(f => edgarDates(t, f, 2).catch(() => [])));
+  return topTwo([].concat(...per));
 }
-async function edgarLatestDate(ticker, type) {
-  const u = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(ticker)}&type=${encodeURIComponent(type)}&count=1&output=atom`;
+async function edgarDates(ticker, type, count) {
+  const u = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(ticker)}&type=${encodeURIComponent(type)}&count=${count}&output=atom`;
   // SEC EDGAR は User-Agent に連絡先が必要。既存の disclosure.js と同じヘッダに合わせる。
   const r = await fetchGuard(u, 8000, { 'User-Agent': 'securities-manager/1.0 (contact: mutenka1000@gmail.com)', 'Accept': 'application/json, application/atom+xml, */*' });
-  if (!r.ok) return null;
+  if (!r.ok) return [];
   const xml = await r.text();
-  const c = (xml.match(/<entry>([\s\S]*?)<\/entry>/) || [])[1] || '';
-  const form = (c.match(/term="([^"]+)"/) || [])[1] || (c.match(/<filing-type>([^<]+)<\/filing-type>/) || [])[1] || '';
-  if (!form || form.replace(/\/A$/, '') !== type) return null; // 種別指定でも別書式が返ることがあるので照合
-  const date = (c.match(/<filing-date>([^<]+)<\/filing-date>/) || [])[1] || (c.match(/<updated>([^<]+)<\/updated>/) || [])[1] || '';
-  return date ? String(date).slice(0, 10) : null;
+  const out = []; const re = /<entry>([\s\S]*?)<\/entry>/g; let m;
+  while ((m = re.exec(xml))) {
+    const c = m[1];
+    const form = (c.match(/term="([^"]+)"/) || [])[1] || (c.match(/<filing-type>([^<]+)<\/filing-type>/) || [])[1] || '';
+    if (!form || form.replace(/\/A$/, '') !== type) continue; // 種別指定でも別書式が返ることがあるので照合
+    const date = (c.match(/<filing-date>([^<]+)<\/filing-date>/) || [])[1] || (c.match(/<updated>([^<]+)<\/updated>/) || [])[1] || '';
+    if (date) out.push(String(date).slice(0, 10));
+  }
+  return out;
+}
+// 日付配列から新しい順に上位2つ（重複除去）
+function topTwo(dates) {
+  const uniq = [...new Set((dates || []).filter(Boolean))].sort((a, b) => a < b ? 1 : -1);
+  return { prev: uniq[0] || null, prev2: uniq[1] || null };
 }
 
 // ---------- 共通 ----------
