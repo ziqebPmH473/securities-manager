@@ -297,6 +297,7 @@ const store = {
     this.data.securities ||= [];
     this.data.holdings ||= [];
     this.data.transactions ||= [];
+    this.data.acqLedger ||= [];       // 取得円台帳（米国株・外国株式等取引報告書の明細。取引履歴とは独立）
     // rules は空配列だと既定ルールを失い、後段の rules[0].isDefault で落ちる。
     // 同期マージの削除伝播で空配列が Drive に書かれた場合も含め、空/不正なら既定を再シード（自己修復）
     if (!Array.isArray(this.data.rules) || this.data.rules.length === 0) this.data.rules = [structuredClone(DEFAULT_RULE)];
@@ -418,7 +419,7 @@ const store = {
   },
   seed() {
     return {
-      securities: [], holdings: [], transactions: [],
+      securities: [], holdings: [], transactions: [], acqLedger: [],
       rules: [structuredClone(DEFAULT_RULE)],
       categories: structuredClone(DEFAULT_CATEGORIES),
       investCategories: structuredClone(DEFAULT_INVEST_CATEGORIES),
@@ -625,6 +626,23 @@ const store = {
     if (settleJpy == null) delete t.settleJpy; else t.settleJpy = settleJpy;
     this.touch(t);
     return true;
+  },
+
+  // ===== 取得円台帳（acqLedger） =====
+  // 外国株式等取引報告書の明細を [ティッカー×証券会社×口座] キーで蓄積する台帳（取得円の正本）。
+  // 取引履歴(transactions)とは完全に独立（前回購入日・購入回数・買い増し判定に影響しない）。
+  // 「反映」で acqLedgerCompute の計算結果を保有の取得円(acqJpy)へ差分確認つきで書き込む。
+  addAcqLedgerRows(rows) {
+    for (const r of rows) { r.id = this.nextId(); this.touch(r); this.data.acqLedger.push(r); }
+    this.save();
+    return rows.length;
+  },
+  updateAcqLedgerRow(id, patch) {
+    const r = this.data.acqLedger.find(x => x.id === id); if (!r) return;
+    Object.assign(r, patch); this.touch(r); this.save();
+  },
+  removeAcqLedgerRow(id) {
+    this.data.acqLedger = this.data.acqLedger.filter(x => x.id !== id); this.save();
   },
 
   // rules
@@ -7334,6 +7352,16 @@ function renderImport() {
         <p class="muted grp-note">1銘柄分の過去の売買明細（日付・種別・数量・単価…）を貼り付けて一括登録。<strong>「保有に反映しない（履歴のみ）」を既定ON</strong>にしてあるので、現在の保有数量・平均取得単価を崩さず過去履歴を入れられます（前回購入日・購入回数・判定には反映）。</p>
         <p class="muted grp-note">「受渡金額(円)を一括上書き」＝記録時に空欄にした受渡金額(円)を、取引報告書を貼り付けて<strong>既存の取引にまとめて反映</strong>。<strong>銘柄×日付×種別×数量×証券会社×口座</strong>が一致した取引にだけ書き込みます（一致なし・複数一致はスキップ）。</p>
       </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>⑤ 取得円台帳（米国株・外国株式等取引報告書）</h2></div>
+      <div class="section-body" style="padding:16px">
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="openAcqLedger()">台帳を開く（取込・反映・編集）</button>
+        </div>
+        <p class="muted grp-note">外国株式等取引報告書（ChatGPT等で表に整形）を貼り付けて<strong>取得円台帳</strong>に蓄積し、「保有へ反映」で保有の「取得円」を更新します（<strong>差分を確認してから上書き・自動では変えません</strong>）。取引履歴・購入回数・前回購入日には影響しません。買い=受渡金額(円)を加算 / 売り=取得円を売却割合で按分減算。証券会社ごとの取込済み最新日付・株数の整合性チェックつき。</p>
+        ${(() => { const s = acqLedgerBrokerSummary(); const ks = Object.keys(s); return ks.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">${ks.map(b => `<span class="tag">${esc(b)}: ${esc(s[b].latest || '—')}（${s[b].count}件）</span>`).join('')}</div>` : ''; })()}
+      </div>
     </div>`;
 }
 
@@ -7584,6 +7612,436 @@ function runTxnSettleImport() {
   const bad = infos.filter(x => x.status === 'bad').length;
   closeModal();
   reportImport([...touched], `受渡金額(円)一括上書き: 更新 ${updated}件${nomatch ? ` / 未一致 ${nomatch}` : ''}${multi ? ` / 複数一致 ${multi}` : ''}${bad ? ` / 不備 ${bad}` : ''}（一致なし・複数一致はスキップ）`);
+}
+
+// ---------- 取得円台帳（米国株・外国株式等取引報告書） ----------
+// 取得円(acqJpy)の正本となる台帳。[ティッカー×証券会社×口座] キーで報告書の明細を蓄積し、
+// 「反映」で保有の取得円へ書き込む（差分を一覧表示して確認・自動では上書きしない）。
+// 取引履歴(transactions)とは完全に独立（前回購入日・購入回数・買い増し判定に影響しない）。
+// 重複対策: 約定番号が無いため、署名（ティッカー|会社|口座|日付|種別|数量|金額）の件数比較
+// （台帳 vs 貼付データ）で既取込ぶんをスキップ予定にし、プレビューのチェックで強制取込/除外できる。
+// 整合性: 台帳を再生した株数と保有の株数を比較（取込プレビュー・反映画面・台帳画面の3か所）。
+
+function acqLedgerSig(r) {
+  return [String(r.ticker || '').toUpperCase(), r.broker || '', r.accountType || '', r.date || '', r.type || '', r.quantity ?? '', r.amountJpy ?? ''].join('|');
+}
+// 台帳をキーごとに日付順で再生し、取得円・株数を算出。買い=受渡金額(円)加算 / 売り=按分減算（全売却で0）
+function acqLedgerCompute(ledger) {
+  const rows = (ledger || []).slice().sort((a, b) => ((a.date || '') < (b.date || '')) ? -1 : ((a.date || '') > (b.date || '')) ? 1 : ((a.id || 0) - (b.id || 0)));
+  const byKey = new Map();
+  for (const r of rows) {
+    const key = `${String(r.ticker || '').toUpperCase()}|${r.broker}|${r.accountType}`;
+    let st = byKey.get(key);
+    if (!st) { st = { acqJpy: 0, qty: 0, lastDate: null, count: 0 }; byKey.set(key, st); }
+    const q = r.quantity || 0;
+    if (r.type === 'buy') { st.acqJpy += (r.amountJpy || 0); st.qty += q; }
+    else if (st.qty > 1e-12) {
+      const removed = Math.min(q, st.qty);
+      st.acqJpy -= st.acqJpy * (removed / st.qty);
+      st.qty -= removed;
+      if (Math.abs(st.acqJpy) < 1e-6) st.acqJpy = 0;
+      if (st.qty < 1e-12) st.qty = 0;
+    }
+    st.count++;
+    if (r.date && (!st.lastDate || r.date > st.lastDate)) st.lastDate = r.date;
+  }
+  return byKey;
+}
+// 貼付データの各行に dup(取込済み判定) を付ける。署名ごとに「台帳内の件数」までをスキップ予定にする
+// （＝同じ報告書の再貼付は増えない・本当に同一の取引が複数ある場合は超過分だけ新規になる）。
+function acqLedgerDedupe(parsed, ledger) {
+  const existing = {};
+  for (const r of ledger || []) { const s = acqLedgerSig(r); existing[s] = (existing[s] || 0) + 1; }
+  const seen = {};
+  return parsed.map(r => { const s = acqLedgerSig(r); seen[s] = (seen[s] || 0) + 1; return { ...r, dup: seen[s] <= (existing[s] || 0) }; });
+}
+// 証券会社ごとの台帳サマリー（取込済みデータの最新日付＝データ内の日付・件数）
+function acqLedgerBrokerSummary() {
+  const map = {};
+  for (const r of store.data.acqLedger || []) {
+    const b = r.broker || '—';
+    const m = (map[b] = map[b] || { latest: null, count: 0 });
+    m.count++;
+    if (r.date && (!m.latest || r.date > m.latest)) m.latest = r.date;
+  }
+  return map;
+}
+// 株数の整合性チェック: 台帳を全再生した株数 vs 現在の保有の株数（キーごと）。
+// 不一致＝取込データの欠落/誤り か 保有側の誤り（どちらかをすみぽんが判断して直す）。
+function acqLedgerQtyCheck(comp) {
+  const out = [];
+  for (const [key, st] of comp) {
+    const [tk, broker, account] = key.split('|');
+    const sec = store.findSecurity('US', tk);
+    const h = sec ? store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account) : null;
+    const holdQty = h ? (h.quantity || 0) : 0;
+    out.push({ key, tk, broker, account, sec, h, ledgerQty: st.qty, holdQty, ok: Math.abs(st.qty - holdQty) < 1e-6, secMissing: !sec, holdMissing: !h });
+  }
+  return out;
+}
+function alFmtQty(q) { return String(Math.round((q || 0) * 1e6) / 1e6); }
+// 整合性チェックの共通テーブル（取込プレビュー・台帳画面で共用）
+function alQtyCheckTable(checks) {
+  if (!checks.length) return '<p class="muted">チェック対象がありません。</p>';
+  const bad = checks.filter(c => !c.ok);
+  const rows = checks.map(c => `<tr>
+    <td class="l">${c.ok ? '<span class="pos">○ 一致</span>' : '<span class="neg">× 不一致</span>'}</td>
+    <td class="l">${esc(c.tk)}</td><td class="l">${esc(c.broker)}/${esc(c.account)}</td>
+    <td>${alFmtQty(c.ledgerQty)}</td>
+    <td>${c.holdMissing ? '<span class="muted">保有なし</span>' : alFmtQty(c.holdQty)}</td>
+    <td class="l muted" style="font-size:11px">${c.secMissing ? '銘柄未登録' : c.ok ? '' : '取込データの欠落/誤り か 保有側の誤り。要確認'}</td></tr>`).join('');
+  return `<div class="table-wrap" style="max-height:22vh"><table class="dense"><thead><tr><th class="l">判定</th><th class="l">ティッカー</th><th class="l">会社/口座</th><th>台帳の株数</th><th>保有の株数</th><th class="l">備考</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${bad.length ? `<p class="muted" style="font-size:12px;margin:4px 0 0">不一致 ${bad.length}件。<strong>取込データが誤っているなら取込しない</strong>（過去分の欠落なら過去分も取込）。保有側が誤っているなら保有を修正してください。</p>` : ''}`;
+}
+
+// 洗い替えで消える保有の手入力系フィールド（取得円・投信評価額・売却前購入額）を退避し、
+// 取込後に再作成された同一キーの保有へ復元する（取込データ自身が同項目を持つ場合は上書きしない）。
+// これで「取得円列が無い証券会社のCSVで洗い替え→取得円が毎回消える」を防ぐ。
+function snapshotHoldingExtras(holdings) {
+  const map = {};
+  for (const h of holdings) {
+    const s = store.data.securities.find(x => x.id === h.securityId);
+    if (!s) continue;
+    const ex = {};
+    if (h.acqJpy != null) ex.acqJpy = h.acqJpy;
+    if (h.evalJpy != null) ex.evalJpy = h.evalJpy;
+    if (h.origBuyAmount != null) ex.origBuyAmount = h.origBuyAmount;
+    if (Object.keys(ex).length) map[`${s.market}:${String(s.ticker || '').toUpperCase()}|${h.broker}|${h.accountType}`] = ex;
+  }
+  return map;
+}
+function restoreHoldingExtras(map) {
+  let n = 0;
+  for (const key of Object.keys(map || {})) {
+    const [mkTk, broker, account] = key.split('|');
+    const ci = mkTk.indexOf(':');
+    const sec = store.findSecurity(mkTk.slice(0, ci), mkTk.slice(ci + 1)); if (!sec) continue;
+    const h = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
+    if (!h) continue;
+    let changed = false;
+    for (const f of ['acqJpy', 'evalJpy', 'origBuyAmount']) {
+      if (map[key][f] != null && h[f] == null) { h[f] = map[key][f]; changed = true; }
+    }
+    if (changed) { store.touch(h); n++; }
+  }
+  return n;
+}
+
+// ----- 台帳画面（一覧・編集・整合性チェック） -----
+let _alFilterBroker = '';
+function openAcqLedger() {
+  showModal('取得円台帳（米国株）', `
+    <p class="muted" style="margin:0 0 8px">外国株式等取引報告書の明細を蓄積し、［保有へ反映］で保有の「取得円」を更新します（差分を確認してから上書き・自動では変えません）。取引履歴・購入回数・前回購入日には影響しません。</p>
+    <div id="al-summary"></div>
+    <div class="btn-row" style="margin:10px 0">
+      <button class="btn btn-primary" onclick="openAcqLedgerImport()">報告書を取込…</button>
+      <button class="btn btn-primary" onclick="openAcqLedgerApply()">保有へ反映…</button>
+      <button class="btn" onclick="openAcqLedgerEdit()">行を追加</button>
+      <button class="btn" onclick="alToggleManageCheck()">株数チェック</button>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="closeModal()">閉じる</button>
+    </div>
+    <div id="al-check"></div>
+    <div id="al-table"></div>`, { wide: true });
+  alRenderSummary(); alRenderTable();
+}
+function alRenderSummary() {
+  const el = document.getElementById('al-summary'); if (!el) return;
+  const sum = acqLedgerBrokerSummary();
+  const keys = Object.keys(sum);
+  el.innerHTML = keys.length
+    ? `<div class="grp-label">取込済みデータの最新日付（証券会社ごと・データ内の日付）</div>
+       <div style="display:flex;gap:12px;flex-wrap:wrap;margin:4px 0 2px">${keys.map(b => `<span class="tag" title="件数 ${sum[b].count}件">${esc(b)}: <strong>${esc(sum[b].latest || '—')}</strong>（${sum[b].count}件）</span>`).join('')}</div>
+       <p class="muted" style="font-size:12px;margin:4px 0 0">この日付より後の報告書から取込すればOK（期間が重複しても件数比較でスキップ予定になります）。</p>`
+    : `<p class="muted">台帳はまだ空です。「報告書を取込…」から始めてください。</p>`;
+}
+function alRenderTable() {
+  const el = document.getElementById('al-table'); if (!el) return;
+  const brokers = [...new Set((store.data.acqLedger || []).map(r => r.broker || '—'))];
+  let rows = (store.data.acqLedger || []).slice().sort((a, b) => ((a.date || '') < (b.date || '')) ? 1 : ((a.date || '') > (b.date || '')) ? -1 : ((b.id || 0) - (a.id || 0)));
+  if (_alFilterBroker) rows = rows.filter(r => (r.broker || '—') === _alFilterBroker);
+  const filterSel = brokers.length > 1 ? `<select onchange="alSetFilter(this.value)"><option value="">全証券会社</option>${brokers.map(b => `<option ${b === _alFilterBroker ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>` : '';
+  const body = rows.map(r => `<tr>
+    <td class="l">${esc(r.date || '—')}</td>
+    <td class="l">${r.type === 'buy' ? '買' : '売'}</td>
+    <td class="l">${esc(r.ticker || '')}</td>
+    <td>${r.quantity != null ? esc(alFmtQty(r.quantity)) : '—'}</td>
+    <td>${r.amountJpy != null ? '¥' + num(Math.round(r.amountJpy)) : '—'}</td>
+    <td class="l">${esc(r.broker || '—')}/${esc(r.accountType || '—')}</td>
+    <td class="l nowrap"><button class="btn btn-sm" onclick="openAcqLedgerEdit(${r.id})">編集</button>
+      <button class="btn btn-sm btn-danger" onclick="alRemoveRow(${r.id})">削除</button></td>
+  </tr>`).join('');
+  el.innerHTML = `${filterSel ? `<div style="display:flex;justify-content:flex-end;margin:4px 0">${filterSel}</div>` : ''}
+    <div class="table-wrap" style="max-height:44vh"><table class="dense no-rowclick" style="width:100%"><thead><tr><th class="l">日付</th><th class="l">種別</th><th class="l">ティッカー</th><th>数量</th><th>受渡金額(円)</th><th class="l">会社/口座</th><th class="l">操作</th></tr></thead><tbody>${body || `<tr><td colspan="7" class="muted l">該当なし</td></tr>`}</tbody></table></div>`;
+}
+function alSetFilter(v) { _alFilterBroker = v; alRenderTable(); }
+function alRemoveRow(id) {
+  if (!confirm('この台帳行を削除します。よろしいですか？\n（反映済みの保有の取得円はすぐには変わりません。次回の「保有へ反映」で再計算されます）')) return;
+  store.removeAcqLedgerRow(id);
+  alRenderSummary(); alRenderTable();
+  const chk = document.getElementById('al-check'); if (chk && chk.innerHTML) { chk.innerHTML = ''; alToggleManageCheck(); }
+}
+function alToggleManageCheck() {
+  const el = document.getElementById('al-check'); if (!el) return;
+  if (el.innerHTML) { el.innerHTML = ''; return; }
+  const checks = acqLedgerQtyCheck(acqLedgerCompute(store.data.acqLedger || []));
+  el.innerHTML = `<div class="grp-label">株数の整合性チェック（台帳の再生結果 vs 現在の保有）</div>${alQtyCheckTable(checks)}`;
+}
+// 台帳行の追加・編集フォーム
+function openAcqLedgerEdit(id) {
+  const r = id != null ? (store.data.acqLedger || []).find(x => x.id === id) : null;
+  showModal(r ? '台帳行を編集' : '台帳行を追加', `
+    <form id="al-edit-form">
+      <div class="row">
+        <div class="field"><label>日付（約定日）</label><input name="date" type="date" value="${r ? (r.date || '') : today()}" required></div>
+        <div class="field"><label>種別</label><select name="type"><option value="buy" ${!r || r.type === 'buy' ? 'selected' : ''}>買い</option><option value="sell" ${r && r.type === 'sell' ? 'selected' : ''}>売り</option></select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>ティッカー（米国株）</label><input name="ticker" value="${r ? esc(r.ticker || '') : ''}" style="text-transform:uppercase" required></div>
+        <div class="field"><label>数量（端株可）</label><input name="quantity" type="number" step="any" value="${r ? (r.quantity ?? '') : ''}" required></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>受渡金額(円)（買いは必須・売りは任意）</label><input name="amountJpy" type="number" step="any" value="${r ? (r.amountJpy ?? '') : ''}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>証券会社</label><select name="broker">${BROKERS.map(b => `<option ${r && r.broker === b ? 'selected' : ''}>${b}</option>`).join('')}</select></div>
+        <div class="field"><label>口座種別</label><select name="accountType">${ACCOUNTS.map(a => `<option ${r && r.accountType === a ? 'selected' : ''}>${a}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn" onclick="openAcqLedger()">キャンセル</button>
+        <button type="submit" class="btn btn-primary">${r ? '更新' : '追加'}</button>
+      </div>
+    </form>`);
+  document.getElementById('al-edit-form').onsubmit = (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    const amt = f.amountJpy.value.trim() === '' ? null : (parseFloat(f.amountJpy.value) || 0);
+    const patch = {
+      date: f.date.value, type: f.type.value, ticker: f.ticker.value.trim().toUpperCase(),
+      quantity: parseFloat(f.quantity.value) || 0, amountJpy: amt,
+      broker: f.broker.value, accountType: f.accountType.value,
+    };
+    if (!patch.ticker || !patch.date || !patch.quantity) { toast('日付・ティッカー・数量は必須です'); return; }
+    if (patch.type === 'buy' && patch.amountJpy == null) { toast('買いは受渡金額(円)が必須です'); return; }
+    if (r) store.updateAcqLedgerRow(r.id, patch); else store.addAcqLedgerRows([patch]);
+    openAcqLedger();
+    toast(r ? '台帳行を更新しました' : '台帳行を追加しました');
+  };
+}
+
+// ----- 報告書の取込（貼付＋列マッピング＋重複プレビュー＋株数チェック） -----
+const AL_FIELDS = [
+  { key: 'date', label: '日付（約定日）', req: true },
+  { key: 'type', label: '種別(買/売)', req: true },
+  { key: 'ticker', label: 'ティッカー', req: true },
+  { key: 'quantity', label: '数量', req: true },
+  { key: 'amountJpy', label: '受渡金額(円)', req: true },
+  { key: 'broker', label: '証券会社', req: true },
+  { key: 'accountType', label: '口座', req: true },
+];
+const AL_FIXED_KEYS = ['type', 'broker', 'accountType'];
+const AL_AUTOMAP = {
+  '日付': 'date', '約定日': 'date', '取引日': 'date', '受渡日': 'date',
+  '種別': 'type', '売買': 'type', '売買区分': 'type', '取引区分': 'type', '取引': 'type',
+  'ティッカー': 'ticker', 'コード': 'ticker', '銘柄コード': 'ticker', 'シンボル': 'ticker', '銘柄': 'ticker',
+  '数量': 'quantity', '株数': 'quantity', '約定数量': 'quantity', '約定株数': 'quantity',
+  '受渡金額(円)': 'amountJpy', '受渡金額（円）': 'amountJpy', '受渡金額': 'amountJpy', '国内受渡金額': 'amountJpy', '受取金額(円)': 'amountJpy', '受取金額': 'amountJpy',
+  '証券会社': 'broker', '口座': 'accountType', '口座種別': 'accountType',
+};
+const AL_GPT_PROMPT = '添付した外国株式等取引報告書PDF（複数可）の全取引を、1取引=1行のタブ区切りの表にしてください。\n列の順: 約定日\t種別\tティッカー\t数量\t受渡金額(円)\t証券会社\t口座\n・約定日は YYYY-MM-DD 形式\n・種別は「買」または「売」\n・数量は株数（小数はそのまま）\n・受渡金額(円)は円貨の受渡金額（カンマなしの数値）\n・口座は 特定/一般/NISA のいずれか\n・1行目にヘッダ行を付ける。表以外の文章は出力しない';
+let _alHeaders = [], _alRows = [], _alMapping = [], _alParsed = [];
+function openAcqLedgerImport() {
+  _alHeaders = []; _alRows = []; _alMapping = []; _alParsed = [];
+  showModal('取得円台帳へ取込（外国株式等取引報告書）', `
+    <p class="muted" style="margin:0 0 8px">報告書（複数まとめて可・過去データ可）を表に整形して貼り付け→列を割当→プレビューで確認して取込。<strong>取込済みと判定した行は自動でチェックが外れます</strong>（署名の件数比較）。チェックの付け外しで最終決定できます。この画面では台帳に貯めるだけで、保有の取得円は変わりません（変更は「保有へ反映」で確認してから）。</p>
+    <details style="margin:0 0 8px"><summary class="muted" style="cursor:pointer">ChatGPTでPDFを整形する場合の指示文（コピーして使用）</summary>
+      <textarea id="al-gpt" rows="8" readonly style="width:100%;font-family:monospace;font-size:11px">${esc(AL_GPT_PROMPT)}</textarea>
+      <button class="btn btn-sm" style="margin-top:4px" onclick="alCopyPrompt()">指示文をコピー</button></details>
+    <textarea id="al-text" rows="6" style="width:100%;font-family:monospace;font-size:12px" placeholder="ヘッダ行を含めて貼り付け（タブ/カンマ/マークダウン表対応）" oninput="alParse(this.value)"></textarea>
+    <div id="al-map"></div>
+    <div class="grp-label" style="margin-top:8px">列に無い項目を固定値で指定（全行に適用・任意）</div>
+    <div class="btn-row" style="align-items:flex-end">
+      <div class="field" style="width:auto"><label style="font-size:11px">種別</label>
+        <select id="al-fix-type" onchange="alRenderPreview()"><option value="">―</option><option value="buy">買い</option><option value="sell">売り</option></select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">証券会社</label>
+        <select id="al-fix-broker" onchange="alRenderPreview()"><option value="">―</option>${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">口座</label>
+        <select id="al-fix-accountType" onchange="alRenderPreview()"><option value="">―</option>${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
+    </div>
+    <div id="al-preview"></div>
+    <div id="al-qty-check"></div>
+    <div class="btn-row" style="margin-top:10px">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="openAcqLedger()">戻る</button>
+      <button class="btn btn-primary" onclick="runAcqLedgerImport()">チェックした行を台帳へ取込</button>
+    </div>`, { wide: true });
+}
+function alCopyPrompt() {
+  const t = document.getElementById('al-gpt'); if (!t) return;
+  t.select(); t.setSelectionRange(0, 99999);
+  try { navigator.clipboard.writeText(t.value); } catch (_) { try { document.execCommand('copy'); } catch (_) {} }
+  toast('指示文をコピーしました');
+}
+function alFixedValues() {
+  const f = {};
+  for (const k of AL_FIXED_KEYS) { const e = document.getElementById('al-fix-' + k); if (e && e.value) f[k] = e.value; }
+  return f;
+}
+function alParse(text) {
+  const mdLines = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+  const raw = isMdTable(mdLines)
+    ? mdLines.filter(l => !isMdSepRow(l)).map(splitMdRow)
+    : (text.includes('\t') ? text.split(/\r?\n/).map(l => l.split('\t')) : parseCsvText(text));
+  const rows = raw.filter(r => r.some(c => String(c).trim() !== ''));
+  const mapDiv = document.getElementById('al-map'), pvDiv = document.getElementById('al-preview');
+  if (!rows.length) { _alHeaders = []; _alRows = []; _alMapping = []; _alParsed = []; if (mapDiv) mapDiv.innerHTML = ''; if (pvDiv) pvDiv.innerHTML = ''; const qc = document.getElementById('al-qty-check'); if (qc) qc.innerHTML = ''; return; }
+  _alHeaders = rows[0].map(h => String(h).trim());
+  _alRows = rows.slice(1);
+  _alMapping = _alHeaders.map(h => AL_AUTOMAP[h] || '');
+  alRenderMap();
+}
+function alRenderMap() {
+  const opts = (sel) => `<option value="">（取込まない）</option>` + AL_FIELDS.map(f => `<option value="${f.key}" ${sel === f.key ? 'selected' : ''}>${esc(f.label)}${f.req ? ' *' : ''}</option>`).join('');
+  const items = _alHeaders.map((h, i) => `<div class="field" style="min-width:150px;flex:0 0 auto">
+    <label style="font-size:11px">${esc(h || '(空欄)')}</label>
+    <select onchange="alSetMap(${i}, this.value)">${opts(_alMapping[i])}</select></div>`).join('');
+  document.getElementById('al-map').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0">${items}</div>`;
+  alRenderPreview();
+}
+function alSetMap(i, v) { _alMapping[i] = v; alRenderPreview(); }
+// 1行を解析。status: ok / bad（必須欠落・形式NG）。ok でも銘柄未登録は note を付ける（取込は可・反映時に必要）
+function alResolveRow(row, fixed) {
+  const rec = {};
+  _alMapping.forEach((f, i) => { if (f) rec[f] = row[i] != null ? String(row[i]).trim() : ''; });
+  for (const k of AL_FIXED_KEYS) { if (fixed[k] && (rec[k] == null || rec[k] === '')) rec[k] = fixed[k]; }
+  const date = tsNormTradedAt(rec.date);
+  const type = tsNormType(rec.type);
+  const ticker = (rec.ticker || '').trim().toUpperCase();
+  const quantity = numClean(rec.quantity);
+  const amountJpy = numClean(rec.amountJpy);
+  const broker = (rec.broker || '').trim() || null;
+  const accountType = normAccount(rec.accountType);
+  const info = { date, type, ticker, quantity, amountJpy: amountJpy != null ? amountJpy : null, broker, accountType, status: 'bad', reason: '' };
+  if (!date || !type || !ticker || quantity == null || !broker || !accountType) { info.reason = '必須項目が不足'; return info; }
+  if (!validTicker(ticker, 'US')) { info.reason = 'ティッカー形式NG'; return info; }
+  if (type === 'buy' && info.amountJpy == null) { info.reason = '買いの受渡金額(円)なし'; return info; }
+  info.status = 'ok';
+  if (!store.findSecurity('US', ticker)) info.note = '銘柄未登録（取込は可・反映には登録が必要）';
+  return info;
+}
+function alRenderPreview() {
+  const pv = document.getElementById('al-preview'); if (!pv) return;
+  const qc = document.getElementById('al-qty-check');
+  if (!_alRows.length) { pv.innerHTML = ''; if (qc) qc.innerHTML = ''; _alParsed = []; return; }
+  const fixed = alFixedValues();
+  const missing = AL_FIELDS.filter(f => f.req && !_alMapping.includes(f.key) && !(AL_FIXED_KEYS.includes(f.key) && fixed[f.key]));
+  if (missing.length) { pv.innerHTML = `<div class="notice">未割当の必須項目: ${missing.map(f => esc(f.label)).join('・')}（種別・証券会社・口座は固定値でも可）</div>`; if (qc) qc.innerHTML = ''; _alParsed = []; return; }
+  const infos = _alRows.map(r => alResolveRow(r, fixed));
+  const oks = infos.filter(i => i.status === 'ok');
+  const dedup = acqLedgerDedupe(oks, store.data.acqLedger || []);
+  let di = 0;
+  _alParsed = infos.map(i => i.status === 'ok' ? dedup[di++] : i);
+  const newN = _alParsed.filter(i => i.status === 'ok' && !i.dup).length;
+  const dupN = _alParsed.filter(i => i.status === 'ok' && i.dup).length;
+  const badN = _alParsed.filter(i => i.status !== 'ok').length;
+  const rows = _alParsed.map((i, idx) => `<tr${i.status === 'ok' ? '' : ' style="opacity:.55"'}>
+    <td class="l">${i.status === 'ok' ? `<input type="checkbox" class="al-chk" data-idx="${idx}" ${i.dup ? '' : 'checked'} onchange="alRenderImportCheck()">` : ''}</td>
+    <td class="l">${esc(i.date || '?')}</td>
+    <td class="l">${i.type === 'buy' ? '買' : i.type === 'sell' ? '売' : '?'}</td>
+    <td class="l">${esc(i.ticker || '?')}</td>
+    <td>${i.quantity != null ? esc(alFmtQty(i.quantity)) : '?'}</td>
+    <td>${i.amountJpy != null ? '¥' + num(Math.round(i.amountJpy)) : '—'}</td>
+    <td class="l">${esc(i.broker || '?')}/${esc(i.accountType || '?')}</td>
+    <td class="l muted" style="font-size:11px">${i.status === 'ok' ? (i.dup ? '取込済み（スキップ予定）' : (i.note || '新規')) : esc(i.reason)}</td>
+  </tr>`).join('');
+  pv.innerHTML = `<div class="muted" style="margin:6px 0 4px">新規 <strong>${newN}件</strong> ／ 取込済みスキップ予定 ${dupN}件 ／ 不備 ${badN}件（チェックで変更可）</div>
+    <div class="table-wrap" style="max-height:34vh"><table class="dense no-rowclick" style="width:100%"><thead><tr><th class="l">取込</th><th class="l">日付</th><th class="l">種別</th><th class="l">ティッカー</th><th>数量</th><th>受渡金額(円)</th><th class="l">会社/口座</th><th class="l">判定</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  alRenderImportCheck();
+}
+// プレビューのチェック済み行（取込予定の行）を返す
+function alCheckedRows() {
+  const rows = [];
+  document.querySelectorAll('#al-preview .al-chk').forEach(c => {
+    if (!c.checked) return;
+    const i = _alParsed[+c.dataset.idx];
+    if (i && i.status === 'ok') rows.push({ date: i.date, type: i.type, ticker: i.ticker, quantity: i.quantity, amountJpy: i.amountJpy, broker: i.broker, accountType: i.accountType });
+  });
+  return rows;
+}
+// 取込プレビューの株数チェック: 既存台帳＋チェック済み行 を再生した株数 vs 保有の株数（対象キーのみ）
+function alImportQtyCheck() {
+  const rows = alCheckedRows();
+  if (!rows.length) return [];
+  const merged = (store.data.acqLedger || []).concat(rows.map((r, i) => ({ ...r, id: 1e9 + i })));
+  const keys = new Set(rows.map(r => `${r.ticker}|${r.broker}|${r.accountType}`));
+  return acqLedgerQtyCheck(acqLedgerCompute(merged)).filter(c => keys.has(c.key));
+}
+function alRenderImportCheck() {
+  const el = document.getElementById('al-qty-check'); if (!el) return;
+  const checks = alImportQtyCheck();
+  el.innerHTML = checks.length ? `<div class="grp-label" style="margin-top:8px">株数の整合性チェック（取込後の台帳 vs 現在の保有・対象キーのみ）</div>${alQtyCheckTable(checks)}` : '';
+}
+function runAcqLedgerImport() {
+  const rows = alCheckedRows();
+  if (!rows.length) { toast('取込対象の行がありません（チェックを確認してください）'); return; }
+  const bad = alImportQtyCheck().filter(c => !c.ok);
+  if (bad.length && !confirm(`株数が保有と一致しないキーが ${bad.length} 件あります。\n取込データの誤り・過去分の欠落の可能性があります。それでも台帳へ取込しますか？\n（保有側の誤りなら、取込後に保有を修正してください）`)) return;
+  store.addAcqLedgerRows(rows);
+  toast(`台帳に ${rows.length} 件追加しました`);
+  openAcqLedger();
+}
+
+// ----- 保有へ反映（差分の確認・選択上書き） -----
+let _alApplyItems = [];
+function openAcqLedgerApply() {
+  const comp = acqLedgerCompute(store.data.acqLedger || []);
+  if (!comp.size) { toast('台帳が空です。先に「報告書を取込」してください'); return; }
+  const qtyChecks = new Map(acqLedgerQtyCheck(comp).map(c => [c.key, c]));
+  const changed = [], same = [], noTarget = [];
+  for (const [key, st] of comp) {
+    const [tk, broker, account] = key.split('|');
+    const sec = store.findSecurity('US', tk);
+    const h = sec ? store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account) : null;
+    const it = { key, tk, broker, account, sec, h, newVal: st.acqJpy, lastDate: st.lastDate, qc: qtyChecks.get(key) };
+    if (!sec) { it.reason = '銘柄未登録'; noTarget.push(it); }
+    else if (!h) { it.reason = '保有レコードなし'; noTarget.push(it); }
+    else if (h.acqJpy != null && Math.abs(h.acqJpy - st.acqJpy) < 0.5) same.push(it);
+    else changed.push(it);
+  }
+  _alApplyItems = changed;
+  const rows = changed.map((it, i) => `<tr>
+    <td class="l"><input type="checkbox" class="al-ap-chk" data-i="${i}" ${it.qc && it.qc.ok ? 'checked' : ''}></td>
+    <td class="l">${esc(it.sec ? calc.displayName(it.sec) : it.tk)}</td>
+    <td class="l">${esc(it.broker)}/${esc(it.account)}</td>
+    <td>${it.h.acqJpy != null ? '¥' + num(Math.round(it.h.acqJpy)) : '<span class="muted">未設定</span>'}</td>
+    <td><strong>¥${num(Math.round(it.newVal))}</strong></td>
+    <td class="l">${it.qc ? (it.qc.ok ? '<span class="pos">○</span>' : `<span class="neg">× 台帳${alFmtQty(it.qc.ledgerQty)} / 保有${alFmtQty(it.qc.holdQty)}</span>`) : '—'}</td>
+    <td class="l muted" style="font-size:11px">台帳 〜${esc(it.lastDate || '—')}${it.qc && !it.qc.ok ? '・株数不一致のため既定OFF' : ''}</td>
+  </tr>`).join('');
+  const ntRows = noTarget.map(it => `<tr><td class="l muted">対象外</td><td class="l">${esc(it.tk)}</td><td class="l">${esc(it.broker)}/${esc(it.account)}</td><td>¥${num(Math.round(it.newVal))}</td><td class="l muted" style="font-size:11px">${esc(it.reason)}</td></tr>`).join('');
+  showModal('保有へ反映（差分の確認）', `
+    <p class="muted" style="margin:0 0 8px">台帳から計算した取得円と現在の保有の取得円の<strong>差分だけ</strong>を表示しています。<strong>チェックした行のみ上書き</strong>します（勝手に上書きしません）。株数チェックが不一致の行は既定でチェックOFFです。変更なし ${same.length}件は非表示。</p>
+    ${changed.length ? `<div class="table-wrap" style="max-height:46vh"><table class="dense no-rowclick" style="width:100%"><thead><tr>
+      <th class="l"><input type="checkbox" onchange="document.querySelectorAll('.al-ap-chk').forEach(c=>c.checked=this.checked)"></th>
+      <th class="l">銘柄</th><th class="l">会社/口座</th><th>現在の取得円</th><th>反映後</th><th class="l">株数チェック</th><th class="l">備考</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted">上書きが必要な差分はありません（すべて一致しています）。</p>`}
+    ${ntRows ? `<div class="grp-label" style="margin-top:8px">反映できないキー（銘柄未登録・保有なし）</div><div class="table-wrap" style="max-height:16vh"><table class="dense"><tbody>${ntRows}</tbody></table></div>` : ''}
+    <div class="btn-row" style="margin-top:10px">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="openAcqLedger()">戻る</button>
+      ${changed.length ? `<button class="btn btn-primary" onclick="runAcqLedgerApply()">チェックした行を上書き</button>` : ''}
+    </div>`, { wide: true });
+}
+function runAcqLedgerApply() {
+  let n = 0;
+  document.querySelectorAll('.al-ap-chk').forEach(c => {
+    if (!c.checked) return;
+    const it = _alApplyItems[+c.dataset.i];
+    if (it && it.h) { it.h.acqJpy = it.newVal; store.touch(it.h); n++; }
+  });
+  if (!n) { toast('チェックされた行がありません'); return; }
+  store.save();
+  closeModal(); render();
+  toast(`取得円を ${n} 件反映しました`);
 }
 
 // Google連携（実験的・任意）。クライアントID未設定なら休眠＝現行アプリに影響しない。
@@ -10224,6 +10682,8 @@ async function runBrokerImport() {
   let scope = prof.fixed ? prof.scope : { broker: defBroker, markets: ['JP', 'US'] };
 
   // replace: スコープ内の既存保有を削除
+  // 洗い替えで消える取得円・投信評価額・売却前購入額は退避し、取込後に同一キーへ復元（削除前に退避）
+  const extras = mode === 'replace' ? snapshotHoldingExtras(store.data.holdings) : null;
   let removed = 0;
   if (mode === 'replace') {
     const keep = [];
@@ -10302,6 +10762,7 @@ async function runBrokerImport() {
       }
     }
   }
+  if (extras) restoreHoldingExtras(extras);  // 洗い替えで消えた取得円等を同一キーの保有へ復元
   store.save();
   // 取込履歴
   const baseDate = extractBaseDate(_importText);
@@ -10688,9 +11149,12 @@ async function runGenericImport() {
   GI_FIXED_KEYS.forEach(k => { if (FIELD_DOMAIN[k] && fixed[k] != null && fixed[k] !== '') giPairs.push({ field: k, raw: fixed[k] }); });
   if (!(await ensureMasterConversions(giPairs))) { toast('取込を中止しました'); return; }
   // 洗い替え: 固定の証券会社×市場が必須。そのスコープの保有を先に削除
+  // 洗い替えで消える取得円・投信評価額・売却前購入額は退避し、取込後に同一キーへ復元（削除前に退避）
   let removed = 0;
+  let extras = null;
   if (mode === 'replace') {
     if (!fixed.broker || !fixed.market) { toast('洗い替えは「固定値」で証券会社と市場の指定が必要です'); return; }
+    extras = snapshotHoldingExtras(store.data.holdings);
     const keep = [];
     for (const h of store.data.holdings) {
       const s = store.data.securities.find(x => x.id === h.securityId);
@@ -10752,6 +11216,7 @@ async function runGenericImport() {
     }
     touched.push(sec);
   }
+  if (extras) restoreHoldingExtras(extras);  // 洗い替えで消えた取得円等を同一キーの保有へ復元
   // 洗い替え時のみ取込日時を記録（取込状況に反映。Webull等フォーマット無しの証券会社向け）
   if (mode === 'replace' && fixed.broker && fixed.market) {
     store.data.importHistory.unshift({
@@ -11425,6 +11890,8 @@ function runFundImport() {
   const mode = (document.getElementById('fi-mode') || {}).value || 'replace';
   const items = parseFundRows((document.getElementById('fi-text') || {}).value || '');
   if (!items.length) { toast('投信データを認識できませんでした（投信部分をヘッダごと貼り付けてください）'); return; }
+  // 洗い替えで消える評価額(円)等は退避し、取込後に同一キーへ復元（取込データに評価額があればそちら優先）
+  const extras = mode === 'replace' ? snapshotHoldingExtras(store.data.holdings) : null;
   if (mode === 'replace') {
     store.data.holdings = store.data.holdings.filter(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !(s && s.market === 'FUND' && h.broker === broker); });
   }
@@ -11441,6 +11908,7 @@ function runFundImport() {
     }
     n++;
   }
+  if (extras) restoreHoldingExtras(extras);
   store.save(); closeModal(); render();
   toast(`投信を ${n} 件取り込みました（${broker}）`, 4000);
 }

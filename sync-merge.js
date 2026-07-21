@@ -29,6 +29,7 @@
     securities:      ['records', (s) => `${s.market}:${String(s.ticker || '').toUpperCase()}`],
     holdings:        ['records', (h) => `${h.securityId}|${h.broker}|${h.accountType}`],
     transactions:    ['records', (t) => `t:${t.id}`],
+    acqLedger:       ['records', (r) => `al:${r.id}`],  // 取得円台帳（報告書明細）。id キー＋updatedAt で3-way
     rules:           ['records', (r) => `r:${r.id}`],
     categories:      ['records', (c) => `c:${c.category}`],
     investCategories: ['records', (c) => `ic:${c.name}`], // 投資カテゴリ（分析枠ラベル）マスタ。名前キーで3-wayマージ（updatedAt タイブレーク）
