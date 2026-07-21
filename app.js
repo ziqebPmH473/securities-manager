@@ -430,6 +430,10 @@ const store = {
   },
   nextId() { return this.data.seq++; },
   _now() { return new Date().toISOString(); },
+  // レコードの編集時刻を打つ。sync-merge.js の 3-way マージは records を updatedAt の新しい方で採る（両在時）。
+  // store.data の records 要素を「書き換えた／新規作成した」ら必ずこれを呼ぶ（呼ばないとマージで別端末の
+  // 古いスナップショットに負けて巻き戻る＝同期漏れ）。取引適用・取得円編集・マスタ改名波及なども対象。
+  touch(rec) { if (rec) rec.updatedAt = this._now(); return rec; },
 
   // securities
   addSecurity(s) { s.id = this.nextId(); s.createdAt = this._now(); s.updatedAt = s.createdAt; this.data.securities.push(s); this.save(); return s; },
@@ -442,7 +446,7 @@ const store = {
         const c = this.data.categories.find(x => x.category === s.category);
         if (c) this.data.amountSnapshots.push({
           id: this.nextId(), securityId: id, category: s.category,
-          amountJpy: c.amountJpy, amountUsd: c.amountUsd, recordedAt: this._now(), trigger: 'category_change',
+          amountJpy: c.amountJpy, amountUsd: c.amountUsd, recordedAt: this._now(), trigger: 'category_change', updatedAt: this._now(),
         });
       }
       Object.assign(s, patch); this.save();
@@ -465,8 +469,8 @@ const store = {
   upsertHolding(h) {
     const found = this.data.holdings.find(x =>
       x.securityId === h.securityId && x.broker === h.broker && x.accountType === h.accountType);
-    if (found) { Object.assign(found, h); }
-    else { h.id = this.nextId(); this.data.holdings.push(h); }
+    if (found) { Object.assign(found, h); this.touch(found); }
+    else { h.id = this.nextId(); this.touch(h); this.data.holdings.push(h); }
     this.save();
   },
   removeHolding(id) { this.data.holdings = this.data.holdings.filter(h => h.id !== id); this.save(); },
@@ -489,6 +493,7 @@ const store = {
   // transactions（保有へ反映）
   addTransaction(t) {
     t.id = this.nextId();
+    t.updatedAt = this._now();   // 取引の編集を端末間で伝播させる（sync-merge は records を updatedAt で3-way）
     this.data.transactions.push(t);
     this.applyTransaction(t);
     this.save();
@@ -501,7 +506,7 @@ const store = {
     if (t.ledgerOnly) {
       if (t.type === 'buy') {
         const sec = this.data.securities.find(s => s.id === t.securityId);
-        if (sec) sec.buyCount = (sec.buyCount || 0) + 1;
+        if (sec) { sec.buyCount = (sec.buyCount || 0) + 1; this.touch(sec); }
       }
       return;
     }
@@ -514,20 +519,33 @@ const store = {
       h.quantity += t.quantity;
       h.avgCost = h.quantity > 0 ? totalCost / h.quantity : 0; // 加重平均
       t._dq = t.quantity;                                      // 実際に適用した数量変化（買い=+）。逆操作で使用
-      // 取得円(円)累計: 米国株の受渡金額(円)が入力されていれば加算（買=+）。SEC-59
-      if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) + t.settleJpy;
+      // 取得円(円)累計: 米国株の受渡金額(円)＝支払った原価が入力されていれば加算（買=+）。SEC-59
+      // 逆操作用に実際に加えた額(_dAcq)を記録（settleJpy 無しなら 0）。
+      t._dAcq = (t.settleJpy != null) ? t.settleJpy : 0;
+      if (t._dAcq) h.acqJpy = (h.acqJpy || 0) + t._dAcq;
+      this.touch(h);
       // 購入回数を加算
       const sec = this.data.securities.find(s => s.id === t.securityId);
-      if (sec) sec.buyCount = (sec.buyCount || 0) + 1;
+      if (sec) { sec.buyCount = (sec.buyCount || 0) + 1; this.touch(sec); }
     } else { // sell: 既存ロットの数量のみ減算（平均取得単価は不変）。対応ロットが無ければ保有は触らない（空ロットを作らない）
       const h = findLot();
-      if (!h) { t._dq = 0; return; }                          // 一致する保有ロットが無い売り＝保有に影響なし
-      const removed = Math.min(t.quantity, h.quantity);        // 実際に減った数量（在庫を超えてマイナスにしない）
+      if (!h) { t._dq = 0; t._dAcq = 0; return; }             // 一致する保有ロットが無い売り＝保有に影響なし
+      const qtyBefore = h.quantity;
+      const removed = Math.min(t.quantity, qtyBefore);         // 実際に減った数量（在庫を超えてマイナスにしない）
       h.quantity -= removed;
       t._dq = -removed;                                        // 逆操作はこの実減少分だけ戻す（非対称による幽霊ロットを防止）
-      // 取得円(円)累計: 受渡金額(円)が入力されていれば減算（売=−。台帳式に一致）。SEC-59
-      if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) - t.settleJpy;
+      // 取得円(円)＝取得原価。売却は「売った数量ぶんの原価」を按分して除く。SEC-59改。
+      // 売りの受渡金額（＝受け取った代金）は原価ではないので取得円には使わない（利益売却で原価がマイナスになるのを防ぐ）。
+      let dAcq = 0;
+      if (h.acqJpy != null && qtyBefore > 1e-12) {
+        const removedCost = h.acqJpy * (removed / qtyBefore);
+        h.acqJpy -= removedCost;
+        if (Math.abs(h.acqJpy) < 1e-6) h.acqJpy = 0;           // 端数掃除（全売却で綺麗に0・マイナス化を防ぐ）
+        dAcq = -removedCost;                                   // 逆操作で戻す除去原価（負）
+      }
+      t._dAcq = dAcq;
       if (h.quantity === 0) h.avgCost = 0;
+      this.touch(h);
     }
     this._pruneEmptyHoldings(t.securityId);
   },
@@ -542,7 +560,7 @@ const store = {
   // 買い=数量と取得原価を差し引き／売り=実際に減った数量(_dq)を戻す。ledgerOnly は買い回数のみ戻す。
   reverseTransaction(t) {
     if (t.ledgerOnly) {
-      if (t.type === 'buy') { const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) sec.buyCount = Math.max(0, sec.buyCount - 1); }
+      if (t.type === 'buy') { const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) { sec.buyCount = Math.max(0, sec.buyCount - 1); this.touch(sec); } }
       return;
     }
     const h = this.data.holdings.find(x => x.securityId === t.securityId && x.broker === t.broker && x.accountType === t.accountType);
@@ -552,14 +570,19 @@ const store = {
         const totalCost = h.avgCost * h.quantity - t.price * dq;
         h.quantity = Math.max(0, h.quantity - dq);
         h.avgCost = h.quantity > 0 ? Math.max(0, totalCost) / h.quantity : 0;
-        if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) - t.settleJpy;
+        // 取得円: 適用時に加えた原価(_dAcq)を戻す（旧データは settleJpy で代替）
+        const dAcq = (t._dAcq != null) ? t._dAcq : (t.settleJpy != null ? t.settleJpy : 0);
+        if (dAcq) h.acqJpy = (h.acqJpy || 0) - dAcq;
       } else {
         const removed = (t._dq != null ? -t._dq : t.quantity); // 実際に減った数量だけ戻す（旧データは数量で代替）
         h.quantity += removed;
-        if (t.settleJpy != null) h.acqJpy = (h.acqJpy || 0) + t.settleJpy;
+        // 取得円: 適用時に按分除去した原価(_dAcq は負)を戻す。旧データは settleJpy を買い戻す（＝加算）で代替。
+        const dAcq = (t._dAcq != null) ? t._dAcq : (t.settleJpy != null ? -t.settleJpy : 0);
+        if (dAcq) h.acqJpy = (h.acqJpy || 0) - dAcq;
       }
+      this.touch(h);
     }
-    if (t.type === 'buy') { const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) sec.buyCount = Math.max(0, sec.buyCount - 1); }
+    if (t.type === 'buy') { const sec = this.data.securities.find(s => s.id === t.securityId); if (sec && sec.buyCount) { sec.buyCount = Math.max(0, sec.buyCount - 1); this.touch(sec); } }
     this._pruneEmptyHoldings(t.securityId);
   },
   // 取引の削除（保有への影響を取り消してから除去）
@@ -577,6 +600,7 @@ const store = {
     delete t.settleJpy; delete t.ledgerOnly;
     Object.assign(t, patch);
     this.applyTransaction(t);
+    this.touch(t);   // 取引の編集を端末間で伝播（sync-merge の updatedAt タイブレーク）
     this.save();
   },
   // 既存取引の受渡金額(円)だけを更新（保有数量・平均取得単価・購入回数には一切触らない）。
@@ -586,40 +610,44 @@ const store = {
   // settleJpy=null で受渡金額をクリア。save しない版（一括用に呼び元でまとめて save）。
   setTransactionSettle(id, settleJpy) {
     const t = this.data.transactions.find(x => x.id === id); if (!t) return false;
-    const old = t.settleJpy;
-    if (!t.ledgerOnly) {
+    // 買いの受渡金額(円)＝支払った原価なので取得円に反映。売りの受渡金額は代金（原価でない）ため取得円に反映しない。
+    if (!t.ledgerOnly && t.type === 'buy') {
       const h = this.data.holdings.find(x => x.securityId === t.securityId && x.broker === t.broker && x.accountType === t.accountType);
       if (h) {
-        const sign = t.type === 'buy' ? 1 : -1;              // applyTransaction と同符号（買い=加算/売り=減算）
-        if (old != null) h.acqJpy = (h.acqJpy || 0) - sign * old;             // 旧寄与を取り消し
-        if (settleJpy != null) h.acqJpy = (h.acqJpy || 0) + sign * settleJpy; // 新寄与を加算
+        const old = (t._dAcq != null) ? t._dAcq : (t.settleJpy != null ? t.settleJpy : 0); // 旧寄与（買い＝加算した原価）
+        if (old) h.acqJpy = (h.acqJpy || 0) - old;             // 旧寄与を取り消し
+        const add = settleJpy != null ? settleJpy : 0;
+        if (add) h.acqJpy = (h.acqJpy || 0) + add;             // 新寄与を加算
+        t._dAcq = add;
+        this.touch(h);
       }
     }
     if (settleJpy == null) delete t.settleJpy; else t.settleJpy = settleJpy;
+    this.touch(t);
     return true;
   },
 
   // rules
   rule(id) { return this.data.rules.find(r => r.id === id) || this.defaultRule(); },
   defaultRule() { return this.data.rules.find(r => r.isDefault) || this.data.rules[0]; },
-  addRule(r) { r.id = this.nextId(); this.data.rules.push(r); this.save(); return r; },
+  addRule(r) { r.id = this.nextId(); this.touch(r); this.data.rules.push(r); this.save(); return r; },
   updateRule(id, patch) {
     const r = this.data.rules.find(x => x.id === id);
-    if (r) { Object.assign(r, patch); this.save(); }
+    if (r) { Object.assign(r, patch); this.touch(r); this.save(); }
     return r;
   },
   removeRule(id) {
     if (this.data.rules.length <= 1) return false;
     const wasDefault = this.data.rules.find(r => r.id === id)?.isDefault;
     this.data.rules = this.data.rules.filter(r => r.id !== id);
-    // 当該ルール参照銘柄は既定へ戻す
-    for (const s of this.data.securities) if (s.ruleId === id) s.ruleId = null;
-    if (wasDefault && !this.data.rules.some(r => r.isDefault)) this.data.rules[0].isDefault = true;
+    // 当該ルール参照銘柄は既定へ戻す（銘柄側の変更も伝播させる）
+    for (const s of this.data.securities) if (s.ruleId === id) { s.ruleId = null; this.touch(s); }
+    if (wasDefault && !this.data.rules.some(r => r.isDefault)) { this.data.rules[0].isDefault = true; this.touch(this.data.rules[0]); }
     this.save();
     return true;
   },
   setDefaultRule(id) {
-    for (const r of this.data.rules) r.isDefault = (r.id === id);
+    for (const r of this.data.rules) { r.isDefault = (r.id === id); this.touch(r); }
     this.save();
   },
 
@@ -637,7 +665,7 @@ const store = {
   },
   addCategory(c) {
     c.sortOrder = c.sortOrder || (Math.max(0, ...this.data.categories.map(x => x.sortOrder)) + 1);
-    this.data.categories.push(c); this.save();
+    this.touch(c); this.data.categories.push(c); this.save();
   },
   // 取込変換マスタ: 正規化した取込値→マスタ正規値（または '__skip__'）を記憶
   setAlias(domain, normRaw, value) {
@@ -656,7 +684,7 @@ const store = {
       for (const s of this.data.securities.filter(x => x.category === oldName)) {
         this.data.amountSnapshots.push({
           id: this.nextId(), securityId: s.id, category: oldName,
-          amountJpy: c.amountJpy, amountUsd: c.amountUsd, recordedAt: now, trigger: 'master_change',
+          amountJpy: c.amountJpy, amountUsd: c.amountUsd, recordedAt: now, trigger: 'master_change', updatedAt: now,
         });
       }
       // 変更履歴（旧→新）
@@ -664,59 +692,62 @@ const store = {
         id: this.nextId(), category: newName || oldName,
         prevJpy: c.amountJpy, prevUsd: c.amountUsd,
         newJpy: patch.amountJpy ?? c.amountJpy, newUsd: patch.amountUsd ?? c.amountUsd,
-        changedAt: now,
+        changedAt: now, updatedAt: now,
       });
     }
     Object.assign(c, patch);
-    // カテゴリ名を変えたら、参照している銘柄も追従
+    this.touch(c);
+    // カテゴリ名を変えたら、参照している銘柄も追従（銘柄側の変更も伝播）
     if (newName && newName !== oldName) {
-      for (const s of this.data.securities) if (s.category === oldName) s.category = newName;
+      for (const s of this.data.securities) if (s.category === oldName) { s.category = newName; this.touch(s); }
     }
     this.save();
   },
   removeCategory(name) {
     this.data.categories = this.data.categories.filter(c => c.category !== name);
-    for (const s of this.data.securities) if (s.category === name) s.category = null;
+    for (const s of this.data.securities) if (s.category === name) { s.category = null; this.touch(s); }
     this.save();
   },
   // 投資カテゴリ（分析枠ラベル）マスタ。金額は持たない（名前・色・並び順のみ）。
   addInvestCategory(c) {
     c.sortOrder = c.sortOrder || (Math.max(0, ...this.data.investCategories.map(x => x.sortOrder || 0)) + 1);
-    this.data.investCategories.push(c); this.save();
+    this.touch(c); this.data.investCategories.push(c); this.save();
   },
   updateInvestCategory(oldName, patch) {
     const c = this.data.investCategories.find(x => x.name === oldName);
     if (!c) return;
     const newName = patch.name;
     Object.assign(c, patch);
+    this.touch(c);
     if (newName && newName !== oldName) {
-      for (const s of this.data.securities) if (s.investCategory === oldName) s.investCategory = newName;
+      for (const s of this.data.securities) if (s.investCategory === oldName) { s.investCategory = newName; this.touch(s); }
     }
     this.save();
   },
   removeInvestCategory(name) {
     this.data.investCategories = this.data.investCategories.filter(c => c.name !== name);
-    for (const s of this.data.securities) if (s.investCategory === name) s.investCategory = null;
+    for (const s of this.data.securities) if (s.investCategory === name) { s.investCategory = null; this.touch(s); }
     this.save();
   },
   // 銘柄ラベル（複数タグ）マスタ。名前・色・並び順のみ。sec.labels（配列）が参照する。
   addLabelDef(c) {
     c.sortOrder = c.sortOrder || (Math.max(0, ...this.data.labelDefs.map(x => x.sortOrder || 0)) + 1);
-    this.data.labelDefs.push(c); this.save();
+    this.touch(c); this.data.labelDefs.push(c); this.save();
   },
   updateLabelDef(oldName, patch) {
     const c = this.data.labelDefs.find(x => x.name === oldName);
     if (!c) return;
     const newName = patch.name;
     Object.assign(c, patch);
+    this.touch(c);
     if (newName && newName !== oldName) {
-      for (const s of this.data.securities) if (Array.isArray(s.labels)) s.labels = s.labels.map(l => l === oldName ? newName : l);
+      for (const s of this.data.securities) if (Array.isArray(s.labels) && s.labels.includes(oldName)) { s.labels = s.labels.map(l => l === oldName ? newName : l); this.touch(s); }
     }
     this.save();
   },
   removeLabelDef(name) {
     this.data.labelDefs = this.data.labelDefs.filter(c => c.name !== name);
-    for (const s of this.data.securities) if (Array.isArray(s.labels)) s.labels = s.labels.filter(l => l !== name);
+    for (const s of this.data.securities) if (Array.isArray(s.labels) && s.labels.includes(name)) { s.labels = s.labels.filter(l => l !== name); this.touch(s); }
     this.save();
   },
 
@@ -778,15 +809,17 @@ const store = {
     if (mode === 'full') {
       for (const h of this.data.holdings.filter(x => x.securityId === secId)) { h.quantity *= r; h.avgCost /= r; h.updatedAt = this._now(); }
     }
-    // 手入力項目・手動取引は両モードで調整
-    if (typeof sec.prevBuyPrice === 'number') sec.prevBuyPrice /= r;
-    if (typeof sec.baseHighManual === 'number') sec.baseHighManual /= r;
-    if (typeof sec.fixedBuyPrice === 'number') sec.fixedBuyPrice /= r;
-    for (const t of this.data.transactions.filter(t => t.securityId === secId && t.tradedAt && t.tradedAt < date)) { t.price /= r; t.quantity *= r; }
+    // 手入力項目・手動取引は両モードで調整（変更した security/transaction は updatedAt を打って同期漏れを防ぐ）
+    let secChanged = false;
+    if (typeof sec.prevBuyPrice === 'number') { sec.prevBuyPrice /= r; secChanged = true; }
+    if (typeof sec.baseHighManual === 'number') { sec.baseHighManual /= r; secChanged = true; }
+    if (typeof sec.fixedBuyPrice === 'number') { sec.fixedBuyPrice /= r; secChanged = true; }
+    for (const t of this.data.transactions.filter(t => t.securityId === secId && t.tradedAt && t.tradedAt < date)) { t.price /= r; t.quantity *= r; this.touch(t); }
     // 自動取得の価格キャッシュ（現在値・前日終値・5年/52週高値）は触らない。
     // Yahoo はEx-date以降は分割調整済みの値を返すため、削除せず手入力項目だけ調整する（次の価格更新で最新化）。
     const hrec = (sec.splitHistory || []).find(x => x.date === date);
-    if (hrec) { hrec.status = 'applied'; hrec.appliedAt = this._now(); hrec.mode = mode; }
+    if (hrec) { hrec.status = 'applied'; hrec.appliedAt = this._now(); hrec.mode = mode; secChanged = true; }
+    if (secChanged) this.touch(sec);
     this.save();
   },
 };
@@ -8050,20 +8083,22 @@ function openHoldingsForm(secId) {
       if (h) {
         const newQty = parseFloat(tr.querySelector('.h-qty').value) || 0;
         const newCost = parseFloat(tr.querySelector('.h-cost').value) || 0;
+        let changed = false;
         // 数量・単価を実際に変更した時だけ「手入力」として記録（未変更の再保存では更新しない）
         if (newQty !== h.quantity || newCost !== h.avgCost) {
-          h.quantity = newQty; h.avgCost = newCost;
-          h.source = 'manual'; h.updatedAt = store._now();
+          h.quantity = newQty; h.avgCost = newCost; h.source = 'manual'; changed = true;
         }
         // 取得円(円)の直接編集（米国株）。空欄なら未設定に戻す
         const acqEl = tr.querySelector('.h-acq');
-        if (acqEl) { const v = acqEl.value.trim(); h.acqJpy = v === '' ? undefined : (parseFloat(v) || 0); }
+        if (acqEl) { const v = acqEl.value.trim(); const nv = v === '' ? undefined : (parseFloat(v) || 0); if (nv !== h.acqJpy) { h.acqJpy = nv; changed = true; } }
         // 評価額(円)の直接編集（投信・保有＝証券会社×口座ごと）。空欄なら未設定に戻す
         const evalEl = tr.querySelector('.h-eval');
-        if (evalEl) { const v = evalEl.value.trim(); h.evalJpy = v === '' ? undefined : (parseFloat(v) || 0); }
+        if (evalEl) { const v = evalEl.value.trim(); const nv = v === '' ? undefined : (parseFloat(v) || 0); if (nv !== h.evalJpy) { h.evalJpy = nv; changed = true; } }
         // 売却前購入額（損出し用・原通貨）。空欄なら未設定（取得価額を採用）に戻す
         const origEl = tr.querySelector('.h-orig');
-        if (origEl) { const v = origEl.value.trim(); h.origBuyAmount = v === '' ? undefined : (parseFloat(v) || 0); }
+        if (origEl) { const v = origEl.value.trim(); const nv = v === '' ? undefined : (parseFloat(v) || 0); if (nv !== h.origBuyAmount) { h.origBuyAmount = nv; changed = true; } }
+        // 取得円/評価額/売却前購入額だけ編集した時も updatedAt を打つ（同期漏れ防止）
+        if (changed) store.touch(h);
       }
     });
     // 新規追加
@@ -9122,11 +9157,11 @@ function openTxnForm(secId, presetType, opts = {}) {
         <div class="field"><label>口座種別</label><select name="accountType">${acctOpts}</select></div>
       </div>
       ${sec.market === 'US' ? `
-      <div class="row">
+      <div class="row buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">
         <div class="field"><label>受渡金額(円)（手数料・税込／取得円用・任意）</label>
           <input name="settleJpy" type="number" step="any" value="${e.settleJpy ?? ''}" placeholder="取引報告書の国内受渡金額"></div>
       </div>
-      <p class="muted">受渡金額(円)を入れると「取得円」に反映（買い=加算・売り=減算）。取得円エクスポート用で、買い増し判定には未使用。</p>` : ''}
+      <p class="muted buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">買いの受渡金額(円)＝支払った原価を「取得円」に加算。売りは取得円を売却割合で自動按分（代金は原価ではないので受渡金額は不要）。買い増し判定には未使用。</p>` : ''}
       <div class="row buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">
         <div class="field"><label>前回売却分の元購入額 (${ccy})（任意・損出し買い直し用）</label>
           <input name="prevSoldOrig" type="number" step="any" placeholder="前回売却した分の当初の購入額"></div>
@@ -9154,7 +9189,8 @@ function openTxnForm(secId, presetType, opts = {}) {
       price: parseFloat(f.price.value), quantity: parseFloat(f.quantity.value),
       broker: f.broker.value, accountType: f.accountType.value, tradedAt: f.tradedAt.value,
       ...(f.ledgerOnly && f.ledgerOnly.checked ? { ledgerOnly: true } : {}),
-      ...(isNaN(settleJpy) ? {} : { settleJpy }),
+      // 受渡金額(円)は買いのみ取得円に効く（売りは代金＝原価でないため取得円に使わない）
+      ...((f.type.value === 'buy' && !isNaN(settleJpy)) ? { settleJpy } : {}),
     };
     if (editTxn) { store.updateTransaction(editTxn.id, data); toast('取引を更新しました'); }
     else {
@@ -10705,13 +10741,13 @@ async function runGenericImport() {
             store.setHolding(sec.id, broker, account, rec.quantity, ac, 'import'); holdingSet++;
           }
           const h = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
-          if (hasAcq && h) h.acqJpy = rec.acqJpy;
+          if (hasAcq && h) { h.acqJpy = rec.acqJpy; store.touch(h); }
           // 売却前購入額（保有単位）。数量が無くても保有レコードがあれば付与（損出しの本来額の記録）
-          if (hasOrig && h) h.origBuyAmount = rec.origBuyAmount;
+          if (hasOrig && h) { h.origBuyAmount = rec.origBuyAmount; store.touch(h); }
         }
       } else if (hasAcq) {
         const hs = store.data.holdings.filter(x => x.securityId === sec.id && x.quantity > 0);
-        if (hs.length === 1) { hs[0].acqJpy = rec.acqJpy; holdingSet++; }
+        if (hs.length === 1) { hs[0].acqJpy = rec.acqJpy; store.touch(hs[0]); holdingSet++; }
       }
     }
     touched.push(sec);
@@ -11469,7 +11505,7 @@ function runAcqJpyImport() {
     let targets = store.data.holdings.filter(h => h.securityId === sec.id && h.quantity > 0);
     if (brokerTok) targets = targets.filter(h => h.broker === brokerTok);
     if (targets.length !== 1) { skipped++; continue; } // 一意に決まらない場合はスキップ
-    targets[0].acqJpy = amt; applied++;
+    targets[0].acqJpy = amt; store.touch(targets[0]); applied++;
   }
   store.save();
   toast(`取得額を設定: ${applied}件${skipped ? ` / スキップ ${skipped}` : ''}`);

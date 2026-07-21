@@ -683,6 +683,23 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - 設定配布: clientId/spreadsheetId はリポジトリに置かず **`/api/config`（CF env: GOOGLE_OAUTH_CLIENT_ID/GOOGLE_SHEET_ID）** から配る。`gsync.cfg()` がローカル空なら env で補完（新端末は入力不要）。
 - Sheets（`_appdata`）は**保険として残置**（手動保存/読込ボタンは従来どおり）。
 
+### 15.1.1 同期規約：records を書き換えたら必ず `updatedAt` を打つ（2026-07-21・重要）
+- **鉄則**: `store.data` の **records 系レコード（securities/holdings/transactions/rules/categories/investCategories/labelDefs/amountHistory/amountSnapshots 等）を書き換えた／新規作成したら、必ず `store.touch(rec)`（＝`rec.updatedAt = _now()`）を呼ぶ**。3-wayマージは両在レコードを `updatedAt` の新しい方で採る（`c > a ? r : l`）ため、**編集したのに `updatedAt` を打たないと「古いまま」に見え、別端末の古いスナップショットに負けて巻き戻る（＝同期漏れ）**。
+- **過去に漏れていた箇所（本日一括修正）**:
+  - **型A＝そもそも `updatedAt` 機構が無かった種別**: `rules`/`categories`/`investCategories`/`labelDefs`/`transactions`/`amountHistory`/`amountSnapshots`。両在が常に `'' vs ''`→local維持で、**端末間で編集が伝播していなかった**（買い増しルール・カテゴリ金額・ラベル・投資カテゴリ・取引の編集）。作成・編集時に `touch` を追加。
+  - **型B＝`updatedAt` はあるが打ち直していなかった箇所**: `applyTransaction`/`reverseTransaction`（holding の数量・単価・取得円、security の `buyCount`、新規ロット作成）／`setTransactionSettle`（取得円）／一括保有編集で**数量・単価を変えず取得円/評価額/売却前購入額だけ**編集した時／取得円だけの取込・貼付（`setHolding` を通らない分岐）／`applySplit`（分割後の手入力基準値・調整した取引）／マスタ改名・削除に伴う**銘柄側参照の更新**（category/ruleId/labels/investCategory）。いずれも書き換え時に `touch`。
+  - **`investCategories` を SCHEMA に登録**（`['records', name]`）。従来 `single`（配列丸ごと比較・両者変更で local 優先）で片方の追加/編集が丸ごと消え得た。
+- **検証**: 実ブラウザで `store` を直接操作する E2E（Playwright）で、取引後に holding/security の `updatedAt` が更新されること、及び「PCで取引→更新時刻新→スマホの古い保有に勝つ（＝巻き戻らない）」を確認。旧挙動（時刻同値でstale維持＝巻き戻り）も対照で再現。
+
+### 15.1.2 取得円（acqJpy）の売却時の扱い（2026-07-21 修正・重要）
+- **取得円 = 現在保有している株の取得原価（円）**。米国株は買いの**受渡金額(円)＝支払った原価**を `acqJpy` に加算して積み上げる（JP株の取得円列は `avgCost×quantity` の算出値で、その円建て版が `acqJpy`）。
+- **旧バグ**: 売りで**受渡金額(円)＝受け取った代金**を `acqJpy` から減算していた。代金は原価ではないため、**利益が出た売却では `acqJpy` がマイナスになり得た**（例: ¥10,000で取得→¥15,000で全売却→`10,000−15,000=−5,000`）。全売却（`recordSellAll`）は受渡金額を渡さず、**取得円が売却ぶんを含んだまま残る**問題もあった。
+- **修正後のルール（`applyTransaction`）**: 売りは「**売った数量ぶんの原価**」を按分して除く＝`acqJpy −= acqJpy × (売却数量 ÷ 売却前数量)`。**代金（売りの受渡金額）は取得円に使わない**。
+  - **全売却は取得円が必ず 0**（按分×1・端数掃除で厳密に0）。**マイナスにならない**。一部売却は原価が比例で減る。
+  - 逆操作（取引の削除・編集）用に、適用時に実際に増減した取得円を **`t._dAcq`** に記録（`_dq` と同じ流儀）。旧データ（`_dAcq` 無し）は従来の `settleJpy` で代替復元。
+  - `setTransactionSettle`／取引フォームの受渡金額欄は**買いのみ取得円に反映**（売りは非表示・受渡金額を取得円に使わない）。
+- **既存データへの注意**: 旧ロジックで「受渡金額を入れて売却」した米株は既に `acqJpy` がズレている可能性がある（利益売却ならマイナス寄り）。該当銘柄は保有直接編集フォームで取得円を入れ直す。
+
 ### 15.2 通知（買い増しサイン・メール）
 - パイプライン（Cloudflare Functions・サーバー側、ツール未起動でも動く）:
   1. **データ読取** `functions/lib/sheets.js`：`readAppDataBundle(env)` = サービスアカウントで **Drive `data.json` を優先読取**（`readAppDataFromDrive`、drive.readonly）→失敗時 Sheets フォールバック（応答に `source`）。
