@@ -7848,7 +7848,7 @@ const AL_AUTOMAP = {
   '受渡金額(円)': 'amountJpy', '受渡金額（円）': 'amountJpy', '受渡金額': 'amountJpy', '国内受渡金額': 'amountJpy', '受取金額(円)': 'amountJpy', '受取金額': 'amountJpy',
   '証券会社': 'broker', '口座': 'accountType', '口座種別': 'accountType',
 };
-const AL_GPT_PROMPT = '添付した外国株式等取引報告書PDF（複数可）の全取引を、1取引=1行のタブ区切りの表にしてください。\n列の順: 約定日\t種別\tティッカー\t数量\t受渡金額(円)\t証券会社\t口座\n・約定日は YYYY-MM-DD 形式\n・種別は「買」または「売」\n・数量は株数（小数はそのまま）\n・受渡金額(円)は円貨の受渡金額（カンマなしの数値）\n・口座は 特定/一般/NISA のいずれか\n・1行目にヘッダ行を付ける。表以外の文章は出力しない';
+const AL_GPT_PROMPT = '添付した外国株式等取引報告書PDF（複数可）の全取引を、1取引=1行のマークダウン表にしてください。\n列の順: 約定日 | 種別 | ティッカー | 数量 | 受渡金額(円) | 証券会社 | 口座\n・約定日は YYYY-MM-DD 形式\n・種別は「買」または「売」\n・数量は株数（小数はそのまま）\n・受渡金額(円)は円貨の受渡金額（カンマなしの数値）\n・証券会社は ' + BROKERS.join(' / ') + ' のいずれかの表記（例: ウィブル証券→Webull）\n・口座は 特定/一般/NISA のいずれか\n・1行目はヘッダ行。表以外の文章は出力しない';
 let _alHeaders = [], _alRows = [], _alMapping = [], _alParsed = [];
 function openAcqLedgerImport() {
   _alHeaders = []; _alRows = []; _alMapping = []; _alParsed = [];
