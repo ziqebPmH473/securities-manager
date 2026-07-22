@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260722-2343';
+const APP_VERSION = 'v20260722-2353';
 
 'use strict';
 
@@ -5242,9 +5242,12 @@ function _newsPruneTrans() { // 30日より古い翻訳キャッシュを掃除
 async function _newsTranslateBatch(texts) {
   if (!texts.length) return [];
   try {
-    // サーバーと同じ上限で切り詰めて送る（長文で filter 落ち→件数ズレ・翻訳不能になるのを防ぐ二重防御）
-    const qs = texts.map(t => 'q=' + encodeURIComponent(String(t || '').slice(0, 1500))).join('&');
-    const r = await fetch('/api/translate?sl=en&tl=ja&' + qs);
+    // POST（JSON）で送る。旧GETは見出し＋要約×15件でURLがCFの上限(16KB)を超え、
+    // リクエスト自体が失敗して「大きいバッチほど全滅」になっていた。切り詰めはサーバーと同じ1500字。
+    const r = await fetch('/api/translate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sl: 'en', tl: 'ja', texts: texts.map(t => String(t || '').slice(0, 1500)) }),
+    });
     const d = await r.json();
     return Array.isArray(d.translated) ? d.translated : [];
   } catch (_) { return []; }
