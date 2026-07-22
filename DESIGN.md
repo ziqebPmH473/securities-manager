@@ -719,10 +719,11 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 ### 15.1.3c 'single'規則の棚卸し結果（2026-07-22）
 上場マスタ事故（15.1.3b）を受け、SCHEMA の 'single'/'singleTs' 系を全数点検。**「シード/既定値が実データに勝ち得る」型は listedMaster が最後の残党**だった。残りは: `fx`/`lastPriceSource`/`lastPrevCloseAt`/`prevCloseVer`＝自動取得キャッシュ（負けても次の更新で自己修復・実害なし）、`settings`＝singleTs（保存箇所は `_updatedAt` を stamp。**YouTube設定保存(ytModel/ytAutoSummary)だけ stamp 漏れ→修正**）、`matrixBands/matrixSettings/_colPrefs`＝対策済み。map系（importAliases/importMappings/newsRead等）はキー単位マージでシードが実データを消す型ではない（同一キー同時編集時のみ local 優先）。
 
-### 15.1.5 ニュース未読○の新着色分け（2026-07-22）
-- `store.data.newsSeen`（記事リンク→初見日時ISO・同期 map・45日で掃除）を新設。取得時に `newsMarkNew(items)` が「newsSeen に無いリンク＝今回初めて現れた記事」へ `isNew` を付け初見日時を記録。
-- 表示: 未読○（`.news-item.unread`）のうち **今回の取得で新しく現れた記事は黄色○**（`.nu-new`、#eab308）。既知の未読は従来の青○。既読は○なし。「どこから新しいか」の境界が一目でわかる。
-- 初回利用時は newsSeen が空のため全記事が一度だけ黄色になる（次の取得から差分のみ）。
+### 15.1.5 ニュース一覧の共有プール＋未読○の色分け（2026-07-23 最終形）
+- **一覧の正本＝`store.data.newsPool`** `{items, at(最新取得時刻), prevAt(前回取得時刻), _updatedAt}`（SCHEMA `singleTs`・「更新」した端末の新しい方が勝つ）。**「更新」ボタン押下時のみ**ニュースサイトから取得して `newsPoolStore` で保存→Google同期＝**全端末が同じ一覧・同じ○の色**。タブを開いた時は `newsPoolCache()` でプールを表示するだけ（自動取得なし・ドロワーの `newsEnsure` も同様）。
+- **○の色**: 各記事に `batch`（初めて取得に現れた時刻。既存記事は前回の値を引き継ぐ）を刻み、未読のうち `batch===at`＝**黄**（今回の取得で入った）/ `batch===prevAt`＝**緑**（前回の取得分）/ それ以前＝青（既定）。既読は○なし。**タブを開いても黄は増えず、「更新」すると前回の黄が緑に落ちる**。
+- 容量: プールは最新250件・約350KBまで（localStorage/Driveのバンドルに載るため）。localStorage逼迫時は `_freeCacheSpace` がプールを自動破棄（「更新」で取り直せる・銘柄データ優先）。
+- 経緯: メモリのみ→端末ローカル保存（sm_news_cache）→**プール同期方式に置換**（すみぽん要望：全端末同一表示・端末保存は不要）。旧 `newsSeen`/sm_news_cache は廃止（load時に掃除・キーは後方互換で残置）。
 
 ### 15.1.6 バージョン管理（2026-07-22 導入）
 - `app.js` 冒頭の `APP_VERSION`＝**`v{YYYYMMDD}-{HHMM}`（JST更新日時）**。コミットのたびに更新し、`index.html` の `?v=` も同じ日時に揃える（運用ルールは CLAUDE.md ルール7）。表示＝**マスタ画面ヘッダ右**。すみぽんが実機のキャッシュ鮮度を確認する手段。

@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0734';
+const APP_VERSION = 'v20260723-0742';
 
 'use strict';
 
@@ -331,7 +331,9 @@ const store = {
     this.data.earnings ||= {};        // 決算日キャッシュ priceKey→{prev,next,nextEstimate,exDiv,at}。1日1回取得・同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     this.data.newsRead ||= {};        // ニュース既読（記事リンク→既読日時ISO）。Google同期対象（sync-merge SCHEMA登録済み）
-    this.data.newsSeen ||= {};        // ニュース初見（記事リンク→初めて取得に現れた日時ISO）。未読○の新着色分け用・同期
+    this.data.newsSeen ||= {};        // （旧方式の名残・現在未使用）ニュース初見の記録。newsPool の batch 方式へ移行済み
+    this.data.newsPool ||= null;      // ニュース一覧の共有プール {items,at,prevAt,_updatedAt}。「更新」で取得しGoogle同期（全端末で同じ一覧・同じ○の色）
+    try { localStorage.removeItem('sm_news_cache'); } catch (_) {} // 旧・端末ローカル保存の掃除（newsPool同期方式へ移行）
     this.data.newsTags ||= [];        // ニュース注目タグ（保有登録なしの企業/人物/テーマ名）[{id,name}]。見出し一致で別色チップ表示・Google同期
     this.data.newsHidden ||= {};      // ニュース非表示（記事リンク→非表示日時ISO）。一覧から除外・復元可・Google同期
     this.data.newsTrans ||= {};       // ニュース翻訳キャッシュ（記事リンク→{t:訳題,d:訳要約,at}）。1記事1回だけ翻訳・Google同期
@@ -389,8 +391,8 @@ const store = {
     let freed = 0;
     const drop = (k) => { const v = this.data[k]; if (v && typeof v === 'object' && Object.keys(v).length) { freed += JSON.stringify(v).length; this.data[k] = {}; } };
     drop('mktRanking'); drop('indices'); drop('newsTrans');
-    // ニュース一覧の端末ローカル保存（sm_news_cache）も捨てる（「更新」で取り直せる。銘柄データを優先）
-    try { const nv = localStorage.getItem('sm_news_cache'); if (nv) { freed += nv.length; localStorage.removeItem('sm_news_cache'); } } catch (_) {}
+    // ニュース一覧プール（newsPool）も捨てる（「更新」で取り直せる。銘柄データを優先）
+    if (this.data.newsPool) { freed += JSON.stringify(this.data.newsPool).length; this.data.newsPool = null; }
     freed += this._pruneTechAnalysis(true); // それでも足りなければ登録外の分析結果も強めに整理
     return freed;
   },
@@ -4838,47 +4840,35 @@ async function newsRefresh(auto) {
       const seen = new Set();
       items = items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link))
         .sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
-      if (items.length) { newsMarkNew(items); _newsCache = { items, at: (data && data.at) || new Date().toISOString() }; newsSaveCache(); }
+      if (items.length) newsPoolStore(items, new Date().toISOString());
     } finally { clearTimeout(timer); }
   } catch (_) { /* 失敗時は既存キャッシュのまま。キャッシュ無しなら empty 表示になる */ }
   finally { newsBusy = false; }
   // 取得完了時に別タブへ移っていたら描画しない（マーケットタブと同じ配慮。DESIGN.md参照）
   if (currentView === 'news') renderNews();
 }
-// 今回の取得で初めて現れた記事に isNew 印を付ける（未読○の色分け＝新着は黄色）。
-// newsSeen（リンク→初見日時・Google同期）に無いリンク＝新着。45日で掃除（newsRead と同様）。
-// 初回利用時は全記事が新着扱いになる（newsSeen が空のため。次の取得から差分だけが黄色になる）。
-function newsMarkNew(items) {
-  const ns = (store.data.newsSeen ||= {});
-  const nowIso = new Date().toISOString();
-  let changed = false;
-  for (const it of items) {
-    if (!it.link) continue;
-    if (!ns[it.link]) { ns[it.link] = nowIso; it.isNew = true; changed = true; }
-  }
-  const lim = Date.now() - 45 * 86400000;
-  for (const k in ns) { const d = new Date(ns[k]); if (isNaN(d) || d.getTime() < lim) { delete ns[k]; changed = true; } }
-  if (changed) store.save();
+// ===== ニュース一覧の共有プール（store.data.newsPool・Google同期） =====
+// 一覧は「更新」ボタンで取得して newsPool に保存し同期する＝全端末が同じ一覧・同じ○の色（2026-07-23 すみぽん要望）。
+// タブを開いた時はプール（＝ドライブ同期済みの手持ちデータ）を表示するだけで、ニュースサイトへは取りに行かない。
+// ○の色: 未読のうち batch===at（今回の取得で初登場）=黄 / batch===prevAt（前回の取得で初登場）=緑 / それ以前=青。
+function newsPoolCache() {
+  const p = store.data.newsPool;
+  if (!p || !Array.isArray(p.items) || !p.items.length) return _newsCache;
+  if (!_newsCache || _newsCache.at !== p.at) _newsCache = { items: p.items, at: p.at, prevAt: p.prevAt || null };
+  return _newsCache;
 }
-// ニュース一覧の端末ローカル保存（Google同期はしない）。「更新」ボタン方式にしたため、アプリを
-// 開き直しても前回の取得結果が見えるよう localStorage に保持する（旧: メモリのみ＝リロードで消えて
-// いたが、自動取得だったので気づかなかった）。容量対策で最新400件・約700KBまで。保存失敗は無視。
-const NEWS_LS_KEY = 'sm_news_cache';
-function newsSaveCache() {
-  try {
-    if (!_newsCache || !Array.isArray(_newsCache.items)) return;
-    let items = _newsCache.items.slice(0, 400);
-    let json = JSON.stringify({ items, at: _newsCache.at });
-    while (json.length > 700000 && items.length > 50) { items = items.slice(0, Math.floor(items.length / 2)); json = JSON.stringify({ items, at: _newsCache.at }); }
-    localStorage.setItem(NEWS_LS_KEY, json);
-  } catch (_) { /* 容量不足などは無視（表示はメモリキャッシュで継続） */ }
-}
-function newsLoadCache() {
-  if (_newsCache) return;
-  try {
-    const d = JSON.parse(localStorage.getItem(NEWS_LS_KEY));
-    if (d && Array.isArray(d.items) && d.items.length) _newsCache = { items: d.items, at: d.at || null };
-  } catch (_) { /* 壊れた保存は無視（未取得扱い） */ }
+// 取得結果をプールへ保存。各記事に batch（初めて取得に現れた時刻）を刻む（既存記事は前回の値を引き継ぐ）。
+// 容量対策: 最新250件・約350KBまで（プールは localStorage と Drive の同期バンドルに載るため控えめに）。
+function newsPoolStore(items, at) {
+  const prev = store.data.newsPool;
+  const prevBy = new Map(((prev && prev.items) || []).map(it => [it.link, it]));
+  for (const it of items) { const old = prevBy.get(it.link); it.batch = (old && old.batch) || at; }
+  let keep = items.slice(0, 250);
+  let json = JSON.stringify(keep);
+  while (json.length > 350000 && keep.length > 50) { keep = keep.slice(0, Math.floor(keep.length / 2)); json = JSON.stringify(keep); }
+  store.data.newsPool = { items: keep, at, prevAt: (prev && prev.at) || null, _updatedAt: at };
+  _newsCache = { items: keep, at, prevAt: (prev && prev.at) || null };
+  store.save();
 }
 // 記事クリック時: 既読を記録（再描画はしない＝リンクを開く動作を妨げず、クラスだけ落とす）。
 // リンクは data-link 属性から読む（タブ一覧・銘柄詳細ドロワーの両方で共用）
@@ -4991,7 +4981,7 @@ async function generateVideoSummary(videoId, showInPanel) {
       store.save();
       // 一覧の該当動画1行だけ即更新（クリック生成・裏生成どちらも）。画面全体・他行には触れない
       const it = _newsCache && _newsCache.items.find(x => x.videoId === videoId);
-      if (it) { it.desc = d.summary; it.lang = undefined; newsSaveCache(); if (currentView === 'news') _patchVideoItemDom(it); } // 要約後は日本語＝翻訳対象から外す・保存も更新
+      if (it) { it.desc = d.summary; it.lang = undefined; if (currentView === 'news') _patchVideoItemDom(it); } // 要約後は日本語＝翻訳対象から外す（プール項目の変更は直後のsaveで永続化）
       if (showInPanel) {
         const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary;
         const ht = document.getElementById('np-video-headline'); if (ht && d.headline) ht.textContent = d.headline;
@@ -5513,7 +5503,11 @@ function newsItemHtml(it, read, matches, opts = {}) {
     if (cached.headline) { titleLine = `▶ ${esc(cached.headline)}`; subLine = `<span class="news-preview">${esc(it.title)}</span>`; }
     else if (ytAutoForItem(it)) subLine = `<span class="news-preview muted">要約を準備中…</span>`;
   }
-  return `<a class="news-item ${unread ? 'unread' : ''}${unread && it.isNew ? ' nu-new' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
+  // 未読○の色: 今回の取得で初登場(batch===at)=黄 / 前回の取得(batch===prevAt)=緑 / それ以前=青（既定）
+  const batchCls = (unread && it.batch && _newsCache)
+    ? (it.batch === _newsCache.at ? ' nu-new' : (_newsCache.prevAt && it.batch === _newsCache.prevAt ? ' nu-prev' : ''))
+    : '';
+  return `<a class="news-item ${unread ? 'unread' : ''}${batchCls}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
       <span class="news-title">${titleLine}</span>
       ${subLine}
@@ -5523,8 +5517,7 @@ function newsItemHtml(it, read, matches, opts = {}) {
 function renderNews() {
   if (currentView !== 'news') return;
   newsPinCatSession(); // 開いた時点のカテゴリ選択を固定（裏の同期で勝手に切り替わらないように）
-  newsLoadCache();     // 開き直し（リロード）後も前回の取得結果を表示（端末ローカル保存から復元）
-  const cache = _newsCache;
+  const cache = newsPoolCache(); // 同期済みプールから表示（タブを開いてもニュースサイトへは取りに行かない）
   const read = store.data.newsRead || {};
   const hidden = store.data.newsHidden || {};
   const hiddenN = Object.keys(hidden).length;
@@ -5629,14 +5622,8 @@ async function _newsDiscForHoldings() {
 }
 // ニュースプールを確保（10分以内のキャッシュがあればそれ・なければ取得）。描画はしない（ドロワー用）
 async function newsEnsure() {
-  newsLoadCache();
-  if (_newsCache && Date.now() - new Date(_newsCache.at).getTime() < 10 * 60 * 1000) return _newsCache;
-  try {
-    const res = await fetch('/api/news');
-    const d = await res.json();
-    if (d && Array.isArray(d.items)) { newsMarkNew(d.items); _newsCache = { items: d.items, at: d.at || new Date().toISOString() }; newsSaveCache(); }
-  } catch (_) { /* 失敗時は手持ちのキャッシュ（null含む）のまま */ }
-  return _newsCache;
+  // 取得は「更新」ボタンのみ（黄色○が勝手に増えないように）。ドロワーは同期済みプールを参照するだけ。
+  return newsPoolCache();
 }
 // 開示・決算1行（TDnet/EDGAR）。細分類ラベルで色分け、クリックで原本(PDF/EDGAR)を開く
 // 開示のリンク先。TDnet(日本株)のPDFは公開期間が約1か月で、それを過ぎると404になる。

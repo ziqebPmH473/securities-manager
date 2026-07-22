@@ -59,6 +59,7 @@
     newsHidden:      ['map', null],   // ニュース非表示（記事リンク→非表示日時ISO）。キー単位3-way・両在はlocal
     newsTrans:       ['map', null],   // ニュース翻訳キャッシュ（記事リンク→{t,d,at}）。キー単位3-way・両在はlocal
     newsPrefs:       ['singleTs'],    // ニュース表示設定（除外カテゴリ/開示種類）。両方編集時は _updatedAt の新しい方
+    newsPool:        ['singleTs'],    // ニュース一覧の共有プール {items,at,prevAt,_updatedAt}。「更新」した端末の新しい方を採用
     // 開示種別マスタ / YouTube購読チャンネル。以前は ['single'] だったが、既定値が自動シードされる
     // マスタなので「別端末で再シードされた既定値」が本物の登録内容を上書きして消える事故が起きた
     // （実際に登録済みのYouTubeチャンネルが消失）。行ごとの updatedAt ＋ 削除のトンボストン（deleted:true）で
