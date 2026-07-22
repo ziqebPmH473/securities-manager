@@ -65,8 +65,12 @@
     discTypeDefs:    ['records', (d) => `dt:${d && d.name}`],
     ytChannels:      ['records', (c) => `yt:${c && c.id}`],
     ytSummaries:     ['map', null],   // 動画要約キャッシュ（videoId→{summary,at}）。キー単位3-way・両在はlocal
-    listedMaster:    ['single'],      // 全上場銘柄マスタ（自動タグ用・配列）。一括取込なので base から変わった側を採用
-    listedMasterInfo: ['single'],     // 上場マスタの取込メタ（日付・件数）。listedMasterと一緒に更新
+    // 全上場銘柄マスタ（自動タグ用・一括取込のコンパクト文字列）。旧 'single' は「別端末の base にキーが
+    // 無い」と seed の空が本物の取込済みマスタに local 優先で勝ち、引き継がれない/消える事故が起きた。
+    // bulkTs = 取込メタ listedMasterInfo._updatedAt の新しい方を採用し、時刻が無い場合は「空でない側」を採用
+    // （一括取込マスタの空は「未取込」であって編集の意思ではない。全消去は _updatedAt 付きで伝播する）。
+    listedMaster:    ['bulkTs', 'listedMasterInfo'],
+    listedMasterInfo: ['singleTs'],   // 上場マスタの取込メタ（日付・件数・_updatedAt）。listedMasterと一緒に更新
 
     fx:              ['single'],
     settings:        ['singleTs'],
@@ -155,6 +159,18 @@
     const lt = (lref && lref._updatedAt) || '', rt = (rref && rref._updatedAt) || '';
     return (rt > lt) ? remote : local;
   }
+  // 一括取込マスタ（listedMaster）用: 相方メタ(lref/rref)の _updatedAt の新しい方。時刻が無い/同じ場合は
+  // 「空でない側」を採用（配列・コンパクト文字列の両形式に対応）。両方に実データがあれば local。
+  function mergeBulkTs3way(base, local, remote, lref, rref) {
+    const bj = JSON.stringify(base), lj = JSON.stringify(local), rj = JSON.stringify(remote);
+    if (lj === bj) return remote;
+    if (rj === bj) return local;
+    const lt = (lref && lref._updatedAt) || '', rt = (rref && rref._updatedAt) || '';
+    if (lt !== rt) return (rt > lt) ? remote : local;
+    const isEmpty = (v) => v == null || (Array.isArray(v) ? v.length === 0 : String(v) === '');
+    if (isEmpty(local) !== isEmpty(remote)) return isEmpty(local) ? remote : local;
+    return local;
+  }
   const mergeMax = (a, b) => (a == null) ? b : (b == null) ? a : (b > a ? b : a);
   const mergeMaxNum = (a, b) => Math.max(a || 0, b || 0);
 
@@ -199,6 +215,7 @@
       else if (rule[0] === 'maxNum') out[key] = mergeMaxNum(local[key], remote[key]);
       else if (rule[0] === 'singleTs') out[key] = mergeSingleTs3way(base[key], local[key], remote[key]);
       else if (rule[0] === 'pairTs') out[key] = mergeSingleRefTs3way(base[key], local[key], remote[key], local[rule[1]], remote[rule[1]]);
+      else if (rule[0] === 'bulkTs') out[key] = mergeBulkTs3way(base[key], local[key], remote[key], local[rule[1]], remote[rule[1]]);
       else if (rule[0] === 'colprefs') out[key] = mergeColPrefs3way(base[key], local[key], remote[key]);
       else out[key] = mergeSingle3way(base[key], local[key], remote[key]);
     }

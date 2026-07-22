@@ -6665,7 +6665,8 @@ async function importListedFromFile(file) {
       }
       if (!parsed.list.length) throw new Error('コード・銘柄名を読み取れませんでした（ファイルをご確認ください）');
       setListedMaster(parsed.list);
-      store.data.listedMasterInfo = { date: parsed.date || '', importedAt: store._now ? store._now() : Date.now(), count: parsed.list.length, fileName: file.name || '' };
+      // _updatedAt: 同期の bulkTs 規則が「新しい取込」を勝たせるための編集時刻（未取込端末の空に負けない）
+      store.data.listedMasterInfo = { date: parsed.date || '', importedAt: store._now ? store._now() : Date.now(), count: parsed.list.length, fileName: file.name || '', _updatedAt: store._now() };
       store.save();
       _majorsListCache = null; _majorsMemo.clear();
       return parsed;
@@ -6718,7 +6719,7 @@ function importListedMaster() {
   const parsed = parseListedMaster(ta.value);
   if (!parsed.list.length) { toast('コード・銘柄名を読み取れませんでした（貼り付け内容をご確認ください）'); return; }
   setListedMaster(parsed.list);
-  store.data.listedMasterInfo = { date: parsed.date || '', importedAt: store._now ? store._now() : Date.now(), count: parsed.list.length, fileName: '' };
+  store.data.listedMasterInfo = { date: parsed.date || '', importedAt: store._now ? store._now() : Date.now(), count: parsed.list.length, fileName: '', _updatedAt: store._now() };
   store.save();
   _majorsListCache = null; _majorsMemo.clear(); // 照合リスト再構築
   closeModal(); if (currentView === 'news') renderNews();
@@ -6726,7 +6727,8 @@ function importListedMaster() {
 }
 function clearListedMaster() {
   if (!confirm('上場銘柄マスタを全消去します。よろしいですか？')) return;
-  setListedMaster([]); store.data.listedMasterInfo = null; store.save();
+  // 消去も _updatedAt 付きのメタを残す（null にすると同期で「消去の意思」が伝わらず他端末のデータで復活する）
+  setListedMaster([]); store.data.listedMasterInfo = { date: '', importedAt: store._now(), count: 0, fileName: '', cleared: true, _updatedAt: store._now() }; store.save();
   _majorsListCache = null; _majorsMemo.clear();
   closeModal(); if (currentView === 'news') renderNews();
   toast('上場銘柄マスタを消去しました');
