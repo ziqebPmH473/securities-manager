@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0808';
+const APP_VERSION = 'v20260723-0812';
 
 'use strict';
 
@@ -4681,6 +4681,7 @@ function renderMarketTab() {
 // 記事一覧はメモリキャッシュのみ（RSS取得は無料・軽量なので保存しない）。既読だけを
 // store.data.newsRead（リンク→既読日時）に保存し Google同期する（sync-merge.js SCHEMA 登録済み）。
 let _newsCache = null;   // { items:[{title,link,source,pubDate}], at }
+let _newsSeenMark = null; // タブに入り直した時点のプール取得時刻。黄○＝この時刻より後の「更新」で入った新着（開き直すと青へ）
 let newsBusy = false;
 let newsHeldOnly = false; // 関連銘柄（登録銘柄に見出し一致）のみ表示
 const NEWS_REAL_CATS = ['market', 'earnings', 'disclosure', 'video', 'macro', 'other']; // 「すべて」以外の実カテゴリ
@@ -4883,7 +4884,7 @@ function newsReadLink(el) {
     if (isNaN(d) || d.getTime() < lim) delete store.data.newsRead[k];
   }
   store.save();
-  el.classList.remove('unread', 'nu-new'); el.classList.add('read');
+  el.classList.remove('unread', 'nu-new');
 }
 
 // 記事をリンクから探す（要約パネル用）
@@ -4896,7 +4897,7 @@ function newsOpenArticle(ev, el) {
   store.data.newsRead[link] = new Date().toISOString();
   const lim = Date.now() - 45 * 86400 * 1000;
   for (const k in store.data.newsRead) { const d = new Date(store.data.newsRead[k]); if (isNaN(d) || d.getTime() < lim) delete store.data.newsRead[k]; }
-  store.save(); el.classList.remove('unread', 'nu-new'); el.classList.add('read');
+  store.save(); el.classList.remove('unread', 'nu-new');
   const it = newsFindItem(link);
   if (it && it.cat === 'video') { openVideoPanel(it); return; } // 動画はAI要約パネル
   // 要約が無い記事（開示・日経マーケット・Yahoo等）はパネルを出さず一発で元記事を開く
@@ -5503,9 +5504,9 @@ function newsItemHtml(it, read, matches, opts = {}) {
     if (cached.headline) { titleLine = `▶ ${esc(cached.headline)}`; subLine = `<span class="news-preview">${esc(it.title)}</span>`; }
     else if (ytAutoForItem(it)) subLine = `<span class="news-preview muted">要約を準備中…</span>`;
   }
-  // ○の色: 今回の取得で入った未読(batch===at)=黄 / それ以外の未読=青 / 既読=グレー（read）
-  const batchCls = (unread && it.batch && _newsCache && it.batch === _newsCache.at) ? ' nu-new' : '';
-  return `<a class="news-item ${unread ? 'unread' : 'read'}${batchCls}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
+  // ○の色: 「更新」で入った新着未読=黄（次にタブを開き直すと通常の未読=青へ戻る）/ 未読=青 / 既読=従来どおり
+  const batchCls = (unread && it.batch && _newsCache && it.batch === _newsCache.at && _newsCache.at !== _newsSeenMark) ? ' nu-new' : '';
+  return `<a class="news-item ${unread ? 'unread' : ''}${batchCls}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
       <span class="news-title">${titleLine}</span>
       ${subLine}
@@ -5516,6 +5517,7 @@ function renderNews() {
   if (currentView !== 'news') return;
   newsPinCatSession(); // 開いた時点のカテゴリ選択を固定（裏の同期で勝手に切り替わらないように）
   const cache = newsPoolCache(); // 同期済みプールから表示（タブを開いてもニュースサイトへは取りに行かない）
+  if (_newsSeenMark === null) _newsSeenMark = (cache && cache.at) || ''; // リロード直後の初回表示も「開き直し」扱い（黄→青）
   const read = store.data.newsRead || {};
   const hidden = store.data.newsHidden || {};
   const hiddenN = Object.keys(hidden).length;
@@ -12092,6 +12094,9 @@ function timeBasedMarket() {
   return (day >= 1 && day <= 5 && hour >= 8 && hour < 18) ? 'JP' : 'US';
 }
 function go(view) {
+  // ニュースタブに「入り直した」時点で、前回「更新」ぶんの黄○を通常の未読（青）へ戻す
+  //（黄＝更新してから次にタブを開くまでの目印。すみぽん仕様 2026-07-23）
+  if (view === 'news' && currentView !== 'news') _newsSeenMark = (store.data.newsPool && store.data.newsPool.at) || '';
   currentView = view;
   try { sessionStorage.setItem('sm_view', view); } catch (_) {} // リロードで復元（開き直しはクリアされ dashboard）
   renderNav();
