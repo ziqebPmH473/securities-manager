@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0742';
+const APP_VERSION = 'v20260723-0808';
 
 'use strict';
 
@@ -4883,7 +4883,7 @@ function newsReadLink(el) {
     if (isNaN(d) || d.getTime() < lim) delete store.data.newsRead[k];
   }
   store.save();
-  el.classList.remove('unread');
+  el.classList.remove('unread', 'nu-new'); el.classList.add('read');
 }
 
 // 記事をリンクから探す（要約パネル用）
@@ -4896,7 +4896,7 @@ function newsOpenArticle(ev, el) {
   store.data.newsRead[link] = new Date().toISOString();
   const lim = Date.now() - 45 * 86400 * 1000;
   for (const k in store.data.newsRead) { const d = new Date(store.data.newsRead[k]); if (isNaN(d) || d.getTime() < lim) delete store.data.newsRead[k]; }
-  store.save(); el.classList.remove('unread');
+  store.save(); el.classList.remove('unread', 'nu-new'); el.classList.add('read');
   const it = newsFindItem(link);
   if (it && it.cat === 'video') { openVideoPanel(it); return; } // 動画はAI要約パネル
   // 要約が無い記事（開示・日経マーケット・Yahoo等）はパネルを出さず一発で元記事を開く
@@ -5503,11 +5503,9 @@ function newsItemHtml(it, read, matches, opts = {}) {
     if (cached.headline) { titleLine = `▶ ${esc(cached.headline)}`; subLine = `<span class="news-preview">${esc(it.title)}</span>`; }
     else if (ytAutoForItem(it)) subLine = `<span class="news-preview muted">要約を準備中…</span>`;
   }
-  // 未読○の色: 今回の取得で初登場(batch===at)=黄 / 前回の取得(batch===prevAt)=緑 / それ以前=青（既定）
-  const batchCls = (unread && it.batch && _newsCache)
-    ? (it.batch === _newsCache.at ? ' nu-new' : (_newsCache.prevAt && it.batch === _newsCache.prevAt ? ' nu-prev' : ''))
-    : '';
-  return `<a class="news-item ${unread ? 'unread' : ''}${batchCls}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
+  // ○の色: 今回の取得で入った未読(batch===at)=黄 / それ以外の未読=青 / 既読=グレー（read）
+  const batchCls = (unread && it.batch && _newsCache && it.batch === _newsCache.at) ? ' nu-new' : '';
+  return `<a class="news-item ${unread ? 'unread' : 'read'}${batchCls}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
       <span class="news-title">${titleLine}</span>
       ${subLine}

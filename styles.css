@@ -1109,9 +1109,9 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .news-title { font-size: 13.5px; line-height: 1.45; }
 .news-item.unread .news-title { font-weight: 700; }
 .news-item.unread .news-title::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 7px; vertical-align: 2px; }
-/* 未読○の色分け: 今回の取得で新しく現れた記事=黄 / 前回の取得分=緑 / それ以前=青（既定） */
+/* ○の色分け: 今回の取得で入った未読=黄 / それ以外の未読=青（既定） / 既読=グレー */
 .news-item.unread.nu-new .news-title::before { background: #eab308; }
-.news-item.unread.nu-prev .news-title::before { background: #22c55e; }
+.news-item.read .news-title::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #9ca3af; margin-right: 7px; vertical-align: 2px; }
 .news-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
 .news-cat { padding: 1px 7px; border-radius: 999px; font-size: 10px; border: 1px solid var(--border); background: var(--panel-2); }
 .news-cat.cat-earnings { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
