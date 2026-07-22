@@ -54,6 +54,7 @@
     importMappings:  ['map', null],
     importAliases:   ['map', null],
     newsRead:        ['map', null],   // ニュース既読（記事リンク→既読日時ISO）。キー単位3-way・両在はlocal
+    newsSeen:        ['map', null],   // ニュース初見（記事リンク→初見日時ISO・未読○の新着色分け用）。キー単位3-way・両在はlocal
     newsTags:        ['records', (t) => `ntag:${t.name}`], // ニュース注目タグ。名前キーで3-way（削除も伝播）
     newsHidden:      ['map', null],   // ニュース非表示（記事リンク→非表示日時ISO）。キー単位3-way・両在はlocal
     newsTrans:       ['map', null],   // ニュース翻訳キャッシュ（記事リンク→{t,d,at}）。キー単位3-way・両在はlocal

@@ -716,6 +716,14 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - **旧バグ**: `listedMaster` の同期規則が `'single'`（両方変更なら local 優先）。別端末の base にキーが無い場合、seed の空 `[]` も「変更」扱いになり、**未取込端末の空が取込済み端末の本物のマスタに勝って引き継がれない**（さらに push で Drive も空に上書きされ得る）。discTypeDefs/ytChannels で起きたのと同じ 'single'＋シード事故型。
 - **修正**: 新規則 **`bulkTs`** を追加——相方メタ `listedMasterInfo._updatedAt` の新しい方を採用し、**時刻が無い/同じ場合は「空でない側」を採用**（一括取込マスタの空＝未取込であり編集の意思ではない）。取込2経路と全消去で `_updatedAt` を stamp。**全消去は info=null でなく `{cleared:true, _updatedAt}` を残す**（消去の意思がタイムスタンプ付きで伝播し、他端末のデータで勝手に復活しない）。`listedMasterInfo` は `singleTs` に変更。
 
+### 15.1.3c 'single'規則の棚卸し結果（2026-07-22）
+上場マスタ事故（15.1.3b）を受け、SCHEMA の 'single'/'singleTs' 系を全数点検。**「シード/既定値が実データに勝ち得る」型は listedMaster が最後の残党**だった。残りは: `fx`/`lastPriceSource`/`lastPrevCloseAt`/`prevCloseVer`＝自動取得キャッシュ（負けても次の更新で自己修復・実害なし）、`settings`＝singleTs（保存箇所は `_updatedAt` を stamp。**YouTube設定保存(ytModel/ytAutoSummary)だけ stamp 漏れ→修正**）、`matrixBands/matrixSettings/_colPrefs`＝対策済み。map系（importAliases/importMappings/newsRead等）はキー単位マージでシードが実データを消す型ではない（同一キー同時編集時のみ local 優先）。
+
+### 15.1.5 ニュース未読○の新着色分け（2026-07-22）
+- `store.data.newsSeen`（記事リンク→初見日時ISO・同期 map・45日で掃除）を新設。取得時に `newsMarkNew(items)` が「newsSeen に無いリンク＝今回初めて現れた記事」へ `isNew` を付け初見日時を記録。
+- 表示: 未読○（`.news-item.unread`）のうち **今回の取得で新しく現れた記事は黄色○**（`.nu-new`、#eab308）。既知の未読は従来の青○。既読は○なし。「どこから新しいか」の境界が一目でわかる。
+- 初回利用時は newsSeen が空のため全記事が一度だけ黄色になる（次の取得から差分のみ）。
+
 ### 15.1.4 決算日取得の抑制（2026-07-22 修正）
 - **旧バグ**: `refreshEarnings` がETFにも毎回問い合わせ→決算が無いので常に空応答→「空は取得済みにしない」仕様（同時アクセス制限対策）と組み合わさり、**同じN件（ETF等）が株価更新のたびに永遠に再試行**され、更新が遅くなっていた。
 - **修正**: ①**ETFを対象外**（`detailTypeOf(s) !== 'ETF'`＝手動指定＋自動判定）②データ無し/失敗の銘柄は `earnings[k].tryAt` を記録し**60分間は再試行しない**（制限からの当日回復は維持しつつ更新のたびの全件リトライを廃止。既存値は保持）③**場中スキップ**＝`earnSkipNow()` が真（日本株ザラ場9:00-16:00・米国レギュラー・各寄り30分前、月〜金）の間は決算日取得を丸ごとスキップし、場外の株価更新で取得（場中は株価を最速で見たいため）。

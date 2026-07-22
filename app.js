@@ -328,6 +328,7 @@ const store = {
     this.data.earnings ||= {};        // 決算日キャッシュ priceKey→{prev,next,nextEstimate,exDiv,at}。1日1回取得・同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     this.data.newsRead ||= {};        // ニュース既読（記事リンク→既読日時ISO）。Google同期対象（sync-merge SCHEMA登録済み）
+    this.data.newsSeen ||= {};        // ニュース初見（記事リンク→初めて取得に現れた日時ISO）。未読○の新着色分け用・同期
     this.data.newsTags ||= [];        // ニュース注目タグ（保有登録なしの企業/人物/テーマ名）[{id,name}]。見出し一致で別色チップ表示・Google同期
     this.data.newsHidden ||= {};      // ニュース非表示（記事リンク→非表示日時ISO）。一覧から除外・復元可・Google同期
     this.data.newsTrans ||= {};       // ニュース翻訳キャッシュ（記事リンク→{t:訳題,d:訳要約,at}）。1記事1回だけ翻訳・Google同期
@@ -4832,12 +4833,27 @@ async function newsRefresh(auto) {
       const seen = new Set();
       items = items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link))
         .sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
-      if (items.length) _newsCache = { items, at: (data && data.at) || new Date().toISOString() };
+      if (items.length) { newsMarkNew(items); _newsCache = { items, at: (data && data.at) || new Date().toISOString() }; }
     } finally { clearTimeout(timer); }
   } catch (_) { /* 失敗時は既存キャッシュのまま。キャッシュ無しなら empty 表示になる */ }
   finally { newsBusy = false; }
   // 取得完了時に別タブへ移っていたら描画しない（マーケットタブと同じ配慮。DESIGN.md参照）
   if (currentView === 'news') renderNews();
+}
+// 今回の取得で初めて現れた記事に isNew 印を付ける（未読○の色分け＝新着は黄色）。
+// newsSeen（リンク→初見日時・Google同期）に無いリンク＝新着。45日で掃除（newsRead と同様）。
+// 初回利用時は全記事が新着扱いになる（newsSeen が空のため。次の取得から差分だけが黄色になる）。
+function newsMarkNew(items) {
+  const ns = (store.data.newsSeen ||= {});
+  const nowIso = new Date().toISOString();
+  let changed = false;
+  for (const it of items) {
+    if (!it.link) continue;
+    if (!ns[it.link]) { ns[it.link] = nowIso; it.isNew = true; changed = true; }
+  }
+  const lim = Date.now() - 45 * 86400000;
+  for (const k in ns) { const d = new Date(ns[k]); if (isNaN(d) || d.getTime() < lim) { delete ns[k]; changed = true; } }
+  if (changed) store.save();
 }
 // 記事クリック時: 既読を記録（再描画はしない＝リンクを開く動作を妨げず、クラスだけ落とす）。
 // リンクは data-link 属性から読む（タブ一覧・銘柄詳細ドロワーの両方で共用）
@@ -5468,7 +5484,7 @@ function newsItemHtml(it, read, matches, opts = {}) {
     if (cached.headline) { titleLine = `▶ ${esc(cached.headline)}`; subLine = `<span class="news-preview">${esc(it.title)}</span>`; }
     else if (store.data.settings && store.data.settings.ytAutoSummary) subLine = `<span class="news-preview muted">要約を準備中…</span>`;
   }
-  return `<a class="news-item ${unread ? 'unread' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
+  return `<a class="news-item ${unread ? 'unread' : ''}${unread && it.isNew ? ' nu-new' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
       <span class="news-title">${titleLine}</span>
       ${subLine}
@@ -5581,7 +5597,7 @@ async function newsEnsure() {
   try {
     const res = await fetch('/api/news');
     const d = await res.json();
-    if (d && Array.isArray(d.items)) _newsCache = { items: d.items, at: d.at || new Date().toISOString() };
+    if (d && Array.isArray(d.items)) { newsMarkNew(d.items); _newsCache = { items: d.items, at: d.at || new Date().toISOString() }; }
   } catch (_) { /* 失敗時は手持ちのキャッシュ（null含む）のまま */ }
   return _newsCache;
 }
@@ -6809,6 +6825,7 @@ function saveYtChannelMaster() {
   store.data.settings = store.data.settings || {};
   const msel = document.getElementById('yt-model'); if (msel) store.data.settings.ytModel = msel.value || '';
   const auto = document.getElementById('yt-auto'); if (auto) store.data.settings.ytAutoSummary = !!auto.checked;
+  store.data.settings._updatedAt = store._now(); // 同期マージ(singleTs)で両端末変更時に新しい方を採るため（従来ここだけ漏れていた）
   store.save();
   closeModal(); if (currentView === 'news') { _newsCache = null; newsRefresh(); }
   toast('YouTubeチャンネルを保存しました');
