@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0023';
+const APP_VERSION = 'v20260723-0724';
 
 'use strict';
 
@@ -5533,7 +5533,7 @@ function renderNews() {
       ${discSeg}
       <div id="flt-host-news" style="flex-basis:100%">${fltState.news.open ? filterPanelHtml('news') : ''}</div>`;
     if (!cache) {
-      body = '<div class="empty">読み込み中…</div>';
+      body = newsBusy ? '<div class="empty">読み込み中…</div>' : '<div class="empty">まだ取得していません。右上の「更新」ボタンで取得します。</div>';
     } else {
       const entries = _newsCurrentEntries();
       body = entries.length
@@ -5557,8 +5557,9 @@ function renderNews() {
     </div>`;
   scheduleFit(); // 一覧を枠内スクロールに（ページ全体をスクロールさせない）
   initNewsDragScroll(); // ドラッグでスクロール（初回のみ設定）
-  if (!newsBusy && !cache) newsRefresh(true); // タブを開いた時に自動取得
-  else if (!newsBusy && cache && Date.now() - new Date(cache.at).getTime() > 5 * 60 * 1000) newsRefresh(true); // 5分超は裏で自動更新
+  // 記事の取得は「更新」ボタン押下時のみ（2026-07-23 すみぽん要望）。
+  // 旧: タブを開くと自動取得＋キャッシュ5分超で裏更新→「開いたら勝手に更新される」ため廃止。
+  // 手持ちキャッシュの翻訳・要約の裏処理（下2行）は通信済みデータの加工なので従来どおり動かす。
   if (cache) newsTranslatePending(); // 英語記事の未翻訳分を裏で翻訳→完了後に再描画（非同期・多重起動はガード済み）
   if (cache) newsAutoSummarizeVideos(); // 新着動画の要約を裏で先に生成（設定ONのとき・多重起動ガード済み）
 }
