@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0812';
+const APP_VERSION = 'v20260723-0839';
 
 'use strict';
 
@@ -4681,7 +4681,8 @@ function renderMarketTab() {
 // 記事一覧はメモリキャッシュのみ（RSS取得は無料・軽量なので保存しない）。既読だけを
 // store.data.newsRead（リンク→既読日時）に保存し Google同期する（sync-merge.js SCHEMA 登録済み）。
 let _newsCache = null;   // { items:[{title,link,source,pubDate}], at }
-let _newsSeenMark = null; // タブに入り直した時点のプール取得時刻。黄○＝この時刻より後の「更新」で入った新着（開き直すと青へ）
+let _newsSeenMark = null; // セッション開始時点のプール取得時刻。黄○＝それより後の「更新」で入った新着。
+                          // アプリ開き直し/リロードで青へ戻る。タブ移動→戻るでは消えない（セッション変数のため自然にそうなる）
 let newsBusy = false;
 let newsHeldOnly = false; // 関連銘柄（登録銘柄に見出し一致）のみ表示
 const NEWS_REAL_CATS = ['market', 'earnings', 'disclosure', 'video', 'macro', 'other']; // 「すべて」以外の実カテゴリ
@@ -5517,7 +5518,7 @@ function renderNews() {
   if (currentView !== 'news') return;
   newsPinCatSession(); // 開いた時点のカテゴリ選択を固定（裏の同期で勝手に切り替わらないように）
   const cache = newsPoolCache(); // 同期済みプールから表示（タブを開いてもニュースサイトへは取りに行かない）
-  if (_newsSeenMark === null) _newsSeenMark = (cache && cache.at) || ''; // リロード直後の初回表示も「開き直し」扱い（黄→青）
+  if (_newsSeenMark === null) _newsSeenMark = (cache && cache.at) || ''; // セッション初回表示＝「開き直し」（それ以前の黄は青へ）
   const read = store.data.newsRead || {};
   const hidden = store.data.newsHidden || {};
   const hiddenN = Object.keys(hidden).length;
@@ -12094,9 +12095,8 @@ function timeBasedMarket() {
   return (day >= 1 && day <= 5 && hour >= 8 && hour < 18) ? 'JP' : 'US';
 }
 function go(view) {
-  // ニュースタブに「入り直した」時点で、前回「更新」ぶんの黄○を通常の未読（青）へ戻す
-  //（黄＝更新してから次にタブを開くまでの目印。すみぽん仕様 2026-07-23）
-  if (view === 'news' && currentView !== 'news') _newsSeenMark = (store.data.newsPool && store.data.newsPool.at) || '';
+  // ニュースの黄○はタブ移動→戻るでは消さない（消えるのはアプリ開き直し/リロード時と「更新」時のみ。
+  // _newsSeenMark はセッション開始時の renderNews で一度だけ初期化される。すみぽん仕様 2026-07-23）
   currentView = view;
   try { sessionStorage.setItem('sm_view', view); } catch (_) {} // リロードで復元（開き直しはクリアされ dashboard）
   renderNav();
