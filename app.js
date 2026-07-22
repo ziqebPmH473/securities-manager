@@ -9,6 +9,9 @@
  *  - 市場(米国株/日本株/投信)を分離して表示。一覧はソート/フィルタ対応
  *  - 銘柄分析結果（評価・★・推奨カテゴリ等）を銘柄に紐づけ。Excel貼付けで一括取込
  */
+// アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
+// マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
+const APP_VERSION = 'v20260722-2343';
 
 'use strict';
 
@@ -5239,7 +5242,8 @@ function _newsPruneTrans() { // 30日より古い翻訳キャッシュを掃除
 async function _newsTranslateBatch(texts) {
   if (!texts.length) return [];
   try {
-    const qs = texts.map(t => 'q=' + encodeURIComponent(t)).join('&');
+    // サーバーと同じ上限で切り詰めて送る（長文で filter 落ち→件数ズレ・翻訳不能になるのを防ぐ二重防御）
+    const qs = texts.map(t => 'q=' + encodeURIComponent(String(t || '').slice(0, 1500))).join('&');
     const r = await fetch('/api/translate?sl=en&tl=ja&' + qs);
     const d = await r.json();
     return Array.isArray(d.translated) ? d.translated : [];
@@ -7112,7 +7116,7 @@ function openNotifyMaster() {
 function renderMaster() {
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>マスタ</h2></div>
+      <div class="section-head"><h2>マスタ</h2><span class="muted" style="margin-left:auto;font-size:12px" title="アプリのバージョン（更新日時 JST）">${esc(APP_VERSION)}</span></div>
       <div class="section-body" style="padding:16px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <span class="muted">マスタを選択</span>

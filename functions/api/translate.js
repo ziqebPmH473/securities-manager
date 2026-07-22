@@ -11,7 +11,11 @@ export async function onRequestGet(context) {
   if (!texts.length && single) texts = [single];
   const sl = url.searchParams.get('sl') || 'auto';
   const tl = url.searchParams.get('tl') || 'ja';
-  texts = texts.filter(t => t && t.length <= 1200).slice(0, 30);
+  // 長文は「除外」ではなく先頭1500文字に切り詰めて翻訳する。
+  // 旧: length>1200 を filter で落としていたため、①長い要約は翻訳が常に失敗（毎回「翻訳を取得できません
+  // でした」）②バッチ内の1件が落ちると translated の件数がズレ、クライアント側の対応付けが崩れて
+  // 別記事の訳が混ざり得た。切り詰めなら件数が常に一致し、長文も冒頭だけは翻訳される。
+  texts = texts.map(t => String(t || '').slice(0, 1500)).filter(t => t).slice(0, 30);
   if (!texts.length) return json({ error: 'no text', translated: [] }, 400);
 
   let translated = await batchClients5(texts, sl, tl);
