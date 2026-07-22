@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0839';
+const APP_VERSION = 'v20260723-0847';
 
 'use strict';
 
@@ -378,22 +378,30 @@ const store = {
       const freedKB = Math.round(this._freeCacheSpace() / 1024);
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
-        if (typeof toast === 'function') toast(`保存容量が上限に近づいたため、再取得できるキャッシュ（市場ランキング/参考指数/翻訳）約${freedKB}KBを整理して保存しました`, 5000);
+        if (typeof toast === 'function') toast(`保存容量が上限に近づいたため、再取得できるキャッシュ（市場ランキング/参考指数/翻訳/分析）約${freedKB}KBを整理して保存しました`, 5000);
       } catch (e2) {
-        if (typeof toast === 'function') toast('ブラウザの保存容量が上限です。マスタ→「上場銘柄マスタ」で「全消去」するか、不要な保有/取込データを整理してください', 7000);
-        throw e2;
+        // 最終手段: ニュース一覧プールも捨てて再試行（「更新」で取り直せる・銘柄データ優先）。
+        // ※取得直後に捨てると「ローカル無し vs Driveの古い一覧」で同期が古い方を採用し、
+        //   タブ復帰時に新着記事が消える事故が起きたため、プール破棄は本当に最後の手段に限定する。
+        if (this.data.newsPool) this.data.newsPool = null;
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+          if (typeof toast === 'function') toast('保存容量が上限のため、ニュース一覧の保存を一時的に見送りました（「更新」で取り直せます）。マスタのデータ整理をおすすめします', 7000);
+        } catch (e3) {
+          if (typeof toast === 'function') toast('ブラウザの保存容量が上限です。マスタ→「上場銘柄マスタ」で「全消去」するか、不要な保有/取込データを整理してください', 7000);
+          throw e3;
+        }
       }
     }
   },
-  // 再取得できるキャッシュ（市場ランキング・参考指数・ニュース翻訳）を破棄して容量を空ける。戻り値=解放したおよそのバイト数。
-  // ※動画要約(ytSummaries)はGeminiのAPIコストがかかる再生成のため、ここでは消さない。
+  // 再取得できるキャッシュ（市場ランキング・参考指数・ニュース翻訳・登録外の分析結果）を破棄して容量を空ける。
+  // 戻り値=解放したおよそのバイト数。※動画要約(ytSummaries)はGeminiのAPIコスト、ニュース一覧(newsPool)は
+  // 同期の巻き戻り事故防止のため、ここでは消さない（newsPool は save() の最終手段でのみ破棄）。
   _freeCacheSpace() {
     let freed = 0;
     const drop = (k) => { const v = this.data[k]; if (v && typeof v === 'object' && Object.keys(v).length) { freed += JSON.stringify(v).length; this.data[k] = {}; } };
     drop('mktRanking'); drop('indices'); drop('newsTrans');
-    // ニュース一覧プール（newsPool）も捨てる（「更新」で取り直せる。銘柄データを優先）
-    if (this.data.newsPool) { freed += JSON.stringify(this.data.newsPool).length; this.data.newsPool = null; }
-    freed += this._pruneTechAnalysis(true); // それでも足りなければ登録外の分析結果も強めに整理
+    freed += this._pruneTechAnalysis(true); // 登録外の分析結果も強めに整理（過去実測で最大の容量食い）
     return freed;
   },
   // テクニカル分析結果の自動整理（容量対策。localStorageの大半を占めていたため）。
@@ -4856,20 +4864,39 @@ async function newsRefresh(auto) {
 function newsPoolCache() {
   const p = store.data.newsPool;
   if (!p || !Array.isArray(p.items) || !p.items.length) return _newsCache;
-  if (!_newsCache || _newsCache.at !== p.at) _newsCache = { items: p.items, at: p.at, prevAt: p.prevAt || null };
+  if (!_newsCache || _newsCache.at !== p.at) {
+    // 保存時に落とした動画のサムネ・要約(desc)を表示用コピーへ復元（サムネ=動画IDから再構成 / 要約=ytSummaries）。
+    // プール内のオブジェクトを直接書き換えるとスリム化が打ち消される（次のsaveで太って保存される）ためコピーに対して行う。
+    const items = p.items.map(it => {
+      if (!it.videoId) return it;
+      const o = { ...it };
+      if (!o.thumb) o.thumb = `https://i.ytimg.com/vi/${o.videoId}/hqdefault.jpg`;
+      if (!o.desc) { const s = (store.data.ytSummaries || {})[o.videoId]; if (s && s.summary) o.desc = s.summary; }
+      return o;
+    });
+    _newsCache = { items, at: p.at, prevAt: p.prevAt || null };
+  }
   return _newsCache;
 }
 // 取得結果をプールへ保存。各記事に batch（初めて取得に現れた時刻）を刻む（既存記事は前回の値を引き継ぐ）。
-// 容量対策: 最新250件・約350KBまで（プールは localStorage と Drive の同期バンドルに載るため控えめに）。
+// 容量対策（プールは localStorage と Drive の同期バンドル両方に載るため極力軽く）:
+//   最新200件・約200KBまで。動画のサムネ(thumb=IDから再構成可)と要約(desc=ytSummaries から復元可)は保存しない。
+//   長い本文は800字に切り詰め（RSSの要約は通常この範囲。表示・翻訳への実害は小）。
 function newsPoolStore(items, at) {
   const prev = store.data.newsPool;
   const prevBy = new Map(((prev && prev.items) || []).map(it => [it.link, it]));
   for (const it of items) { const old = prevBy.get(it.link); it.batch = (old && old.batch) || at; }
-  let keep = items.slice(0, 250);
+  let keep = items.slice(0, 200).map(it => {
+    const o = { ...it };
+    delete o.thumb;
+    if (o.videoId) delete o.desc;
+    if (typeof o.desc === 'string' && o.desc.length > 800) o.desc = o.desc.slice(0, 800);
+    return o;
+  });
   let json = JSON.stringify(keep);
-  while (json.length > 350000 && keep.length > 50) { keep = keep.slice(0, Math.floor(keep.length / 2)); json = JSON.stringify(keep); }
+  while (json.length > 200000 && keep.length > 50) { keep = keep.slice(0, Math.floor(keep.length / 2)); json = JSON.stringify(keep); }
   store.data.newsPool = { items: keep, at, prevAt: (prev && prev.at) || null, _updatedAt: at };
-  _newsCache = { items: keep, at, prevAt: (prev && prev.at) || null };
+  _newsCache = null; newsPoolCache(); // 表示用キャッシュを作り直し（動画のサムネ・要約を復元した状態で）
   store.save();
 }
 // 記事クリック時: 既読を記録（再描画はしない＝リンクを開く動作を妨げず、クラスだけ落とす）。
