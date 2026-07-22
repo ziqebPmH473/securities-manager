@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260722-2353';
+const APP_VERSION = 'v20260723-0000';
 
 'use strict';
 
@@ -4969,7 +4969,7 @@ async function generateVideoSummary(videoId, showInPanel) {
       store.save();
       // 一覧の該当動画1行だけ即更新（クリック生成・裏生成どちらも）。画面全体・他行には触れない
       const it = _newsCache && _newsCache.items.find(x => x.videoId === videoId);
-      if (it) { it.desc = d.summary; if (currentView === 'news') _patchVideoItemDom(it); }
+      if (it) { it.desc = d.summary; it.lang = undefined; if (currentView === 'news') _patchVideoItemDom(it); } // 要約後は日本語＝翻訳対象から外す
       if (showInPanel) {
         const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary;
         const ht = document.getElementById('np-video-headline'); if (ht && d.headline) ht.textContent = d.headline;
@@ -4989,10 +4989,10 @@ async function generateVideoSummary(videoId, showInPanel) {
 let _ytAutoBusy = false;
 const _ytTried = new Set();
 async function newsAutoSummarizeVideos() {
-  if (!(store.data.settings && store.data.settings.ytAutoSummary)) return;
   if (_ytAutoBusy || !_newsCache) return;
   const sums = store.data.ytSummaries || {};
-  const pend = _newsCache.items.filter(it => it.cat === 'video' && it.videoId && !(sums[it.videoId] && sums[it.videoId].summary) && !_ytTried.has(it.videoId)).slice(0, 2);
+  // マスタ設定ON=全チャンネル対象 / OFFでも「全動画を自動要約」指定のチャンネルは対象（ytAutoForItem）
+  const pend = _newsCache.items.filter(it => it.cat === 'video' && it.videoId && ytAutoForItem(it) && !(sums[it.videoId] && sums[it.videoId].summary) && !_ytTried.has(it.videoId)).slice(0, 2);
   if (!pend.length) return;
   _ytAutoBusy = true;
   try {
@@ -5489,7 +5489,7 @@ function newsItemHtml(it, read, matches, opts = {}) {
   if (it.cat === 'video') {
     const cached = store.data.ytSummaries[it.videoId] || {};
     if (cached.headline) { titleLine = `▶ ${esc(cached.headline)}`; subLine = `<span class="news-preview">${esc(it.title)}</span>`; }
-    else if (store.data.settings && store.data.settings.ytAutoSummary) subLine = `<span class="news-preview muted">要約を準備中…</span>`;
+    else if (ytAutoForItem(it)) subLine = `<span class="news-preview muted">要約を準備中…</span>`;
   }
   return `<a class="news-item ${unread ? 'unread' : ''}${unread && it.isNew ? ' nu-new' : ''}" href="${esc(it.link)}" data-link="${esc(it.link)}" target="_blank" rel="noopener" draggable="false" onclick="newsOpenArticle(event,this)">
       ${hideBtn}
@@ -5574,11 +5574,16 @@ async function _newsVideos() {
     if (d && Array.isArray(d.items)) vids = d.items;
   } catch (_) { return []; }
   const sums = store.data.ytSummaries || {};
-  return vids.map(v => ({
-    title: v.title, link: v.link, pubDate: v.published, source: v.channel || 'YouTube',
-    cat: 'video', videoId: v.videoId, thumb: v.thumb,
-    desc: (sums[v.videoId] && sums[v.videoId].summary) || undefined, // 要約があれば本文に（パネル表示・翻訳不要）
-  }));
+  return vids.map(v => {
+    const hasSum = !!(sums[v.videoId] && sums[v.videoId].summary);
+    return {
+      title: v.title, link: v.link, pubDate: v.published, source: v.channel || 'YouTube',
+      cat: 'video', videoId: v.videoId, channelId: v.channelId, thumb: v.thumb,
+      desc: hasSum ? sums[v.videoId].summary : undefined, // 要約があれば本文に（パネル表示・翻訳不要）
+      // 要約前の英語動画は見出しを翻訳対象に（要約と翻訳の併用）。要約後は日本語の見出し/要約を使うため対象外。
+      lang: (!hasSum && v.title && !/[぀-ヿ㐀-鿿]/.test(v.title)) ? 'en' : undefined,
+    };
+  });
 }
 // 登録JP銘柄の適時開示（TDnet）をまとめて取得し、ニュース一覧アイテム化して返す。
 // 保有銘柄ごとに直近開示を引くので「直近全社120件に入っていない銘柄」も漏れなく出る。
@@ -6793,7 +6798,18 @@ function ytChannelRowHtml(c) {
   return `<tr>
     <td class="l"><input class="yt-name" value="${esc(c.name || '')}" placeholder="テスタ" style="width:130px"></td>
     <td class="l"><input class="yt-id" value="${esc(c.id || '')}" placeholder="UCfJEDCUlzQl4-atLp6Z9DcQ" style="width:100%;min-width:260px"></td>
+    <td class="l"><select class="yt-sum" title="このチャンネルの自動要約の扱い">
+      <option value="" ${!c.summaryMode ? 'selected' : ''}>マスタ設定に従う</option>
+      <option value="all" ${c.summaryMode === 'all' ? 'selected' : ''}>全動画を自動要約</option>
+    </select></td>
     <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()" title="削除">×</button></td></tr>`;
+}
+// このチャンネルの動画を裏で自動要約するか（チャンネル指定「全動画」ならマスタ設定OFFでも要約する）
+function ytAutoForItem(it) {
+  if (store.data.settings && store.data.settings.ytAutoSummary) return true;
+  if (!it || !it.channelId) return false;
+  const ch = ytChannelList().find(c => c.id === it.channelId);
+  return !!(ch && ch.summaryMode === 'all');
 }
 function openYtChannelMaster() {
   const rows = ytChannelList().map(ytChannelRowHtml).join('');
@@ -6803,7 +6819,7 @@ function openYtChannelMaster() {
   showModal('YouTubeチャンネル・要約設定', `
     <p class="muted" style="margin:0 0 8px;font-size:12px">ニュースの「動画」カテゴリに新着動画を表示するチャンネルです。<strong>チャンネルID</strong>（<code>UC</code>で始まる24文字）を登録してください。<br>調べ方: チャンネルページを開き、URLが <code>youtube.com/channel/UC…</code> ならその <code>UC…</code>。<code>@ハンドル</code> 形式の場合は、チャンネルの「概要」→「チャンネルを共有」→「チャンネルIDをコピー」で取得できます。</p>
     <div class="table-wrap"><table class="holdings dense">
-      <thead><tr><th class="l">表示名</th><th class="l">チャンネルID（UC…）</th><th></th></tr></thead>
+      <thead><tr><th class="l">表示名</th><th class="l">チャンネルID（UC…）</th><th class="l">自動要約</th><th></th></tr></thead>
       <tbody id="yt-ch-rows">${rows}</tbody></table></div>
     <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" onclick="ytChannelAddRow()">＋ チャンネルを追加</button></div>
     <fieldset class="form-group" style="margin-top:14px"><legend>要約に使うAIモデル（Gemini）</legend>
@@ -6826,7 +6842,8 @@ function saveYtChannelMaster() {
     const m = id.match(/UC[\w-]{20,}/); if (m) id = m[0]; // URLを貼られてもID部分を抽出
     if (!id) continue;
     if (!/^UC[\w-]{20,}$/.test(id)) { toast(`チャンネルIDの形式が不正です: ${name || id}`); return; }
-    defs.push({ id, name: name || id });
+    const sumEl = tr.querySelector('.yt-sum');
+    defs.push({ id, name: name || id, ...(sumEl && sumEl.value ? { summaryMode: sumEl.value } : {}) });
   }
   store.data.ytChannels = masterRowsSave(store.data.ytChannels, defs, c => 'yt:' + String(c.id || ''));
   store.data.settings = store.data.settings || {};
