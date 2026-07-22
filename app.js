@@ -1674,6 +1674,16 @@ function usDST(ms) {
 }
 // 日本株 ザラ場(9:00-15:30)＋遅延考慮で16:00まで。月〜金。
 function jpRegularOpen() { const { day, min } = jstNow(); return day >= 1 && day <= 5 && min >= 540 && min < 960; }
+// 決算日取得をスキップする時間帯: 日本株ザラ場・米国レギュラー・それぞれの寄り30分前（月〜金）。
+// 場中は株価取得を最速にしたい（決算日は場外の株価更新で1日1回取れれば十分）。
+function earnSkipNow() {
+  if (jpRegularOpen() || usRegularOpen()) return true;
+  const { day, min } = jstNow();
+  if (day >= 1 && day <= 5 && min >= 510 && min < 540) return true;                  // 日本株 寄り前30分（8:30-9:00 JST）
+  const regStart = usDST(Date.now()) ? 1350 : 1410;                                  // 米国レギュラー開始（JST分）
+  if (day >= 1 && day <= 5 && min >= regStart - 30 && min < regStart) return true;   // 米国株 寄り前30分
+  return false;
+}
 // 米国株 レギュラー時間（JST換算・DST自動）。夏22:30〜翌5:00 / 冬23:30〜翌6:00。窓は深夜をまたぐ。
 function usRegularOpen() {
   const { day, min } = jstNow(), dst = usDST(Date.now());
@@ -1815,8 +1825,9 @@ const api = {
     // 名前未取得の銘柄だけ銘柄情報を取得（refreshMeta が「銘柄情報を取得中… n/m件」を表示）
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
     if (need.length) await this.refreshMeta(need);
-    // 決算日（前回/次回）を1日1回取得（銘柄ごとの成功日 earnings[k].at で判定＝高値と同方式）
-    try { await this.refreshEarnings(allSecs); } catch (_) {}
+    // 決算日（前回/次回）を1日1回取得（銘柄ごとの成功日 earnings[k].at で判定＝高値と同方式）。
+    // 場中（日本株ザラ場・米国レギュラー）と各市場の寄り30分前は、株価を早く見たいのでスキップし場外の更新で取得する
+    try { if (!earnSkipNow()) await this.refreshEarnings(allSecs); } catch (_) {}
     // ランキング順位バッジは「株価更新時だけ」取得（タブ表示のたびの取得をやめ、保有銘柄タブの引っかかりを解消）。
     // 1日1回のキャッシュを尊重（force無し）。取得後にバッジだけ反映するため再描画。
     busyMsg('ランキング順位を取得中…');
@@ -1827,9 +1838,18 @@ const api = {
   // 決算日（前回/次回）を /api/earnings で取得し store.data.earnings にキャッシュ。
   // 銘柄ごとの取得成功日 at で「その日1回だけ」に抑制（高値の highsAt と同方式）。Yahoo形式(JP=code.T)で問い合わせ。
   async refreshEarnings(allSecs) {
-    const secs = (allSecs || store.data.securities).filter(s => s.ticker && (s.market === 'JP' || s.market === 'US'));
+    // ETF・投信は決算が無いので対象外（詳細種別の手動指定＋自動判定）。従来はETFにも毎回問い合わせ→
+    // 常にデータ無し→「未取得」のまま永遠に再試行され、株価更新のたびに「決算日を取得中…N件」が出続けていた。
+    const secs = (allSecs || store.data.securities).filter(s => s.ticker && (s.market === 'JP' || s.market === 'US') && detailTypeOf(s) !== 'ETF');
     const td = today();
-    const stale = secs.filter(s => (store.data.earnings[priceKey(s)] || {}).at !== td);
+    // 今日成功済み(at===td)はスキップ。データ無し/失敗だった銘柄(tryAt)は60分間隔でだけ再試行する
+    // （ソース側の同時アクセス制限からの当日回復は許しつつ、株価更新のたびの全件リトライをやめる）
+    const stale = secs.filter(s => {
+      const e = store.data.earnings[priceKey(s)] || {};
+      if (e.at === td) return false;
+      if (e.tryAt && Date.now() - Date.parse(e.tryAt) < 3600000) return false;
+      return true;
+    });
     if (!stale.length) return;
     const symOf = (s) => s.market === 'JP' ? `${s.ticker}.T` : String(s.ticker).toUpperCase();
     const keyBySym = new Map(stale.map(s => [symOf(s), priceKey(s)]));
@@ -1840,14 +1860,19 @@ const api = {
       const q = batch.map(symOf).join(',');
       let res = null;
       try { res = await fetch(`/api/earnings?symbols=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : null); } catch (_) { res = null; }
-      if (!res) continue;
-      for (const [sym, d] of Object.entries(res)) {
-        const k = keyBySym.get(sym); if (!k) continue;
-        // 前回も次回も取れなかった＝ソース側の同時アクセス制限で弾かれた可能性→「取得済み」にせず次回の更新に持ち越す
-        // （既存の値があればそれは消さない）。at を今日にしないので、次の価格更新でまた取りに行く。
-        if (!d.prev && !d.next) continue;
-        store.data.earnings[k] = { next: d.next || null, nextEstimate: !!d.nextEstimate, exDiv: d.exDiv || null, prev: d.prev || null, prev2: d.prev2 || null, at: td };
+      const gotAt = new Set();
+      if (res) {
+        for (const [sym, d] of Object.entries(res)) {
+          const k = keyBySym.get(sym); if (!k) continue;
+          // 前回も次回も無し＝データ無し or ソース側ブロック → 成功扱いにしない（既存値は消さない）
+          if (!d.prev && !d.next) continue;
+          store.data.earnings[k] = { next: d.next || null, nextEstimate: !!d.nextEstimate, exDiv: d.exDiv || null, prev: d.prev || null, prev2: d.prev2 || null, at: td };
+          gotAt.add(k);
+        }
       }
+      // 取れなかった銘柄は試行時刻(tryAt)だけ記録し、60分間は再試行しない（既存値は保持）
+      const nowIso = new Date().toISOString();
+      for (const s of batch) { const k = priceKey(s); if (!gotAt.has(k)) store.data.earnings[k] = { ...(store.data.earnings[k] || {}), tryAt: nowIso }; }
     }
     store.save();
   },
