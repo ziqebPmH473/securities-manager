@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0730';
+const APP_VERSION = 'v20260723-0734';
 
 'use strict';
 
@@ -389,6 +389,8 @@ const store = {
     let freed = 0;
     const drop = (k) => { const v = this.data[k]; if (v && typeof v === 'object' && Object.keys(v).length) { freed += JSON.stringify(v).length; this.data[k] = {}; } };
     drop('mktRanking'); drop('indices'); drop('newsTrans');
+    // ニュース一覧の端末ローカル保存（sm_news_cache）も捨てる（「更新」で取り直せる。銘柄データを優先）
+    try { const nv = localStorage.getItem('sm_news_cache'); if (nv) { freed += nv.length; localStorage.removeItem('sm_news_cache'); } } catch (_) {}
     freed += this._pruneTechAnalysis(true); // それでも足りなければ登録外の分析結果も強めに整理
     return freed;
   },
