@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0724';
+const APP_VERSION = 'v20260723-0730';
 
 'use strict';
 
@@ -4836,7 +4836,7 @@ async function newsRefresh(auto) {
       const seen = new Set();
       items = items.filter(it => it.link && !seen.has(it.link) && seen.add(it.link))
         .sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1);
-      if (items.length) { newsMarkNew(items); _newsCache = { items, at: (data && data.at) || new Date().toISOString() }; }
+      if (items.length) { newsMarkNew(items); _newsCache = { items, at: (data && data.at) || new Date().toISOString() }; newsSaveCache(); }
     } finally { clearTimeout(timer); }
   } catch (_) { /* 失敗時は既存キャッシュのまま。キャッシュ無しなら empty 表示になる */ }
   finally { newsBusy = false; }
@@ -4857,6 +4857,26 @@ function newsMarkNew(items) {
   const lim = Date.now() - 45 * 86400000;
   for (const k in ns) { const d = new Date(ns[k]); if (isNaN(d) || d.getTime() < lim) { delete ns[k]; changed = true; } }
   if (changed) store.save();
+}
+// ニュース一覧の端末ローカル保存（Google同期はしない）。「更新」ボタン方式にしたため、アプリを
+// 開き直しても前回の取得結果が見えるよう localStorage に保持する（旧: メモリのみ＝リロードで消えて
+// いたが、自動取得だったので気づかなかった）。容量対策で最新400件・約700KBまで。保存失敗は無視。
+const NEWS_LS_KEY = 'sm_news_cache';
+function newsSaveCache() {
+  try {
+    if (!_newsCache || !Array.isArray(_newsCache.items)) return;
+    let items = _newsCache.items.slice(0, 400);
+    let json = JSON.stringify({ items, at: _newsCache.at });
+    while (json.length > 700000 && items.length > 50) { items = items.slice(0, Math.floor(items.length / 2)); json = JSON.stringify({ items, at: _newsCache.at }); }
+    localStorage.setItem(NEWS_LS_KEY, json);
+  } catch (_) { /* 容量不足などは無視（表示はメモリキャッシュで継続） */ }
+}
+function newsLoadCache() {
+  if (_newsCache) return;
+  try {
+    const d = JSON.parse(localStorage.getItem(NEWS_LS_KEY));
+    if (d && Array.isArray(d.items) && d.items.length) _newsCache = { items: d.items, at: d.at || null };
+  } catch (_) { /* 壊れた保存は無視（未取得扱い） */ }
 }
 // 記事クリック時: 既読を記録（再描画はしない＝リンクを開く動作を妨げず、クラスだけ落とす）。
 // リンクは data-link 属性から読む（タブ一覧・銘柄詳細ドロワーの両方で共用）
@@ -4969,7 +4989,7 @@ async function generateVideoSummary(videoId, showInPanel) {
       store.save();
       // 一覧の該当動画1行だけ即更新（クリック生成・裏生成どちらも）。画面全体・他行には触れない
       const it = _newsCache && _newsCache.items.find(x => x.videoId === videoId);
-      if (it) { it.desc = d.summary; it.lang = undefined; if (currentView === 'news') _patchVideoItemDom(it); } // 要約後は日本語＝翻訳対象から外す
+      if (it) { it.desc = d.summary; it.lang = undefined; newsSaveCache(); if (currentView === 'news') _patchVideoItemDom(it); } // 要約後は日本語＝翻訳対象から外す・保存も更新
       if (showInPanel) {
         const el = document.getElementById('np-video-summary'); if (el) el.textContent = d.summary;
         const ht = document.getElementById('np-video-headline'); if (ht && d.headline) ht.textContent = d.headline;
@@ -5501,6 +5521,7 @@ function newsItemHtml(it, read, matches, opts = {}) {
 function renderNews() {
   if (currentView !== 'news') return;
   newsPinCatSession(); // 開いた時点のカテゴリ選択を固定（裏の同期で勝手に切り替わらないように）
+  newsLoadCache();     // 開き直し（リロード）後も前回の取得結果を表示（端末ローカル保存から復元）
   const cache = _newsCache;
   const read = store.data.newsRead || {};
   const hidden = store.data.newsHidden || {};
@@ -5606,11 +5627,12 @@ async function _newsDiscForHoldings() {
 }
 // ニュースプールを確保（10分以内のキャッシュがあればそれ・なければ取得）。描画はしない（ドロワー用）
 async function newsEnsure() {
+  newsLoadCache();
   if (_newsCache && Date.now() - new Date(_newsCache.at).getTime() < 10 * 60 * 1000) return _newsCache;
   try {
     const res = await fetch('/api/news');
     const d = await res.json();
-    if (d && Array.isArray(d.items)) { newsMarkNew(d.items); _newsCache = { items: d.items, at: d.at || new Date().toISOString() }; }
+    if (d && Array.isArray(d.items)) { newsMarkNew(d.items); _newsCache = { items: d.items, at: d.at || new Date().toISOString() }; newsSaveCache(); }
   } catch (_) { /* 失敗時は手持ちのキャッシュ（null含む）のまま */ }
   return _newsCache;
 }
