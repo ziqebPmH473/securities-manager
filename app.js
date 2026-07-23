@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-2355';
+const APP_VERSION = 'v20260724-0001';
 
 'use strict';
 
@@ -1616,18 +1616,21 @@ function earnInfo(sec) {
 }
 // 銘柄名の横／上部に出すラベル。近い決算・直近発表のときだけ返す（無ければ null）。
 //   { text, cls, sub }  cls: earn-soon(予定) / earn-done(発表) / earn-est(ごろ)
-// 前営業日（土日をスキップ。祝日は考慮しない簡易版）
+// 前営業日・翌営業日（土日をスキップ。祝日は考慮しない簡易版）
 function _prevBizYmd() { const d = new Date(); d.setDate(d.getDate() - 1); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1); return _ymd(d); }
+function _nextBizYmd() { const d = new Date(); d.setDate(d.getDate() + 1); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1); return _ymd(d); }
 function earnLabel(sec) {
   const info = earnInfo(sec); if (!info) return null;
   const today = _todayYmd();
-  const pb = _prevBizYmd();
-  const urgent = (d) => d === today || d === pb; // 当日・前営業日＝赤系で強調（すみぽん仕様 2026-07-23）
+  const pb = _prevBizYmd(), nb = _nextBizYmd();
+  // 赤強調（すみぽん仕様 2026-07-23）: 発表=当日・前営業日 / 予定=前営業日・当日・翌営業日
+  const urgentPrev = (d) => d === today || d === pb;
+  const urgentNext = (d) => d === today || d === pb || d === nb;
   const { prev, confirmedNext, estNext } = info;
   // 1) 直近に発表があった（前回発表から7日以内）
-  if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' + (urgent(prev) ? ' earn-urgent' : '') }; }
+  if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' + (urgentPrev(prev) ? ' earn-urgent' : '') }; }
   // 2) 確定した次回予定日が近い（予定日の1週間前～当日。当日を過ぎても前営業日までは赤で出す＝発表直後の可能性）
-  if (confirmedNext) { const g = _diffDays(today, confirmedNext); if (g !== null && ((g >= 0 && g <= 7) || urgent(confirmedNext))) return { text: `${fmtEarnMD(confirmedNext)}予定`, cls: 'earn-soon' + (urgent(confirmedNext) ? ' earn-urgent' : '') }; }
+  if (confirmedNext) { const g = _diffDays(today, confirmedNext); if (g !== null && ((g >= 0 && g <= 7) || urgentNext(confirmedNext))) return { text: `${fmtEarnMD(confirmedNext)}予定`, cls: 'earn-soon' + (urgentNext(confirmedNext) ? ' earn-urgent' : '') }; }
   // 3) 推定が近い（推定予定日の【2週間前】～当日）。推定時は前回決算日も併記（推定は不確実なので赤強調はしない）
   if (estNext) { const g = _diffDays(today, estNext); if (g !== null && g >= 0 && g <= 14) return { text: `${fmtEarnMD(estNext)}ごろ`, cls: 'earn-est', sub: prev ? `前回${fmtEarnMD(prev)}` : '' }; }
   return null;
