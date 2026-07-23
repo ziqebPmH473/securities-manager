@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260724-0001';
+const APP_VERSION = 'v20260724-0024';
 
 'use strict';
 
@@ -659,6 +659,10 @@ const store = {
   },
   removeAcqLedgerRow(id) {
     this.data.acqLedger = this.data.acqLedger.filter(x => x.id !== id); this.save();
+  },
+  removeAcqLedgerRows(ids) {
+    const s = new Set(ids);
+    this.data.acqLedger = this.data.acqLedger.filter(x => !s.has(x.id)); this.save();
   },
 
   // rules
@@ -7845,6 +7849,7 @@ function restoreHoldingExtras(map) {
 // ----- 台帳画面（一覧・編集・整合性チェック） -----
 let _alFilterBroker = '';
 function openAcqLedger() {
+  _alFilterBroker = ''; _alFilterBad = false;
   showModal('取得円台帳（米国株）', `
     <p class="muted" style="margin:0 0 8px">外国株式等取引報告書の明細を蓄積し、［保有へ反映］で保有の「取得円」を更新します（差分を確認してから上書き・自動では変えません）。取引履歴・購入回数・前回購入日には影響しません。</p>
     <div id="al-summary"></div>
@@ -7870,13 +7875,20 @@ function alRenderSummary() {
        <p class="muted" style="font-size:12px;margin:4px 0 0">この日付より後の報告書から取込すればOK（期間が重複しても件数比較でスキップ予定になります）。</p>`
     : `<p class="muted">台帳はまだ空です。「報告書を取込…」から始めてください。</p>`;
 }
+let _alFilterBad = false;   // 台帳一覧を「不整合（株数チェックNG）のキーの行だけ」に絞る
 function alRenderTable() {
   const el = document.getElementById('al-table'); if (!el) return;
   const brokers = [...new Set((store.data.acqLedger || []).map(r => r.broker || '—'))];
+  // 不整合キー集合（台帳再生の株数 ≠ 保有の株数）。行の色付けと「不整合のみ」絞り込みに使う
+  const badKeys = new Set(acqLedgerQtyCheck(acqLedgerCompute(store.data.acqLedger || [])).filter(c => !c.ok).map(c => c.key));
+  const keyOf = (r) => `${String(r.ticker || '').toUpperCase()}|${r.broker}|${r.accountType}`;
   let rows = (store.data.acqLedger || []).slice().sort((a, b) => ((a.date || '') < (b.date || '')) ? 1 : ((a.date || '') > (b.date || '')) ? -1 : ((b.id || 0) - (a.id || 0)));
   if (_alFilterBroker) rows = rows.filter(r => (r.broker || '—') === _alFilterBroker);
+  if (_alFilterBad) rows = rows.filter(r => badKeys.has(keyOf(r)));
   const filterSel = brokers.length > 1 ? `<select onchange="alSetFilter(this.value)"><option value="">全証券会社</option>${brokers.map(b => `<option ${b === _alFilterBroker ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>` : '';
-  const body = rows.map(r => `<tr>
+  const badBtn = `<button class="btn btn-sm ${_alFilterBad ? 'btn-primary' : ''}" onclick="alToggleBadFilter()" title="株数チェックが不一致のキーに属する行だけ表示">不整合のみ${badKeys.size ? ` (${badKeys.size}キー)` : ''}</button>`;
+  const body = rows.map(r => `<tr class="${badKeys.has(keyOf(r)) ? 'al-row-bad' : ''}">
+    <td class="l"><input type="checkbox" class="al-del-chk" data-id="${r.id}"></td>
     <td class="l">${esc(r.date || '—')}</td>
     <td class="l">${r.type === 'buy' ? '買' : '売'}</td>
     <td class="l">${esc(r.ticker || '')}</td>
@@ -7886,10 +7898,24 @@ function alRenderTable() {
     <td class="l nowrap"><button class="btn btn-sm" onclick="openAcqLedgerEdit(${r.id})">編集</button>
       <button class="btn btn-sm btn-danger" onclick="alRemoveRow(${r.id})">削除</button></td>
   </tr>`).join('');
-  el.innerHTML = `${filterSel ? `<div style="display:flex;justify-content:flex-end;margin:4px 0">${filterSel}</div>` : ''}
-    <div class="table-wrap" style="max-height:44vh"><table class="dense no-rowclick" style="width:100%"><thead><tr><th class="l">日付</th><th class="l">種別</th><th class="l">ティッカー</th><th>数量</th><th>受渡金額(円)</th><th class="l">会社/口座</th><th class="l">操作</th></tr></thead><tbody>${body || `<tr><td colspan="7" class="muted l">該当なし</td></tr>`}</tbody></table></div>`;
+  el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">${badBtn}<span style="flex:1"></span>
+      <button class="btn btn-sm btn-danger" onclick="alDeleteSelected()">選択を削除</button>${filterSel}</div>
+    <div class="table-wrap" style="max-height:44vh"><table class="dense no-rowclick" style="width:100%"><thead><tr>
+      <th class="l"><input type="checkbox" onchange="document.querySelectorAll('#al-table .al-del-chk').forEach(c=>c.checked=this.checked)" title="全選択"></th>
+      <th class="l">日付</th><th class="l">種別</th><th class="l">ティッカー</th><th>数量</th><th>受渡金額(円)</th><th class="l">会社/口座</th><th class="l">操作</th></tr></thead><tbody>${body || `<tr><td colspan="8" class="muted l">該当なし</td></tr>`}</tbody></table></div>`;
 }
 function alSetFilter(v) { _alFilterBroker = v; alRenderTable(); }
+function alToggleBadFilter() { _alFilterBad = !_alFilterBad; alRenderTable(); }
+// 複数選択削除（チェックした台帳行をまとめて削除）
+function alDeleteSelected() {
+  const ids = [...document.querySelectorAll('#al-table .al-del-chk:checked')].map(c => parseInt(c.dataset.id, 10));
+  if (!ids.length) { toast('削除する行にチェックを付けてください'); return; }
+  if (!confirm(`選択した ${ids.length} 行を台帳から削除します。よろしいですか？\n（保有の取得円は次回の「保有へ反映」で再計算されます）`)) return;
+  store.removeAcqLedgerRows(ids);
+  alRenderSummary(); alRenderTable();
+  const chk = document.getElementById('al-check'); if (chk && chk.innerHTML) { chk.innerHTML = ''; alToggleManageCheck(); }
+  toast(`${ids.length} 行を削除しました`);
+}
 function alRemoveRow(id) {
   if (!confirm('この台帳行を削除します。よろしいですか？\n（反映済みの保有の取得円はすぐには変わりません。次回の「保有へ反映」で再計算されます）')) return;
   store.removeAcqLedgerRow(id);
@@ -8059,7 +8085,7 @@ function alRenderPreview() {
   const newN = _alParsed.filter(i => i.status === 'ok' && !i.dup).length;
   const dupN = _alParsed.filter(i => i.status === 'ok' && i.dup).length;
   const badN = _alParsed.filter(i => i.status !== 'ok').length;
-  const rows = _alParsed.map((i, idx) => `<tr${i.status === 'ok' ? '' : ' style="opacity:.55"'}>
+  const rows = _alParsed.map((i, idx) => `<tr${i.status === 'ok' ? ` data-alkey="${esc(`${i.ticker}|${i.broker}|${i.accountType}`)}"` : ' style="opacity:.55"'}>
     <td class="l">${i.status === 'ok' ? `<input type="checkbox" class="al-chk" data-idx="${idx}" ${i.dup ? '' : 'checked'} onchange="alRenderImportCheck()">` : ''}</td>
     <td class="l">${esc(i.date || '?')}</td>
     <td class="l">${i.type === 'buy' ? '買' : i.type === 'sell' ? '売' : '?'}</td>
@@ -8095,6 +8121,9 @@ function alRenderImportCheck() {
   const el = document.getElementById('al-qty-check'); if (!el) return;
   const checks = alImportQtyCheck();
   el.innerHTML = checks.length ? `<div class="grp-label" style="margin-top:8px">株数の整合性チェック（取込後の台帳 vs 現在の保有・対象キーのみ）</div>${alQtyCheckTable(checks)}` : '';
+  // 不整合キーに属するプレビュー行を色付け（チェック変更のたびにクラスだけ付け外し＝チェック状態は保持）
+  const badKeys = new Set(checks.filter(c => !c.ok).map(c => c.key));
+  document.querySelectorAll('#al-preview tr[data-alkey]').forEach(tr => tr.classList.toggle('al-row-bad', badKeys.has(tr.dataset.alkey)));
 }
 function runAcqLedgerImport() {
   const rows = alCheckedRows();
