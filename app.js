@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260723-0847';
+const APP_VERSION = 'v20260723-2355';
 
 'use strict';
 
@@ -1616,15 +1616,19 @@ function earnInfo(sec) {
 }
 // 銘柄名の横／上部に出すラベル。近い決算・直近発表のときだけ返す（無ければ null）。
 //   { text, cls, sub }  cls: earn-soon(予定) / earn-done(発表) / earn-est(ごろ)
+// 前営業日（土日をスキップ。祝日は考慮しない簡易版）
+function _prevBizYmd() { const d = new Date(); d.setDate(d.getDate() - 1); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1); return _ymd(d); }
 function earnLabel(sec) {
   const info = earnInfo(sec); if (!info) return null;
   const today = _todayYmd();
+  const pb = _prevBizYmd();
+  const urgent = (d) => d === today || d === pb; // 当日・前営業日＝赤系で強調（すみぽん仕様 2026-07-23）
   const { prev, confirmedNext, estNext } = info;
   // 1) 直近に発表があった（前回発表から7日以内）
-  if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' }; }
-  // 2) 確定した次回予定日が近い（予定日の1週間前～当日）
-  if (confirmedNext) { const g = _diffDays(today, confirmedNext); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(confirmedNext)}予定`, cls: 'earn-soon' }; }
-  // 3) 推定が近い（推定予定日の【2週間前】～当日）。推定時は前回決算日も併記
+  if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' + (urgent(prev) ? ' earn-urgent' : '') }; }
+  // 2) 確定した次回予定日が近い（予定日の1週間前～当日。当日を過ぎても前営業日までは赤で出す＝発表直後の可能性）
+  if (confirmedNext) { const g = _diffDays(today, confirmedNext); if (g !== null && ((g >= 0 && g <= 7) || urgent(confirmedNext))) return { text: `${fmtEarnMD(confirmedNext)}予定`, cls: 'earn-soon' + (urgent(confirmedNext) ? ' earn-urgent' : '') }; }
+  // 3) 推定が近い（推定予定日の【2週間前】～当日）。推定時は前回決算日も併記（推定は不確実なので赤強調はしない）
   if (estNext) { const g = _diffDays(today, estNext); if (g !== null && g >= 0 && g <= 14) return { text: `${fmtEarnMD(estNext)}ごろ`, cls: 'earn-est', sub: prev ? `前回${fmtEarnMD(prev)}` : '' }; }
   return null;
 }
@@ -2821,7 +2825,7 @@ function nameAbbr(name) {
 function displayNameAbbr(sec) { return nameAbbr(calc.displayName(sec)); }
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
-  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}${earnLabelHtml(s)}</td>`; },
+  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}${earnLabelHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`; },
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
