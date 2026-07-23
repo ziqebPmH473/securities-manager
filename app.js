@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260724-0024';
+const APP_VERSION = 'v20260724-0150';
 
 'use strict';
 
@@ -351,7 +351,7 @@ const store = {
       const mx = this.data.matrixSettings && this.data.matrixSettings.usdJpy;
       this.data.settings.masterUsdJpy = (mx != null && isFinite(mx)) ? mx : DEFAULT_MATRIX_USDJPY;
     }
-    if (this.data.settings.ytModel === undefined) this.data.settings.ytModel = 'gemini-3.1-flash-lite'; // 動画要約の既定モデル（500回/日）。未設定時のみ
+    if (this.data.settings.ytModel === undefined) this.data.settings.ytModel = 'gemini-3.5-flash-lite'; // 動画要約の既定モデル（500回/日）。未設定時のみ
     if (this.data.settings.ytAutoSummary === undefined) this.data.settings.ytAutoSummary = true; // 新着動画の要約を裏で自動生成（一覧を開いた時）
     this.data.cfRules = migrateCfRules(this.data.cfRules); // 列の背景色ルール（マスタ管理）。未定義は既定シード／旧フラット型は移行
     for (const k in DEFAULT_IMPORT_MAPPINGS) {
@@ -4772,14 +4772,16 @@ const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決
 const DEFAULT_YT_CHANNELS = [{ id: 'UCfJEDCUlzQl4-atLp6Z9DcQ', name: 'テスタ' }];
 // 要約に使えるGeminiモデル（東証マーケット振り返りツールと同一）。空=自動（優先順に試し上限時は次へ降格）
 const YT_MODELS = [
+  ['gemini-3.6-flash', 'Gemini 3.6 Flash（20回/日）'],
   ['gemini-3.5-flash', 'Gemini 3.5 Flash（20回/日）'],
   ['gemini-3-flash-preview', 'Gemini 3 Flash（20回/日）'],
+  ['gemini-3.5-flash-lite', 'Gemini 3.5 Flash Lite（500回/日）'],
   ['gemini-3.1-flash-lite', 'Gemini 3.1 Flash Lite（500回/日）'],
   ['gemini-2.5-flash', 'Gemini 2.5 Flash（20回/日）'],
   ['gemini-2.5-flash-lite', 'Gemini 2.5 Flash Lite（20回/日）'],
 ];
 // 品質優先の並び（自動時のチェーン／固定選択時の降格先の順序）。上ほど高精度、下ほど回数上限が大きい。
-const YT_QUALITY_ORDER = ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
+const YT_QUALITY_ORDER = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
 function ytModelSetting() { return (store.data.settings && store.data.settings.ytModel) || ''; }
 // パネルの「モデル: … ・ 12,345 tok」表記
 function ytModelNote(model, tokens, fellBack) {
