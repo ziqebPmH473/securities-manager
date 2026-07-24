@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260724-0150';
+const APP_VERSION = 'v20260724-1444';
 
 'use strict';
 
@@ -10760,7 +10760,7 @@ function openBrokerImport(preKey) {
           <option value="upsert">追加＋上書き</option>
         </select></div>
       <div class="field" id="bimport-file-wrap"><label>CSVファイル（Shift-JIS/UTF-8 自動判定）</label>
-        <input type="file" name="file" accept=".csv,text/csv" onchange="onImportFile(this)"></div>
+        <input type="file" name="file" accept=".csv,.txt,text/csv,text/plain,text/comma-separated-values,application/csv,application/vnd.ms-excel,application/octet-stream" onchange="onImportFile(this)"></div>
       <div class="field" id="bimport-paste-wrap" style="display:none"><label>貼り付け</label>
         <textarea name="paste" rows="8" oninput="onImportPaste(this.value)" style="font-family:monospace;font-size:12px" placeholder="ここに貼り付け"></textarea></div>
       <label class="check"><input type="checkbox" name="create" checked> 未登録のティッカーは新規作成する</label>
