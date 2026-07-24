@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260724-1454';
+const APP_VERSION = 'v20260724-1504';
 
 'use strict';
 
@@ -1801,6 +1801,10 @@ const api = {
           // 全体フラグ(lastHighsDate)は失敗しても立つため「取得済みなのに古い高値のまま」が起きる。
           // 銘柄単位の成功日で「今日まだ取れていない銘柄」を下で取り直す（GLW 230.5固定バグ）。
           highsAt: q.high5y != null ? today() : (prev.highsAt ?? null),
+          // 高値の「取得を試みた日」（成否問わず）。withHighs=highs=1 の時だけ更新。
+          // Yahooが5年高値を返せない銘柄は highsAt が永久に古いまま→毎回の補完取得で毎回リトライされてしまう。
+          // 試行日を記録し、下の補完取得を「1日1回」に抑える（翌日は再試行＝回復すれば拾える）。
+          highsTriedAt: withHighs ? today() : (prev.highsTriedAt ?? null),
           low1y: q.low1y != null ? q.low1y : (prev.low1y ?? null),
           low3y: q.low3y != null ? q.low3y : (prev.low3y ?? null),
           low1yDate: q.low1yDate != null ? q.low1yDate : (prev.low1yDate ?? null),
@@ -1844,8 +1848,11 @@ const api = {
     // どちらも highsAt !== today() で拾える。成功済み（highsAt===today）は skip＝毎回の再取得はしない。
     // 全体フラグ(lastHighsDate)は失敗でも立つため使わず、銘柄ごとの成功日(prices[k].highsAt)で判定する。
     // ※ secs ではなく allSecs で判定（現在値取得済みで今回対象外の銘柄も高値だけ古いことがあるため）。
+    // ★恒久的に高値を取れない銘柄（Yahooが5年チャートを返せないティッカー）は highsAt が永久に古いため、
+    //   従来は毎回の価格更新で毎回リトライされていた（「5年高値を取得中… 1/1件」が毎回）。試行日 highsTriedAt を見て
+    //   「今日まだ試していない」銘柄のみに絞る＝失敗する銘柄も1日1回だけ試す（翌日再試行＝回復すれば拾える）。
     {
-      const staleHigh = allSecs.filter(s => (store.data.prices[priceKey(s)] || {}).highsAt !== today());
+      const staleHigh = allSecs.filter(s => { const p = store.data.prices[priceKey(s)] || {}; return p.highsAt !== today() && p.highsTriedAt !== today(); });
       // highs=1 は5年日足も取るためサブリクエストが重い。10件ずつに分割して上限内に収める
       for (let i = 0; i < staleHigh.length; i += 10) { busyMsg(`5年高値を取得中… ${Math.min(i + 10, staleHigh.length)}/${staleHigh.length}件`); try { await this.refreshPrice(staleHigh.slice(i, i + 10)); } catch (_) {} }
     }
@@ -2003,6 +2010,7 @@ const api = {
           low1y: q.low1y != null ? q.low1y : (prev.low1y ?? null), low3y: q.low3y != null ? q.low3y : (prev.low3y ?? null),
           low1yDate: q.low1yDate ?? prev.low1yDate ?? null, low3yDate: q.low3yDate ?? prev.low3yDate ?? null, // 安値が付いた日（情報表示用）
           highsAt: q.high5y != null ? today() : (prev.highsAt ?? null), // 高値取得の成功日（銘柄単位）
+          highsTriedAt: today(), // 高値取得を試みた日（この経路は常に highs=1）。成否問わず更新し、失敗銘柄の毎回リトライを防ぐ
           volume: q.volume != null ? q.volume : (prev.volume ?? null), // 当日出来高（売買代金算出用）
           fetchedAt: q.fetchedAt,
         };
