@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260724-1444';
+const APP_VERSION = 'v20260724-1454';
 
 'use strict';
 
@@ -10827,6 +10827,24 @@ async function runBrokerImport() {
   // 洗い替えスコープ
   let scope = prof.fixed ? prof.scope : { broker: defBroker, markets: ['JP', 'US'] };
 
+  // 同じCSV/貼付に含まれる投資信託（先に解析してスコープ判定に使う。下の投信取込でも再利用）
+  // strict は「株ファイルに投信が混ざる」moomoo/楽天等の誤検知対策。投信専用プロファイル
+  // （scope が FUND。例: マネックス投信）はファイル全体が投信なので非strict（見出し/種別列が無くても拾う）
+  const fundStrict = !(scope.markets && scope.markets.includes('FUND'));
+  const fundItems = parseFundRows(_importText, { strict: fundStrict });
+  const fundsInScope = fundItems.length > 0;
+  // この保有が洗い替えスコープ（この証券会社×対象市場、CSVに投信があれば投信も）に入るか
+  const inReplaceScope = (h) => {
+    const s = store.data.securities.find(x => x.id === h.securityId);
+    if (!s) return false;
+    if (h.broker === scope.broker && scope.markets.includes(s.market)) return true;
+    return fundsInScope && s.market === 'FUND' && h.broker === scope.broker;
+  };
+  const holdKey = (h) => `${h.securityId}|${h.broker}|${h.accountType}`;
+  // 洗い替えの内訳（追加/更新/据置/削除）を出すため、削除前にスコープ内保有を退避
+  const beforeHoldings = {};
+  if (mode === 'replace') for (const h of store.data.holdings) if (inReplaceScope(h)) beforeHoldings[holdKey(h)] = { quantity: h.quantity, avgCost: h.avgCost };
+
   // replace: スコープ内の既存保有を削除
   // 洗い替えで消える取得円・投信評価額・売却前購入額は退避し、取込後に同一キーへ復元（削除前に退避）
   const extras = mode === 'replace' ? snapshotHoldingExtras(store.data.holdings) : null;
@@ -10880,10 +10898,6 @@ async function runBrokerImport() {
   // 同じCSV/貼付に含まれる投資信託を自動仕分け（FUND保有として内部保存）
   // 既存ファンド（名称/エイリアス一致）は即取込。未登録（新規）は登録せず保留し、後でコード入力させてから登録する
   let fundCount = 0, pendingTotal = 0;
-  // strict は「株ファイルに投信が混ざる」moomoo/楽天等の誤検知対策。投信専用プロファイル
-  // （scope が FUND。例: マネックス投信）はファイル全体が投信なので非strict（見出し/種別列が無くても拾う）
-  const fundStrict = !(scope.markets && scope.markets.includes('FUND'));
-  const fundItems = parseFundRows(_importText, { strict: fundStrict });
   const pending = {}; // normName -> { name, items:[{broker,account,qty,acqJpy,evalJpy}] }
   if (fundItems.length) {
     if (mode === 'replace') {
@@ -10920,7 +10934,28 @@ async function runBrokerImport() {
   _convSession = {};
   store.save();
   closeModal();
-  const importMsg = `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${pendingTotal ? ` / 新規投信 ${Object.keys(pending).length}件はコード入力待ち` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`;
+  // 結果メッセージ。洗い替え（証券会社別の固定形式）は「全件・追加・更新・据置・削除」の内訳を出す
+  // （旧: 削除＝スコープ全件が出て中身の変化が分からなかった）。汎用の追加/上書きは従来どおり。
+  let importMsg;
+  if (mode === 'replace') {
+    const afterHoldings = {};
+    for (const h of store.data.holdings) if (inReplaceScope(h)) afterHoldings[holdKey(h)] = { quantity: h.quantity, avgCost: h.avgCost };
+    const sameHold = (a, b) => a.quantity === b.quantity && Math.abs((a.avgCost || 0) - (b.avgCost || 0)) < 1e-6;
+    let addedH = 0, updatedH = 0, keptH = 0, deletedH = 0;
+    for (const k of Object.keys(afterHoldings)) {
+      if (!(k in beforeHoldings)) addedH++;
+      else if (sameHold(beforeHoldings[k], afterHoldings[k])) keptH++;
+      else updatedH++;
+    }
+    for (const k of Object.keys(beforeHoldings)) if (!(k in afterHoldings)) deletedH++;
+    const totalH = Object.keys(afterHoldings).length;
+    importMsg = `取込完了（洗い替え）: 全 ${totalH}件 ／ 追加 ${addedH} ・ 更新 ${updatedH} ・ 据置 ${keptH} ・ 削除 ${deletedH}`
+      + `${pendingTotal ? ` ／ 新規投信 ${Object.keys(pending).length}件はコード入力待ち` : ''}`
+      + `${badFmt ? ` ／ 形式NG ${badFmt}件は取込まず` : ''}`
+      + `${skipped ? ` ／ スキップ ${skipped}件` : ''}`;
+  } else {
+    importMsg = `取込完了: 更新 ${updated} / 新規 ${created}${fundCount ? ` / 投信 ${fundCount}件` : ''}${pendingTotal ? ` / 新規投信 ${Object.keys(pending).length}件はコード入力待ち` : ''}${removed ? ` / 洗い替え削除 ${removed}` : ''}${badFmt ? ` / 形式NG ${badFmt}件は取込まず` : ''}${skipped ? ` / スキップ ${skipped}` : ''}`;
+  }
   // 新規投信があれば「コード入力→登録」を先に出し、登録が終わってから取込完了レポートを出す
   // （同じ #modal-overlay を使うため、レポートと同時に出すと後勝ちで入力画面が消える／裏に回る）
   if (Object.keys(pending).length) {
