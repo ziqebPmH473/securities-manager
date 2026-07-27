@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260724-1508';
+const APP_VERSION = 'v20260727-1751';
 
 'use strict';
 
@@ -1663,6 +1663,24 @@ function earnTopHtml(sec) {
 }
 // 次回決算までの日数（実効日基準。ソート用。無ければ大きな値で末尾へ）
 function earnNextDays(sec) { const eff = earnEffNext(sec); if (!eff) return null; const d = _diffDays(_todayYmd(), eff.date); return d; }
+// 決算日の再取得間隔（日）。次回決算までの距離で段階的に空ける（全銘柄を毎日取り直すのをやめる）。
+//   ・直近発表（前回から7日以内）… 毎日（発表直後は次回予定日が確定・更新されやすい）
+//   ・確定予定日あり … 14日以内=毎日 / 15〜30日=3日 / 31日以上=7日
+//   ・推定のみ（前回+決算間隔の憶測） … 推定日は±2週間ズレるので毎日の窓を2週間広げ(28日)、遠くても3日まで。
+//     推定銘柄の再取得の主目的は「予定日」ではなく prev（実際の発表日）の更新確認で、
+//     「M/D発表」ラベルの窓が7日しかないため7日間隔だと発表を取り逃す。
+//   ・推定が無効化（間隔判定ミス/不定期でいつ来るか不明） … 3日
+//   ・完全未取得 … 毎日（実際の再試行抑制は refreshEarnings の tryAt=60分バックオフが担う）
+function earnRefetchInterval(sec) {
+  const i = earnInfo(sec);
+  if (!i) return 1;
+  const today = _todayYmd();
+  if (!i.prev && !i.confirmedNext && !i.estNext) return 1;
+  if (i.prev) { const g = _diffDays(i.prev, today); if (g !== null && g >= 0 && g <= 7) return 1; }
+  if (i.confirmedNext) { const d = _diffDays(today, i.confirmedNext); if (d === null || d <= 14) return 1; return d <= 30 ? 3 : 7; }
+  if (i.estNext) { const d = _diffDays(today, i.estNext); return (d === null || d <= 28) ? 1 : 3; }
+  return 3;
+}
 // Yahoo Finance シンボル変換:
 //   JP株  → 7203.T
 //   投信  → 0131103C.T（ファンドコード.T形式）
@@ -1888,10 +1906,13 @@ const api = {
     const td = today();
     // 今日成功済み(at===td)はスキップ。データ無し/失敗だった銘柄(tryAt)は60分間隔でだけ再試行する
     // （ソース側の同時アクセス制限からの当日回復は許しつつ、株価更新のたびの全件リトライをやめる）
+    // さらに、取得済みの銘柄は「次回決算までの距離」で再取得間隔を空ける（earnRefetchInterval）。
+    // 決算が1ヶ月以上先の銘柄を毎日取り直すのは無駄で、場外の株価更新を無駄に長くしていた。
     const stale = secs.filter(s => {
       const e = store.data.earnings[priceKey(s)] || {};
       if (e.at === td) return false;
       if (e.tryAt && Date.now() - Date.parse(e.tryAt) < 3600000) return false;
+      if (e.at) { const gap = _diffDays(e.at, td); if (gap !== null && gap < earnRefetchInterval(s)) return false; }
       return true;
     });
     if (!stale.length) return;
