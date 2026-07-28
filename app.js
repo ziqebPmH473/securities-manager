@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-0002';
+const APP_VERSION = 'v20260729-0009';
 
 'use strict';
 
@@ -2800,7 +2800,8 @@ function buildRatioCtx(shownSecs) {
   const d = sum(stocks());
   return { mode: 'both', label: RATIO_DENOM_LABEL.both, get: () => d };
 }
-// 比率(%)。分母が無い/0なら null
+// 比率(%)。分母が無い/0、または分子が0（＝未保有・保有額0）なら null＝「—」表示。
+// 「0.00%」を並べても情報にならず、保有ゼロの行が数字で埋まって読みにくいため。
 function ratioPct(sec, kind, ctx) {
   const c = ctx || ratioCtx || buildRatioCtx(null);
   const d = c.get(sec);
@@ -2808,6 +2809,7 @@ function ratioPct(sec, kind, ctx) {
   const den = kind === 'cost' ? d.c : d.v;
   if (!(den > 0)) return null;
   const numr = kind === 'cost' ? ratioCostJpy(sec) : ratioValJpy(sec);
+  if (!(numr > 0)) return null;
   return numr / den * 100;
 }
 // 比率セル（％テキスト＋背景バー）。バー幅は 100% を上限にクリップ。
