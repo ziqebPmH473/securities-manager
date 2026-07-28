@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260728-2353';
+const APP_VERSION = 'v20260729-0002';
 
 'use strict';
 
@@ -2583,7 +2583,7 @@ function colDefaultWidth(key) {
   if (key === 'analysisNote' || key === 'memo') return 160;
   if (key === 'labels') return 150; // 複数タグ
   if (key === 'origCost') return 96; // 金額（本来の購入額）
-  if (key === 'ratioValue' || key === 'ratioCost') return 78; // 「12.3%」＋バー
+  if (key === 'ratioValue' || key === 'ratioCost') return 84; // 「12.34%」＋バー
   if (key === 'anaWarn' || key === 'anaWarnC') return 150; // パターン名＋スコア
   if (key === 'anaMa200') return 72;
   if (key === 'ana5d') return 58;
@@ -2819,13 +2819,13 @@ function ratioTd(sec, kind) {
   const den = kind === 'cost' ? d.c : d.v;
   const numr = kind === 'cost' ? ratioCostJpy(sec) : ratioValJpy(sec);
   const title = `${kind === 'cost' ? '取得額' : '評価額'} ${yen(numr)} ÷ ${c.label} ${yen(den)}`;
-  return `<td class="ratio-td" title="${esc(title)}"><span class="ratio-bar" style="width:${Math.max(0, Math.min(100, p)).toFixed(1)}%"></span><span class="ratio-v">${p.toFixed(1)}%</span></td>`;
+  return `<td class="ratio-td" title="${esc(title)}"><span class="ratio-bar" style="width:${Math.max(0, Math.min(100, p)).toFixed(1)}%"></span><span class="ratio-v">${p.toFixed(2)}%</span></td>`;
 }
 // 詳細ドロワー・銘柄カルテ用の1行テキスト（評価額比率 / 取得額比率＋分母ラベル）
 function ratioSummaryHtml(sec) {
   const c = ratioCtx || buildRatioCtx(null);
   const pv = ratioPct(sec, 'value', c), pc = ratioPct(sec, 'cost', c);
-  const f = p => p != null ? `${p.toFixed(1)}%` : '—';
+  const f = p => p != null ? `${p.toFixed(2)}%` : '—';
   return `${f(pv)} <span class="muted" style="font-weight:400;font-size:11px">/ 取得額 ${f(pc)}（分母: ${esc(c.label)}）</span>`;
 }
 // 分母切替のツールバー（保有銘柄一覧・買い増しサイン共通）
