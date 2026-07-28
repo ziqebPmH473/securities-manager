@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260728-2335';
+const APP_VERSION = 'v20260728-2353';
 
 'use strict';
 
@@ -2833,8 +2833,9 @@ function ratioToolbarHtml() {
   const s = store.data.settings || {};
   const mode = ratioDenomMode();
   const opts = Object.keys(RATIO_DENOM_LABEL).map(k => `<option value="${k}" ${mode === k ? 'selected' : ''}>${RATIO_DENOM_LABEL[k]}</option>`).join('');
+  // 金額は桁区切り表示（type=number だとカンマを表示できないため text＋inputmode で数字キーパッドを出す）
   const manual = mode === 'manual' ? `
-    <input id="ratio-manual-amt" type="number" step="any" min="0" value="${s.ratioManualAmount != null ? s.ratioManualAmount : ''}" placeholder="金額" style="width:110px" onchange="setRatioManual()">
+    <input id="ratio-manual-amt" type="text" inputmode="decimal" value="${s.ratioManualAmount != null ? num(s.ratioManualAmount) : ''}" placeholder="金額" style="width:130px;text-align:right" oninput="ratioManualFormat(this)" onchange="setRatioManual()">
     <select id="ratio-manual-ccy" onchange="setRatioManual()"><option value="JPY" ${s.ratioManualCcy !== 'USD' ? 'selected' : ''}>円</option><option value="USD" ${s.ratioManualCcy === 'USD' ? 'selected' : ''}>ドル</option></select>` : '';
   return `<span class="ratio-ctl" title="比率列（評価額比率・取得額比率）の分母">
     <span class="muted">比率の分母</span>
@@ -2847,8 +2848,24 @@ function setRatioDenom(v) {
   store.data.settings._updatedAt = store._now(); // 同期マージ用（settings は singleTs）
   store.save(); render();
 }
+// 手入力額を打ちながら桁区切り（カンマ）を付ける。全角数字・カンマ・¥/$ は取り除いて解釈。
+function ratioNumOf(str) {
+  const t = String(str == null ? '' : str)
+    .replace(/[０-９．]/g, c => '０１２３４５６７８９'.indexOf(c) >= 0 ? String('０１２３４５６７８９'.indexOf(c)) : '.')
+    .replace(/[^0-9.]/g, '');
+  const v = parseFloat(t);
+  return isFinite(v) ? v : null;
+}
+function ratioManualFormat(el) {
+  const raw = el.value;
+  const dec = /\.\d*$/.test(raw.replace(/,/g, '')) ? raw.replace(/,/g, '').match(/\.\d*$/)[0] : ''; // 「1234.」入力中も維持
+  const v = ratioNumOf(raw);
+  if (v == null) { el.value = raw.replace(/[^0-9.]/g, ''); return; }
+  el.value = Math.floor(v).toLocaleString('ja-JP') + dec;
+  try { el.setSelectionRange(el.value.length, el.value.length); } catch (_) {}
+}
 function setRatioManual() {
-  const a = parseFloat((document.getElementById('ratio-manual-amt') || {}).value);
+  const a = ratioNumOf((document.getElementById('ratio-manual-amt') || {}).value);
   const ccy = (document.getElementById('ratio-manual-ccy') || {}).value === 'USD' ? 'USD' : 'JPY';
   store.data.settings = store.data.settings || {};
   store.data.settings.ratioManualAmount = isFinite(a) && a > 0 ? a : null;
@@ -3967,11 +3984,14 @@ function colHeadHtml(visibleCols, st, market, ccy) {
     const label = ovMap[col.key] ? ovMap[col.key]
       : (['value','cost','buyAmount','reco','high5y','high52w','prevBuyPrice'].includes(col.key) && ccy && ccy !== '¥')
       ? `${mc.label}(${ccy})` : mc.label;
-    if (mc.noSort) return `<th class="${cls2}">${label}</th>`;
+    // 列名のツールチップ。列幅が狭くて見出しが切れても、カーソルを当てれば列名が読める。
+    // 見出しを変更している列（labelOverride）は「表示名（元の列名）」で両方出す。
+    const tip = esc(ovMap[col.key] ? `${label}（${mc.label}）` : label);
+    if (mc.noSort) return `<th class="${cls2}" title="${tip}">${label}</th>`;
     const active = st.sortKey === col.key;
     // 矢印スペースを常時予約（ソートで列幅が変わらないように）
     const arrow = `<span class="sort-arrow">${active ? (st.sortDir === 1 ? '▲' : '▼') : ''}</span>`;
-    return `<th class="sortable ${cls2} ${active ? 'active' : ''}" onclick="setSort('${market}','${col.key}')">${label}${arrow}</th>`;
+    return `<th class="sortable ${cls2} ${active ? 'active' : ''}" title="${tip}" onclick="setSort('${market}','${col.key}')">${label}${arrow}</th>`;
   }).join('');
 }
 
@@ -4374,7 +4394,7 @@ function dashSignalsTable() {
   if (newReached.length === 0) return `<div class="empty">本日新しく買い増しサインに到達した銘柄はありません。</div>`;
   const cols = ['ticker', 'name', 'market', 'price', 'drop', 'trigger', 'buyAmount']
     .map(k => MASTER_COLS.find(m => m.key === k));
-  const head = cols.map(c => `<th class="${c.left ? 'l' : ''}">${c.label}</th>`).join('');
+  const head = cols.map(c => `<th class="${c.left ? 'l' : ''}" title="${esc(c.label)}">${c.label}</th>`).join('');
   const sorted = sortSecurities(newReached, 'SIGNAL');
   return `<div class="table-wrap"><table class="holdings dense">
     <thead><tr>${head}</tr></thead>
@@ -6643,7 +6663,7 @@ function renderSecMaster() {
     { k: 'createdAt', l: '追加日', c: 'l' }, { k: 'updatedAt', l: '更新日', c: 'l' },
   ];
   const smHead = '<th class="l"><input type="checkbox" onclick="smSelectAll(this.checked)" title="全選択"></th>'
-    + SM_COLS.map(col => { const active = sk === col.k; const arrow = `<span class="sort-arrow">${active ? (dir > 0 ? '▲' : '▼') : ''}</span>`; return `<th class="${col.c} sortable${active ? ' active' : ''}" onclick="setSecMasterSort('${col.k}')">${col.l}${arrow}</th>`; }).join('') + '<th class="l"></th>';
+    + SM_COLS.map(col => { const active = sk === col.k; const arrow = `<span class="sort-arrow">${active ? (dir > 0 ? '▲' : '▼') : ''}</span>`; return `<th class="${col.c} sortable${active ? ' active' : ''}" title="${esc(col.l)}" onclick="setSecMasterSort('${col.k}')">${col.l}${arrow}</th>`; }).join('') + '<th class="l"></th>';
   const rows = secs.map(s => {
     const rule = store.rule(s.ruleId);
     const ov = (k) => s[k + 'Override'] ? ' <span class="tag" title="手動上書き中">手</span>' : '';
