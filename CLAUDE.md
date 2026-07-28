@@ -111,7 +111,14 @@
 - **収まり判定は必ず `main.content` 基準で測る**（`main.scrollHeight - main.clientHeight`）。`document`/`window` 基準は body が `overflow:hidden` のため**常に0になり誤判定**する（実際に何度も誤判定した）。プレビュー検証もこの値で確認する。
 - 実装の要点: 表は `fitListTables()`（あふれた分だけ `.table-wrap` の max-height を詰める）、マトリックスは `fitMatrix()`（窓いっぱいに広げてはみ出し分だけ縮める自己補正）、グラフは `assetChartBox()`/`renderAssetChart()`（実はみ出し量でグラフ高さを補正）。
 
-### ルール7: バージョン管理（コミットのたびに必ず更新・報告）
+### ルール7: 設定・データを localStorage だけに保存しない（2026-07-28 すみぽん指示）
+- **新しい設定値・ユーザーの選択状態を「localStorage 単独」で保存するのは今後も一切しない**。必ず `store.data`（＝Googleドライブ同期の対象）に持たせる。
+- 置き場所の基本は `store.data.settings.*`。保存時は `store.data.settings._updatedAt = store._now()` を打ってから `store.save()`（sync SCHEMA が `settings: ['singleTs']` ＝両端末変更時は新しい方を採用するため）。
+- `store.data` に**新しいトップレベルのキー**を足す場合は `sync-merge.js` の `SCHEMA` に登録する（ルール5-8／メモリ「マスタ追加時はsync SCHEMA登録」参照）。未登録だと同期で消える・既定値に戻る。
+- **理由**: 端末をまたいで同じ状態で使いたい。localStorage 単独だとPC↔スマホで設定が食い違い、ブラウザのデータ消去で無言で失われる。
+- 例外は「その端末固有の一時状態」だけ（自動同期のON/OFF `sm_drive_autosync`・同期ベース `sm_sync_base`・トークン等）。迷ったら `store.data` に入れる。
+
+### ルール8: バージョン管理（コミットのたびに必ず更新・報告）
 - バージョン形式は **`v{YYYYMMDD}-{HHMM}`（JST の更新日時。例: v20260722-2343）**。セマンティックバージョン（v1.0.1等）は使わない。
 - **コミット時に必ず**次の3点を実施する:
   1. `app.js` 冒頭の **`APP_VERSION`** をコミット時点のJST日時に更新

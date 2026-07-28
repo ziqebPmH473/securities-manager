@@ -9,9 +9,9 @@
  *  - 市場(米国株/日本株/投信)を分離して表示。一覧はソート/フィルタ対応
  *  - 銘柄分析結果（評価・★・推奨カテゴリ等）を銘柄に紐づけ。Excel貼付けで一括取込
  */
-// アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール7）。
+// アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260727-1751';
+const APP_VERSION = 'v20260728-2335';
 
 'use strict';
 
@@ -165,6 +165,9 @@ const MASTER_COLS = [
   { key: 'cost',        label: '取得価額',         left: false, markets: ALLM, noSort: false },
   { key: 'origCost',    label: '購入額（本来）',    left: false, markets: ALLM, noSort: false },
   { key: 'acqJpy',      label: '取得円(円)',       left: false, markets: STKM, noSort: false },
+  // 資産に占める割合（分母はツールバーの「比率の分母」で切替＝日米合計/表示中/市場別/手入力）
+  { key: 'ratioValue',  label: '評価額比率',       left: false, markets: STKM, noSort: false },
+  { key: 'ratioCost',   label: '取得額比率',       left: false, markets: STKM, noSort: false },
   { key: 'pnl',         label: '損益率',           left: false, markets: ALLM, noSort: false },
   { key: 'avgCost',     label: '取得単価',         left: false, markets: ALLM, noSort: false },
   { key: 'qty',         label: '数量',             left: false, markets: ALLM, noSort: false },
@@ -237,10 +240,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating'],
+  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
   ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
   ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
   // マーケットランキングタブ（既定＝現状維持）。順位/コード/名称は先頭固定列で、ここには含めない。
@@ -2580,6 +2583,7 @@ function colDefaultWidth(key) {
   if (key === 'analysisNote' || key === 'memo') return 160;
   if (key === 'labels') return 150; // 複数タグ
   if (key === 'origCost') return 96; // 金額（本来の購入額）
+  if (key === 'ratioValue' || key === 'ratioCost') return 78; // 「12.3%」＋バー
   if (key === 'anaWarn' || key === 'anaWarnC') return 150; // パターン名＋スコア
   if (key === 'anaMa200') return 72;
   if (key === 'ana5d') return 58;
@@ -2673,7 +2677,7 @@ const CF_SCREENS = [
   { id: 'analysis', label: '分析' },
 ];
 // 背景色ルールを設定できる数値列（設定UIの選択肢）。
-const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail'];
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'ratioValue', 'ratioCost', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail'];
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
@@ -2746,6 +2750,112 @@ function masterUsdJpy() {
   const mx = store.data.matrixSettings && store.data.matrixSettings.usdJpy; // 後方互換
   return (mx != null && isFinite(mx) && mx > 0) ? mx : DEFAULT_MATRIX_USDJPY;
 }
+// ===== 資産に占める割合（比率列） =====
+// 分母の選び方（store.data.settings.ratioDenom に保存＝Google同期対象。localStorage 単独保存はしない）。
+//   both   … 日米合計（登録済み全銘柄・US+JP の評価額/取得額合計）
+//   shown  … 表示している範囲（検索・列フィルタ適用後に表に出ている行の合計）
+//   market … 表示している分類（行が属する市場＝日本株なら日本株合計・米国株なら米国株合計）
+//   manual … 手入力の金額（円 or ドル。ドルは共通レートで円換算）
+const RATIO_DENOM_LABEL = { both: '日米合計', shown: '表示中の合計', market: '市場別（日/米）', manual: '手入力額' };
+function ratioDenomMode() {
+  const v = (store.data.settings || {}).ratioDenom;
+  return RATIO_DENOM_LABEL[v] ? v : 'both';
+}
+// 手入力の分母（円換算後）。未設定・0以下は null（＝比率を出さない）
+function ratioManualJpy() {
+  const s = store.data.settings || {};
+  const a = s.ratioManualAmount;
+  if (a == null || !isFinite(a) || a <= 0) return null;
+  return s.ratioManualCcy === 'USD' ? a * masterUsdJpy() : a;
+}
+// 原通貨→円換算（比率用）。為替未取得の米株は共通レート（マスタ・設定）で代替し、分母から欠落させない。
+function ratioJpy(market, nativeAmt) {
+  if (nativeAmt == null) return null;
+  const v = calc.toJpy(market, nativeAmt);
+  if (v != null) return v;
+  return market === 'US' ? nativeAmt * masterUsdJpy() : nativeAmt;
+}
+function ratioValJpy(sec) { return ratioJpy(sec.market, calc.valueOrCostNative(sec)) || 0; }
+function ratioCostJpy(sec) { return ratioJpy(sec.market, calc.costNative(sec)) || 0; }
+// 描画中の表のスコープ（比率列の分母）。marketRow から参照するため描画直前にセットする。
+let ratioCtx = null;
+// shownSecs = その表に実際に出ている銘柄（分母 'shown' 用）。省略時は 'shown' でも日米合計にフォールバック。
+function buildRatioCtx(shownSecs) {
+  const mode = ratioDenomMode();
+  const sum = (list) => list.reduce((a, s) => { a.v += ratioValJpy(s); a.c += ratioCostJpy(s); return a; }, { v: 0, c: 0 });
+  const stocks = () => store.data.securities.filter(s => s.market === 'US' || s.market === 'JP');
+  if (mode === 'manual') {
+    const j = ratioManualJpy();
+    const d = j != null ? { v: j, c: j } : null;
+    return { mode, label: RATIO_DENOM_LABEL.manual, get: () => d };
+  }
+  if (mode === 'market') {
+    const cache = {};
+    return { mode, label: RATIO_DENOM_LABEL.market, get: (sec) => (cache[sec.market] || (cache[sec.market] = sum(stocks().filter(s => s.market === sec.market)))) };
+  }
+  if (mode === 'shown' && Array.isArray(shownSecs)) {
+    const d = sum(shownSecs);
+    return { mode, label: RATIO_DENOM_LABEL.shown, get: () => d };
+  }
+  const d = sum(stocks());
+  return { mode: 'both', label: RATIO_DENOM_LABEL.both, get: () => d };
+}
+// 比率(%)。分母が無い/0なら null
+function ratioPct(sec, kind, ctx) {
+  const c = ctx || ratioCtx || buildRatioCtx(null);
+  const d = c.get(sec);
+  if (!d) return null;
+  const den = kind === 'cost' ? d.c : d.v;
+  if (!(den > 0)) return null;
+  const numr = kind === 'cost' ? ratioCostJpy(sec) : ratioValJpy(sec);
+  return numr / den * 100;
+}
+// 比率セル（％テキスト＋背景バー）。バー幅は 100% を上限にクリップ。
+function ratioTd(sec, kind) {
+  const c = ratioCtx || buildRatioCtx(null);
+  const p = ratioPct(sec, kind, c);
+  if (p == null) return `<td>${muted}</td>`;
+  const d = c.get(sec);
+  const den = kind === 'cost' ? d.c : d.v;
+  const numr = kind === 'cost' ? ratioCostJpy(sec) : ratioValJpy(sec);
+  const title = `${kind === 'cost' ? '取得額' : '評価額'} ${yen(numr)} ÷ ${c.label} ${yen(den)}`;
+  return `<td class="ratio-td" title="${esc(title)}"><span class="ratio-bar" style="width:${Math.max(0, Math.min(100, p)).toFixed(1)}%"></span><span class="ratio-v">${p.toFixed(1)}%</span></td>`;
+}
+// 詳細ドロワー・銘柄カルテ用の1行テキスト（評価額比率 / 取得額比率＋分母ラベル）
+function ratioSummaryHtml(sec) {
+  const c = ratioCtx || buildRatioCtx(null);
+  const pv = ratioPct(sec, 'value', c), pc = ratioPct(sec, 'cost', c);
+  const f = p => p != null ? `${p.toFixed(1)}%` : '—';
+  return `${f(pv)} <span class="muted" style="font-weight:400;font-size:11px">/ 取得額 ${f(pc)}（分母: ${esc(c.label)}）</span>`;
+}
+// 分母切替のツールバー（保有銘柄一覧・買い増しサイン共通）
+function ratioToolbarHtml() {
+  const s = store.data.settings || {};
+  const mode = ratioDenomMode();
+  const opts = Object.keys(RATIO_DENOM_LABEL).map(k => `<option value="${k}" ${mode === k ? 'selected' : ''}>${RATIO_DENOM_LABEL[k]}</option>`).join('');
+  const manual = mode === 'manual' ? `
+    <input id="ratio-manual-amt" type="number" step="any" min="0" value="${s.ratioManualAmount != null ? s.ratioManualAmount : ''}" placeholder="金額" style="width:110px" onchange="setRatioManual()">
+    <select id="ratio-manual-ccy" onchange="setRatioManual()"><option value="JPY" ${s.ratioManualCcy !== 'USD' ? 'selected' : ''}>円</option><option value="USD" ${s.ratioManualCcy === 'USD' ? 'selected' : ''}>ドル</option></select>` : '';
+  return `<span class="ratio-ctl" title="比率列（評価額比率・取得額比率）の分母">
+    <span class="muted">比率の分母</span>
+    <select onchange="setRatioDenom(this.value)">${opts}</select>${manual}</span>`;
+}
+function setRatioDenom(v) {
+  if (!RATIO_DENOM_LABEL[v]) return;
+  store.data.settings = store.data.settings || {};
+  store.data.settings.ratioDenom = v;
+  store.data.settings._updatedAt = store._now(); // 同期マージ用（settings は singleTs）
+  store.save(); render();
+}
+function setRatioManual() {
+  const a = parseFloat((document.getElementById('ratio-manual-amt') || {}).value);
+  const ccy = (document.getElementById('ratio-manual-ccy') || {}).value === 'USD' ? 'USD' : 'JPY';
+  store.data.settings = store.data.settings || {};
+  store.data.settings.ratioManualAmount = isFinite(a) && a > 0 ? a : null;
+  store.data.settings.ratioManualCcy = ccy;
+  store.data.settings._updatedAt = store._now();
+  store.save(); render();
+}
 // 背景色判定で「US（ドル建て）→円換算」する対象の列（ネイティブ通貨の金額・株価系）。
 // %・倍率・株数・スコア・既に円建ての取得円(acqJpy)は対象外。表示は$のまま、色だけ円換算で判定する。
 const CF_MONEY_KEYS = new Set(['price', 'dayAmt', 'trigger', 'base', 'high5y', 'high52w', 'low1y', 'low3y', 'prevBuyPrice', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'avgCost', 'buyAmount', 'reco', 'fixedBuyPrice', 'dividend', 'eps', 'principalSoldAmount']);
@@ -2806,6 +2916,8 @@ function cfCellValue(key, sec, ctx) {
     case 'cost': return ctx.th.qty ? ctx.th.acquiredCost : null;
     case 'origCost': return calc.originalCostNative(sec) || null;
     case 'acqJpy': { if (sec.market === 'US') { const hs = store.data.holdings.filter(h => h.securityId === sec.id); return hs.some(h => h.acqJpy != null) ? hs.reduce((a, h) => a + (h.acqJpy || 0), 0) : null; } return ctx.th.qty ? ctx.th.avgCost * ctx.th.qty : null; }
+    case 'ratioValue': return ratioPct(sec, 'value');
+    case 'ratioCost': return ratioPct(sec, 'cost');
     case 'pnl': return ctx.pnlPct;
     case 'avgCost': return ctx.th.qty ? ctx.th.avgCost : null;
     case 'qty': return ctx.th.qty || null;
@@ -2944,6 +3056,9 @@ const COL_RENDERERS = {
     else v = c.th.qty ? Math.round(c.th.avgCost * c.th.qty) : null;
     return `<td>${v != null ? num(v) : muted}</td>`;
   },
+  // 資産に占める割合（円換算ベース）。分母は ratioCtx（ツールバーの「比率の分母」）
+  ratioValue: (s,c) => ratioTd(s, 'value'),
+  ratioCost:  (s,c) => ratioTd(s, 'cost'),
   pnl:       (s,c) => pctTd(c.pnlPct),
   avgCost:   (s,c) => `<td>${c.th.qty ? fmtAmt(c.th.avgCost, c.market) : muted}</td>`,
   qty:       (s,c) => `<td>${c.th.qty ? fmtQty(c.th.qty, c.market) : '<span class="muted">0</span>'}</td>`,
@@ -3252,6 +3367,8 @@ function render() {
 }
 function _render() {
   updateHeader();
+  // 比率列の分母（既定＝日米合計）。表を持つ画面は各 render 内で表示中の集合を渡して上書きする
+  ratioCtx = buildRatioCtx(null);
   updateSignalBadge();
   updateSplitBadge();
   // 背景色ルールの適用先画面を現在ビューから決定（us/jp は保有銘柄と同じ列・描画なので holdings 扱い）
@@ -3706,6 +3823,8 @@ function sortValue(sec, key) {
     case 'riseFrom1y': return calc.riseFrom1y(sec) ?? Infinity;
     case 'riseFrom3y': return calc.riseFrom3y(sec) ?? Infinity;
     case 'value': return calc.valueOrCostNative(sec) ?? -Infinity;
+    case 'ratioValue': return ratioPct(sec, 'value') ?? -Infinity;
+    case 'ratioCost': return ratioPct(sec, 'cost') ?? -Infinity;
     case 'pnl': return calc.pnlPctNative(sec) ?? -Infinity;
     case 'day': { const p = store.data.prices[priceKey(sec)] || {}; return (p.price != null && p.prevClose) ? (p.price - p.prevClose) / p.prevClose * 100 : -Infinity; }
     case 'prevClose': { const p = store.data.prices[priceKey(sec)] || {}; return p.prevClose ?? -Infinity; }
@@ -3745,6 +3864,8 @@ function renderMarket(market) {
   if (holdingsSearch.trim()) secs = secs.filter(s => secMatchesQuery(s, holdingsSearch));
   // 列フィルタ（分析と共通。種別・会社・カテゴリ等はパネルで設定）
   secs = applyColFilters(secs, 'holdings');
+  // 比率列の分母。'表示中' はこの絞り込み後の集合が母数（ソートより前に確定させる＝比率ソートも同じ母数で行う）
+  ratioCtx = buildRatioCtx(secs);
   secs = sortSecurities(secs, colMkt);
 
   const ccy = MARKET_CCY[colMkt];
@@ -3791,6 +3912,7 @@ function renderMarket(market) {
         <div class="search">${svgIcon('search', '')}<input id="hold-search" placeholder="コード・銘柄名で検索" value="${esc(holdingsSearch)}" oninput="setHoldingsSearch(this.value)" autocomplete="off">${holdingsSearch ? `<button class="clr" onclick="setHoldingsSearch('')">×</button>` : ''}</div>
         <div class="tb-spacer"></div>
         ${filterBtnHtml('holdings')}
+        ${ratioToolbarHtml()}
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${colMkt}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
         <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
@@ -4203,6 +4325,8 @@ function renderSignals() {
     reached = reached.filter(s => s.market === signalMarketFilter);
     near = near.filter(s => s.market === signalMarketFilter);
   }
+  // 比率列の分母。'表示中' は到達＋もうすぐの両グループ（この表に出ている行）が母数
+  ratioCtx = buildRatioCtx([...reached, ...near]);
   const visOrderS = getColOrder('SIGNAL').filter(c => c.visible);
   const visibleCols = visOrderS.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
   const colCount = visibleCols.length + 1; // +1 = アクション列
@@ -4223,6 +4347,7 @@ function renderSignals() {
       <div class="section-head">
         <div class="seg" role="tablist">${seg('all', '全市場')}${seg('JP', '日本株')}${seg('US', '米国株')}</div>
         <div style="flex:1"></div>
+        ${ratioToolbarHtml()}
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
       </div>
       <div class="section-body">
@@ -8906,6 +9031,7 @@ function openSecurityDetail(secId) {
       <div class="cell"><div class="k">平均取得単価</div><div class="v">${held ? m(th.avgCost) : '—'}</div></div>
       <div class="cell"><div class="k">保有数量</div><div class="v">${qtyDisp}</div></div>
       <div class="cell"><div class="k">取得原価${sec.market === 'US' ? '（$ / 円）' : '（円）'}</div><div class="v">${held ? (sec.market === 'US' ? `${m(calc.costNative(sec))}<span class="muted" style="font-weight:400;font-size:11px"> / ${yen(costJpyV)}</span>` : yen(costJpyV)) : '—'}</div></div>
+      <div class="cell"><div class="k">資産に占める割合</div><div class="v">${held ? ratioSummaryHtml(sec) : '—'}</div></div>
     </div>
 
     <fieldset class="form-group"><legend>価格チャート（週足終値）</legend>
@@ -9079,6 +9205,7 @@ function renderAnalysis() {
   const AKEY = anaColKey();
   const st = listState[AKEY];
   let secs = analysisTargets();
+  ratioCtx = buildRatioCtx(secs); // 比率列の分母（'表示中' はこの絞り込み後の集合）
   secs = sortSecurities(secs, AKEY);
   const mkBtn = (id, label) => `<button class="${anaMarket === id ? 'active' : ''}" onclick="anaSetMarket('${id}')">${label}</button>`;
   const sideBtn = (id, label) => `<button class="${anaSide === id ? 'active' : ''}" onclick="anaSetSide('${id}')">${label}</button>`;
@@ -9682,6 +9809,7 @@ function karteCardHtml(sec) {
     row('平均取得単価', held ? m(th.avgCost) : '—'),
     row('保有数量', qtyDisp),
     ...(us ? usValueRows : jpValueRows),
+    row('資産に占める割合', held ? ratioSummaryHtml(sec) : '—'),
     row('前回購入', lb.price != null ? m(lb.price) + (lb.date ? ` <span class="muted">(${esc(lb.date)})</span>` : '') : '—'),
     row('購入回数', `${calc.buyCount(sec)}回`),
     holdAccRows,

@@ -122,6 +122,15 @@ table.fixed-cols th, table.fixed-cols td { overflow: hidden; text-overflow: elli
 .drop.near { color: var(--amber); background: rgba(245, 158, 11, 0.18); }
 .drop.far { color: var(--muted); }
 
+/* 資産に占める割合（比率列）。％テキストの背後に構成比バーを敷く */
+.ratio-td { position: relative; }
+.ratio-td .ratio-bar { position: absolute; left: 0; top: 3px; bottom: 3px; background: rgba(59, 130, 246, 0.18); border-radius: 2px; pointer-events: none; }
+.ratio-td .ratio-v { position: relative; font-weight: 600; }
+/* ツールバーの分母セレクト */
+.ratio-ctl { display: inline-flex; align-items: center; gap: 6px; }
+.ratio-ctl .muted { font-size: 11px; }
+.ratio-ctl select, .ratio-ctl input { font-size: 12px; padding: 3px 6px; }
+
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
 
 /* フォーム */
