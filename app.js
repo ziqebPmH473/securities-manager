@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-0009';
+const APP_VERSION = 'v20260729-0041';
 
 'use strict';
 
@@ -11397,6 +11397,19 @@ const GI_AUTOMAP = { ...GENERIC_MAP,
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount', '売却元本': 'principalSoldAmount',
 };
 let _giHeaders = [], _giRows = [], _giMapping = []; // _giMapping[colIdx] = fieldKey | ''
+// 列見出しの正規化キー。全角/半角(NFKC)・空白・★☆・英字大小を無視して一致させる。
+// 例: '★リスク' / 'リスク ' / 'ﾘｽｸ' → 同一キー。
+// ※カッコ内は残す（'取得額(円)'=取得円 と '取得額' を同一視すると別項目に誤割当するため）。
+function giHeaderKey(h) {
+  return normKey(h).replace(/[★☆\s]/g, '').toLowerCase();
+}
+// 見出し→フィールドの自動対応（正規化キーでも引く）。GI_AUTOMAP は初出優先。
+let _giAutoN = null;
+function giAutoField(h) {
+  if (GI_AUTOMAP[h]) return GI_AUTOMAP[h];
+  if (!_giAutoN) { _giAutoN = {}; for (const [k, v] of Object.entries(GI_AUTOMAP)) { const nk = giHeaderKey(k); if (!(nk in _giAutoN)) _giAutoN[nk] = v; } }
+  return _giAutoN[giHeaderKey(h)] || '';
+}
 
 function openGenericImport() {
   showModal('汎用取込（列を選んで取込）', `
@@ -11464,7 +11477,7 @@ function giParse(text) {
   if (!rows.length) { _giHeaders = []; _giRows = []; _giMapping = []; if (mapDiv) mapDiv.innerHTML = ''; if (pvDiv) pvDiv.innerHTML = ''; return; }
   _giHeaders = rows[0].map(h => String(h).trim());
   _giRows = rows.slice(1);
-  _giMapping = _giHeaders.map(h => GI_AUTOMAP[h] || '');
+  _giMapping = _giHeaders.map(h => giAutoField(h));
   giRenderMap();
 }
 function giRenderMap() {
@@ -11604,8 +11617,10 @@ function giSaveFormat() {
   const name = (document.getElementById('gi-format-name').value || '').trim();
   if (!name) { toast('フォーマット名を入力してください'); return; }
   if (!_giHeaders.length) { toast('先にデータを貼り付けてください'); return; }
+  // 全列を保存する（取込まない列は '' で明示）。以前は割当のある列だけ保存していたため、
+  // 「取込まないと決めた列」と「そもそも保存時に無かった列」を読込時に区別できなかった。
   const mapping = {};
-  _giHeaders.forEach((h, i) => { if (_giMapping[i]) mapping[h] = _giMapping[i]; });
+  _giHeaders.forEach((h, i) => { mapping[h] = _giMapping[i] || ''; });
   const fixed = giFixedValues();
   const ex = store.data.importFormats.find(f => f.name === name);
   if (ex) { ex.mapping = mapping; ex.fixed = fixed; } else store.data.importFormats.push({ id: store.nextId(), name, mapping, fixed });
@@ -11616,11 +11631,25 @@ function giLoadFormat() {
   const fmt = (store.data.importFormats || []).find(f => f.id === id);
   if (!fmt) { toast('フォーマットを選択してください'); return; }
   if (!_giHeaders.length) { toast('先にデータを貼り付けてください'); return; }
-  _giMapping = _giHeaders.map(h => fmt.mapping[h] || '');
+  // 列見出しは表記ゆれ（全角/半角・空白・★の有無）で一致しないことがある。正規化キーでも引き、
+  // 保存フォーマットに無い見出し（列を足した・名前が変わった）は自動対応を残す。
+  // ※以前は `fmt.mapping[h] || ''` だったため、見出しが少しでも違う列は自動対応ごと消えて
+  //   「保存したのに読み込むと一部の列がリセットされる」ように見えていた。
+  const mapN = {};
+  for (const [k, v] of Object.entries(fmt.mapping || {})) { const nk = giHeaderKey(k); if (!(nk in mapN)) mapN[nk] = v; }
+  let saved = 0, auto = 0;
+  _giMapping = _giHeaders.map(h => {
+    const hit = Object.prototype.hasOwnProperty.call(fmt.mapping || {}, h) ? fmt.mapping[h]
+      : (giHeaderKey(h) in mapN ? mapN[giHeaderKey(h)] : undefined);
+    if (hit !== undefined) { if (hit) saved++; return hit || ''; }
+    const a = giAutoField(h);
+    if (a) auto++;
+    return a || '';
+  });
   const fx = fmt.fixed || {};
   for (const k of GI_FIXED_KEYS) { const e = document.getElementById('gi-fix-' + k); if (e) e.value = fx[k] || ''; }
   giRenderMap();
-  toast(`フォーマット「${fmt.name}」を適用`);
+  toast(`フォーマット「${fmt.name}」を適用（保存 ${saved}列${auto ? ` / 自動 ${auto}列` : ''}）`);
 }
 function giDeleteFormat() {
   const id = parseInt(document.getElementById('gi-format').value, 10);
