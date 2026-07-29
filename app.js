@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-1832';
+const APP_VERSION = 'v20260729-1848';
 
 'use strict';
 
@@ -10012,9 +10012,11 @@ function openTxnForm(secId, presetType, opts = {}) {
   // 証券会社／口座の既定値: 編集時はその取引／新規時は実際の保有（数量が多いロット優先）に合わせる。
   // ＝売りの既定が保有と食い違って「数量が減らない」のを防ぐ。
   const hs = store.data.holdings.filter(h => h.securityId === secId);
-  const primary = hs.filter(h => h.quantity > 0).sort((a, b) => b.quantity - a.quantity)[0] || hs[0] || null;
-  // 未保有かつ取引履歴なし＝どこで買うか情報が無い → マスタの既定（市場ごと。既定 JP=楽天 / US=Webull）
-  const defBroker = editTxn ? e.broker : (primary ? primary.broker : (calc.lastBroker(sec) || defaultBrokerFor(sec.market)));
+  const held = hs.filter(h => h.quantity > 0).sort((a, b) => b.quantity - a.quantity)[0] || null; // 現時点で株数がある口座
+  const primary = held || hs[0] || null;
+  // 証券会社の既定: **現時点の保有株数が0なら**マスタの既定（市場ごと。初期値 JP=楽天 / US=Webull）。
+  // 過去の取引履歴や数量0の保有レコードは見ない（全部売った銘柄を買い直すときは新しく買う先が既定になる）。
+  const defBroker = editTxn ? e.broker : (held ? held.broker : defaultBrokerFor(sec.market));
   const defAcct = editTxn ? e.accountType : (primary ? primary.accountType : ACCOUNTS[0]);
   const typeSel = editTxn ? e.type : (presetType === 'sell' ? 'sell' : 'buy');
   const ledgerChecked = editTxn ? !!e.ledgerOnly : presetLedgerOnly;
