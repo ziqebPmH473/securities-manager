@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-1725';
+const APP_VERSION = 'v20260729-1746';
 
 'use strict';
 
@@ -1669,7 +1669,21 @@ function earnLabelHtml(sec, opts) {
 function earnPrevText(sec) { const i = earnInfo(sec); return i && i.prev ? fmtEarnYMD(i.prev) : '-'; }
 function earnNextText(sec) { const i = earnInfo(sec); return i && i.confirmedNext ? fmtEarnYMD(i.confirmedNext) : '-'; }
 // 次回決算の「実効日」（確定予定＞推定）。列・上部表示・ソート用。{ date, kind:'予定'|'ごろ' } or null
-function earnEffNext(sec) { const i = earnInfo(sec); if (!i) return null; if (i.confirmedNext) return { date: i.confirmedNext, kind: '予定' }; if (i.estNext) return { date: i.estNext, kind: 'ごろ' }; return null; }
+// ラベルと同じ日付・同じ区分になるようにする（すみぽん指示 2026-07-29）:
+//   予定日を取得できていれば「予定」、無ければ 前回+サイクル の「ごろ」。
+//   予定日を過ぎても【発表日をまだ取得できていない間（7日以内）】はその予定日を「予定」で出す
+//   （＝ラベルが `7/27予定` の時に列が `7/27ごろ` になるズレを無くす）。
+//   発表日を取得できたら（prev >= 予定日）その予定日は過去のものなので、次は推定「ごろ」に切り替わる。
+function earnEffNext(sec) {
+  const i = earnInfo(sec); if (!i) return null;
+  if (i.confirmedNext) return { date: i.confirmedNext, kind: '予定' };
+  if (i.schedule && (!i.prev || i.prev < i.schedule)) {
+    const g = _diffDays(_todayYmd(), i.schedule);
+    if (g !== null && g >= -7) return { date: i.schedule, kind: '予定' };
+  }
+  if (i.estNext) return { date: i.estNext, kind: 'ごろ' };
+  return null;
+}
 // 詳細ドロワー・カルテ上部の決算日表示（株探風の日付テキスト。ラベル/ピルにはしない）。
 // 上部に出すのは「決算が近い or 直近に発表があった」ときだけ（それ以外は下の決算情報セクションで確認）。
 function earnTopHtml(sec) {
