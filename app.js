@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-2015';
+const APP_VERSION = 'v20260729-2142';
 
 'use strict';
 
@@ -1684,6 +1684,8 @@ function earnEffNext(sec) {
   if (i.estNext) return { date: i.estNext, kind: 'ごろ' };
   return null;
 }
+// 会社概要（株探の「会社情報→概要」を銘柄マスタにキャッシュしたもの）。未取得は ''。
+function companySummary(sec) { return ((calc.metaOf(sec) || {}).summary) || ''; }
 // 詳細ドロワー・カルテ上部の決算日表示（株探風の日付テキスト。ラベル/ピルにはしない）。
 // 上部に出すのは「決算が近い or 直近に発表があった」ときだけ（それ以外は下の決算情報セクションで確認）。
 function earnTopHtml(sec) {
@@ -2141,6 +2143,35 @@ const api = {
     } catch (_) { /* 保存失敗は無視（手入力可） */ }
   },
 
+  // 会社概要（株探の「会社情報→概要」）を銘柄マスタ(meta.summary)にキャッシュ。
+  // 概要は年単位でしか変わらないので **未取得の銘柄だけ** 取りに行く（1銘柄=1リクエスト・以後0回）。
+  // force=true（「銘柄情報を更新」＝洗い替え）のときだけ全銘柄を取り直す。
+  async refreshCompany(allSecs, opts = {}) {
+    const force = !!opts.force;
+    const secs = (allSecs || store.data.securities)
+      .filter(s => s.ticker && (s.market === 'JP' || s.market === 'US'))
+      .filter(s => force || !((store.data.meta[priceKey(s)] || {}).summary));
+    if (!secs.length) return;
+    const CHUNK = 8; // 1銘柄=1サブリクエスト。Cloudflareのサブリクエスト上限に余裕を持たせる
+    for (let i = 0; i < secs.length; i += CHUNK) {
+      const part = secs.slice(i, i + CHUNK);
+      busyMsg(`会社概要を取得中… ${Math.min(i + CHUNK, secs.length)}/${secs.length}件`);
+      const q = part.map(yahooSymbol).join(',');
+      let res = null;
+      try { res = await fetch(`/api/company?symbols=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : null); } catch (_) { res = null; }
+      if (!res) continue;
+      for (const s of part) {
+        const d = res[yahooSymbol(s)];
+        if (!d || !d.summary) continue;            // 取れなかった銘柄は既存値を消さない（次回また試す）
+        const key = priceKey(s);
+        const ex = store.data.meta[key] || {};
+        if (ex.summary === d.summary) continue;    // 変化なしなら updatedAt を進めない（同期の無駄な競合を避ける）
+        store.data.meta[key] = { ...ex, summary: d.summary, summaryAt: today(), updatedAt: store._now() };
+      }
+    }
+    store.save();
+  },
+
   // 起動時の日次更新: 1日1回だけ 銘柄名/セクター/業種/高値 をまとめて更新（名称変更や高値の日次反映用）
   async dailyStartup() {
     if (store.data.securities.every(s => !s.ticker)) return;
@@ -2148,6 +2179,7 @@ const api = {
     store.data.lastInfoDate = today(); store.save();
     await this.refreshAll({ withHighs: true }); // 日次は高値（52週/5年）も取得。価格＋名前未取得分
     await this.refreshMeta();             // 全銘柄の名前/セクター/業種/ファンダを日次更新（日本語名は維持）
+    try { await this.refreshCompany(); } catch (_) {}  // 会社概要は未取得の銘柄だけ（既に持っていれば0リクエスト）
     await this.checkSplits();             // 分割検知（承認待ちは「分割」タブのバッジで通知）
     render();
   },
@@ -9089,6 +9121,7 @@ function openSecurityDetail(secId) {
     kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
     kv('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
+    companySummary(sec) ? kv('概要', `<span style="font-weight:400">${esc(companySummary(sec))}</span>`) : '',
   ].join('');
   // 基本情報の派生値
   const held = th.qty > 0;
@@ -9221,8 +9254,7 @@ function niceStep(range, target) {
 }
 // バニラSVGの折れ線チャート（外部ライブラリ不要）。Y補助目盛・X年ラベル・高値/安値マーカー付き。
 function detailSvgChart(points, overlays, costPts) {
-  // 年ラベルの下の余白を詰める（b:26→18／全体 300→276）。カルテを1画面に近づけるため（2026-07-29）
-  const W = 760, H = 276, pad = { l: 56, r: 86, t: 14, b: 18 };
+  const W = 760, H = 300, pad = { l: 56, r: 86, t: 14, b: 26 };
   const ys = points.map(p => p[1]); const xs = points.map(p => p[0]);
   let dmin = Math.min(...ys), dmax = Math.max(...ys);
   overlays.forEach(o => { if (o.y != null) { dmin = Math.min(dmin, o.y); dmax = Math.max(dmax, o.y); } });
@@ -9243,7 +9275,7 @@ function detailSvgChart(points, overlays, costPts) {
   }
   // X年の区切り＋ラベル
   let xlab = '', lastYear = null;
-  points.forEach(p => { const yr = new Date(p[0] * 1000).getFullYear(); if (yr !== lastYear) { lastYear = yr; const x = px(p[0]).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${H - pad.b}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4"/><text x="${x}" y="${H - pad.b + 13}" fill="var(--muted)" font-size="10" text-anchor="middle">${yr}</text>`; } });
+  points.forEach(p => { const yr = new Date(p[0] * 1000).getFullYear(); if (yr !== lastYear) { lastYear = yr; const x = px(p[0]).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${H - pad.b}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4"/><text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="10" text-anchor="middle">${yr}</text>`; } });
   // 高値・安値マーカー
   let hi = -Infinity, lo = Infinity, hiI = 0, loI = 0;
   ys.forEach((v, i) => { if (v > hi) { hi = v; hiI = i; } if (v < lo) { lo = v; loI = i; } });
@@ -9945,6 +9977,8 @@ function karteCardHtml(sec) {
     row('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     row('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
     row('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
+    // 会社概要（株探の「会社情報→概要」。銘柄マスタ meta.summary にキャッシュ済みのものを表示）
+    companySummary(sec) ? `<div class="kt-summary">${esc(companySummary(sec))}</div>` : '',
   ].join('');
   // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
@@ -9961,8 +9995,8 @@ function karteCardHtml(sec) {
         <div class="kt-sub"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}${buyStatus}</div>
       </div>
       <div class="kt-price-block">
-        <a class="kt-price lnk-ext" href="${kabutanUrl(sec)}" target="_blank" rel="noopener" title="株探のチャートを開く">${m(price)}</a>
-        <a class="kt-chg lnk-ext ${cls(dayPct)}" href="${kabutanUrl(sec)}" target="_blank" rel="noopener" title="株探のチャートを開く">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></a>
+        <div class="kt-price kt-kabu" onclick="window.open('${kabutanUrl(sec)}','_blank','noopener')" title="株探のチャートを開く">${m(price)}</div>
+        <div class="kt-chg kt-kabu ${cls(dayPct)}" onclick="window.open('${kabutanUrl(sec)}','_blank','noopener')" title="株探のチャートを開く">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></div>
       </div>
       <div class="kt-actions">
         ${(function(){ const h = earnTopHtml(sec); return h ? `<span class="kt-earn">${h}</span>` : ''; })()}
@@ -11755,7 +11789,7 @@ function refreshAllMeta() {
   const secs = store.data.securities.filter(s => s.ticker);
   if (!secs.length) { toast('銘柄がありません'); return; }
   withBusy('銘柄情報を更新中…（名前・セクター・時価総額・売買代金）', async () => {
-    await api.refreshMeta(secs); await api.checkSplits(); render();
+    await api.refreshMeta(secs); await api.refreshCompany(secs, { force: true }); await api.checkSplits(); render();
   }, '銘柄情報を更新しました').catch(() => {});
 }
 // 分割タブ専用: 名前・株価・ファンダ等は取得せず、株式分割・併合の情報だけを再取得する軽量リフレッシュ

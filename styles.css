@@ -794,9 +794,11 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: var(--sp-1); }
 .kt-sub .muted { font-size: var(--fs-cap); }
 .kt-price-block { text-align: right; }
-.kt-price { display: block; font-size: var(--fs-hero); font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
-/* 株価・前日比は株探へのリンク（色は文字色のまま・ホバーで下線） */
-.kt-chg { display: block; font-size: var(--fs-body); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: var(--sp-1); }
+.kt-price { font-size: var(--fs-hero); font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+/* 株価・前日比は株探へのリンク。フォント・色は元のまま（下線もつけない） */
+.kt-kabu { cursor: pointer; }
+.kt-kabu:hover { text-decoration: underline; }
+.kt-chg { font-size: var(--fs-body); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: var(--sp-1); }
 .kt-chg .muted { font-weight: 400; font-size: var(--fs-cap); }
 .kt-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 
@@ -829,6 +831,8 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-memo { white-space: pre-wrap; word-break: break-word; font-size: var(--fs-body); line-height: 1.5; }
 .kt-chart { min-height: 150px; display: flex; align-items: center; justify-content: center; cursor: zoom-in; }
 .kt-chart-legend { margin: 6px 0 0; font-size: var(--fs-cap); }
+/* 会社概要（株探）。ファンダの最終行に全幅で表示 */
+.kt-summary { margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: 1px solid var(--hair); font-size: var(--fs-cap); line-height: 1.55; color: var(--muted); }
 
 .kt-tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-2); margin-bottom: var(--sp-2); align-items: start; }
 .kt-scroll { max-height: 150px; overflow-y: auto; }

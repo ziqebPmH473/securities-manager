@@ -1109,8 +1109,10 @@
   //         mas:[{values:[...同長...],color,label}], width,height,title }
   function candleSVG(bars, opts) {
     opts = opts || {};
-    const W = opts.width || 760, H = opts.height || 320;
-    const pad = { l: 56, r: 92, t: 12, b: 40 };
+    // b(下余白)=年ラベルの行だけ。以前は 40 で年ラベルの下に 26px の空白帯ができていた（2026-07-29 圧縮）。
+    // H も同じだけ詰めて、チャートの下にあるパーツをその分上へ詰める。
+    const W = opts.width || 760, H = opts.height || 300;
+    const pad = { l: 56, r: 92, t: 12, b: 20 };
     const volH = 46; // 出来高サブチャートの高さ
     const plotB = H - pad.b - volH;
     if (!bars || !bars.length) return '<div class="muted">データなし</div>';
@@ -1137,7 +1139,7 @@
     }
     // X年ラベル
     let xlab = '', lastYear = null;
-    bars.forEach((b, i) => { const yr = new Date(b.t * 1000).getFullYear(); if (yr !== lastYear) { lastYear = yr; const x = cx(i).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${plotB}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4"/><text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="10" text-anchor="middle">${yr}</text>`; } });
+    bars.forEach((b, i) => { const yr = new Date(b.t * 1000).getFullYear(); if (yr !== lastYear) { lastYear = yr; const x = cx(i).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${plotB}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4"/><text x="${x}" y="${H - pad.b + 13}" fill="var(--muted)" font-size="10" text-anchor="middle">${yr}</text>`; } });
 
     // ローソク＋出来高
     let candles = '', vols = '';
