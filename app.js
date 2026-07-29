@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-1546';
+const APP_VERSION = 'v20260729-1725';
 
 'use strict';
 
@@ -1619,19 +1619,17 @@ function earnInfo(sec) {
   const e = earnOf(sec);
   if (!e) return null;
   const today = _todayYmd();
-  const rawPrev = e.prev || null;
-  const passedGap = e.next ? _diffDays(e.next, today) : null;            // 予定日から今日までの日数（正=過ぎている）
-  const passedNext = (passedGap !== null && passedGap >= 1 && passedGap <= 45) ? e.next : null;
-  const prevAssumed = (passedNext && (!rawPrev || rawPrev < passedNext)) ? passedNext : null;
-  const prev = prevAssumed || rawPrev;
-  // Yahoo/Nasdaq 確定の予定日のみ「予定日」扱い。過ぎた予定日は上で prev に繰り上げたので次回からは外す
-  const confirmedNext = (e.next && !e.nextEstimate && _diffDays(today, e.next) >= 0) ? e.next : null;
+  const prev = e.prev || null;                                   // 取得できた前回決算日だけ。推測で埋めない
+  const schedule = (e.next && !e.nextEstimate) ? e.next : null;  // Yahoo/Nasdaq 確定の予定日（過去日を含む生の値）
+  // 「次回」としての予定日は未来（当日を含む）のものだけ。過ぎた予定日は次回ではないので外す
+  // （ソースが消しても手元には残す＝ラベルが決算直後の数日それを出すため。schedule で参照する）
+  const confirmedNext = (schedule && _diffDays(today, schedule) >= 0) ? schedule : null;
   let estNext = null;
   if (!confirmedNext) {
     const raw = prev ? _addMonths(prev, earnCadence(e)) : (e.next || null); // 予定日が無ければ 前回+決算間隔 を推定
     if (raw && _diffDays(today, raw) >= -31) estNext = raw; // 推定日を1ヶ月以上過ぎたら「わからない」扱い
   }
-  return { prev, prevAssumed: !!prevAssumed, prev2: e.prev2 || null, confirmedNext, estNext };
+  return { prev, prev2: e.prev2 || null, schedule, confirmedNext, estNext };
 }
 // 銘柄名の横／上部に出すラベル。近い決算・直近発表のときだけ返す（無ければ null）。
 //   { text, cls, sub }  cls: earn-soon(予定) / earn-done(発表) / earn-est(ごろ)
@@ -1645,13 +1643,20 @@ function earnLabel(sec) {
   // 赤強調（すみぽん仕様 2026-07-23）: 発表=当日・前営業日 / 予定=前営業日・当日・翌営業日
   const urgentPrev = (d) => d === today || d === pb;
   const urgentNext = (d) => d === today || d === pb || d === nb;
-  const { prev, confirmedNext, estNext } = info;
+  const { prev, schedule, estNext } = info;
+  // 表示期間の考え方（2026-07-29 すみぽん決定）:
+  //   「いつから」＝決算が近いと分かる期間（予定=7日前 / 推定=14日前。またぐかの判断に使う）
+  //   「いつまで」＝決算直後に株価が動く理由として決算を疑える期間＝どれも【7日後まで】。
+  //   それを過ぎたら決算は株価と関係が薄いのでラベルは出さない。
+  //   ※ 予定日・推定日を過ぎても7日は出す。前回決算日の取得がソース側の遅れで1〜2日空くため、
+  //     ここで切ると「決算があったのにラベルが何も出ない」空白ができる（実際に発生した）。
+  const AFTER = 7;
   // 1) 直近に発表があった（前回発表から7日以内）
-  if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= 7) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' + (urgentPrev(prev) ? ' earn-urgent' : '') }; }
-  // 2) 確定した次回予定日が近い（予定日の1週間前～当日。当日を過ぎても前営業日までは赤で出す＝発表直後の可能性）
-  if (confirmedNext) { const g = _diffDays(today, confirmedNext); if (g !== null && ((g >= 0 && g <= 7) || urgentNext(confirmedNext))) return { text: `${fmtEarnMD(confirmedNext)}予定`, cls: 'earn-soon' + (urgentNext(confirmedNext) ? ' earn-urgent' : '') }; }
-  // 3) 推定が近い（推定予定日の【2週間前】～当日）。推定時は前回決算日も併記（推定は不確実なので赤強調はしない）
-  if (estNext) { const g = _diffDays(today, estNext); if (g !== null && g >= 0 && g <= 14) return { text: `${fmtEarnMD(estNext)}ごろ`, cls: 'earn-est', sub: prev ? `前回${fmtEarnMD(prev)}` : '' }; }
+  if (prev) { const g = _diffDays(prev, today); if (g !== null && g >= 0 && g <= AFTER) return { text: `${fmtEarnMD(prev)}発表`, cls: 'earn-done' + (urgentPrev(prev) ? ' earn-urgent' : '') }; }
+  // 2) 予定日（確定）が近い／過ぎて間もない（7日前〜7日後）。過ぎても発表日を取得できていない間はこれを出す
+  if (schedule) { const g = _diffDays(today, schedule); if (g !== null && g >= -AFTER && g <= 7) return { text: `${fmtEarnMD(schedule)}予定`, cls: 'earn-soon' + (urgentNext(schedule) ? ' earn-urgent' : '') }; }
+  // 3) 推定が近い／過ぎて間もない（14日前〜7日後）。推定時は前回決算日も併記（推定は不確実なので赤強調はしない）
+  if (estNext) { const g = _diffDays(today, estNext); if (g !== null && g >= -AFTER && g <= 14) return { text: `${fmtEarnMD(estNext)}ごろ`, cls: 'earn-est', sub: prev ? `前回${fmtEarnMD(prev)}` : '' }; }
   return null;
 }
 // ラベルのHTML（一覧の銘柄名の横・上部共通）。size='sm' は一覧用の小型。
@@ -1662,9 +1667,6 @@ function earnLabelHtml(sec, opts) {
 }
 // 決算情報セクション用の値（推定は出さない。予定日不明は「-」）
 function earnPrevText(sec) { const i = earnInfo(sec); return i && i.prev ? fmtEarnYMD(i.prev) : '-'; }
-// 前回決算が「過ぎた予定日からの見込み」かどうか（ソースの反映待ち）。表示に注記を付けるため。
-function earnPrevAssumed(sec) { const i = earnInfo(sec); return !!(i && i.prevAssumed); }
-function earnPrevNote(sec) { return earnPrevAssumed(sec) ? ' <span class="muted" style="font-size:11px">（予定日・確報待ち）</span>' : ''; }
 function earnNextText(sec) { const i = earnInfo(sec); return i && i.confirmedNext ? fmtEarnYMD(i.confirmedNext) : '-'; }
 // 次回決算の「実効日」（確定予定＞推定）。列・上部表示・ソート用。{ date, kind:'予定'|'ごろ' } or null
 function earnEffNext(sec) { const i = earnInfo(sec); if (!i) return null; if (i.confirmedNext) return { date: i.confirmedNext, kind: '予定' }; if (i.estNext) return { date: i.estNext, kind: 'ごろ' }; return null; }
@@ -1694,9 +1696,6 @@ function earnRefetchInterval(sec) {
   if (!i) return 1;
   const today = _todayYmd();
   if (!i.prev && !i.confirmedNext && !i.estNext) return 1;
-  // 予定日を過ぎたのに本物の prev が来ていない（見込み扱い中）… ソース反映を毎日確認。
-  // 2週間たっても来ない＝ソース側が出さないケースなので3日に落として無駄打ちを止める。
-  if (i.prevAssumed) { const g = _diffDays(i.prev, today); return (g !== null && g <= 14) ? 1 : 3; }
   if (i.prev) { const g = _diffDays(i.prev, today); if (g !== null && g >= 0 && g <= 7) return 1; }
   if (i.confirmedNext) { const d = _diffDays(today, i.confirmedNext); if (d === null || d <= 14) return 1; return d <= 30 ? 3 : 7; }
   if (i.estNext) { const d = _diffDays(today, i.estNext); return (d === null || d <= 28) ? 1 : 3; }
@@ -3097,7 +3096,7 @@ const COL_RENDERERS = {
   prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
   // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
   prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
-  earnPrev: (s,c) => { const t = earnPrevText(s); const as = earnPrevAssumed(s); return `<td class="l" title="${as ? '予定日を過ぎたため発表済みとみなした日（ソースの確報待ち）' : '前回決算発表日'}">${t === '-' ? muted : esc(t) + (as ? '<span class="muted">*</span>' : '')}</td>`; },
+  earnPrev: (s,c) => { const t = earnPrevText(s); return `<td class="l" title="前回決算発表日">${t === '-' ? muted : esc(t)}</td>`; },
   // 次回決算（予定＝確定 / ごろ＝前回+4ヶ月の推定を含む）。ソートは実効日で近い順。
   earnNext: (s,c) => { const eff = earnEffNext(s); if (!eff) return `<td class="l" title="次回決算">${muted}</td>`; const days = earnNextDays(s); const dtxt = (days != null && days >= 0 && days <= 60) ? ` <span class="muted">(あと${days}日)</span>` : ''; return `<td class="l" title="次回決算（予定/推定込み）">${esc(fmtEarnYMD(eff.date))} <span class="muted">${eff.kind}</span>${dtxt}</td>`; },
   dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
@@ -9045,7 +9044,7 @@ function openSecurityDetail(secId) {
     kv('時価総額 / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
     kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
-    kv('前回決算 / 次回決算', `${esc(earnPrevText(sec))}${earnPrevNote(sec)} / ${esc(earnNextText(sec))}`),
+    kv('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
   ].join('');
   // 基本情報の派生値
   const held = th.qty > 0;
@@ -9898,7 +9897,7 @@ function karteCardHtml(sec) {
     row('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
     row('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     row('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
-    row('前回決算 / 次回決算', `${esc(earnPrevText(sec))}${earnPrevNote(sec)} / ${esc(earnNextText(sec))}`),
+    row('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
   ].join('');
   // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
