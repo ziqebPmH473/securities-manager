@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-1746';
+const APP_VERSION = 'v20260729-1832';
 
 'use strict';
 
@@ -6468,6 +6468,35 @@ function saveFxRate() {
   store.data.settings._updatedAt = store._now(); // 同期マージで両端末変更時に新しい方を採るため
   store.save(); closeModal(); render(); toast(`ドル円換算レートを 1ドル＝${num(v)}円 に設定しました`);
 }
+// ---------- 取引の既定 証券会社（未保有の銘柄用） ----------
+// 取引記録フォームの証券会社は「実際の保有 → 直近の買い」の順で決めるが、**未保有・取引履歴なし**の
+// 銘柄はどこで買うかの情報が無く、従来は BROKERS[0]（SBI）固定だった。市場ごとの既定をマスタで持つ。
+// 保存先は store.data.settings（＝Googleドライブ同期の対象。localStorage 単独では持たない／CLAUDE.md ルール7）。
+const DEFAULT_NEW_BROKER = { JP: '楽天', US: 'Webull', FUND: 'SBI' };
+function defaultBrokerFor(market) {
+  const s = (store.data.settings && store.data.settings.defaultBroker) || {};
+  const v = s[market];
+  if (v && BROKERS.includes(v)) return v;
+  return DEFAULT_NEW_BROKER[market] || BROKERS[0];
+}
+function openDefaultBrokerMaster() {
+  const sel = (mkt) => `<select id="dfb-${mkt}">${BROKERS.map(b => `<option ${b === defaultBrokerFor(mkt) ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>`;
+  showModal('取引の既定 証券会社（未保有の銘柄）', `
+    <div class="row">
+      <div class="field"><label>日本株</label>${sel('JP')}</div>
+      <div class="field"><label>米国株</label>${sel('US')}</div>
+    </div>
+    <p class="muted" style="margin:8px 0 0">取引を記録するときの証券会社の初期値です。<strong>すでに保有している銘柄・過去に買った銘柄は、その保有／直近の買いの証券会社が優先</strong>されます。ここで設定した値が使われるのは<strong>未保有かつ取引履歴が無い銘柄</strong>（新規に買う銘柄）のときだけです。</p>
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">キャンセル</button><button type="button" class="btn btn-primary" onclick="saveDefaultBroker()">保存</button></div>`);
+}
+function saveDefaultBroker() {
+  const jp = (document.getElementById('dfb-JP') || {}).value;
+  const us = (document.getElementById('dfb-US') || {}).value;
+  store.data.settings = store.data.settings || {};
+  store.data.settings.defaultBroker = { ...(store.data.settings.defaultBroker || {}), JP: jp, US: us };
+  store.data.settings._updatedAt = store._now(); // 同期マージで両端末変更時に新しい方を採るため
+  store.save(); closeModal(); toast(`未保有時の既定を 日本株=${jp} / 米国株=${us} にしました`);
+}
 // トグル連動の「現在の集計」表。assetTableBroker=false: 分類ごとの集計のみ／true: 証券会社×分類のクロス表。
 let assetTableBroker = false;
 function toggleAssetBroker() {
@@ -6896,6 +6925,7 @@ const MASTER_LAUNCH = [
   { v: 'grade',    label: '銘柄格付けマスタ',     open: () => openGradeMaster(),    note: '銘柄格付け（S/A/B/C/D）の一覧・詳細での表示色を設定。' },
   { v: 'matrix',   label: 'マトリックス レンジ設定', open: () => openMatrixBandMaster(), note: 'レポートの分布マトリックスの取得額レンジ（色・しきい値）。米株円換算は共通レートを使用。' },
   { v: 'fxrate',   label: 'ドル円換算レート（マスタ評価用）', open: () => openFxRateMaster(), note: '米国株($)を円換算して評価する共通レート（初期100円）。背景色ルールのUS金額判定とマトリックスの取得額換算で共用。' },
+  { v: 'defbroker', label: '取引の既定 証券会社（未保有の銘柄）', open: () => openDefaultBrokerMaster(), note: '取引記録フォームの証券会社の初期値（日本株・米国株それぞれ）。保有・取引履歴がある銘柄はそちらが優先。' },
   { v: 'fund',     label: '投資信託 コードマスタ', open: () => openFundCodeMaster(), note: '取り込んだ投信のコード（協会コード）編集・名称取得・統合。' },
   { v: 'alias',    label: '取込変換マスタ',         open: () => openImportAliasMaster(), note: '取込時の「マスタに無い値」の変換対応（カテゴリ/格付/詳細種別/ルール）。' },
   { v: 'cf',       label: '列の背景色ルール',       open: () => openCfRulesMaster(),  note: '数値列の値の範囲ごとの背景色。適用画面（保有/サイン/マスタ/マーケット）を複数選択可。' },
@@ -9983,7 +10013,8 @@ function openTxnForm(secId, presetType, opts = {}) {
   // ＝売りの既定が保有と食い違って「数量が減らない」のを防ぐ。
   const hs = store.data.holdings.filter(h => h.securityId === secId);
   const primary = hs.filter(h => h.quantity > 0).sort((a, b) => b.quantity - a.quantity)[0] || hs[0] || null;
-  const defBroker = editTxn ? e.broker : (primary ? primary.broker : (calc.lastBroker(sec) || BROKERS[0]));
+  // 未保有かつ取引履歴なし＝どこで買うか情報が無い → マスタの既定（市場ごと。既定 JP=楽天 / US=Webull）
+  const defBroker = editTxn ? e.broker : (primary ? primary.broker : (calc.lastBroker(sec) || defaultBrokerFor(sec.market)));
   const defAcct = editTxn ? e.accountType : (primary ? primary.accountType : ACCOUNTS[0]);
   const typeSel = editTxn ? e.type : (presetType === 'sell' ? 'sell' : 'buy');
   const ledgerChecked = editTxn ? !!e.ledgerOnly : presetLedgerOnly;
