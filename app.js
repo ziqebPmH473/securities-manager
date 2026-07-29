@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-1005';
+const APP_VERSION = 'v20260729-1546';
 
 'use strict';
 
@@ -1609,17 +1609,29 @@ function earnCadence(e) {
 }
 // 決算日の整理: prev(実績) / 確定予定(confirmedNext) / 推定(estNext=前回+決算間隔)。
 // 推定は「決算間隔+1ヶ月」を過ぎても発表が来ない＝間隔判定が外れ／不定期決算なので無効化（半期銘柄がソート上位に残り続けるのを防ぐ）。
+// 「予定日を過ぎたのに prev が古いまま」への対処（2026-07-29）:
+//   ソース側は発表当日〜翌日には反映されない（US=Nasdaqの Date Reported は1〜2日遅れ、
+//   JP=Yahooは発表と同時に予定日を消す）。この間、予定日は過去・prev は前四半期のままになり、
+//   画面上は「次回決算が消えて、前回決算が古いまま」に見える。
+//   → 過ぎた予定日(next)を **発表済み（見込み）** として prev に繰り上げ、次回＝そこ+決算間隔で推定する。
+//     ソースが本物の prev を返した時点で自動的に置き換わる。45日以上前の予定日は誤りの可能性があるため使わない。
 function earnInfo(sec) {
   const e = earnOf(sec);
   if (!e) return null;
-  const prev = e.prev || null;
-  const confirmedNext = (e.next && !e.nextEstimate) ? e.next : null; // Yahoo確定の予定日のみ「予定日」扱い
+  const today = _todayYmd();
+  const rawPrev = e.prev || null;
+  const passedGap = e.next ? _diffDays(e.next, today) : null;            // 予定日から今日までの日数（正=過ぎている）
+  const passedNext = (passedGap !== null && passedGap >= 1 && passedGap <= 45) ? e.next : null;
+  const prevAssumed = (passedNext && (!rawPrev || rawPrev < passedNext)) ? passedNext : null;
+  const prev = prevAssumed || rawPrev;
+  // Yahoo/Nasdaq 確定の予定日のみ「予定日」扱い。過ぎた予定日は上で prev に繰り上げたので次回からは外す
+  const confirmedNext = (e.next && !e.nextEstimate && _diffDays(today, e.next) >= 0) ? e.next : null;
   let estNext = null;
   if (!confirmedNext) {
     const raw = prev ? _addMonths(prev, earnCadence(e)) : (e.next || null); // 予定日が無ければ 前回+決算間隔 を推定
-    if (raw && _diffDays(_todayYmd(), raw) >= -31) estNext = raw; // 推定日を1ヶ月以上過ぎたら「わからない」扱い
+    if (raw && _diffDays(today, raw) >= -31) estNext = raw; // 推定日を1ヶ月以上過ぎたら「わからない」扱い
   }
-  return { prev, prev2: e.prev2 || null, confirmedNext, estNext };
+  return { prev, prevAssumed: !!prevAssumed, prev2: e.prev2 || null, confirmedNext, estNext };
 }
 // 銘柄名の横／上部に出すラベル。近い決算・直近発表のときだけ返す（無ければ null）。
 //   { text, cls, sub }  cls: earn-soon(予定) / earn-done(発表) / earn-est(ごろ)
@@ -1650,6 +1662,9 @@ function earnLabelHtml(sec, opts) {
 }
 // 決算情報セクション用の値（推定は出さない。予定日不明は「-」）
 function earnPrevText(sec) { const i = earnInfo(sec); return i && i.prev ? fmtEarnYMD(i.prev) : '-'; }
+// 前回決算が「過ぎた予定日からの見込み」かどうか（ソースの反映待ち）。表示に注記を付けるため。
+function earnPrevAssumed(sec) { const i = earnInfo(sec); return !!(i && i.prevAssumed); }
+function earnPrevNote(sec) { return earnPrevAssumed(sec) ? ' <span class="muted" style="font-size:11px">（予定日・確報待ち）</span>' : ''; }
 function earnNextText(sec) { const i = earnInfo(sec); return i && i.confirmedNext ? fmtEarnYMD(i.confirmedNext) : '-'; }
 // 次回決算の「実効日」（確定予定＞推定）。列・上部表示・ソート用。{ date, kind:'予定'|'ごろ' } or null
 function earnEffNext(sec) { const i = earnInfo(sec); if (!i) return null; if (i.confirmedNext) return { date: i.confirmedNext, kind: '予定' }; if (i.estNext) return { date: i.estNext, kind: 'ごろ' }; return null; }
@@ -1679,6 +1694,9 @@ function earnRefetchInterval(sec) {
   if (!i) return 1;
   const today = _todayYmd();
   if (!i.prev && !i.confirmedNext && !i.estNext) return 1;
+  // 予定日を過ぎたのに本物の prev が来ていない（見込み扱い中）… ソース反映を毎日確認。
+  // 2週間たっても来ない＝ソース側が出さないケースなので3日に落として無駄打ちを止める。
+  if (i.prevAssumed) { const g = _diffDays(i.prev, today); return (g !== null && g <= 14) ? 1 : 3; }
   if (i.prev) { const g = _diffDays(i.prev, today); if (g !== null && g >= 0 && g <= 7) return 1; }
   if (i.confirmedNext) { const d = _diffDays(today, i.confirmedNext); if (d === null || d <= 14) return 1; return d <= 30 ? 3 : 7; }
   if (i.estNext) { const d = _diffDays(today, i.estNext); return (d === null || d <= 28) ? 1 : 3; }
@@ -1934,7 +1952,20 @@ const api = {
           const k = keyBySym.get(sym); if (!k) continue;
           // 前回も次回も無し＝データ無し or ソース側ブロック → 成功扱いにしない（既存値は消さない）
           if (!d.prev && !d.next) continue;
-          store.data.earnings[k] = { next: d.next || null, nextEstimate: !!d.nextEstimate, exDiv: d.exDiv || null, prev: d.prev || null, prev2: d.prev2 || null, at: td };
+          // 部分取得（片方だけ返る）で既存の良い値を潰さないようにマージする。
+          //  ・next: 新しい値が無ければ既存を残す（Yahooは発表と同時に予定日を消すため、過ぎた予定日も
+          //    「発表済み（見込み）」の根拠として earnInfo が使う。45日で自動的に無視される）
+          //  ・prev/prev2: 新しい prev が既存より新しい時だけ組で入れ替える（古い prev で巻き戻さない）
+          const cur = store.data.earnings[k] || {};
+          const useNewPrev = !cur.prev || (d.prev && d.prev > cur.prev);
+          store.data.earnings[k] = {
+            next: d.next || cur.next || null,
+            nextEstimate: d.next ? !!d.nextEstimate : !!cur.nextEstimate,
+            exDiv: d.exDiv || cur.exDiv || null,
+            prev: useNewPrev ? (d.prev || null) : cur.prev,
+            prev2: useNewPrev ? (d.prev2 || null) : (cur.prev2 || null),
+            at: td,
+          };
           gotAt.add(k);
         }
       }
@@ -2780,8 +2811,9 @@ function ratioCostJpy(sec) { return ratioJpy(sec.market, calc.costNative(sec)) |
 // 描画中の表のスコープ（比率列の分母）。marketRow から参照するため描画直前にセットする。
 let ratioCtx = null;
 // shownSecs = その表に実際に出ている銘柄（分母 'shown' 用）。省略時は 'shown' でも日米合計にフォールバック。
-function buildRatioCtx(shownSecs) {
-  const mode = ratioDenomMode();
+// forceMode を渡すと設定を無視してその分母で計算する（銘柄カルテ＝常に日米合計）。
+function buildRatioCtx(shownSecs, forceMode) {
+  const mode = forceMode || ratioDenomMode();
   const sum = (list) => list.reduce((a, s) => { a.v += ratioValJpy(s); a.c += ratioCostJpy(s); return a; }, { v: 0, c: 0 });
   const stocks = () => store.data.securities.filter(s => s.market === 'US' || s.market === 'JP');
   if (mode === 'manual') {
@@ -2823,12 +2855,22 @@ function ratioTd(sec, kind) {
   const title = `${kind === 'cost' ? '取得額' : '評価額'} ${yen(numr)} ÷ ${c.label} ${yen(den)}`;
   return `<td class="ratio-td" title="${esc(title)}"><span class="ratio-bar" style="width:${Math.max(0, Math.min(100, p)).toFixed(1)}%"></span><span class="ratio-v">${p.toFixed(2)}%</span></td>`;
 }
-// 詳細ドロワー・銘柄カルテ用の1行テキスト（評価額比率 / 取得額比率＋分母ラベル）
+// 詳細ドロワー用の1行テキスト（評価額比率 / 取得額比率＋分母ラベル）
 function ratioSummaryHtml(sec) {
   const c = ratioCtx || buildRatioCtx(null);
   const pv = ratioPct(sec, 'value', c), pc = ratioPct(sec, 'cost', c);
   const f = p => p != null ? `${p.toFixed(2)}%` : '—';
   return `${f(pv)} <span class="muted" style="font-weight:400;font-size:11px">/ 取得額 ${f(pc)}（分母: ${esc(c.label)}）</span>`;
+}
+// 銘柄カルテ用（2026-07-29 すみぽん指示）: 1銘柄を単体で見る画面なので
+// **評価額ベース・分母は日米合計に固定**する。ツールバーの分母設定・取得額比率は出さない。
+// 理由: 取得額比率は分母（全銘柄の取得額合計）と分子（この銘柄の取得額）の時点がそろわず、
+// 「資産に占める割合」としては解釈しづらいため。
+function karteRatioHtml(sec) {
+  const c = buildRatioCtx(null, 'both'); // 日米合計（ツールバーの分母設定に依存しない）
+  const p = ratioPct(sec, 'value', c);
+  if (p == null) return '—';
+  return `${p.toFixed(2)}% <span class="muted" style="font-weight:400;font-size:11px">（評価額 / 日米合計）</span>`;
 }
 // 分母切替のツールバー（保有銘柄一覧・買い増しサイン共通）
 function ratioToolbarHtml() {
@@ -3055,7 +3097,7 @@ const COL_RENDERERS = {
   prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
   // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
   prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
-  earnPrev: (s,c) => { const t = earnPrevText(s); return `<td class="l" title="前回決算発表日">${t === '-' ? muted : esc(t)}</td>`; },
+  earnPrev: (s,c) => { const t = earnPrevText(s); const as = earnPrevAssumed(s); return `<td class="l" title="${as ? '予定日を過ぎたため発表済みとみなした日（ソースの確報待ち）' : '前回決算発表日'}">${t === '-' ? muted : esc(t) + (as ? '<span class="muted">*</span>' : '')}</td>`; },
   // 次回決算（予定＝確定 / ごろ＝前回+4ヶ月の推定を含む）。ソートは実効日で近い順。
   earnNext: (s,c) => { const eff = earnEffNext(s); if (!eff) return `<td class="l" title="次回決算">${muted}</td>`; const days = earnNextDays(s); const dtxt = (days != null && days >= 0 && days <= 60) ? ` <span class="muted">(あと${days}日)</span>` : ''; return `<td class="l" title="次回決算（予定/推定込み）">${esc(fmtEarnYMD(eff.date))} <span class="muted">${eff.kind}</span>${dtxt}</td>`; },
   dropFromPrev: (s,c) => pctTd(calc.dropFromPrev(s)),
@@ -9003,7 +9045,7 @@ function openSecurityDetail(secId) {
     kv('時価総額 / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
     kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
-    kv('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
+    kv('前回決算 / 次回決算', `${esc(earnPrevText(sec))}${earnPrevNote(sec)} / ${esc(earnNextText(sec))}`),
   ].join('');
   // 基本情報の派生値
   const held = th.qty > 0;
@@ -9831,7 +9873,7 @@ function karteCardHtml(sec) {
     row('平均取得単価', held ? m(th.avgCost) : '—'),
     row('保有数量', qtyDisp),
     ...(us ? usValueRows : jpValueRows),
-    row('資産に占める割合', held ? ratioSummaryHtml(sec) : '—'),
+    row('資産に占める割合', held ? karteRatioHtml(sec) : '—'),
     row('前回購入', lb.price != null ? m(lb.price) + (lb.date ? ` <span class="muted">(${esc(lb.date)})</span>` : '') : '—'),
     row('購入回数', `${calc.buyCount(sec)}回`),
     holdAccRows,
@@ -9856,7 +9898,7 @@ function karteCardHtml(sec) {
     row('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
     row('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     row('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
-    row('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
+    row('前回決算 / 次回決算', `${esc(earnPrevText(sec))}${earnPrevNote(sec)} / ${esc(earnNextText(sec))}`),
   ].join('');
   // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
