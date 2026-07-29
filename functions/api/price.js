@@ -101,7 +101,7 @@ async function fetchFinnhub(symbol, token, withHighs) {
 // Yahoo の includePrePost で当日分(1分足)を取得。現在値=レギュラー、extPrice=プレ/アフターの直近値。
 // 現在がプレ/アフターの取引時間内のときだけ extPrice を返す（それ以外は null＝時間外取引なし）。
 async function fetchUsExtended(symbol) {
-  const u = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m&includePrePost=true`;
+  const u = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m&includePrePost=true${bust()}`;
   const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' }, cf: { cacheTtl: 60, cacheEverything: true } });
   if (!res.ok) throw new Error(`Yahoo ext ${res.status} (${symbol})`);
   const data = await res.json();
@@ -165,7 +165,7 @@ async function fetchYahoo(symbol, type, rangeOverride, withHighs) {
 }
 
 async function fetchYahooChart(symbol, range, interval) {
-  const u = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
+  const u = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}${bust()}`;
   const res = await fetch(u, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' },
     cf: { cacheTtl: 60, cacheEverything: true },
@@ -265,6 +265,13 @@ async function fetchYahooChart(symbol, range, interval) {
   };
 }
 
+// Yahoo への問い合わせURLに「分単位のキャッシュバスター」を付ける。
+// ★実害があったため必須（2026-07-29）: 同じURL（特に range=1d）に対して丸1日古いレスポンスが返り続け、
+//   日本株の前日比が壊れた（例: 278A.T が 現在値=10,380/前日終値=12,920＝どちらも1日前の値で -17.4% と誤表示。
+//   正しくは 10,200/10,380 で -1.7%。9843.T・7011.T でも同時発生。同じ瞬間に生Yahooへ直接叩くと正常値が返る）。
+// cf.cacheTtl=60 を指定しているのに解消しなかった＝エッジ/上流のどこかが古いオブジェクトを保持し続けていたため、
+// URL自体を1分ごとに変える（＝キャッシュキーを変える）ことで確実に最新を取りに行く。1分粒度なので負荷は増えない。
+function bust() { return `&_t=${Math.floor(Date.now() / 60000)}`; }
 function num(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }
 // 米国サマータイム（3月第2日曜〜11月第1日曜）判定（時間外セッション判定用）
 function usEtDST(ms) {
