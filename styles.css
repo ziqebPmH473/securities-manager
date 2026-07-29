@@ -794,8 +794,9 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: var(--sp-1); }
 .kt-sub .muted { font-size: var(--fs-cap); }
 .kt-price-block { text-align: right; }
-.kt-price { font-size: var(--fs-hero); font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
-.kt-chg { font-size: var(--fs-body); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: var(--sp-1); }
+.kt-price { display: block; font-size: var(--fs-hero); font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+/* 株価・前日比は株探へのリンク（色は文字色のまま・ホバーで下線） */
+.kt-chg { display: block; font-size: var(--fs-body); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: var(--sp-1); }
 .kt-chg .muted { font-weight: 400; font-size: var(--fs-cap); }
 .kt-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 

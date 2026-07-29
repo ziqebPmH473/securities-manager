@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-1848';
+const APP_VERSION = 'v20260729-2015';
 
 'use strict';
 
@@ -9221,7 +9221,8 @@ function niceStep(range, target) {
 }
 // バニラSVGの折れ線チャート（外部ライブラリ不要）。Y補助目盛・X年ラベル・高値/安値マーカー付き。
 function detailSvgChart(points, overlays, costPts) {
-  const W = 760, H = 300, pad = { l: 56, r: 86, t: 14, b: 26 };
+  // 年ラベルの下の余白を詰める（b:26→18／全体 300→276）。カルテを1画面に近づけるため（2026-07-29）
+  const W = 760, H = 276, pad = { l: 56, r: 86, t: 14, b: 18 };
   const ys = points.map(p => p[1]); const xs = points.map(p => p[0]);
   let dmin = Math.min(...ys), dmax = Math.max(...ys);
   overlays.forEach(o => { if (o.y != null) { dmin = Math.min(dmin, o.y); dmax = Math.max(dmax, o.y); } });
@@ -9242,7 +9243,7 @@ function detailSvgChart(points, overlays, costPts) {
   }
   // X年の区切り＋ラベル
   let xlab = '', lastYear = null;
-  points.forEach(p => { const yr = new Date(p[0] * 1000).getFullYear(); if (yr !== lastYear) { lastYear = yr; const x = px(p[0]).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${H - pad.b}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4"/><text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="10" text-anchor="middle">${yr}</text>`; } });
+  points.forEach(p => { const yr = new Date(p[0] * 1000).getFullYear(); if (yr !== lastYear) { lastYear = yr; const x = px(p[0]).toFixed(1); xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${H - pad.b}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4"/><text x="${x}" y="${H - pad.b + 13}" fill="var(--muted)" font-size="10" text-anchor="middle">${yr}</text>`; } });
   // 高値・安値マーカー
   let hi = -Infinity, lo = Infinity, hiI = 0, loI = 0;
   ys.forEach((v, i) => { if (v > hi) { hi = v; hiI = i; } if (v < lo) { lo = v; loI = i; } });
@@ -9939,6 +9940,8 @@ function karteCardHtml(sec) {
   const fundBox = [
     row('セクター/業種', `${esc(calc.field(sec, 'sector') || '—')} / ${esc(calc.field(sec, 'industry') || '—')}`),
     row('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
+    // PBR / PSR（PSRは米国株のみ取得元がある。日本株は「—」）
+    row('PBR / PSR', `${calc.pbr(sec) != null ? num(calc.pbr(sec)) : '—'} / ${calc.psr(sec) != null ? num(calc.psr(sec)) : '—'}`),
     row('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     row('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
     row('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
@@ -9958,8 +9961,8 @@ function karteCardHtml(sec) {
         <div class="kt-sub"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}${buyStatus}</div>
       </div>
       <div class="kt-price-block">
-        <div class="kt-price">${m(price)}</div>
-        <div class="kt-chg ${cls(dayPct)}">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></div>
+        <a class="kt-price lnk-ext" href="${kabutanUrl(sec)}" target="_blank" rel="noopener" title="株探のチャートを開く">${m(price)}</a>
+        <a class="kt-chg lnk-ext ${cls(dayPct)}" href="${kabutanUrl(sec)}" target="_blank" rel="noopener" title="株探のチャートを開く">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></a>
       </div>
       <div class="kt-actions">
         ${(function(){ const h = earnTopHtml(sec); return h ? `<span class="kt-earn">${h}</span>` : ''; })()}
