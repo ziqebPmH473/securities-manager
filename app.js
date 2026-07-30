@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260731-0302';
+const APP_VERSION = 'v20260731-0325';
 
 'use strict';
 
@@ -9852,7 +9852,7 @@ function renderTradeEntry() {
   }
   const searchBar = `
     <div class="kt-search">
-      <div class="field" style="flex:1">
+      <div class="field">
         <input id="karte-code" class="kt-code" type="text" value="${esc(karteCode)}" placeholder="コード・ティッカー・銘柄名（例: AAPL）" autocomplete="off"></div>
       <div class="field"><button class="btn btn-primary btn-sm" onclick="karteLookup()">${svgIcon('search', '')} 表示</button></div>
     </div>`;

@@ -782,7 +782,8 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 }
 /* カルテは1画面に収める。main.content の上下 padding(22/16px) を打ち消して、
    実チャート描画後でもスクロールバーが出ないようにする（実測で約25pxはみ出していた） */
-.kt { margin: -22px 0 -12px; }
+/* 上端の空きは入力欄の下の余白(--sp-2 = 6px)と同じにし、下は main.content の padding(16px)を打ち消す */
+.kt { margin: -16px 0 -16px; }
 .kt-search { display: flex; align-items: flex-end; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 var(--sp-2); }
 .kt-search .field { margin: 0; }
 .kt-search .field label { font-size: var(--fs-cap); font-weight: 400; color: var(--muted); margin-bottom: var(--sp-1); }
@@ -809,7 +810,7 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 
 .kt-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 1px; background: var(--hair); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; margin-bottom: var(--sp-2); }
-.kt-metrics .cell { background: var(--panel); padding: 5px var(--sp-3); }
+.kt-metrics .cell { background: var(--panel); padding: 4px var(--sp-3); }
 .kt-metrics .k { font-size: var(--fs-cap); color: var(--muted); }
 .kt-metrics .v { font-size: var(--fs-body); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }
 
