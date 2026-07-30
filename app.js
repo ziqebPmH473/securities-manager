@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260731-0110';
+const APP_VERSION = 'v20260731-0126';
 
 'use strict';
 
@@ -8632,25 +8632,25 @@ function openSecurityForm(id, presetMarket) {
       <div class="row">
         <div class="field"><label>注意銘柄(ウォッチ)</label>
           <select name="watch"><option value="0" ${!sec || !sec.watch ? 'selected' : ''}>通常</option><option value="1" ${sec && sec.watch ? 'selected' : ''}>注意</option></select></div>
-        <div class="field"><label>前回購入価格 / 前回購入日（買い取引が無い場合の基準・任意）</label>
+        <div class="field"><label title="買い取引が無い場合の基準（任意）。取引履歴があればそちらを優先">前回購入価格 / 前回購入日</label>
           <div style="display:flex;gap:6px">
             <input name="prevBuyPrice" type="number" step="any" value="${sec && sec.prevBuyPrice != null ? sec.prevBuyPrice : ''}" placeholder="価格(原通貨)" style="flex:1">
             <input name="prevBuyDate" type="date" value="${sec && sec.prevBuyDate ? esc(sec.prevBuyDate) : ''}" title="前回購入日。高値更新判定（最高値が購入後か）の比較に使用。取引履歴があればそちらを優先" style="flex:1">
           </div></div>
       </div>
       <div class="row">
-        <div class="field"><label>基準高値（個別上書き・任意）</label>
+        <div class="field"><label title="この銘柄だけルールの基準高値を上書きする（任意）">基準高値</label>
           <select name="baseHighMode" onchange="toggleBaseHighManual(this)">
             <option value="" ${!sec || !sec.baseHighMode ? 'selected' : ''}>ルールに従う（${BASE_HIGH_LABEL[store.rule(sec ? sec.ruleId : null).baseHighMode] || '5年高値'}）</option>
             ${Object.entries(BASE_HIGH_LABEL).map(([v, lbl]) => `<option value="${v}" ${sec && sec.baseHighMode === v ? 'selected' : ''}>${lbl}</option>`).join('')}
           </select></div>
-        <div class="field"><label>手動の基準高値（基準高値=手動指定の時のみ）</label>
+        <div class="field"><label title="基準高値＝手動指定の時のみ有効">手動の基準高値</label>
           <input name="baseHighManual" type="number" step="any" value="${sec && sec.baseHighManual != null ? sec.baseHighManual : ''}" placeholder="原通貨" ${sec && sec.baseHighMode === 'manual' ? '' : 'disabled'}></div>
       </div>
       <div class="row">
-        <div class="field"><label>買増固定値（次回購入をこの価格に固定・任意）</label>
-          <input name="fixedBuyPrice" type="number" step="any" value="${sec && sec.fixedBuyPrice != null ? sec.fixedBuyPrice : ''}" placeholder="原通貨。入力するとルール計算より優先"></div>
-        <div class="field"><label>詳細種別（貼付出力用）</label>
+        <div class="field"><label title="次回購入をこの価格に固定（任意）。入力するとルール計算より優先">買増固定値</label>
+          <input name="fixedBuyPrice" type="number" step="any" value="${sec && sec.fixedBuyPrice != null ? sec.fixedBuyPrice : ''}" placeholder="原通貨"></div>
+        <div class="field"><label title="貼付出力用">詳細種別</label>
           <select name="detailType">
             <option value="" ${!sec || !sec.detailType ? 'selected' : ''}>自動判定（${sec ? esc(autoDetailType(sec)) : '個別株'}）</option>
             ${['個別株', 'ETF'].map(t => `<option ${sec && sec.detailType === t ? 'selected' : ''}>${t}</option>`).join('')}
@@ -8661,36 +8661,33 @@ function openSecurityForm(id, presetMarket) {
           買い増しも初回基準で判定</label></div>
 
       <div class="row">
-        <div class="field"><label>元本売却済み（情報管理のみ・判定には影響しません）</label>
+        <div class="field"><label title="情報管理のみ。判定には影響しない">元本売却済み</label>
           <select name="principalSold"><option value="0" ${!sec || !sec.principalSold ? 'selected' : ''}>いいえ</option><option value="1" ${sec && sec.principalSold ? 'selected' : ''}>売却済み</option></select></div>
         <div class="field"><label>売却済みの元本額 (${ccy})</label>
           <input name="principalSoldAmount" type="number" step="any" value="${sec && sec.principalSoldAmount != null ? sec.principalSoldAmount : ''}" placeholder="任意・原通貨"></div>
       </div>
 
-      <div class="field"><label>メモ（自由記述・任意）</label>
-        <textarea name="memo" rows="2" placeholder="この銘柄に関する覚書（損出しの経緯・方針など）">${sec ? esc(sec.memo || '') : ''}</textarea></div>
+      <div class="field"><label>メモ</label>
+        <textarea name="memo" rows="2">${sec ? esc(sec.memo || '') : ''}</textarea></div>
 
-      <div class="field"><label>銘柄ラベル（複数可・投資テーマ/分類。例: 半導体・高配当）</label>
+      <div class="field"><label title="投資テーマ/分類。マスタ・設定の「銘柄ラベル」で色・並び順を編集">銘柄ラベル</label>
         <div class="label-picker" style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center">${labelChecks || '<span class="muted">ラベル未登録（下に入力するか、マスタで追加）</span>'}</div>
-        <input name="labelsNew" placeholder="新規ラベルを追加（; か , 区切り）— 例: AI; ロボット" style="margin-top:6px" autocomplete="off">
-        <p class="muted" style="margin:4px 0 0">前提（テーマ）が崩れた時に、ラベルで絞り込んで一括判断できます。マスタ・設定の「銘柄ラベル」で色・並び順を編集できます。</p></div>
+        <input name="labelsNew" placeholder="新規追加（; か , 区切り）" style="margin-top:6px" autocomplete="off"></div>
 
-      <fieldset class="form-group"><legend>表示の手動上書き（任意・自動取得では上書きされません）</legend>
-        <div class="field"><label>銘柄名（上書き）</label>
+      <fieldset class="form-group"><legend title="自動取得では上書きされません。空欄にすると自動取得値に戻ります">表示の手動上書き</legend>
+        <div class="field"><label>銘柄名</label>
           <input name="nameOverride" value="${sec && sec.nameOverride ? esc(sec.nameOverride) : ''}" placeholder="${sec ? esc((store.data.meta[priceKey(sec)] || {}).name || sec.ticker) : '空欄で自動取得名を使用'}"></div>
         <div class="row">
-          <div class="field"><label>セクター（上書き）</label>
+          <div class="field"><label>セクター</label>
             <input name="sectorOverride" value="${sec && sec.sectorOverride ? esc(sec.sectorOverride) : ''}" placeholder="${sec ? esc(jpInd((store.data.meta[priceKey(sec)] || {}).sector) || '空欄で自動取得') : '空欄で自動取得'}"></div>
-          <div class="field"><label>業種（上書き）</label>
+          <div class="field"><label>業種</label>
             <input name="industryOverride" value="${sec && sec.industryOverride ? esc(sec.industryOverride) : ''}" placeholder="${sec ? esc(jpInd((store.data.meta[priceKey(sec)] || {}).industry) || '空欄で自動取得') : '空欄で自動取得'}"></div>
         </div>
-        <p class="muted" style="margin:6px 0 0">空欄にすると自動取得値に戻ります。</p>
       </fieldset>
 
       <fieldset class="form-group"><legend>銘柄情報（自動取得）</legend>
         <div id="auto-info" class="auto-info">${autoInfoPanelHtml(m, sec ? sec.ticker : '')}</div>
         <button type="button" class="btn btn-sm" style="margin-top:8px" onclick="refetchInfo()">今すぐ取得</button>
-        <p class="muted" style="margin:8px 0 0">銘柄名・セクター・業種・時価総額・PER・配当はティッカーをキーに自動取得（マスタ管理）。価格更新時にも定期取得され、手入力はしません。</p>
       </fieldset>
       ${sec && sec.splitHistory && sec.splitHistory.length ? `
       <fieldset class="form-group"><legend>株式分割・併合の履歴</legend>
@@ -8702,14 +8699,13 @@ function openSecurityForm(id, presetMarket) {
         <div class="row">
           <div class="field"><label>カテゴリ</label>
             <select name="category" onchange="fillBuyAmount(this)"><option value="">未設定</option>${catOpts}</select></div>
-          <div class="field"><label>1回の購入額 (${ccy})</label>
-            <input name="buyAmount" type="number" step="any" value="${buyAmtVal}" placeholder="カテゴリから自動／手入力で上書き"></div>
+          <div class="field"><label title="カテゴリを選ぶと自動転記（${m === 'US' ? '米株は÷100ドル' : '円'}）。手入力で上書き可">1回の購入額 (${ccy})</label>
+            <input name="buyAmount" type="number" step="any" value="${buyAmtVal}"></div>
           <div class="field"><label>購入回数</label>
-            <input name="buyCount" type="number" step="1" min="0" value="${buyCntVal}" placeholder="任意"></div>
+            <input name="buyCount" type="number" step="1" min="0" value="${buyCntVal}"></div>
         </div>
-        <p class="muted" style="margin:-4px 0 12px">カテゴリを選ぶと購入額を転記します（${m === 'US' ? '米株は÷100ドル' : '円'}）。実際の購入額が異なる場合は手入力で上書きしてください。</p>
         <div class="row">
-          <div class="field"><label>投資カテゴリ（分析枠のラベル・高配当/テーマ株 等）</label>
+          <div class="field"><label title="分析枠のラベル（高配当/テーマ株 等）">投資カテゴリ</label>
             <select name="investCategory"><option value="">未設定</option>${invCatOpts}</select></div>
         </div>
         <div class="row">
@@ -8731,7 +8727,7 @@ function openSecurityForm(id, presetMarket) {
       </details>
 
       ${id ? '' : `
-      <fieldset class="form-group"><legend>初期保有（任意・後から「保有」で編集可）</legend>
+      <fieldset class="form-group"><legend title="任意。後から「保有」で編集できます">初期保有</legend>
         <div class="row">
           <div class="field"><label>証券会社</label><select name="broker">${BROKERS.map(b => `<option>${b}</option>`).join('')}</select></div>
           <div class="field"><label>口座種別</label><select name="accountType">${ACCOUNTS.map(a => `<option>${a}</option>`).join('')}</select></div>
