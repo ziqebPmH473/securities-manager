@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260731-0057';
+const APP_VERSION = 'v20260731-0110';
 
 'use strict';
 
@@ -7808,13 +7808,13 @@ function openTxnImport() {
     <div class="field"><label>明細を貼り付け（1行=1取引／タブ・カンマ・マークダウン表対応）</label>
       <textarea id="ti-text" rows="8" placeholder="日付&#9;種別&#9;数量&#9;単価&#9;[証券会社]&#9;[口座]&#9;[受渡金額]&#10;2024-01-15&#9;買い&#9;100&#9;2500&#9;SBI&#9;特定&#10;2024/03/02&#9;売り&#9;50&#9;2700"></textarea></div>
     <p class="muted" style="font-size:12px;margin:2px 0 8px">列の順番: <strong>日付 / 種別(買い・売り) / 数量 / 単価 / 証券会社(任意) / 口座種別(任意) / 受渡金額(任意・米株の取得円用)</strong>。先頭の見出し行は自動スキップ。証券会社・口座が空の行は上の「既定」を使います。</p>
-    <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:2px 0 8px;cursor:pointer">
-      <input id="ti-ledger" type="checkbox" checked style="margin-top:3px">
-      <span>保有数量・平均取得単価に反映しない（履歴のみ＝推奨）<br><span class="muted" style="font-size:12px">※ 現在の保有を崩さず過去履歴を登録。前回購入日・購入回数・判定には反映します。OFFにすると保有数量・平均取得単価も再計算されます。</span></span>
+    <label class="chk-row" style="display:flex;gap:8px;align-items:center;margin:2px 0 4px;cursor:pointer" title="現在の保有を崩さず過去履歴を登録。前回購入日・購入回数・判定には反映。OFFにすると保有数量・平均取得単価も再計算">
+      <input id="ti-ledger" type="checkbox" checked>
+      <span>保有に反映しない（履歴のみ＝推奨）</span>
     </label>
-    <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:2px 0 8px;cursor:pointer">
-      <input id="ti-skipprev" type="checkbox" style="margin-top:3px">
-      <span>前回購入額を更新しない（取り込む買いを「前回購入」に使わない）<br><span class="muted" style="font-size:12px">※ 取り込んだ買いの単価・日付を前回購入単価／前回購入日に使いません（次回購入トリガー・高値更新判定が動かない）。購入回数・取引サマリーには反映します。</span></span>
+    <label class="chk-row" style="display:flex;gap:8px;align-items:center;margin:2px 0 8px;cursor:pointer" title="取り込む買いの単価・日付を前回購入単価／前回購入日に使わない（次回購入トリガー・高値更新判定が動かない）">
+      <input id="ti-skipprev" type="checkbox">
+      <span>前回購入額を更新しない</span>
     </label>
     <div class="form-actions" style="justify-content:flex-start">
       <button type="button" class="btn" onclick="txnImportPreview()">プレビュー</button>
@@ -10086,25 +10086,20 @@ function openTxnForm(secId, presetType, opts = {}) {
       </div>
       ${sec.market === 'US' ? `
       <div class="row buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">
-        <div class="field"><label>受渡金額(円)（手数料・税込／取得円用・任意）</label>
-          <input name="settleJpy" type="number" step="any" value="${e.settleJpy ?? ''}" placeholder="取引報告書の国内受渡金額"></div>
-      </div>
-      <p class="muted buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">買いの受渡金額(円)＝支払った原価を「取得円」に加算。売りは取得円を売却割合で自動按分（代金は原価ではないので受渡金額は不要）。買い増し判定には未使用。</p>` : ''}
+        <div class="field"><label title="手数料・税込。取得円に加算（買いのみ）。買い増し判定には未使用">受渡金額(円)（任意）</label>
+          <input name="settleJpy" type="number" step="any" value="${e.settleJpy ?? ''}"></div>
+      </div>` : ''}
       <div class="row buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">
-        <div class="field"><label>前回売却分の元購入額 (${ccy})（任意・損出し買い直し用）</label>
-          <input name="prevSoldOrig" type="number" step="any" placeholder="前回売却した分の当初の購入額"></div>
+        <div class="field"><label title="損出し買い直し用。前回売却した分の当初の購入額を入れると、今回の取得価額に上乗せして「購入額（本来）」に反映">前回売却分の元購入額 (${ccy})（任意）</label>
+          <input name="prevSoldOrig" type="number" step="any"></div>
       </div>
-      <p class="muted buy-only" style="font-size:12px;display:${typeSel === 'sell' ? 'none' : ''}">買い直し（損出し）の時、前回売却した分の<strong>当初の購入額</strong>を入れると、今回の取得価額に上乗せして「購入額（本来）」に反映します（その保有ロットの売却前購入額として保存）。空欄なら通常どおり取得価額のみ。</p>
-      <p class="muted">買い=数量加算＆平均取得単価を更新 / 売り=数量のみ減算（単価は不変）。証券会社・口座は保有ロットに合わせて選んでください。</p>
-      <label class="chk-row">
+      <label class="chk-row" title="保有数量・平均取得単価・取得円は変えない。前回購入日・購入回数・判定・取引サマリーには反映">
         <input name="ledgerOnly" type="checkbox" ${ledgerChecked ? 'checked' : ''}>
-        <span>保有数量・平均取得単価に反映しない（過去の購入履歴の記録用）<br>
-          <span class="muted" style="font-size:12px">※ チェックすると保有・取得原価は変えず、前回購入日・購入回数・高値更新判定・取引サマリーには反映します。</span></span>
+        <span>保有に反映しない（履歴のみ）</span>
       </label>
-      <label class="chk-row buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">
+      <label class="chk-row buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}" title="この取引の単価・日付を前回購入単価／前回購入日に使わない（次回購入トリガー・高値更新判定が動かない）。保有・購入回数には反映">
         <input name="skipPrevBuy" type="checkbox" ${skipPrevChecked ? 'checked' : ''}>
-        <span>前回購入額を更新しない（この取引を「前回購入」に使わない）<br>
-          <span class="muted" style="font-size:12px">※ チェックするとこの取引の単価・日付を前回購入単価／前回購入日として使いません（次回購入トリガー・前回からの下落率・高値更新判定が動きません）。保有数量・平均取得単価・購入回数・取引サマリーには通常どおり反映します。</span></span>
+        <span>前回購入額を更新しない</span>
       </label>
       <div class="form-actions">
         ${editTxn ? `<button type="button" class="btn btn-danger" id="txn-del" style="margin-right:auto">削除</button>` : ''}
