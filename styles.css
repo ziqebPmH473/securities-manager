@@ -780,13 +780,14 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
   --fs-hero: 23px;    /* 現在値 */
   --sp-1: 3px; --sp-2: 6px; --sp-3: 10px;
 }
-/* カルテは1画面に収める。上端の余白（main.content の padding-top）を詰める */
-.kt { margin-top: -14px; }
+/* カルテは1画面に収める。main.content の上下 padding(22/16px) を打ち消して、
+   実チャート描画後でもスクロールバーが出ないようにする（実測で約25pxはみ出していた） */
+.kt { margin: -22px 0 -12px; }
 .kt-search { display: flex; align-items: flex-end; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 var(--sp-2); }
 .kt-search .field { margin: 0; }
 .kt-search .field label { font-size: var(--fs-cap); font-weight: 400; color: var(--muted); margin-bottom: var(--sp-1); }
 .kt-search .field select, .kt-search .field input { height: 32px; padding: 4px 9px; font-size: var(--fs-body); line-height: 1.3; }
-.kt-search .kt-code { width: 240px; }
+.kt-search .kt-code { width: 320px; }
 /* カルテ: 複数候補の選択リスト */
 .kt-cands { display: flex; flex-direction: column; gap: 4px; max-width: 560px; }
 .kt-cand { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); cursor: pointer; text-align: left; }
@@ -840,7 +841,7 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 /* 会社概要は3行で省略（全文は title でホバー表示）。1画面に収めるため */
 .kt-summary { margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: 1px solid var(--hair); font-size: var(--fs-cap); line-height: 1.55; color: var(--muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 
-.kt-tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-2); margin-bottom: var(--sp-2); align-items: start; }
+.kt-tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-2); align-items: start; }
 .kt-scroll { max-height: 150px; overflow-y: auto; }
 .kt-scroll > h3 { position: sticky; top: 0; background: var(--panel); padding-bottom: var(--sp-1); z-index: 1; }
 
