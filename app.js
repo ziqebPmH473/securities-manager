@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260731-0126';
+const APP_VERSION = 'v20260731-0210';
 
 'use strict';
 
@@ -8165,7 +8165,7 @@ let _alFilterBroker = '';
 function openAcqLedger() {
   _alFilterBroker = ''; _alFilterBad = false;
   showModal('取得円台帳（米国株）', `
-    <p class="muted" style="margin:0 0 8px">外国株式等取引報告書の明細を蓄積し、［保有へ反映］で保有の「取得円」を更新します（差分を確認してから上書き・自動では変えません）。取引履歴・購入回数・前回購入日には影響しません。</p>
+    <p class="muted" style="margin:0 0 8px">報告書の明細をここに貯める → ［保有へ反映］で保有の「取得円」を上書き（差分を確認してから）。取引履歴・購入回数・前回購入日は変わりません。</p>
     <div id="al-summary"></div>
     <div class="btn-row" style="margin:10px 0">
       <button class="btn btn-primary" onclick="openAcqLedgerImport()">報告書を取込…</button>
@@ -8308,7 +8308,7 @@ let _alHeaders = [], _alRows = [], _alMapping = [], _alParsed = [];
 function openAcqLedgerImport() {
   _alHeaders = []; _alRows = []; _alMapping = []; _alParsed = [];
   showModal('取得円台帳へ取込（外国株式等取引報告書）', `
-    <p class="muted" style="margin:0 0 8px">報告書（複数まとめて可・過去データ可）を表に整形して貼り付け→列を割当→プレビューで確認して取込。<strong>取込済みと判定した行は自動でチェックが外れます</strong>（署名の件数比較）。チェックの付け外しで最終決定できます。この画面では台帳に貯めるだけで、保有の取得円は変わりません（変更は「保有へ反映」で確認してから）。</p>
+    <p class="muted" style="margin:0 0 8px">貼り付け → 列を割当 → プレビューで確認して取込。<strong>取込済みの行は自動でチェックが外れます</strong>（重複防止。手動で付け外し可）。ここは台帳に貯めるだけで、保有の取得円は変わりません。</p>
     <details style="margin:0 0 8px"><summary class="muted" style="cursor:pointer">ChatGPTでPDFを整形する場合の指示文（コピーして使用）</summary>
       <textarea id="al-gpt" rows="8" readonly style="width:100%;font-family:monospace;font-size:11px">${esc(AL_GPT_PROMPT)}</textarea>
       <button class="btn btn-sm" style="margin-top:4px" onclick="alCopyPrompt()">指示文をコピー</button></details>
@@ -8478,7 +8478,7 @@ function openAcqLedgerApply() {
   </tr>`).join('');
   const ntRows = noTarget.map(it => `<tr><td class="l muted">対象外</td><td class="l">${esc(it.tk)}</td><td class="l">${esc(it.broker)}/${esc(it.account)}</td><td>¥${num(Math.round(it.newVal))}</td><td class="l muted" style="font-size:11px">${esc(it.reason)}</td></tr>`).join('');
   showModal('保有へ反映（差分の確認）', `
-    <p class="muted" style="margin:0 0 8px">台帳から計算した取得円と現在の保有の取得円の<strong>差分だけ</strong>を表示しています。<strong>チェックした行のみ上書き</strong>します（勝手に上書きしません）。株数チェックが不一致の行は既定でチェックOFFです。変更なし ${same.length}件は非表示。</p>
+    <p class="muted" style="margin:0 0 8px"><strong>チェックした行だけ</strong>保有の取得円を上書きします。株数が合わない行は既定でOFF。差分のある行のみ表示（変更なし ${same.length}件は非表示）。</p>
     ${changed.length ? `<div class="table-wrap" style="max-height:46vh"><table class="dense no-rowclick" style="width:100%"><thead><tr>
       <th class="l"><input type="checkbox" onchange="document.querySelectorAll('.al-ap-chk').forEach(c=>c.checked=this.checked)"></th>
       <th class="l">銘柄</th><th class="l">会社/口座</th><th>現在の取得円</th><th>反映後</th><th class="l">株数チェック</th><th class="l">備考</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted">上書きが必要な差分はありません（すべて一致しています）。</p>`}
@@ -8948,7 +8948,7 @@ function openHoldingsForm(secId) {
   showModal(`保有を直接編集 — ${esc(sec.name || sec.ticker)}`, `
     <form id="holdings-form">
       ${secNavBar(secId, 'hold')}
-      <p class="muted">取引履歴を介さず、数量・平均取得単価を直接修正できます（単価 ${ccy}）。${us ? '「取得円(円)」は米国株の取得円（転記・取得円列に使用）。空欄＝未設定。' : ''}<br>「売却前購入額」は一旦売却→他社で買い直し（損出し）等で<strong>最初の購入額</strong>を残したい時に入力。空欄なら取得価額(単価×数量)を使用し、合算が「購入額（本来）」列に出ます。</p>
+      <p class="muted">取引履歴を介さず数量・平均取得単価を直接修正します（単価 ${ccy}）。<br>「売却前購入額」＝損出しで売って買い直した時の<strong>最初の購入額</strong>。空欄なら 単価×数量 を使い、「購入額（本来）」列に出ます。</p>
 
       <fieldset class="form-group"><legend>元本売却（銘柄単位・情報管理のみ）</legend>
         <div class="row">
@@ -9902,7 +9902,6 @@ function karteCardHtml(sec) {
   const pnlPctN = calc.pnlPctNative(sec);
   const pr = store.data.prices[priceKey(sec)] || {};
   const dayPct = (pr.price != null && pr.prevClose) ? (pr.price - pr.prevClose) / pr.prevClose * 100 : null;
-  const qtyDisp = th.qty != null ? Number(th.qty).toLocaleString('ja-JP', { maximumFractionDigits: 8 }) : '—';
   const gradeTag = g => { if (!g) return '<span class="muted">—</span>'; const gm = (store.data.grades || []).find(x => x.grade === String(g).toUpperCase()); const st = gm && gm.color ? labelColorStyle(gm.color) : ''; return `<span class="grade grade-${esc(String(g).toLowerCase())}"${st ? ` style="${st}"` : ''}>${esc(g)}</span>`; };
   const starsFmt = n => n == null ? '<span class="muted">—</span>' : `<span style="color:var(--brass);letter-spacing:1px">${'★'.repeat(n)}<span style="color:var(--border-strong)">${'☆'.repeat(Math.max(0, 5 - n))}</span></span>`;
   // 判定
@@ -9920,6 +9919,8 @@ function karteCardHtml(sec) {
   const judgeBox = ev ? [
     row('種別', typeLabel),
     row('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
+    // 前回購入は「保有」ではなく判定の基準として読むもの。基準値の直下に置く
+    row('前回購入', lb.price != null ? m(lb.price) + (lb.date ? ` <span class="muted">(${esc(lb.date)})</span>` : '') : '—'),
     row('買い増しライン', (ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.trigger), 'kt-hl'),
     row('現在値', m(price)),
     row('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%${ev.reached ? ' 到達' : ''}</span>` : '—'),
@@ -9950,13 +9951,13 @@ function karteCardHtml(sec) {
     row('評価損益(円)', held && pnlJpyV != null ? `<span class="${cls(pnlJpyV)}">${yen(pnlJpyV)}${pctTxt}</span>` : '—'),
   ];
   const holdBox = [
-    row('平均取得単価', held ? m(th.avgCost) : '—'),
-    row('保有数量', qtyDisp),
+    // 合計の数量・平均取得単価は口座別の行と同じ「数量 @ 単価」書式で1行にまとめる。
+    // 口座が1つだけなら口座別行と同じ内容になるので合計は出さない
+    hs.length > 1 ? row('合計', held ? `${fmtQty(th.qty, sec.market)} @ ${m(th.avgCost)}` : '—') : '',
+    holdAccRows || row('合計', '—'),
     ...(us ? usValueRows : jpValueRows),
     row('資産に占める割合', held ? karteRatioHtml(sec) : '—'),
-    row('前回購入', lb.price != null ? m(lb.price) + (lb.date ? ` <span class="muted">(${esc(lb.date)})</span>` : '') : '—'),
     row('購入回数', `${calc.buyCount(sec)}回`),
-    holdAccRows,
   ].join('');
   // 評価・分析ボックス
   const analysisBox = [
@@ -9982,7 +9983,7 @@ function karteCardHtml(sec) {
     row('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
     row('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
     // 会社概要（株探の「会社情報→概要」。銘柄マスタ meta.summary にキャッシュ済みのものを表示）
-    companySummary(sec) ? `<div class="kt-summary">${esc(companySummary(sec))}</div>` : '',
+    companySummary(sec) ? `<div class="kt-summary" title="${esc(companySummary(sec))}">${esc(companySummary(sec))}</div>` : '',
   ].join('');
   // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
@@ -11972,7 +11973,7 @@ function openSplitAdjust(items) {
     </tr>`;
   }).join('');
   showModal('株式分割・併合の一括調整', `
-    <p class="muted">行ごとに「種別」を選んで「調整実行」。初期はスキップ（何もしない）です。⚠＝単価/現在値が分割比率を超過＝既調整や異常の可能性。「全部」=保有も調整／「手入力のみ」=前回購入価格等のみ。取込日/手入力日が分割日より<strong>前</strong>（＝未調整の疑い）は<span class="after-split">この色</span>。<br>「推奨」列は当ツールの推奨処理（手入力日が分割前なら未調整とみなす）。チェックして「選択行を→推奨→に一括変更」でまとめて反映できます。</p>
+    <p class="muted">行ごとに「種別」を選んで「調整実行」（初期はスキップ＝何もしない）。<strong>全部</strong>＝保有も調整／<strong>手入力のみ</strong>＝前回購入価格などだけ調整。<br><span class="after-split">この色</span>＝取込日・手入力日が分割日より前（未調整の疑い）。⚠＝既に調整済みの可能性。迷ったら「推奨」列に従い、チェックして「選択行を→推奨→に一括変更」。</p>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0">
       <label class="check" style="margin:0"><input type="checkbox" id="sa-all" onchange="saSelectAll(this)"> 全選択</label>
       選択行を <select id="sa-bulk"><option value="reco">推奨</option><option value="full">全部</option><option value="manual">手入力のみ</option><option value="skip">スキップ</option></select>

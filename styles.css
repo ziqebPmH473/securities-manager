@@ -780,6 +780,8 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
   --fs-hero: 23px;    /* 現在値 */
   --sp-1: 3px; --sp-2: 6px; --sp-3: 10px;
 }
+/* カルテは1画面に収める。上端の余白（main.content の padding-top）を詰める */
+.kt { margin-top: -14px; }
 .kt-search { display: flex; align-items: flex-end; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 var(--sp-2); }
 .kt-search .field { margin: 0; }
 .kt-search .field label { font-size: var(--fs-cap); font-weight: 400; color: var(--muted); margin-bottom: var(--sp-1); }
@@ -835,7 +837,8 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-chart { min-height: 150px; display: flex; align-items: center; justify-content: center; cursor: zoom-in; }
 .kt-chart-legend { margin: 6px 0 0; font-size: var(--fs-cap); }
 /* 会社概要（株探）。ファンダの最終行に全幅で表示 */
-.kt-summary { margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: 1px solid var(--hair); font-size: var(--fs-cap); line-height: 1.55; color: var(--muted); }
+/* 会社概要は3行で省略（全文は title でホバー表示）。1画面に収めるため */
+.kt-summary { margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: 1px solid var(--hair); font-size: var(--fs-cap); line-height: 1.55; color: var(--muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 
 .kt-tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-2); margin-bottom: var(--sp-2); align-items: start; }
 .kt-scroll { max-height: 150px; overflow-y: auto; }
