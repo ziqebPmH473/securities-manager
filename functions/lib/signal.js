@@ -11,8 +11,9 @@ function resolveMode(baseHighMode, ruleBaseHighMode) {
 }
 
 // 前回購入情報: 買い取引の最新 > 手動の前回購入価格 > 取得単価(みなし)。日付は取引日 or 手動の前回購入日。
+// skipPrevBuy が立つ取引は「前回購入」の候補から除外（原典: app.js calc._lastBuyInfo）。
 export function resolveLastBuy({ buys, prevBuyPrice, prevBuyDate, holding }) {
-  const sorted = (buys || []).slice().sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
+  const sorted = (buys || []).filter(b => !b.skipPrevBuy).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
   if (sorted.length) return { price: sorted[0].price, source: 'txn', date: sorted[0].tradedAt || null };
   const manualDate = prevBuyDate || null;
   if (typeof prevBuyPrice === 'number') return { price: prevBuyPrice, source: 'manual', date: manualDate };

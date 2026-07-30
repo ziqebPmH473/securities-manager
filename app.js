@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260729-2142';
+const APP_VERSION = 'v20260731-0057';
 
 'use strict';
 
@@ -612,12 +612,12 @@ const store = {
     this.data.transactions = this.data.transactions.filter(x => x.id !== id);
     this.save();
   },
-  // 取引の編集（旧効果を取り消し→値を更新→新効果を適用）。patch は type/price/quantity/broker/accountType/tradedAt/settleJpy/ledgerOnly
+  // 取引の編集（旧効果を取り消し→値を更新→新効果を適用）。patch は type/price/quantity/broker/accountType/tradedAt/settleJpy/ledgerOnly/skipPrevBuy
   updateTransaction(id, patch) {
     const t = this.data.transactions.find(x => x.id === id); if (!t) return;
     this.reverseTransaction(t);
-    // settleJpy/ledgerOnly は未指定なら消す（フォーム送信値で完全上書き）
-    delete t.settleJpy; delete t.ledgerOnly;
+    // settleJpy/ledgerOnly/skipPrevBuy は未指定なら消す（フォーム送信値で完全上書き＝チェックを外せば解除される）
+    delete t.settleJpy; delete t.ledgerOnly; delete t.skipPrevBuy;
     Object.assign(t, patch);
     this.applyTransaction(t);
     this.touch(t);   // 取引の編集を端末間で伝播（sync-merge の updatedAt タイブレーク）
@@ -1364,8 +1364,10 @@ const calc = {
     return this._lastBuyInfo(sec);
   },
   _lastBuyInfo(sec) {
+    // skipPrevBuy が立つ買い取引は「前回購入」の候補から外す（単価・日付とも使わない）。
+    // 保有数量・平均取得単価・購入回数・取引サマリーには通常どおり反映される（ledgerOnly とは独立）。
     const buys = store.data.transactions
-      .filter(t => t.securityId === sec.id && t.type === 'buy')
+      .filter(t => t.securityId === sec.id && t.type === 'buy' && !t.skipPrevBuy)
       .sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
     if (buys.length) return { price: buys[0].price, source: 'txn', date: buys[0].tradedAt || null };
     // 取引履歴が無い場合の前回購入日は手動入力(prevBuyDate)を採用。価格は手動値→みなし(取得単価)の順で決める。
@@ -6277,7 +6279,7 @@ function openTxnList(type) {
     const nameCell = sec ? `<a href="#" onclick="closeModal();openSecurityDetail(${sec.id});return false">${name}</a>` : name;
     return `<tr>
       <td class="l">${esc(t.tradedAt || '—')}</td>
-      <td class="l">${nameCell}${t.broker ? ` <span class="muted" style="font-size:11px">${esc(t.broker)}</span>` : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}</td>
+      <td class="l">${nameCell}${t.broker ? ` <span class="muted" style="font-size:11px">${esc(t.broker)}</span>` : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}${t.skipPrevBuy ? ' <span class="tag" title="前回購入単価・前回購入日として使わない">前回購入外</span>' : ''}</td>
       <td>${qty}</td>
       <td>${ccy}${num(t.price)}</td>
       <td>${jpy != null ? yen(jpy) : '—'}</td>
@@ -7810,6 +7812,10 @@ function openTxnImport() {
       <input id="ti-ledger" type="checkbox" checked style="margin-top:3px">
       <span>保有数量・平均取得単価に反映しない（履歴のみ＝推奨）<br><span class="muted" style="font-size:12px">※ 現在の保有を崩さず過去履歴を登録。前回購入日・購入回数・判定には反映します。OFFにすると保有数量・平均取得単価も再計算されます。</span></span>
     </label>
+    <label class="chk-row" style="display:flex;gap:8px;align-items:flex-start;margin:2px 0 8px;cursor:pointer">
+      <input id="ti-skipprev" type="checkbox" style="margin-top:3px">
+      <span>前回購入額を更新しない（取り込む買いを「前回購入」に使わない）<br><span class="muted" style="font-size:12px">※ 取り込んだ買いの単価・日付を前回購入単価／前回購入日に使いません（次回購入トリガー・高値更新判定が動かない）。購入回数・取引サマリーには反映します。</span></span>
+    </label>
     <div class="form-actions" style="justify-content:flex-start">
       <button type="button" class="btn" onclick="txnImportPreview()">プレビュー</button>
       <button type="button" class="btn btn-primary" id="ti-commit" onclick="txnImportCommit()" disabled>取込実行</button>
@@ -7870,12 +7876,14 @@ function txnImportCommit() {
   const sec = mktFindSec(code, market);
   if (!sec) { toast('銘柄が見つかりません'); return; }
   const ledgerOnly = document.getElementById('ti-ledger').checked;
+  const skipPrevBuy = document.getElementById('ti-skipprev').checked;
   let n = 0;
   for (const t of _txnImportRows) {
     store.addTransaction({
       securityId: sec.id, type: t.type, price: t.price, quantity: t.quantity,
       broker: t.broker, accountType: t.accountType, tradedAt: t.tradedAt,
       ...(ledgerOnly ? { ledgerOnly: true } : {}),
+      ...((skipPrevBuy && t.type === 'buy') ? { skipPrevBuy: true } : {}),
       ...(t.settleJpy != null ? { settleJpy: t.settleJpy } : {}),
     });
     n++;
@@ -9101,7 +9109,7 @@ function openSecurityDetail(secId) {
     ? kv('元本売却', `${sec.principalSold ? '売却済み' : '—'}${sec.principalSoldAmount != null ? '　/　' + m(sec.principalSoldAmount) : ''}`) : '';
   // 購入・取引履歴
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
-  const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
+  const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}${t.skipPrevBuy ? ' <span class="tag" title="前回購入単価・前回購入日として使わない">前回購入外</span>' : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
   // 分析メタ
   const meta = [
     kv('銘柄格付 / 総合 / 買い時', `${esc(sec.rating || '—')} / ${esc(sec.overallGrade || '—')} / ${esc(sec.buyGrade || '—')}`),
@@ -9983,7 +9991,7 @@ function karteCardHtml(sec) {
   // 取引履歴ボックス
   const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
   const txnBox = txns.length ? txns.map(t => `<div class="kt-txn-row">
-      <span class="d">${esc(t.tradedAt || '—')} ${t.type === 'buy' ? '買' : t.type === 'sell' ? '売' : esc(t.type || '')}${t.ledgerOnly ? ' <span class="tag" title="保有に未反映">記録のみ</span>' : ''}</span>
+      <span class="d">${esc(t.tradedAt || '—')} ${t.type === 'buy' ? '買' : t.type === 'sell' ? '売' : esc(t.type || '')}${t.ledgerOnly ? ' <span class="tag" title="保有に未反映">記録のみ</span>' : ''}${t.skipPrevBuy ? ' <span class="tag" title="前回購入として使わない">前回購入外</span>' : ''}</span>
       <span class="q">${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span>
       <span class="acts"><button class="kt-ico" title="編集" onclick="editTxn(${t.id})">${svgIcon('edit', '')}</button><button class="kt-ico" title="削除" onclick="delTxn(${t.id})">&times;</button></span>
     </div>`).join('') : '<div class="muted" style="font-size:12.5px">取引履歴なし</div>';
@@ -10057,6 +10065,7 @@ function openTxnForm(secId, presetType, opts = {}) {
   const defAcct = editTxn ? e.accountType : (primary ? primary.accountType : ACCOUNTS[0]);
   const typeSel = editTxn ? e.type : (presetType === 'sell' ? 'sell' : 'buy');
   const ledgerChecked = editTxn ? !!e.ledgerOnly : presetLedgerOnly;
+  const skipPrevChecked = editTxn ? !!e.skipPrevBuy : false;
   const brokerOpts = BROKERS.map(b => `<option ${b === defBroker ? 'selected' : ''}>${b}</option>`).join('');
   const acctOpts = ACCOUNTS.map(a => `<option ${a === defAcct ? 'selected' : ''}>${a}</option>`).join('');
   showModal(`${editTxn ? '取引を編集' : '取引を記録'} — ${esc(sec.name || sec.ticker)}`, `
@@ -10092,6 +10101,11 @@ function openTxnForm(secId, presetType, opts = {}) {
         <span>保有数量・平均取得単価に反映しない（過去の購入履歴の記録用）<br>
           <span class="muted" style="font-size:12px">※ チェックすると保有・取得原価は変えず、前回購入日・購入回数・高値更新判定・取引サマリーには反映します。</span></span>
       </label>
+      <label class="chk-row buy-only" style="display:${typeSel === 'sell' ? 'none' : ''}">
+        <input name="skipPrevBuy" type="checkbox" ${skipPrevChecked ? 'checked' : ''}>
+        <span>前回購入額を更新しない（この取引を「前回購入」に使わない）<br>
+          <span class="muted" style="font-size:12px">※ チェックするとこの取引の単価・日付を前回購入単価／前回購入日として使いません（次回購入トリガー・前回からの下落率・高値更新判定が動きません）。保有数量・平均取得単価・購入回数・取引サマリーには通常どおり反映します。</span></span>
+      </label>
       <div class="form-actions">
         ${editTxn ? `<button type="button" class="btn btn-danger" id="txn-del" style="margin-right:auto">削除</button>` : ''}
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
@@ -10108,6 +10122,8 @@ function openTxnForm(secId, presetType, opts = {}) {
       price: parseFloat(f.price.value), quantity: parseFloat(f.quantity.value),
       broker: f.broker.value, accountType: f.accountType.value, tradedAt: f.tradedAt.value,
       ...(f.ledgerOnly && f.ledgerOnly.checked ? { ledgerOnly: true } : {}),
+      // 前回購入に使わない指定は買いのみ（売りは元々 lastBuyInfo の対象外）
+      ...((f.type.value === 'buy' && f.skipPrevBuy && f.skipPrevBuy.checked) ? { skipPrevBuy: true } : {}),
       // 受渡金額(円)は買いのみ取得円に効く（売りは代金＝原価でないため取得円に使わない）
       ...((f.type.value === 'buy' && !isNaN(settleJpy)) ? { settleJpy } : {}),
     };

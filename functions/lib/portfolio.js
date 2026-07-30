@@ -31,7 +31,7 @@ export function evalSecurity(bundle, sec) {
   const th = totalHolding(bundle, sec.id);
   const buys = (bundle.transactions || [])
     .filter(t => t.securityId === sec.id && t.type === 'buy')
-    .map(t => ({ price: t.price, tradedAt: t.tradedAt }));
+    .map(t => ({ price: t.price, tradedAt: t.tradedAt, skipPrevBuy: !!t.skipPrevBuy }));
   const recoAmount = (sec.buyAmount != null && sec.buyAmount !== '')
     ? Number(sec.buyAmount)
     : (categoryAmount(bundle, sec.category, sec.market) || null);
