@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260731-0210';
+const APP_VERSION = 'v20260731-0243';
 
 'use strict';
 
@@ -9092,8 +9092,8 @@ function openSecurityDetail(secId) {
     kv('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%</span>` + (ev.reached ? '（到達）' : '') : '—'),
     highResetNote,
   ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>');
-  // 保有（口座別）
-  const hs = store.data.holdings.filter(h => h.securityId === sec.id);
+  // 保有（口座別）。表示は保有株数がある口座だけ（0株のロットは出さない）
+  const hs = store.data.holdings.filter(h => h.securityId === sec.id && h.quantity > 1e-9);
   const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}${h.origBuyAmount != null ? ` <span class="muted" title="売却前購入額（本来）">(本来 ${m(h.origBuyAmount)})</span>` : ''}</span></div>`).join('') : '<div class="muted">保有なし</div>';
   const holdSummary = th.qty ? kv('合計 / 評価額 / 損益率',
     `${fmtQty(th.qty, sec.market)}　/　${m(calc.valueOrCostNative(sec))}　/　<span class="${cls(calc.pnlPctNative(sec))}">${calc.pnlPctNative(sec) != null ? signed(calc.pnlPctNative(sec)) + '%' : '—'}</span>`) : '';
@@ -9927,7 +9927,8 @@ function karteCardHtml(sec) {
     rule ? row('適用ルール', `${esc(rule.name)} <span class="muted">(−${rule.initialDropPct}/−${rule.addonDropPct}%・${esc(BASE_HIGH_LABEL[bhMode] || bhMode)})</span>`) : '',
   ].join('') : '<div class="muted" style="font-size:12.5px">判定対象外（無効/価格未取得）</div>';
   // 保有ボックス
-  const hs = store.data.holdings.filter(h => h.securityId === sec.id);
+  // 表示は保有株数がある口座だけ（全売却して0株になったロットは出さない）
+  const hs = store.data.holdings.filter(h => h.securityId === sec.id && h.quantity > 1e-9);
   const holdAccRows = hs.length ? hs.map(h => row(`${esc(h.broker || '—')}/${esc(h.accountType || '—')}`, `${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}`)).join('') : '';
   const us = sec.market === 'US';
   // 原通貨（ドル）建ての評価額・取得額・評価損益（米国株のみ。円建ては両市場で表示）
