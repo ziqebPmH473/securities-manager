@@ -1153,6 +1153,27 @@ US は Nasdaq の Date Reported（earnings-surprise）が発表から**1〜2日�
   - 取れなかった銘柄は既存値を消さない／内容が同じなら `updatedAt` を進めない（同期の無駄な競合を避ける）
 - **表示**: カルテ＝ファンダボックスの最終行に全幅（`.kt-summary`。**3行で省略**し全文は `title` でホバー表示。2026-07-31）／ドロワー＝ファンダの「概要」行。
 
+## 21.7 目標指標からの逆算株価（参考表示・2026-08-01 追加）
+「この銘柄はPER○倍まで下がったら買いたい」を数字で見るための**参考値**。**買い増し判定には一切使わない**
+（判定に組み込むA案は、EPS・配当が決算で動くため見送り。2026-08-01 すみぽん決定）。
+
+- **銘柄の項目**: `securities[].targetPer` / `targetPbr` / `targetYield`（%）。未入力は null＝その行・列は「—」。
+- **算出**（`calc.targetPerPrice` / `targetPbrPrice` / `targetYieldPrice`）:
+  - 目標PER … `EPS × 目標PER`
+  - 目標PBR … `現在値 ÷ 現在PBR × 目標PBR`（BPS＝1株純資産は取得していないので現在値とPBRから逆算）
+  - 目標利回り … `1株配当 ÷ (目標利回り ÷ 100)`。1株配当は `calc.dividendPerShare`
+- **精度の注意**: 米国株は1株配当の実額が取れる。**日本株は1株配当が取得できず**（本番実測: 8銘柄すべて null）、
+  配当利回りから `利回り × 現在値` で逆算した推定値になる＝式を展開すると `現在値 × 現在利回り ÷ 目標利回り`。
+  EPS・配当・PBR は決算/増配で動くので、算出株価も自動で動く（固定値ではない）。
+- **本番のデータ充足率**（2026-08-01 実測・日米8銘柄ずつ）: PBR 8/8・8/8 ／ EPS 7/8・8/8 ／ 配当 日=利回り7/8・米=実額7/8（1つは無配）。
+- **配線**: 銘柄編集フォーム＋保存patch ／ 表の列は**算出株価の3列のみ**（`targetPerPrice`/`targetPbrPrice`/`targetYieldPrice`。
+  `MASTER_COLS`・`COL_RENDERERS`・`DEFAULT_VISIBLE`(US/JP)・`getSortVal`・`colDefaultWidth`・`CF_MONEY_KEYS`・条件付き書式の値取得）／
+  取込は**目標値3つ**（`GI_FIELDS`・`GI_SEC_FIELDS`・`GI_GROUPS`・`GI_AUTOMAP`・`giParseValue`／`GENERIC_MAP`・`GENERIC_HEADER`末尾・`parseGeneric`・`genericFieldValue`）／
+  一括変更（`SM_BULK_FIELDS`・`bulkValueHtml`・`bulkConvert`。空欄でクリア）／ カルテの**買い増し判定ボックス**と詳細ドロワーの判定に「目標値 / 株価」を各1行。
+  **列に目標値そのものを出さない／取込に算出株価を通さない**のは、前者は入力値でフォーム・カルテで足り、後者は派生値で往復させる意味がないため（すみぽん決定）。
+- **分割調整は対象外**（`applySplit`）。PER・PBR・利回りは分割で不変（価格もEPS/配当も同率で動く）。
+- **Google同期**: `securities` は records なのでフィールド追加のみ、SCHEMA 変更不要。
+
 ## 21.6 銘柄カルテの表示ルール（2026-07-31 整理）
 カルテは「1画面完結」が前提（CLAUDE.md ルール6）。実チャート描画後でも `main.content` がはみ出さないこと。
 

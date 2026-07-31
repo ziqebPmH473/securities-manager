@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260731-0325';
+const APP_VERSION = 'v20260801-0237';
 
 'use strict';
 
@@ -188,6 +188,11 @@ const MASTER_COLS = [
   { key: 'divYield',    label: '配当利回り',       left: false, markets: STKM, noSort: false },
   { key: 'yieldOnCost', label: '取得利回り',       left: false, markets: STKM, noSort: false },
   { key: 'eps',         label: 'EPS',              left: false, markets: STKM, noSort: false },
+  // 目標指標から逆算した株価（参考値・判定には未使用）。目標値そのもの(targetPer/Pbr/Yield)は
+  // 銘柄編集フォーム・カルテ・取込で扱い、表には「算出株価」だけ出す（2026-08-01 すみぽん決定）
+  { key: 'targetPerPrice',   label: '目標PER株価',   left: false, markets: STKM, noSort: false },
+  { key: 'targetPbrPrice',   label: '目標PBR株価',   left: false, markets: STKM, noSort: false },
+  { key: 'targetYieldPrice', label: '目標利回り株価', left: false, markets: STKM, noSort: false },
   { key: 'marginRatio', label: '信用倍率',         left: false, markets: ['JP', 'SIGNAL'], noSort: false },
   // 取り込んだ銘柄分析結果（既定非表示・列設定で表示可）
   { key: 'overallGrade', label: '総合評価',        left: true,  markets: STKM, noSort: false },
@@ -240,8 +245,8 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating'],
-  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating'],
+  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
   ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
@@ -1424,6 +1429,17 @@ const calc = {
   turnover(sec) { const p = store.data.prices[priceKey(sec)] || {}; const pr = this.price(sec); const vol = p.volume != null ? p.volume : this.field(sec, 'volume'); return (pr != null && vol != null) ? pr * vol : null; },
   // 配当利回り(%)。日本版ページの配当利回り(divYield)があれば優先、無ければ 1株配当/株価 で算出。
   divYield(sec) { const y = this.field(sec, 'divYield'); if (y != null) return y; const d = this.field(sec, 'dividend'); const p = this.price(sec); return (d != null && p) ? d / p * 100 : null; },
+
+  // ===== 目標指標から逆算した株価（参考値。買い増し判定には一切使わない） =====
+  // 銘柄ごとに手入力した目標値（targetPer / targetPbr / targetYield）を満たす株価を出す。
+  // EPS・配当・PBR は決算や増配で動くため、算出結果も自動で動く（固定値ではない）。
+  // 目標PER: EPS × 目標PER
+  targetPerPrice(sec) { const t = sec.targetPer, e = this.field(sec, 'eps'); return (t > 0 && e != null && e > 0) ? e * t : null; },
+  // 目標PBR: BPS × 目標PBR。BPS(1株純資産)は取得していないので「現在値 ÷ 現在PBR」で逆算する
+  targetPbrPrice(sec) { const t = sec.targetPbr, b = this.pbr(sec), p = this.price(sec); return (t > 0 && b > 0 && p != null) ? p / b * t : null; },
+  // 目標配当利回り: 1株配当 ÷ (目標利回り% ÷ 100)。
+  // 1株配当は dividendPerShare（未取得なら「配当利回り×現在値」の推定値＝主に日本株）。
+  targetYieldPrice(sec) { const t = sec.targetYield, d = this.dividendPerShare(sec); return (t > 0 && d != null && d > 0) ? d / (t / 100) : null; },
 
   baseHigh(sec) {
     const rule = store.rule(sec.ruleId);
@@ -2655,6 +2671,7 @@ function colDefaultWidth(key) {
   if (key === 'prevClose') return 96; // 前日終値＋引け日(MM-DD)
   if (key === 'dayAmt') return 88;    // 前日比の値幅（符号つき金額）
   if (key === 'prevBuyDate') return 100; // YYYY-MM-DD
+  if (['targetPerPrice', 'targetPbrPrice', 'targetYieldPrice'].includes(key)) return 96; // 見出しが長い＋金額
   if (key === 'earnPrev' || key === 'earnNext') return 96; // YYYY/M/D
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
@@ -2966,7 +2983,7 @@ function setRatioManual() {
 }
 // 背景色判定で「US（ドル建て）→円換算」する対象の列（ネイティブ通貨の金額・株価系）。
 // %・倍率・株数・スコア・既に円建ての取得円(acqJpy)は対象外。表示は$のまま、色だけ円換算で判定する。
-const CF_MONEY_KEYS = new Set(['price', 'dayAmt', 'trigger', 'base', 'high5y', 'high52w', 'low1y', 'low3y', 'prevBuyPrice', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'avgCost', 'buyAmount', 'reco', 'fixedBuyPrice', 'dividend', 'eps', 'principalSoldAmount']);
+const CF_MONEY_KEYS = new Set(['price', 'dayAmt', 'trigger', 'base', 'high5y', 'high52w', 'low1y', 'low3y', 'prevBuyPrice', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'avgCost', 'buyAmount', 'reco', 'fixedBuyPrice', 'dividend', 'eps', 'principalSoldAmount', 'targetPerPrice', 'targetPbrPrice', 'targetYieldPrice']);
 // US の金額系の素の値を共通レートで円換算（背景色判定用）。それ以外はそのまま返す。
 function cfConvVal(key, market, v) {
   if (v == null || !isFinite(v)) return v;
@@ -3040,6 +3057,9 @@ function cfCellValue(key, sec, ctx) {
     case 'divYield': return calc.divYield(sec);
     case 'yieldOnCost': return calc.yieldOnCost(sec);
     case 'eps': return calc.field(sec, 'eps');
+    case 'targetPerPrice': return calc.targetPerPrice(sec);
+    case 'targetPbrPrice': return calc.targetPbrPrice(sec);
+    case 'targetYieldPrice': return calc.targetYieldPrice(sec);
     case 'priority': return sec.priority;
     case 'marginRatio': return sec.market === 'JP' ? calc.marginRatio(sec) : null;
     case 'principalSoldAmount': return sec.principalSoldAmount;
@@ -3188,6 +3208,13 @@ const COL_RENDERERS = {
   // 取得利回り＝1株配当÷取得単価。取得時点のコストに対する配当利回り（簿価利回り）。
   yieldOnCost: (s,c) => { const v = calc.yieldOnCost(s); return `<td title="取得単価ベースの配当利回り（1株配当÷取得単価）">${v != null ? v.toFixed(2) + '%' : muted}</td>`; },
   eps:       (s,c) => { const v = calc.field(s,'eps'); return `<td>${v != null ? c.m(v) : muted}</td>`; },
+  // 目標指標から逆算した株価（参考値）。目標値が未入力・元データ未取得なら「—」。title に根拠を出す
+  targetPerPrice: (s,c) => { const v = calc.targetPerPrice(s); const e = calc.field(s,'eps');
+    return `<td title="${s.targetPer > 0 ? `目標PER ${num(s.targetPer)} × EPS ${e != null ? num(e) : '—'}` : '目標PER 未設定'}">${v != null ? fmtAmt(v, c.market) : muted}</td>`; },
+  targetPbrPrice: (s,c) => { const v = calc.targetPbrPrice(s); const b = calc.pbr(s);
+    return `<td title="${s.targetPbr > 0 ? `目標PBR ${num(s.targetPbr)}（現在PBR ${b != null ? num(b) : '—'}）` : '目標PBR 未設定'}">${v != null ? fmtAmt(v, c.market) : muted}</td>`; },
+  targetYieldPrice: (s,c) => { const v = calc.targetYieldPrice(s); const d = calc.dividendPerShare(s);
+    return `<td title="${s.targetYield > 0 ? `目標利回り ${num(s.targetYield)}% ÷ 1株配当 ${d != null ? fmtAmt(d, c.market) : '—'}` : '目標利回り 未設定'}">${v != null ? fmtAmt(v, c.market) : muted}</td>`; },
   // 信用倍率（日本株のみ・週次）。最新＋前週分。値クリックで信用残時系列ページを開く。
   marginRatio: (s,c) => {
     if (s.market !== 'JP') return `<td>${muted}</td>`;
@@ -3903,6 +3930,10 @@ function sortValue(sec, key) {
     case 'turnover': return calc.turnover(sec) ?? -Infinity;
     case 'per': return calc.per(sec) ?? Infinity;
     case 'pbr': return calc.pbr(sec) ?? Infinity;
+    // 目標指標からの逆算株価（未算出は末尾へ）
+    case 'targetPerPrice': return calc.targetPerPrice(sec) ?? -Infinity;
+    case 'targetPbrPrice': return calc.targetPbrPrice(sec) ?? -Infinity;
+    case 'targetYieldPrice': return calc.targetYieldPrice(sec) ?? -Infinity;
     case 'psr': return calc.psr(sec) ?? Infinity;
     case 'divYield': return calc.divYield(sec) ?? -Infinity;
     case 'yieldOnCost': return calc.yieldOnCost(sec) ?? -Infinity;
@@ -6683,6 +6714,9 @@ const SM_BULK_FIELDS = [
   { key: 'rating', label: '銘柄格付' },
   { key: 'overallGrade', label: '総合評価' },
   { key: 'buyGrade', label: '買い時評価' },
+  { key: 'targetPer', label: '目標PER' },
+  { key: 'targetPbr', label: '目標PBR' },
+  { key: 'targetYield', label: '目標配当利回り(%)' },
   { key: 'clearOverrides', label: '手動上書きを削除' },
 ];
 let smBulkField = 'detailType';
@@ -6702,6 +6736,8 @@ function bulkValueHtml(field, id) {
     case 'labelAdd': case 'labelRemove': return `<select id="${id}">${labelOpts || '<option value="">（ラベル未登録）</option>'}</select>`;
     case 'ruleId': return `<select id="${id}">${store.data.rules.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
     case 'rating': case 'overallGrade': case 'buyGrade': return `<select id="${id}">${gradeOpts}</select>`;
+    // 目標指標: 空欄で送ると null（クリア）
+    case 'targetPer': case 'targetPbr': case 'targetYield': return `<input id="${id}" type="number" step="any" min="0" placeholder="空欄でクリア">`;
     case 'clearOverrides': return `<select id="${id}"><option value="all">名前・セクター・業種すべて</option><option value="nameOverride">銘柄名のみ</option><option value="sectorOverride">セクターのみ</option><option value="industryOverride">業種のみ</option></select>`;
     default: return `<input id="${id}" type="text">`;
   }
@@ -6711,6 +6747,7 @@ function bulkConvert(field, raw) {
   if (field === 'detailType') return raw === '__null' ? null : raw;
   if (field === 'ruleId') return parseInt(raw, 10);
   if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return raw || null;
+  if (['targetPer', 'targetPbr', 'targetYield'].includes(field)) { const t = String(raw ?? '').trim(); if (t === '') return null; const n = parseFloat(t); return isNaN(n) ? null : n; }
   return raw;
 }
 // 一括変更で銘柄に適用する patch を作る。clearOverrides は手動上書き(name/sector/industry)を null クリアする特別処理。
@@ -8661,6 +8698,15 @@ function openSecurityForm(id, presetMarket) {
           買い増しも初回基準で判定</label></div>
 
       <div class="row">
+        <div class="field"><label title="EPS × 目標PER で株価を逆算。参考表示のみで買い増し判定には使いません">目標PER</label>
+          <input name="targetPer" type="number" step="any" min="0" value="${sec && sec.targetPer != null ? sec.targetPer : ''}"></div>
+        <div class="field"><label title="現在値 ÷ 現在PBR × 目標PBR で株価を逆算。参考表示のみ">目標PBR</label>
+          <input name="targetPbr" type="number" step="any" min="0" value="${sec && sec.targetPbr != null ? sec.targetPbr : ''}"></div>
+        <div class="field"><label title="1株配当 ÷ 目標利回り で株価を逆算。参考表示のみ。日本株は1株配当が未取得のため配当利回りからの推定値になります">目標配当利回り (%)</label>
+          <input name="targetYield" type="number" step="any" min="0" value="${sec && sec.targetYield != null ? sec.targetYield : ''}"></div>
+      </div>
+
+      <div class="row">
         <div class="field"><label title="情報管理のみ。判定には影響しない">元本売却済み</label>
           <select name="principalSold"><option value="0" ${!sec || !sec.principalSold ? 'selected' : ''}>いいえ</option><option value="1" ${sec && sec.principalSold ? 'selected' : ''}>売却済み</option></select></div>
         <div class="field"><label>売却済みの元本額 (${ccy})</label>
@@ -8767,6 +8813,10 @@ function openSecurityForm(id, presetMarket) {
       baseHighMode: f.baseHighMode.value || null,
       baseHighManual: f.baseHighMode.value === 'manual' ? numOrNull(f.baseHighManual.value) : null,
       detailType: (f.detailType && f.detailType.value) || null, // 詳細種別マスタ（空=自動判定）
+      // 目標指標（参考株価の逆算用。判定には使わない）。分割で不変なので applySplit の対象外
+      targetPer: numOrNull(f.targetPer && f.targetPer.value),
+      targetPbr: numOrNull(f.targetPbr && f.targetPbr.value),
+      targetYield: numOrNull(f.targetYield && f.targetYield.value),
       principalSold: f.principalSold && f.principalSold.value === '1', // 元本売却済みフラグ（情報管理のみ）
       principalSoldAmount: numOrNull(f.principalSoldAmount && f.principalSoldAmount.value), // 売却済み元本額（原通貨・情報管理のみ）
       memo: (f.memo && f.memo.value.trim()) || null, // 銘柄メモ（自由記述・判定には影響しない）
@@ -9091,6 +9141,12 @@ function openSecurityDetail(secId) {
     kv('現在値', m(price)),
     kv('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%</span>` + (ev.reached ? '（到達）' : '') : '—'),
     highResetNote,
+    // 目標指標からの逆算株価（参考値・判定には未使用）。目標値が未入力の行は出さない
+    [['目標PER', sec.targetPer, num(sec.targetPer) + '倍', calc.targetPerPrice(sec)],
+     ['目標PBR', sec.targetPbr, num(sec.targetPbr) + '倍', calc.targetPbrPrice(sec)],
+     ['目標利回り', sec.targetYield, num(sec.targetYield) + '%', calc.targetYieldPrice(sec)]]
+      .filter(([, t]) => t > 0)
+      .map(([lbl, , txt, p]) => kv(lbl, `${txt} / ${p != null ? MARKET_CCY[sec.market] + fmtAmt(p, sec.market) : '—'}`)).join(''),
   ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>');
   // 保有（口座別）。表示は保有株数がある口座だけ（0株のロットは出さない）
   const hs = store.data.holdings.filter(h => h.securityId === sec.id && h.quantity > 1e-9);
@@ -9915,8 +9971,18 @@ function karteCardHtml(sec) {
     : ev ? '<span class="tag">様子見</span>' : '';
   const row = (k, v, cls2) => `<div class="kt-row${cls2 ? ' ' + cls2 : ''}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
   const mcell = (k, v) => `<div class="cell"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  // 目標指標からの逆算株価（参考値・判定には未使用）。「目標値 / 株価」の形式で各1行。目標値が未入力の行は出さない
+  // 株価は列と同じ fmtAmt（日本株=円未満なし / 米株=小数2桁）で出す
+  const targetRow = (label, tgt, tgtTxt, price) => tgt > 0
+    ? row(label, `${tgtTxt} <span class="muted">/</span> ${price != null ? ccy + fmtAmt(price, sec.market) : '<span class="muted">—</span>'}`)
+    : '';
+  const targetRows = [
+    targetRow('目標PER', sec.targetPer, num(sec.targetPer) + '倍', calc.targetPerPrice(sec)),
+    targetRow('目標PBR', sec.targetPbr, num(sec.targetPbr) + '倍', calc.targetPbrPrice(sec)),
+    targetRow('目標利回り', sec.targetYield, num(sec.targetYield) + '%', calc.targetYieldPrice(sec)),
+  ].join('');
   // 買い増し判定ボックス
-  const judgeBox = ev ? [
+  const judgeBox = (ev ? [
     row('種別', typeLabel),
     row('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
     // 前回購入は「保有」ではなく判定の基準として読むもの。基準値の直下に置く
@@ -9925,7 +9991,9 @@ function karteCardHtml(sec) {
     row('現在値', m(price)),
     row('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%${ev.reached ? ' 到達' : ''}</span>` : '—'),
     rule ? row('適用ルール', `${esc(rule.name)} <span class="muted">(−${rule.initialDropPct}/−${rule.addonDropPct}%・${esc(BASE_HIGH_LABEL[bhMode] || bhMode)})</span>`) : '',
-  ].join('') : '<div class="muted" style="font-size:12.5px">判定対象外（無効/価格未取得）</div>';
+  ].join('') : '<div class="muted" style="font-size:12.5px">判定対象外（無効/価格未取得）</div>')
+  // 目標指標の行は判定の成否と切り離す（判定対象外でもEPS等があれば逆算できるため）
+  + targetRows;
   // 保有ボックス
   // 表示は保有株数がある口座だけ（全売却して0株になったロットは出さない）
   const hs = store.data.holdings.filter(h => h.securityId === sec.id && h.quantity > 1e-9);
@@ -10991,9 +11059,10 @@ const GENERIC_MAP = {
   '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount',
   '売却前購入額': 'origBuyAmount', 'メモ': 'memo',
+  '目標PER': 'targetPer', '目標PBR': 'targetPbr', '目標配当利回り': 'targetYield', '目標利回り': 'targetYield',
 };
 // 標準レイアウトの列。exportGeneric はこの列名→GENERIC_MAP でフィールドキーを引き、genericFieldValue で値を出す（位置合わせ不要）。列を足すなら GENERIC_MAP にも登録。
-const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', '買増を初回基準', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル'];
+const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', '買増を初回基準', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル', '目標PER', '目標PBR', '目標配当利回り'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -11035,6 +11104,9 @@ function parseGeneric(text) {
     if ('watch' in rec) sec.watch = /注意|^1$|true|yes/i.test(rec.watch);
     if ('principalSold' in rec) sec.principalSold = /売却|済|^1$|true|yes|○/i.test(rec.principalSold);
     if ('principalSoldAmount' in rec) sec.principalSoldAmount = numClean(rec.principalSoldAmount);
+    if ('targetPer' in rec) sec.targetPer = numClean(rec.targetPer);
+    if ('targetPbr' in rec) sec.targetPbr = numClean(rec.targetPbr);
+    if ('targetYield' in rec) sec.targetYield = numClean(rec.targetYield);
     if ('memo' in rec) sec.memo = rec.memo || null;
     if ('labels' in rec) sec.labels = parseLabels(rec.labels); // 銘柄ラベル（; 区切り→配列）
     // 売却前購入額は保有(holding)単位。row 直下に持たせる（_sec＝銘柄属性ではない）
@@ -11423,6 +11495,9 @@ function genericFieldValue(key, s, h) {
     case 'detailType': return detailTypeOf(s);
     case 'principalSold': return s.principalSold ? '売却済' : '';
     case 'principalSoldAmount': return s.principalSoldAmount ?? '';
+    case 'targetPer': return s.targetPer ?? '';
+    case 'targetPbr': return s.targetPbr ?? '';
+    case 'targetYield': return s.targetYield ?? '';
     case 'memo': return s.memo || '';
     default: return ''; // 分析結果・未対応フィールドは空欄
   }
@@ -11501,17 +11576,20 @@ const GI_FIELDS = [
   { key: 'starValuation', label: '★バリュエーション' },
   { key: 'starStrength',  label: '★独自の強み' },
   { key: 'starRisk',      label: '★リスク' },
+  { key: 'targetPer',     label: '目標PER' },
+  { key: 'targetPbr',     label: '目標PBR' },
+  { key: 'targetYield',   label: '目標配当利回り(%)' },
   { key: 'principalSold',       label: '元本売却済み' },
   { key: 'principalSoldAmount', label: '売却済み元本額' },
   { key: 'origBuyAmount', label: '売却前購入額' },
   { key: 'memo',          label: 'メモ' },
 ];
-const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'category', 'investCategory', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo']);
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'category', 'investCategory', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo', 'targetPer', 'targetPbr', 'targetYield']);
 // 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
   { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy', 'origBuyAmount'] },
-  { g: '判定・属性', keys: ['category', 'investCategory', 'labels', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
+  { g: '判定・属性', keys: ['category', 'investCategory', 'labels', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'targetPer', 'targetPbr', 'targetYield', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
   { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride', 'memo'] },
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
 ];
@@ -11638,6 +11716,7 @@ function giParseValue(field, raw) {
   const v = raw == null ? '' : String(raw).trim();
   switch (field) {
     case 'quantity': case 'avgCost': case 'acqValue': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount': case 'principalSoldAmount': case 'origBuyAmount':
+    case 'targetPer': case 'targetPbr': case 'targetYield':
       return numClean(v);
     case 'principalSold': return /売却|済|^1$|true|yes|○|有/i.test(v);
     case 'buyCount': case 'priority': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
