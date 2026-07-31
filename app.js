@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260801-0237';
+const APP_VERSION = 'v20260801-0301';
 
 'use strict';
 
@@ -1431,15 +1431,16 @@ const calc = {
   divYield(sec) { const y = this.field(sec, 'divYield'); if (y != null) return y; const d = this.field(sec, 'dividend'); const p = this.price(sec); return (d != null && p) ? d / p * 100 : null; },
 
   // ===== 目標指標から逆算した株価（参考値。買い増し判定には一切使わない） =====
+  // 端数処理は次回購入（買い増しライン）と同じ floorBuyPrice に揃える（2026-08-01 すみぽん指示）。
   // 銘柄ごとに手入力した目標値（targetPer / targetPbr / targetYield）を満たす株価を出す。
   // EPS・配当・PBR は決算や増配で動くため、算出結果も自動で動く（固定値ではない）。
   // 目標PER: EPS × 目標PER
-  targetPerPrice(sec) { const t = sec.targetPer, e = this.field(sec, 'eps'); return (t > 0 && e != null && e > 0) ? e * t : null; },
+  targetPerPrice(sec) { const t = sec.targetPer, e = this.field(sec, 'eps'); return (t > 0 && e != null && e > 0) ? floorBuyPrice(e * t, sec.market) : null; },
   // 目標PBR: BPS × 目標PBR。BPS(1株純資産)は取得していないので「現在値 ÷ 現在PBR」で逆算する
-  targetPbrPrice(sec) { const t = sec.targetPbr, b = this.pbr(sec), p = this.price(sec); return (t > 0 && b > 0 && p != null) ? p / b * t : null; },
+  targetPbrPrice(sec) { const t = sec.targetPbr, b = this.pbr(sec), p = this.price(sec); return (t > 0 && b > 0 && p != null) ? floorBuyPrice(p / b * t, sec.market) : null; },
   // 目標配当利回り: 1株配当 ÷ (目標利回り% ÷ 100)。
   // 1株配当は dividendPerShare（未取得なら「配当利回り×現在値」の推定値＝主に日本株）。
-  targetYieldPrice(sec) { const t = sec.targetYield, d = this.dividendPerShare(sec); return (t > 0 && d != null && d > 0) ? d / (t / 100) : null; },
+  targetYieldPrice(sec) { const t = sec.targetYield, d = this.dividendPerShare(sec); return (t > 0 && d != null && d > 0) ? floorBuyPrice(d / (t / 100), sec.market) : null; },
 
   baseHigh(sec) {
     const rule = store.rule(sec.ruleId);
@@ -1510,10 +1511,7 @@ const calc = {
       }
     }
     // 次回購入の丸め（固定値以外・端数切捨て）: 米株=1ドル単位（10ドル未満は0.1ドル）、日本株=円未満切捨て
-    if (fixed == null) {
-      if (sec.market === 'US') trigger = trigger >= 10 ? Math.floor(trigger) : Math.floor(trigger * 10) / 10;
-      else trigger = Math.floor(trigger);
-    }
+    if (fixed == null) trigger = floorBuyPrice(trigger, sec.market);
     const remainingDropPct = (price - trigger) / price * 100; // >0: あとこれだけ下落で到達
     const recoCcy = sec.market === 'US' ? 'USD' : 'JPY';
     const recoAmount = this.buyAmount(sec);
@@ -9146,7 +9144,7 @@ function openSecurityDetail(secId) {
      ['目標PBR', sec.targetPbr, num(sec.targetPbr) + '倍', calc.targetPbrPrice(sec)],
      ['目標利回り', sec.targetYield, num(sec.targetYield) + '%', calc.targetYieldPrice(sec)]]
       .filter(([, t]) => t > 0)
-      .map(([lbl, , txt, p]) => kv(lbl, `${txt} / ${p != null ? MARKET_CCY[sec.market] + fmtAmt(p, sec.market) : '—'}`)).join(''),
+      .map(([lbl, , txt, p]) => kv(lbl, `${txt} / ${p != null ? m(p) : '—'}`)).join(''),
   ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>');
   // 保有（口座別）。表示は保有株数がある口座だけ（0株のロットは出さない）
   const hs = store.data.holdings.filter(h => h.securityId === sec.id && h.quantity > 1e-9);
@@ -9972,9 +9970,9 @@ function karteCardHtml(sec) {
   const row = (k, v, cls2) => `<div class="kt-row${cls2 ? ' ' + cls2 : ''}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
   const mcell = (k, v) => `<div class="cell"><div class="k">${k}</div><div class="v">${v}</div></div>`;
   // 目標指標からの逆算株価（参考値・判定には未使用）。「目標値 / 株価」の形式で各1行。目標値が未入力の行は出さない
-  // 株価は列と同じ fmtAmt（日本株=円未満なし / 米株=小数2桁）で出す
+  // 株価は買い増しラインと同じ書式・同じ端数処理（floorBuyPrice は calc 側で適用済み）
   const targetRow = (label, tgt, tgtTxt, price) => tgt > 0
-    ? row(label, `${tgtTxt} <span class="muted">/</span> ${price != null ? ccy + fmtAmt(price, sec.market) : '<span class="muted">—</span>'}`)
+    ? row(label, `${tgtTxt} <span class="muted">/</span> ${price != null ? m(price) : '<span class="muted">—</span>'}`)
     : '';
   const targetRows = [
     targetRow('目標PER', sec.targetPer, num(sec.targetPer) + '倍', calc.targetPerPrice(sec)),
@@ -12652,6 +12650,13 @@ function money(n, ccy) { return n == null ? '—' : ccy + Number(n).toLocaleStri
 // 株価・金額: 米国株=小数2桁固定 / 日本株=整数。
 // 整数表示の金額（買い増し予定額・推奨購入額用。小数不要）
 function fmtAmtInt(n) { return n == null ? null : Number(n).toLocaleString('ja-JP', { maximumFractionDigits: 0 }); }
+// 買い値の端数切捨て: 米株=1ドル単位（10ドル未満は0.1ドル）、日本株=円未満切捨て。
+// 次回購入（買い増しライン）と目標指標からの逆算株価で共通に使う（表示がバラつかないよう1箇所に集約）。
+function floorBuyPrice(v, market) {
+  if (v == null || !isFinite(v)) return v;
+  if (market === 'US') return v >= 10 ? Math.floor(v) : Math.floor(v * 10) / 10;
+  return Math.floor(v);
+}
 function fmtAmt(n, market) {
   if (n == null) return null;
   if (market === 'US') return Number(n).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
