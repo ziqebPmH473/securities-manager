@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260801-0301';
+const APP_VERSION = 'v20260804-0136';
 
 'use strict';
 
@@ -9969,6 +9969,8 @@ function karteCardHtml(sec) {
     : ev ? '<span class="tag">様子見</span>' : '';
   const row = (k, v, cls2) => `<div class="kt-row${cls2 ? ' ' + cls2 : ''}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
   const mcell = (k, v) => `<div class="cell"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  // ヘッダー右（株価・前日比の右）に出す保有サマリ。原通貨のみ（米国株=ドル / 日本株=円）
+  const posCell = (k, v) => `<div class="kt-pos-cell"><div class="k">${k}</div><div class="v">${v}</div></div>`;
   // 目標指標からの逆算株価（参考値・判定には未使用）。「目標値 / 株価」の形式で各1行。目標値が未入力の行は出さない
   // 株価は買い増しラインと同じ書式・同じ端数処理（floorBuyPrice は calc 側で適用済み）
   const targetRow = (label, tgt, tgtTxt, price) => tgt > 0
@@ -10069,6 +10071,11 @@ function karteCardHtml(sec) {
       <div class="kt-price-block">
         <div class="kt-price kt-kabu" onclick="window.open('${kabutanUrl(sec)}','_blank','noopener')" title="株探のチャートを開く">${m(price)}</div>
         <div class="kt-chg kt-kabu ${cls(dayPct)}" onclick="window.open('${kabutanUrl(sec)}','_blank','noopener')" title="株探のチャートを開く">${dayPct != null ? signed(dayPct) + '%' : '—'}<span class="muted"> 前日比</span></div>
+      </div>
+      <div class="kt-pos">
+        ${posCell('取得額', held ? m(costNativeV) : '<span class="muted">—</span>')}
+        ${posCell('評価額', held ? m(valNative) : '<span class="muted">—</span>')}
+        ${posCell('損益率', held && pnlPctN != null ? `<span class="${cls(pnlPctN)}">${signed(pnlPctN)}%</span>` : '<span class="muted">—</span>')}
       </div>
       <div class="kt-actions">
         ${(function(){ const h = earnTopHtml(sec); return h ? `<span class="kt-earn">${h}</span>` : ''; })()}

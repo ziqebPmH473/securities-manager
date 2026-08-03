@@ -807,6 +807,10 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .kt-kabu:hover { text-decoration: underline; }
 .kt-chg { font-size: var(--fs-body); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: var(--sp-1); }
 .kt-chg .muted { font-weight: 400; font-size: var(--fs-cap); }
+/* 株価・前日比の右: 取得額 / 評価額 / 損益率（原通貨のみ。米国株=ドル / 日本株=円） */
+.kt-pos { display: flex; gap: var(--sp-3); align-items: flex-end; }
+.kt-pos-cell .k { font-size: var(--fs-cap); color: var(--muted); }
+.kt-pos-cell .v { font-size: var(--fs-body); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }
 .kt-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 
 .kt-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 1px; background: var(--hair); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; margin-bottom: var(--sp-2); }
