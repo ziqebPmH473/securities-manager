@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260805-2306';
+const APP_VERSION = 'v20260805-2321';
 
 'use strict';
 
@@ -2333,7 +2333,7 @@ function renderNav() {
   const sig = (ready && typeof allSignals === 'function') ? allSignals().length : 0;
   const split = (ready && typeof pendingSplits === 'function') ? pendingSplits().length : 0;
   const badgeVal = (b) => b === 'sig' ? sig : b === 'split' ? split : 0;
-  nav.innerHTML = NAV_GROUPS.map(grp => `
+  nav.innerHTML = navOrderedGroups().map(grp => `
     <div class="nav-group">
       <div class="nav-label">${grp.group}</div>
       ${grp.items.map(it => {
@@ -4712,17 +4712,18 @@ function mktFetchedAt(ts) { try { return new Date(ts).toLocaleString('ja-JP', { 
 function mktKabutan(code, market) { return market === 'US' ? `https://us.kabutan.jp/stocks/${encodeURIComponent(code)}/chart` : `https://kabutan.jp/stock/chart?code=${encodeURIComponent(code)}`; }
 function mktFindSec(code, market) { return store.data.securities.find(s => s.market === market && (s.ticker || '').toUpperCase() === String(code).toUpperCase()); }
 function mktClickName(code, market) { const s = mktFindSec(code, market); if (s) openSecurityDetail(s.id); else window.open(mktKabutan(code, market), '_blank'); }
+// ランキングからの登録。**注意銘柄(watch)にはしない**（2026-08-05 すみぽん指示。
+// 注意フラグは自分で警戒する銘柄に付けるもので、ランキングからの登録は単なる銘柄追加）。
 async function addRankingWatch(code, market) {
   let s = mktFindSec(code, market);
   const isNew = !s;
-  if (s) { store.updateSecurity(s.id, { watch: true }); }
-  else { s = store.addSecurity({ market, ticker: String(code).toUpperCase(), currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, watch: true, ruleId: store.defaultRule().id }); }
+  if (!s) s = store.addSecurity({ market, ticker: String(code).toUpperCase(), currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, ruleId: store.defaultRule().id });
   renderMarketTab();
   // 名前・セクター等(meta)と現在値・高値(price)を取得してから完了表示（SEC-129: metaが無いと名前がコードのまま）
   await withBusy(`${code} の銘柄情報を取得中…`, async () => {
     await api.refreshMeta([s]);
     await api.refreshPrice([s]);
-  }, isNew ? `${code} を注意銘柄として追加しました` : `${code} を注意銘柄にしました`);
+  }, isNew ? `${code} を登録しました` : `${code} は登録済みです`);
   renderMarketTab();
   if (currentView === 'secMaster') renderSecMaster();
 }
@@ -4943,7 +4944,7 @@ function mktRankRow(it, rank, market, visibleCols) {
   const nameTd = `<td class="l"><strong class="lnk-ext nm-strong mkt-name" onclick="mktClickName('${esc(it.code)}','${market}')" title="${esc(it.name || it.code)}">${esc(nameAbbr(it.name || it.code))}</strong>${owned ? ' <span class="tag" title="登録済み">登</span>' : ''}</td>`;
   const actionTd = `<td class="l nowrap">${owned
     ? `<button class="btn btn-sm" disabled title="登録済みの銘柄です">登録済</button>`
-    : `<button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="保有銘柄の注意(監視)に追加">＋注意</button>`}</td>`;
+    : `<button class="btn btn-sm" onclick="addRankingWatch('${esc(it.code)}','${market}')" title="この銘柄を登録する（注意銘柄にはしない）">＋登録</button>`}</td>`;
   return `<tr><td>${rank}</td>${codeTd}${nameTd}${cells}${actionTd}</tr>`;
 }
 function renderMarketTab() {
@@ -7002,7 +7003,67 @@ const MASTER_LAUNCH = [
   { v: 'disctype', label: '開示種別マスタ（分類・キーワード）', open: () => openDiscTypeMaster(), note: 'ニュースの開示（TDnet/EDGAR）を見出しキーワードで種別分類。種別名（タグ）・まとめ（フィルタタブ）・キーワードを編集可。' },
   { v: 'ytchannel', label: 'YouTubeチャンネル（動画取得元）', open: () => openYtChannelMaster(), note: 'ニュースの「動画」に出す購読チャンネル。チャンネルID（UCで始まる）と表示名を登録。' },
   { v: 'listed', label: '上場銘柄マスタ（自動タグ用）', open: () => openListedMaster(), note: 'JPXの上場銘柄一覧（コード＋銘柄名）を取り込むと、保有外の全上場銘柄もニュース見出しで自動タグ。' },
+  { v: 'navorder', label: '画面（タブ）の並び順', open: () => openNavOrderMaster(), note: '左メニューの画面の並びをグループ内で入れ替え。よく使う画面を上に。' },
 ];
+
+// ---------- 画面（タブ）の並び順マスタ ----------
+// 保存: store.data.settings.navOrder = { グループ名: [viewId, ...] }（Google同期対象。settings は singleTs）。
+// 未知IDは無視、未登録IDは既定順のまま末尾に残す（画面追加時に設定が壊れない）。
+function navOrderedGroups() {
+  const saved = (store.data.settings && store.data.settings.navOrder) || {};
+  return NAV_GROUPS.map(grp => {
+    const order = Array.isArray(saved[grp.group]) ? saved[grp.group] : null;
+    if (!order) return grp;
+    const byId = new Map(grp.items.map(it => [it.id, it]));
+    const sorted = order.map(id => byId.get(id)).filter(Boolean);
+    const rest = grp.items.filter(it => !order.includes(it.id));   // 設定後に追加された画面は末尾へ
+    return { ...grp, items: [...sorted, ...rest] };
+  });
+}
+function openNavOrderMaster() {
+  const groups = navOrderedGroups();
+  const listHtml = groups.map(grp => `
+    <fieldset class="form-group"><legend>${esc(grp.group)}</legend>
+      <div class="nav-order-list" data-group="${esc(grp.group)}">
+        ${grp.items.map(it => `<div class="nav-order-row" data-id="${it.id}">
+          <span class="nm">${navIcon(it.icon)}<span>${esc(it.label)}</span></span>
+          <span class="acts"><button type="button" class="btn btn-sm" data-mv="up" title="上へ">▲</button><button type="button" class="btn btn-sm" data-mv="down" title="下へ">▼</button></span>
+        </div>`).join('')}
+      </div>
+    </fieldset>`).join('');
+  showModal('画面（タブ）の並び順', `
+    <p class="muted">左メニューの並びを変えます。▲▼で入れ替え（グループをまたぐ移動はできません）。</p>
+    ${listHtml}
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="openNavOrderMaster()" title="既定の並びに戻す（保存はされません）" id="nav-order-reset">既定に戻す</button>
+      <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+      <button type="button" class="btn btn-primary" id="nav-order-save">保存</button>
+    </div>`);
+  document.querySelectorAll('.nav-order-row [data-mv]').forEach(b => {
+    b.onclick = () => {
+      const row = b.closest('.nav-order-row');
+      const sib = b.dataset.mv === 'up' ? row.previousElementSibling : row.nextElementSibling;
+      if (!sib) return;
+      if (b.dataset.mv === 'up') row.parentNode.insertBefore(row, sib);
+      else row.parentNode.insertBefore(sib, row);
+    };
+  });
+  document.getElementById('nav-order-reset').onclick = () => {
+    if (!store.data.settings.navOrder) { closeModal(); return; }
+    delete store.data.settings.navOrder;
+    store.data.settings._updatedAt = store._now(); store.save();
+    closeModal(); renderNav(); toast('画面の並びを既定に戻しました');
+  };
+  document.getElementById('nav-order-save').onclick = () => {
+    const navOrder = {};
+    document.querySelectorAll('.nav-order-list').forEach(list => {
+      navOrder[list.dataset.group] = [...list.querySelectorAll('.nav-order-row')].map(r => r.dataset.id);
+    });
+    store.data.settings.navOrder = navOrder;
+    store.data.settings._updatedAt = store._now(); store.save();
+    closeModal(); renderNav(); toast('画面の並びを保存しました');
+  };
+}
 // ---------- 上場銘柄マスタ（自動タグ用・JPX一覧の取込） ----------
 // 保存容量対策: store.data.listedMaster は「CODE\tNAME\n…」のコンパクト文字列で保持（配列JSONより約57%小さい）。
 // 旧バージョンの配列形式[{code,name}]も後方互換で読める。読み出しは listedMasterArr()（文字列パースをメモ化）。
@@ -9202,9 +9263,7 @@ function openSecurityDetail(secId) {
   // 元本売却（情報管理のみ）。フラグまたは金額があれば表示
   const principalSoldRow = (sec.principalSold || sec.principalSoldAmount != null)
     ? kv('元本売却', `${sec.principalSold ? '売却済み' : '—'}${sec.principalSoldAmount != null ? '　/　' + m(sec.principalSoldAmount) : ''}`) : '';
-  // 購入・取引履歴
-  const txns = store.data.transactions.filter(t => t.securityId === sec.id).sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
-  const txnRows = txns.length ? txns.map(t => `<div class="ai-row"><span class="muted">${esc(t.tradedAt || '—')}　${t.type === 'buy' ? '買い' : t.type === 'sell' ? '売り' : esc(t.type || '')}${t.broker ? '　' + esc(t.broker) : ''}${t.ledgerOnly ? ' <span class="tag" title="保有数量・平均取得単価には未反映">記録のみ</span>' : ''}${t.skipPrevBuy ? ' <span class="tag" title="前回購入単価・前回購入日として使わない">前回購入外</span>' : ''}</span><span>${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span></div>`).join('') : '<div class="muted">取引履歴なし</div>';
+  // 購入・取引履歴は txnHistoryHtml（編集・削除つき）で描画する
   // 分析メタ
   const meta = [
     kv('銘柄格付 / 総合 / 買い時', `${esc(sec.rating || '—')} / ${esc(sec.overallGrade || '—')} / ${esc(sec.buyGrade || '—')}`),
@@ -9291,9 +9350,9 @@ function openSecurityDetail(secId) {
     ${sectionBox('判定', judge)}
     ${sectionBox('保有', holdRows + (holdSummary || '') + (origCostRow || '') + (principalSoldRow || ''))}
     ${sec.memo ? sectionBox('メモ', `<div style="white-space:pre-wrap;word-break:break-word">${esc(sec.memo)}</div>`) : ''}
-    ${sectionBox('購入・取引履歴', txnRows)}
+    ${txnHistoryHtml(sec.id, { title: '購入・取引履歴' })}
     ${sectionBox('分析メタ', metaBox)}`, `
-    <button type="button" class="btn" onclick="openSecNews(${sec.id})" title="この銘柄のニュース・開示を表示">${svgIcon('news', '')} ニュース・開示</button>
+    <button type="button" class="btn" onclick="openSecNews(${sec.id})" title="この銘柄のニュース・開示を表示">${svgIcon('news', '')} ニュース</button>
     ${held ? `<button type="button" class="btn btn-danger" onclick="sellAll(${sec.id})" title="証券口座を選んで全売却">全売却</button>` : ''}
     <button type="button" class="btn btn-brass" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引</button>
     <button type="button" class="btn" onclick="closeDrawer();openHoldingsForm(${sec.id})">保有</button>
@@ -10232,7 +10291,8 @@ function openTxnForm(secId, presetType, opts = {}) {
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="submit" class="btn btn-primary">${editTxn ? '更新' : '記録'}</button>
       </div>
-    </form>`);
+    </form>
+    ${editTxn ? '' : txnHistoryHtml(secId)}`);
   const done = () => { closeModal(); if (typeof onDone === 'function') onDone(); else render(); };
   document.getElementById('txn-form').onsubmit = (ev) => {
     ev.preventDefault();
@@ -10272,15 +10332,43 @@ function txnToggleBuyOnly(sel) {
   document.querySelectorAll('#txn-form .buy-only').forEach(el => { el.style.display = show ? '' : 'none'; });
 }
 // 取引履歴の編集・削除（銘柄カルテの履歴行から）
+// 取引履歴の一覧（編集・削除つき）。取引記録フォーム・銘柄詳細ドロワーで共用（カルテと同じ行UI）。
+function txnHistoryHtml(secId, opts = {}) {
+  const sec = store.data.securities.find(s => s.id === secId); if (!sec) return '';
+  const ccy = MARKET_CCY[sec.market];
+  const m = v => v == null ? '<span class="muted">—</span>' : ccy + num(v);
+  const txns = store.data.transactions.filter(t => t.securityId === secId)
+    .sort((a, b) => (a.tradedAt < b.tradedAt ? 1 : -1));
+  const rows = txns.length ? txns.map(t => `<div class="kt-txn-row">
+      <span class="d">${esc(t.tradedAt || '—')} ${t.type === 'buy' ? '買' : t.type === 'sell' ? '売' : esc(t.type || '')}${t.broker ? ' <span class="muted">' + esc(t.broker) + (t.accountType ? '/' + esc(t.accountType) : '') + '</span>' : ''}${t.ledgerOnly ? ' <span class="tag" title="保有に未反映">記録のみ</span>' : ''}${t.skipPrevBuy ? ' <span class="tag" title="前回購入として使わない">前回購入外</span>' : ''}</span>
+      <span class="q">${fmtQty(t.quantity, sec.market)} @ ${m(t.price)}</span>
+      <span class="acts"><button type="button" class="kt-ico" title="編集" onclick="editTxn(${t.id})">${svgIcon('edit', '')}</button><button type="button" class="kt-ico" title="削除" onclick="delTxn(${t.id})">&times;</button></span>
+    </div>`).join('') : '<div class="muted" style="font-size:12.5px">取引履歴なし</div>';
+  return `<fieldset class="form-group txn-hist"><legend>${opts.title || '取引履歴'}</legend><div class="txn-hist-list">${rows}</div></fieldset>`;
+}
+// 取引の編集・削除後の再描画。取引記録フォーム（モーダル）が開いていればその履歴も更新する。
+function txnAfterChange(secId) {
+  if (currentView === 'trade') renderTradeEntry(); else render();
+  const box = document.querySelector('#modal-body .txn-hist');
+  if (box && secId != null) box.outerHTML = txnHistoryHtml(secId);
+}
 function editTxn(id) {
   const t = store.data.transactions.find(x => x.id === id); if (!t) return;
-  openTxnForm(t.securityId, t.type, { editTxn: t, onDone: () => { if (currentView === 'trade') renderTradeEntry(); else render(); } });
+  const fromTxnForm = !!document.querySelector('#modal-body #txn-form');
+  openTxnForm(t.securityId, t.type, {
+    editTxn: t,
+    // 取引記録フォームから編集した時は、更新後にその銘柄のフォーム（履歴つき）へ戻す
+    onDone: fromTxnForm
+      ? () => { if (currentView === 'trade') renderTradeEntry(); else render(); openTxnForm(t.securityId); }
+      : () => { if (currentView === 'trade') renderTradeEntry(); else render(); },
+  });
 }
 function delTxn(id) {
   const t = store.data.transactions.find(x => x.id === id); if (!t) return;
   if (!confirm('この取引を削除します。保有数量・平均取得単価も取り消されます。よろしいですか？')) return;
+  const secId = t.securityId;
   store.removeTransaction(id); toast('取引を削除しました');
-  if (currentView === 'trade') renderTradeEntry(); else render();
+  txnAfterChange(secId);
 }
 
 function openPriceInput(secId) {
@@ -13208,6 +13296,7 @@ window.openYtChannelMaster = openYtChannelMaster;
 window.ytChannelAddRow = ytChannelAddRow;
 window.saveYtChannelMaster = saveYtChannelMaster;
 window.openListedMaster = openListedMaster;
+window.openNavOrderMaster = openNavOrderMaster;
 window.importListedMaster = importListedMaster;
 window.importListedFile = importListedFile;
 window.listedDragOver = listedDragOver;
