@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260806-0106';
+const APP_VERSION = 'v20260806-0128';
 
 'use strict';
 
@@ -1426,12 +1426,12 @@ const calc = {
   marginRatio(sec) { return this.field(sec, 'marginRatio'); },
   // 時価総額(百万) = 株価×発行済株式数/1e6（随時算出）。無ければ取得済み時価総額
   marketCap(sec) { const sh = this.field(sec, 'sharesOut'); const p = this.price(sec); if (sh && p != null) return p * sh / 1e6; return this.field(sec, 'marketCap'); },
-  // 市場の時価総額1位（同じ市場＝日米別）まで何倍か。1位の時価総額 ÷ 自分の時価総額 − 1。
-  // 例: 1位NVDA 4.99T・MU 1.00T → 3.99（＝3.99倍の上昇余地＝+399%）。1位自身や超過は 0 以下になる。
+  // 市場の時価総額1位（同じ市場＝日米別）まで何倍か = 1位の時価総額 ÷ 自分の時価総額。
+  // 例: 1位 5T・自分 1T → 5.00倍（＝+400%）。1位自身は 1.00倍で、原則1倍を下回らない。
   capToTop(sec) {
     const t = topMarketCap(sec.market); if (!t) return null;
     const v = this.marketCap(sec); if (v == null || v <= 0) return null;
-    return t.cap / (v * 1e6) - 1;
+    return t.cap / (v * 1e6);
   },
   // 売買代金（原通貨・実額）= 現在値×当日出来高。出来高は価格キャッシュ優先、無ければ銘柄情報(meta)から。
   // （Finnhub利用の米株は価格更新で出来高が入らないため、銘柄情報更新=Yahoo chart の出来高で補完）
@@ -3181,12 +3181,12 @@ const COL_RENDERERS = {
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(jpInd(v)) : muted}</td>`; },
   // 時価総額: 兆/億/万（米株は$T/B）表記に統一（売買代金と同形式）。marketCapは百万単位なので×1e6で実額化
   marketCap: (s,c) => { const v = calc.marketCap(s); return `<td title="時価総額">${v != null ? fmtTurnover(v * 1e6, c.market) : muted}</td>`; },
-  // 時価1位まで: 市場の時価総額1位まで何倍か（3.99倍＝+399%）。タイトルに1位の銘柄・時価総額・％を出す
+  // 時価1位まで: 市場の時価総額1位まで何倍か（5T/1T＝5.00倍＝+400%）。タイトルに1位の銘柄・時価総額・％を出す
   capToTop:  (s,c) => {
     const t = topMarketCap(s.market); const r = calc.capToTop(s);
-    if (r == null) return `<td title="${t ? '時価総額が未取得' : '時価総額1位が未取得（マーケットタブの時価総額ランキング／株価更新で取得）'}">${muted}</td>`;
-    const tip = `${s.market === 'US' ? '米国株' : '日本株'}の時価総額1位 ${esc(t.name || t.code)}(${esc(t.code)}) ${fmtTurnover(t.cap, s.market)} まで${r > 0 ? ` ${r.toFixed(2)}倍（+${(r * 100).toFixed(0)}%）` : '到達済み'}`;
-    return `<td title="${tip}">${r > 0 ? r.toFixed(2) + '倍' : '<span class="muted">1位</span>'}</td>`;
+    if (r == null) return `<td title="${t ? '時価総額が未取得' : '時価総額1位が未取得（取得に失敗しています）'}">${muted}</td>`;
+    const tip = `${s.market === 'US' ? '米国株' : '日本株'}の時価総額1位 ${esc(t.name || t.code)}(${esc(t.code)}) ${fmtTurnover(t.cap, s.market)} まで ${r.toFixed(2)}倍（${r > 1 ? '+' + ((r - 1) * 100).toFixed(0) + '%' : '到達済み'}）`;
+    return `<td title="${tip}">${r > 1 ? r.toFixed(2) + '倍' : '<span class="muted">1位</span>'}</td>`;
   },
   turnover:  (s,c) => { const v = calc.turnover(s); return `<td title="現在値×当日出来高">${v != null ? fmtTurnover(v, c.market) : muted}</td>`; },
   value:     (s,c) => `<td>${c.th.qty ? fmtAmt(c.valN, c.market) + c.noPriceMark : muted}</td>`,
@@ -9360,7 +9360,7 @@ function openSecurityDetail(secId) {
     // 市場の時価総額1位まで何倍か（1位が未取得なら行ごと出さない）
     ...(topMarketCap(sec.market) && calc.capToTop(sec) != null ? [(() => {
       const t = topMarketCap(sec.market), r = calc.capToTop(sec);
-      return kv('時価総額1位まで', r > 0 ? `${r.toFixed(2)}倍（+${(r * 100).toFixed(0)}%） <span class="muted">1位 ${esc(t.name || t.code)} ${fmtTurnover(t.cap, sec.market)}</span>` : '到達済み（1位）');
+      return kv('時価総額1位まで', r > 1 ? `${r.toFixed(2)}倍（+${((r - 1) * 100).toFixed(0)}%） <span class="muted">1位 ${esc(t.name || t.code)} ${fmtTurnover(t.cap, sec.market)}</span>` : '到達済み（1位）');
     })()] : []),
     kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
