@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260806-0128';
+const APP_VERSION = 'v20260806-0210';
 
 'use strict';
 
@@ -340,6 +340,13 @@ const store = {
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
     this.data.earnings ||= {};        // 決算日キャッシュ priceKey→{prev,next,nextEstimate,exDiv,at}。1日1回取得・同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
+    this.data.mktTopCap ||= {};       // 市場の時価総額1位（US/JP→{code,name,cap,at}）。「時価1位まで」列の分子・自動取得キャッシュ
+    // v20260806-0128 以前は settings 配下に置いていた。settings は同期が singleTs（まるごと後勝ち）で、
+    // 端末が自動で書くと相手端末の設定変更を巻き戻すため、トップレベルへ移設（1回だけ引っ越し）
+    if (this.data.settings.mktTopCap) {
+      for (const [k, v] of Object.entries(this.data.settings.mktTopCap)) if (!this.data.mktTopCap[k]) this.data.mktTopCap[k] = v;
+      delete this.data.settings.mktTopCap;
+    }
     this.data.newsRead ||= {};        // ニュース既読（記事リンク→既読日時ISO）。Google同期対象（sync-merge SCHEMA登録済み）
     this.data.newsSeen ||= {};        // （旧方式の名残・現在未使用）ニュース初見の記録。newsPool の batch 方式へ移行済み
     this.data.newsPool ||= null;      // ニュース一覧の共有プール {items,at,prevAt,_updatedAt}。「更新」で取得しGoogle同期（全端末で同じ一覧・同じ○の色）
@@ -4724,19 +4731,23 @@ const MKT_KINDS = [['turnover', '売買代金'], ['marketcap', '時価総額'], 
 const MKT_JP_SUBS = [['all', '全市場'], ['prime', 'プライム'], ['standard', 'スタンダード'], ['growth', 'グロース']];
 function mktKey() { return `${mktState.market}:${mktState.market === 'JP' ? mktState.sub : '-'}:${mktState.kind}`; }
 // ---------- 市場の時価総額1位（日米別） ----------
-// 「時価1位まで」列の分子。時価総額ランキング(全市場)を取った時に1位を記録し store.data.settings に保存する
-// （＝Google同期対象。ルール7: localStorage単独に置かない）。値は原通貨の実額（US=USD / JP=円）。
-function topMarketCap(market) { const t = ((store.data.settings || {}).mktTopCap || {})[market]; return (t && t.cap > 0) ? t : null; }
+// 「時価1位まで」列の分子。時価総額ランキング(全市場)を取った時に1位を記録する。
+// 値は原通貨の実額（US=USD / JP=円）。**store.data.settings には置かない**——settings は同期が
+// singleTs（オブジェクトまるごと後勝ち）なので、端末が自動で毎日書き込むと、もう片方の端末が
+// 手で変えた設定（画面の並び順 navOrder 等）を丸ごと巻き戻してしまう。ここは自動取得のキャッシュなので
+// store.data.mktTopCap（トップレベル・市場ごとに at で3-wayマージ）に置く（sync-merge SCHEMA 登録済み）。
+function topMarketCapMap() { return (store.data.mktTopCap ||= {}); }
+function topMarketCap(market) { const t = topMarketCapMap()[market]; return (t && t.cap > 0) ? t : null; }
 // at は取得時刻(ms)。古い記録で新しい記録を上書きしない（キャッシュ由来と当日取得が競合するため）
 function setTopMarketCap(market, it, at) {
   if (!it || !(it.marketCap > 0)) return false;
-  const s = (store.data.settings ||= {}); const m = (s.mktTopCap ||= {});
+  const m = topMarketCapMap();
   const cur = m[market] || {};
   const ts = at || Date.now();
   if (cur.at > ts) return false;
   const next = { code: String(it.code || ''), name: it.name || '', cap: it.marketCap, at: ts };
   if (cur.code === next.code && cur.name === next.name && cur.cap === next.cap) return false;
-  m[market] = next; s._updatedAt = store._now(); // settings は singleTs（新しい方を採用）
+  m[market] = next;
   return true;
 }
 // 「時価1位まで」列の分子を自己補完する。未取得（or 前日以前）の市場だけ、時価総額ランキング1件を
