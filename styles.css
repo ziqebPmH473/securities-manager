@@ -759,6 +759,9 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .drawer-head .top { display: flex; align-items: flex-start; gap: 13px; }
 .drawer-head .x { margin-left: auto; }
 .drawer-title { font-family: var(--serif); font-size: 20px; font-weight: 600; }
+/* 詳細ドロワーの銘柄名＝銘柄カルテへのリンク */
+.dr-title-link { cursor: pointer; }
+.dr-title-link:hover { text-decoration: underline; color: var(--accent); }
 .drawer-body { padding: 18px 22px; overflow-y: auto; flex: 1; }
 .drawer-foot { padding: 14px 22px; border-top: 1px solid var(--hair); display: flex; gap: 10px; background: var(--panel-2); }
 .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--hair); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 14px 0; }

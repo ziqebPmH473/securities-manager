@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260804-0148';
+const APP_VERSION = 'v20260805-2306';
 
 'use strict';
 
@@ -8990,7 +8990,7 @@ function openHoldingsForm(secId) {
       ${us ? `<td><input type="number" step="any" class="h-acq" style="width:100%" value="${h.acqJpy ?? ''}" placeholder="取得円"></td>` : ''}
       ${isFund ? `<td><input type="number" step="any" class="h-eval" style="width:100%" value="${fundEvalOf(h)}" placeholder="評価額(円)"></td>` : ''}
       <td><input type="number" step="any" class="h-orig" style="width:100%" value="${h.origBuyAmount ?? ''}" placeholder="任意"></td>
-      <td class="l"><button type="button" class="btn btn-sm btn-danger" onclick="removeHolding(${h.id},${secId})">削除</button></td>
+      <td class="l" style="white-space:nowrap">${h.quantity > 1e-9 ? `<button type="button" class="btn btn-sm btn-danger" title="この証券会社・口座だけを全売却" onclick="sellAll(${secId},[${h.id}])">全売却</button> ` : ''}<button type="button" class="btn btn-sm btn-danger" onclick="removeHolding(${h.id},${secId})">削除</button></td>
     </tr>`).join('');
 
   showModal(`保有を直接編集 — ${esc(sec.name || sec.ticker)}`, `
@@ -9028,7 +9028,7 @@ function openHoldingsForm(secId) {
       </fieldset>
 
       <div class="form-actions">
-        ${hs.some(h => h.quantity > 0) ? `<button type="button" class="btn btn-danger" onclick="sellAll(${secId})">全売却（数量を0に）</button>` : ''}
+        ${hs.some(h => h.quantity > 0) ? `<button type="button" class="btn btn-danger" onclick="sellAll(${secId})">全売却（口座を選択）</button>` : ''}
         <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
@@ -9083,11 +9083,13 @@ function removeHolding(hid, secId) {
 }
 // 全売却を取引履歴に残す: 保有ロットごとに現在値（無ければ平均取得単価）で売り取引を記録し、数量を0にする。
 // 取引履歴・取引サマリーに「売り」として残るのが store.sellAll（履歴を残さず0にするだけ）との違い。
-function recordSellAll(secId) {
+// hids（保有ID配列）を渡すと、その証券口座（証券会社×口座）だけを売却する。省略時は全口座。
+function recordSellAll(secId, hids) {
   const sec = store.data.securities.find(s => s.id === secId); if (!sec) return 0;
   const price = calc.price(sec);
   const td = today();
-  const lots = store.data.holdings.filter(h => h.securityId === secId && h.quantity > 1e-9);
+  let lots = store.data.holdings.filter(h => h.securityId === secId && h.quantity > 1e-9);
+  if (Array.isArray(hids)) lots = lots.filter(h => hids.includes(h.id));
   lots.forEach(h => store.addTransaction({
     securityId: secId, type: 'sell', quantity: h.quantity,
     price: price != null ? price : (h.avgCost || 0),
@@ -9095,11 +9097,54 @@ function recordSellAll(secId) {
   }));
   return lots.length;
 }
-function sellAll(secId) {
-  if (confirm('この銘柄の全口座を全売却します。取引履歴に「売り」を記録し（売値は現在値）、数量を0にします。よろしいですか？')) {
-    recordSellAll(secId); closeModal(); render();
-  }
+// 全売却の確認モーダル。売却内容（証券会社×口座ごとの数量・売値・概算売却額）を表示し、
+// 証券口座単位で選んで売却できる。hids 省略時は全口座を選択済みで表示。
+function openSellAllModal(secId, hids) {
+  const sec = store.data.securities.find(s => s.id === secId); if (!sec) return;
+  const ccy = MARKET_CCY[sec.market];
+  const price = calc.price(sec);
+  const lots = store.data.holdings.filter(h => h.securityId === secId && h.quantity > 1e-9);
+  if (!lots.length) { toast('売却できる保有がありません'); return; }
+  const pre = (Array.isArray(hids) && hids.length) ? hids : lots.map(h => h.id);
+  const sellPriceOf = h => price != null ? price : (h.avgCost || 0);
+  const rows = lots.map(h => `
+    <tr>
+      <td class="l"><label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" class="sa-chk" value="${h.id}" data-amt="${h.quantity * sellPriceOf(h)}" ${pre.includes(h.id) ? 'checked' : ''}>
+        ${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</label></td>
+      <td>${fmtQty(h.quantity, sec.market)}</td>
+      <td>${ccy}${num(sellPriceOf(h))}</td>
+      <td>${ccy}${num(h.quantity * sellPriceOf(h))}</td>
+    </tr>`).join('');
+  showModal(`全売却 — ${esc(calc.displayName(sec))}`, `
+    <p class="muted">選んだ証券口座を全売却します。取引履歴に「売り」を記録し（売値は${price != null ? '現在値' : '平均取得単価（現在値が未取得のため）'}）、数量を0にします。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">証券会社 / 口座</th><th>数量</th><th>売値(${ccy})</th><th>概算売却額(${ccy})</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><th class="l">合計（選択中）</th><th></th><th></th><th id="sa-total"></th></tr></tfoot>
+    </table></div>
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+      <button type="button" class="btn btn-danger" id="sa-exec">全売却する</button>
+    </div>`, { wide: true });
+  const chks = () => [...document.querySelectorAll('.sa-chk')];
+  const updTotal = () => {
+    const sel = chks().filter(c => c.checked);
+    document.getElementById('sa-total').textContent = ccy + num(sel.reduce((a, c) => a + (parseFloat(c.dataset.amt) || 0), 0));
+    document.getElementById('sa-exec').disabled = sel.length === 0;
+  };
+  chks().forEach(c => { c.onchange = updTotal; });
+  updTotal();
+  document.getElementById('sa-exec').onclick = () => {
+    const ids = chks().filter(c => c.checked).map(c => parseInt(c.value, 10));
+    if (!ids.length) return;
+    const n = recordSellAll(secId, ids);
+    closeModal(); closeDrawer(); render();
+    toast(`${n} 口座を全売却しました`);
+  };
 }
+// 保有編集フォーム等からの呼び出し口（確認モーダルを開く）
+function sellAll(secId, hids) { openSellAllModal(secId, hids); }
 
 // ---------- 銘柄詳細（SEC-15） ----------
 // 価格チャート（トリガーライン重畳）＋判定・保有・購入履歴・分析メタ・ファンダを1画面に。
@@ -9249,9 +9294,13 @@ function openSecurityDetail(secId) {
     ${sectionBox('購入・取引履歴', txnRows)}
     ${sectionBox('分析メタ', metaBox)}`, `
     <button type="button" class="btn" onclick="openSecNews(${sec.id})" title="この銘柄のニュース・開示を表示">${svgIcon('news', '')} ニュース・開示</button>
+    ${held ? `<button type="button" class="btn btn-danger" onclick="sellAll(${sec.id})" title="証券口座を選んで全売却">全売却</button>` : ''}
     <button type="button" class="btn btn-brass" onclick="closeDrawer();openTxnForm(${sec.id})">${svgIcon('trade', '')} 取引</button>
     <button type="button" class="btn" onclick="closeDrawer();openHoldingsForm(${sec.id})">保有</button>
     <button type="button" class="btn" onclick="closeDrawer();openSecurityForm(${sec.id})">${svgIcon('edit', '')} 編集</button>`, subHtml);
+  // ドロワー上部の銘柄名はクリックで銘柄カルテへ（showDrawer は textContent で入れるので後から差し替え）
+  const dtEl = document.getElementById('drawer-title');
+  if (dtEl) dtEl.innerHTML = `<span class="dr-title-link" title="銘柄カルテを開く" onclick="karteOpenSec(${sec.id})">${esc(calc.displayName(sec))}</span>`;
   _detailChartCtx = { sec, ev, price, lb };
   loadDetailChart(sec, ev, price, lb, detailChartRange);
 }
@@ -9892,6 +9941,12 @@ function karteLookup() {
   karteSelId = null; saveKarteState(); renderTradeEntry();
 }
 function karteSelect(id) { karteSelId = id; const s = store.data.securities.find(x => x.id === id); if (s) karteCode = s.ticker || karteCode; saveKarteState(); renderTradeEntry(); }
+// 銘柄IDから銘柄カルテを開く（詳細ドロワーの銘柄名クリック等）
+function karteOpenSec(secId) {
+  const s = store.data.securities.find(x => x.id === secId); if (!s) return;
+  karteSelId = s.id; karteCode = s.ticker || calc.displayName(s); saveKarteState();
+  closeModal(); closeDrawer(); go('trade');
+}
 function karteOpen(market, code) { const s = mktFindSec(code, market); karteCode = code; karteSelId = s ? s.id : null; saveKarteState(); go('trade'); }
 function renderTradeEntry() {
   const q = karteCode.trim();
