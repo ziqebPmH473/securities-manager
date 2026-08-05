@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260805-2349';
+const APP_VERSION = 'v20260806-0030';
 
 'use strict';
 
@@ -160,6 +160,8 @@ const MASTER_COLS = [
   { key: 'sector',      label: 'セクター',         left: true,  markets: STKM, noSort: false },
   { key: 'industry',    label: '業種',             left: true,  markets: STKM, noSort: false },
   { key: 'marketCap',   label: '時価総額',          left: false, markets: STKM, noSort: false },
+  // 市場の時価総額1位（日米別）まで何倍か。例: 1位NVDA 4.99T に対しMU 1.00T なら「3.99倍」(=+399%の上昇余地)
+  { key: 'capToTop',    label: '時価1位まで',       left: false, markets: STKM, noSort: false },
   { key: 'turnover',    label: '売買代金',          left: false, markets: STKM, noSort: false },
   { key: 'value',       label: '評価額',           left: false, markets: ALLM, noSort: false },
   { key: 'cost',        label: '取得価額',         left: false, markets: ALLM, noSort: false },
@@ -245,8 +247,8 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
-  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
   SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
   ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
@@ -1424,6 +1426,13 @@ const calc = {
   marginRatio(sec) { return this.field(sec, 'marginRatio'); },
   // 時価総額(百万) = 株価×発行済株式数/1e6（随時算出）。無ければ取得済み時価総額
   marketCap(sec) { const sh = this.field(sec, 'sharesOut'); const p = this.price(sec); if (sh && p != null) return p * sh / 1e6; return this.field(sec, 'marketCap'); },
+  // 市場の時価総額1位（同じ市場＝日米別）まで何倍か。1位の時価総額 ÷ 自分の時価総額 − 1。
+  // 例: 1位NVDA 4.99T・MU 1.00T → 3.99（＝3.99倍の上昇余地＝+399%）。1位自身や超過は 0 以下になる。
+  capToTop(sec) {
+    const t = topMarketCap(sec.market); if (!t) return null;
+    const v = this.marketCap(sec); if (v == null || v <= 0) return null;
+    return t.cap / (v * 1e6) - 1;
+  },
   // 売買代金（原通貨・実額）= 現在値×当日出来高。出来高は価格キャッシュ優先、無ければ銘柄情報(meta)から。
   // （Finnhub利用の米株は価格更新で出来高が入らないため、銘柄情報更新=Yahoo chart の出来高で補完）
   turnover(sec) { const p = store.data.prices[priceKey(sec)] || {}; const pr = this.price(sec); const vol = p.volume != null ? p.volume : this.field(sec, 'volume'); return (pr != null && vol != null) ? pr * vol : null; },
@@ -2676,6 +2685,7 @@ function colDefaultWidth(key) {
   if (key === 'analysisNote' || key === 'memo') return 160;
   if (key === 'labels') return 150; // 複数タグ
   if (key === 'origCost') return 96; // 金額（本来の購入額）
+  if (key === 'capToTop') return 92; // 見出し「時価1位まで」＋「3.99倍」
   if (key === 'ratioValue' || key === 'ratioCost') return 84; // 「12.34%」＋バー
   if (key === 'anaWarn' || key === 'anaWarnC') return 150; // パターン名＋スコア
   if (key === 'anaMa200') return 72;
@@ -2770,7 +2780,7 @@ const CF_SCREENS = [
   { id: 'analysis', label: '分析' },
 ];
 // 背景色ルールを設定できる数値列（設定UIの選択肢）。
-const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'ratioValue', 'ratioCost', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail'];
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'capToTop', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'ratioValue', 'ratioCost', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail'];
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
@@ -3034,6 +3044,7 @@ function cfCellValue(key, sec, ctx) {
     case 'prevBuyPrice': return ctx.prevBuy;
     case 'dropFromPrev': return calc.dropFromPrev(sec);
     case 'marketCap': return calc.marketCap(sec);
+    case 'capToTop': return calc.capToTop(sec);
     case 'turnover': return calc.turnover(sec);
     case 'value': return ctx.th.qty ? ctx.valN : null;
     case 'cost': return ctx.th.qty ? ctx.th.acquiredCost : null;
@@ -3170,6 +3181,13 @@ const COL_RENDERERS = {
   industry:  (s,c) => { const v = calc.field(s,'industry'); return `<td class="l">${v ? esc(jpInd(v)) : muted}</td>`; },
   // 時価総額: 兆/億/万（米株は$T/B）表記に統一（売買代金と同形式）。marketCapは百万単位なので×1e6で実額化
   marketCap: (s,c) => { const v = calc.marketCap(s); return `<td title="時価総額">${v != null ? fmtTurnover(v * 1e6, c.market) : muted}</td>`; },
+  // 時価1位まで: 市場の時価総額1位まで何倍か（3.99倍＝+399%）。タイトルに1位の銘柄・時価総額・％を出す
+  capToTop:  (s,c) => {
+    const t = topMarketCap(s.market); const r = calc.capToTop(s);
+    if (r == null) return `<td title="${t ? '時価総額が未取得' : '時価総額1位が未取得（マーケットタブの時価総額ランキング／株価更新で取得）'}">${muted}</td>`;
+    const tip = `${s.market === 'US' ? '米国株' : '日本株'}の時価総額1位 ${esc(t.name || t.code)}(${esc(t.code)}) ${fmtTurnover(t.cap, s.market)} まで${r > 0 ? ` ${r.toFixed(2)}倍（+${(r * 100).toFixed(0)}%）` : '到達済み'}`;
+    return `<td title="${tip}">${r > 0 ? r.toFixed(2) + '倍' : '<span class="muted">1位</span>'}</td>`;
+  },
   turnover:  (s,c) => { const v = calc.turnover(s); return `<td title="現在値×当日出来高">${v != null ? fmtTurnover(v, c.market) : muted}</td>`; },
   value:     (s,c) => `<td>${c.th.qty ? fmtAmt(c.valN, c.market) + c.noPriceMark : muted}</td>`,
   cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : muted}</td>`,
@@ -3925,6 +3943,7 @@ function sortValue(sec, key) {
     case 'sector': return calc.field(sec, 'sector') || 'zzz';
     case 'industry': return calc.field(sec, 'industry') || 'zzz';
     case 'marketCap': return calc.marketCap(sec) ?? -Infinity;
+    case 'capToTop': return calc.capToTop(sec) ?? -Infinity;
     case 'turnover': return calc.turnover(sec) ?? -Infinity;
     case 'per': return calc.per(sec) ?? Infinity;
     case 'pbr': return calc.pbr(sec) ?? Infinity;
@@ -4703,6 +4722,19 @@ let mktBusy = false;
 const MKT_KINDS = [['turnover', '売買代金'], ['marketcap', '時価総額'], ['gainers', '値上がり'], ['losers', '値下がり']];
 const MKT_JP_SUBS = [['all', '全市場'], ['prime', 'プライム'], ['standard', 'スタンダード'], ['growth', 'グロース']];
 function mktKey() { return `${mktState.market}:${mktState.market === 'JP' ? mktState.sub : '-'}:${mktState.kind}`; }
+// ---------- 市場の時価総額1位（日米別） ----------
+// 「時価1位まで」列の分子。時価総額ランキング(全市場)を取った時に1位を記録し store.data.settings に保存する
+// （＝Google同期対象。ルール7: localStorage単独に置かない）。値は原通貨の実額（US=USD / JP=円）。
+function topMarketCap(market) { const t = ((store.data.settings || {}).mktTopCap || {})[market]; return (t && t.cap > 0) ? t : null; }
+function setTopMarketCap(market, it) {
+  if (!it || !(it.marketCap > 0)) return false;
+  const s = (store.data.settings ||= {}); const m = (s.mktTopCap ||= {});
+  const cur = m[market] || {};
+  const next = { code: String(it.code || ''), name: it.name || '', cap: it.marketCap, at: today() };
+  if (cur.code === next.code && cur.name === next.name && cur.cap === next.cap) return false;
+  m[market] = next; s._updatedAt = store._now(); // settings は singleTs（新しい方を採用）
+  return true;
+}
 function setMktMarket(m) { mktState.market = m; if (m === 'US') mktState.sub = 'all'; renderMarketTab(); }
 function setMktSub(s) { mktState.sub = s; renderMarketTab(); }
 function setMktKind(k) { mktState.kind = k; renderMarketTab(); }
@@ -4778,6 +4810,8 @@ async function loadRanking(force) {
       items = items.map(it => { const n = nm[it.code]; return (n && n.name) ? { ...it, name: n.name } : it; });
     }
     mktCacheMap()[key] = { items, at: Date.now() };
+    // 時価総額ランキング(全市場)の1位を「時価1位まで」列用に記録
+    if (kind === 'marketcap' && (market === 'US' || sub === 'all') && items[0]) setTopMarketCap(market, items[0]);
   } catch (_) { mktCacheMap()[key] = { items: [], at: Date.now() }; }
   store.save(); // ランキングキャッシュ（5年高値・取得日時込）を永続化＝localStorage保存＋Google同期に載る
   mktBusy = false; renderMarketTab();
@@ -4805,16 +4839,21 @@ async function loadRankBadges(force) {
   _rankBadgesBusy = true;
   const combos = [['JP', 'turnover'], ['JP', 'marketcap'], ['US', 'turnover'], ['US', 'marketcap']];
   const out = {};
+  let capChanged = false;
   try {
     await Promise.all(combos.map(async ([market, kind]) => {
       const map = {};
       try {
         const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=all&count=10`).then(x => x.ok ? x.json() : null).catch(() => null);
-        ((r && r.items) || []).slice(0, 10).forEach((it, i) => { if (it.code != null) map[String(it.code).toUpperCase()] = i + 1; });
+        const items = (r && r.items) || [];
+        items.slice(0, 10).forEach((it, i) => { if (it.code != null) map[String(it.code).toUpperCase()] = i + 1; });
+        // 「時価1位まで」列の分子（市場の時価総額1位）を、このバッジ取得のついでに1日1回更新
+        if (kind === 'marketcap' && items[0] && setTopMarketCap(market, items[0])) capChanged = true;
       } catch (_) { /* この指標は取得失敗→空 */ }
       out[`${market}:${kind}`] = map;
     }));
     _rankTop = out; _rankTopDate = today();
+    if (capChanged) store.save();
   } finally { _rankBadgesBusy = false; }
 }
 // 保有銘柄のランキング順位バッジHTML（市場全体TOP10内のときのみ）
@@ -9282,6 +9321,11 @@ function openSecurityDetail(secId) {
     kv('PER / EPS', `${calc.per(sec) != null ? num(calc.per(sec)) : '—'} / ${calc.field(sec, 'eps') != null ? m(calc.field(sec, 'eps')) : '—'}`),
     kv('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     kv('時価総額 / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
+    // 市場の時価総額1位まで何倍か（1位が未取得なら行ごと出さない）
+    ...(topMarketCap(sec.market) && calc.capToTop(sec) != null ? [(() => {
+      const t = topMarketCap(sec.market), r = calc.capToTop(sec);
+      return kv('時価総額1位まで', r > 0 ? `${r.toFixed(2)}倍（+${(r * 100).toFixed(0)}%） <span class="muted">1位 ${esc(t.name || t.code)} ${fmtTurnover(t.cap, sec.market)}</span>` : '到達済み（1位）');
+    })()] : []),
     kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
     kv('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
