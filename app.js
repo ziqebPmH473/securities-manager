@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260806-0030';
+const APP_VERSION = 'v20260806-0106';
 
 'use strict';
 
@@ -3518,6 +3518,7 @@ function render() {
 }
 function _render() {
   updateHeader();
+  ensureTopMarketCap();   // 「時価1位まで」列の分子（市場の時価総額1位）が未取得/前日なら裏で1回だけ取得
   // 比率列の分母（既定＝日米合計）。表を持つ画面は各 render 内で表示中の集合を渡して上書きする
   ratioCtx = buildRatioCtx(null);
   updateSignalBadge();
@@ -4726,14 +4727,48 @@ function mktKey() { return `${mktState.market}:${mktState.market === 'JP' ? mktS
 // 「時価1位まで」列の分子。時価総額ランキング(全市場)を取った時に1位を記録し store.data.settings に保存する
 // （＝Google同期対象。ルール7: localStorage単独に置かない）。値は原通貨の実額（US=USD / JP=円）。
 function topMarketCap(market) { const t = ((store.data.settings || {}).mktTopCap || {})[market]; return (t && t.cap > 0) ? t : null; }
-function setTopMarketCap(market, it) {
+// at は取得時刻(ms)。古い記録で新しい記録を上書きしない（キャッシュ由来と当日取得が競合するため）
+function setTopMarketCap(market, it, at) {
   if (!it || !(it.marketCap > 0)) return false;
   const s = (store.data.settings ||= {}); const m = (s.mktTopCap ||= {});
   const cur = m[market] || {};
-  const next = { code: String(it.code || ''), name: it.name || '', cap: it.marketCap, at: today() };
+  const ts = at || Date.now();
+  if (cur.at > ts) return false;
+  const next = { code: String(it.code || ''), name: it.name || '', cap: it.marketCap, at: ts };
   if (cur.code === next.code && cur.name === next.name && cur.cap === next.cap) return false;
   m[market] = next; s._updatedAt = store._now(); // settings は singleTs（新しい方を採用）
   return true;
+}
+// 「時価1位まで」列の分子を自己補完する。未取得（or 前日以前）の市場だけ、時価総額ランキング1件を
+// 裏で取得して記録する。株価更新やマーケットタブを待たずに列が埋まるようにするための保険で、
+// 1市場あたり1日1回（失敗時もその日の再試行はしない＝毎描画のリトライを防ぐ）。
+let _topCapTriedDate = null;
+async function ensureTopMarketCap() {
+  if (!store.data) return;
+  const d = today();
+  if (_topCapTriedDate === d) return;
+  const need = ['US', 'JP'].filter(mk => { const t = topMarketCap(mk); return !t || !t.at || new Date(t.at).toDateString() !== new Date().toDateString(); });
+  if (!need.length) { _topCapTriedDate = d; return; }
+  _topCapTriedDate = d;
+  let changed = false;
+  await Promise.all(need.map(async mk => {
+    try {
+      const r = await fetch(`/api/ranking?market=${mk}&kind=marketcap&sub=all&count=1`).then(x => x.ok ? x.json() : null).catch(() => null);
+      const it = r && r.items && r.items[0];
+      if (it && setTopMarketCap(mk, it, Date.now())) changed = true;
+    } catch (_) { /* 取得失敗→今日はこのまま「—」。翌日再試行 */ }
+  }));
+  if (changed) { store.save(); preserveTableScroll(render); }
+}
+// マーケットタブの時価総額ランキング（全市場）のキャッシュから1位を反映。
+// タブを開いた時はキャッシュ表示で再取得しないため、これが無いと表示中のランキングと列の分子がズレる。
+function syncTopCapFromCache() {
+  let changed = false;
+  for (const [market, key] of [['US', 'US:-:marketcap'], ['JP', 'JP:all:marketcap']]) {
+    const c = mktCacheMap()[key];
+    if (c && c.items && c.items[0] && setTopMarketCap(market, c.items[0], c.at)) changed = true;
+  }
+  return changed;
 }
 function setMktMarket(m) { mktState.market = m; if (m === 'US') mktState.sub = 'all'; renderMarketTab(); }
 function setMktSub(s) { mktState.sub = s; renderMarketTab(); }
@@ -4762,7 +4797,8 @@ async function addRankingWatch(code, market) {
 async function loadRanking(force) {
   const key = mktKey();
   if (mktBusy) return;
-  if (!force && mktCacheMap()[key]) { renderMarketTab(); return; }
+  // キャッシュ表示のときも、表示するランキングの1位を「時価1位まで」列の分子に反映する
+  if (!force && mktCacheMap()[key]) { if (syncTopCapFromCache()) store.save(); renderMarketTab(); return; }
   mktBusy = true; renderMarketTab();
   try {
     const { market, sub, kind } = mktState;
@@ -4810,8 +4846,8 @@ async function loadRanking(force) {
       items = items.map(it => { const n = nm[it.code]; return (n && n.name) ? { ...it, name: n.name } : it; });
     }
     mktCacheMap()[key] = { items, at: Date.now() };
-    // 時価総額ランキング(全市場)の1位を「時価1位まで」列用に記録
-    if (kind === 'marketcap' && (market === 'US' || sub === 'all') && items[0]) setTopMarketCap(market, items[0]);
+    // 時価総額ランキング(全市場)の1位を「時価1位まで」列用に記録（今取ったばかりなので最優先）
+    if (kind === 'marketcap' && (market === 'US' || sub === 'all') && items[0]) setTopMarketCap(market, items[0], Date.now());
   } catch (_) { mktCacheMap()[key] = { items: [], at: Date.now() }; }
   store.save(); // ランキングキャッシュ（5年高値・取得日時込）を永続化＝localStorage保存＋Google同期に載る
   mktBusy = false; renderMarketTab();
