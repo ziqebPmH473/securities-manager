@@ -1211,6 +1211,8 @@ US は Nasdaq の Date Reported（earnings-surprise）が発表から**1〜2日�
   保存は `store.data.settings.navOrder = { グループ名: [viewId,…] }`（**Google同期対象**。`settings._updatedAt` を更新）。
   `navOrderedGroups()` が `NAV_GROUPS` に適用し、`renderNav` が使う。**未知IDは無視・未登録IDは末尾**に残すので、
   画面を追加しても設定は壊れない。並べ替えはグループ内のみ（▲▼）。「既定に戻す」で `navOrder` を削除。
+  **注意**: 起動時の `renderNav()` は `store.load()` より前に走る（`store.data` がまだ null）。`navOrderedGroups()` は必ず
+  `store.data &&` でガードすること（ガード漏れで起動が中断し画面が真っ白になった。v20260805-2321 → 2349 で修正）。
 - **詳細ドロワーのフッターは折り返す**（`.drawer-foot { flex-wrap: wrap }`）。ボタンが5個で右端が見切れていたため。
   あわせて「ニュース・開示」ボタンの表記を「ニュース」に短縮。
 

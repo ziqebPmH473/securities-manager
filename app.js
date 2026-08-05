@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260805-2321';
+const APP_VERSION = 'v20260805-2349';
 
 'use strict';
 
@@ -7010,7 +7010,9 @@ const MASTER_LAUNCH = [
 // 保存: store.data.settings.navOrder = { グループ名: [viewId, ...] }（Google同期対象。settings は singleTs）。
 // 未知IDは無視、未登録IDは既定順のまま末尾に残す（画面追加時に設定が壊れない）。
 function navOrderedGroups() {
-  const saved = (store.data.settings && store.data.settings.navOrder) || {};
+  // 起動時の renderNav() は store.load() より前に走るため store.data がまだ null。必ずガードする
+  // （ガード漏れで起動が止まり、画面が真っ白になった。2026-08-05）
+  const saved = (store.data && store.data.settings && store.data.settings.navOrder) || {};
   return NAV_GROUPS.map(grp => {
     const order = Array.isArray(saved[grp.group]) ? saved[grp.group] : null;
     if (!order) return grp;
