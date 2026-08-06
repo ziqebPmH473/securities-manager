@@ -59,7 +59,7 @@
     newsTags:        ['records', (t) => `ntag:${t.name}`], // ニュース注目タグ。名前キーで3-way（削除も伝播）
     newsHidden:      ['map', null],   // ニュース非表示（記事リンク→非表示日時ISO）。キー単位3-way・両在はlocal
     newsTrans:       ['map', null],   // ニュース翻訳キャッシュ（記事リンク→{t,d,at}）。キー単位3-way・両在はlocal
-    newsPrefs:       ['singleTs'],    // ニュース表示設定（除外カテゴリ/開示種類）。両方編集時は _updatedAt の新しい方
+    newsPrefs:       ['keyedTs'],     // ニュース表示設定（除外カテゴリ/開示種類）。キー単位3-way・同キー衝突時のみ _updatedAt の新しい方
     newsPool:        ['singleTs'],    // ニュース一覧の共有プール {items,at,prevAt,_updatedAt}。「更新」した端末の新しい方を採用
     // 開示種別マスタ / YouTube購読チャンネル。以前は ['single'] だったが、既定値が自動シードされる
     // マスタなので「別端末で再シードされた既定値」が本物の登録内容を上書きして消える事故が起きた
@@ -73,10 +73,12 @@
     // bulkTs = 取込メタ listedMasterInfo._updatedAt の新しい方を採用し、時刻が無い場合は「空でない側」を採用
     // （一括取込マスタの空は「未取込」であって編集の意思ではない。全消去は _updatedAt 付きで伝播する）。
     listedMaster:    ['bulkTs', 'listedMasterInfo'],
-    listedMasterInfo: ['singleTs'],   // 上場マスタの取込メタ（日付・件数・_updatedAt）。listedMasterと一緒に更新
+    listedMasterInfo: ['singleTs'],   // 上場マスタの取込メタ（日付・件数・_updatedAt）。listedMaster と一括で意味を持つ塊なので singleTs のまま
 
     fx:              ['single'],
-    settings:        ['singleTs'],
+    // 設定は**キー単位**マージ（keyedTs）。まるごと後勝ち(singleTs)にすると、別々のキーを別々の端末で
+    // 変えただけで相手の変更が巻き戻る（2026-08-06 navOrder 消失）。設定・マスタ系は原則キー単位/行単位にする。
+    settings:        ['keyedTs'],
     // マトリックスのレンジ(順序つき配列)とレート設定は常に一括編集される。配列は _updatedAt を
     // 直接持てない（JSON化でドロップ）ため、matrixSettings._updatedAt を共通の編集時刻として両方の
     // タイブレークに使う（matrixBands は pairTs で matrixSettings の時刻を参照）。
@@ -153,6 +155,35 @@
     const lt = (local && local._updatedAt) || '', rt = (remote && remote._updatedAt) || '';
     return (rt > lt) ? remote : local;
   }
+  // 設定オブジェクト（settings 等）用。**まるごと後勝ちにせず、キー1つずつ3-wayマージする**。
+  // singleTs（オブジェクト全体で新しい方を採用）だと、PCで navOrder、スマホで ratioDenom のように
+  // 「別々のキーを別々の端末で変えた」だけで、後から同期した側が相手の変更ごと巻き戻していた
+  // （2026-08-06 実際に発生: 画面の並び順がスマホ側の自動書き込みで消えた）。
+  // キーごとの判定は base との差分で行う: 片側だけ変わっていればその値（キー削除も反映）、
+  // 同じキーを両方で変えた時だけ _updatedAt の新しい方を採る。_updatedAt 自体は新しい方を残す。
+  const UNDEF = ' undefined';
+  const jkey = (v) => v === undefined ? UNDEF : JSON.stringify(v);
+  function mergeKeyedTs3way(base, local, remote) {
+    // オブジェクト以外（null/未提供）が混じる場合は従来どおり singleTs 相当で解決する
+    const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+    if (!isObj(local) || !isObj(remote)) return mergeSingleTs3way(base, local, remote);
+    const b = isObj(base) ? base : {};
+    const lt = local._updatedAt || '', rt = remote._updatedAt || '';
+    const out = {};
+    for (const k of new Set([...Object.keys(b), ...Object.keys(local), ...Object.keys(remote)])) {
+      if (k === '_updatedAt') continue;
+      const bj = jkey(b[k]), lj = jkey(local[k]), rj = jkey(remote[k]);
+      let v;
+      if (lj === rj) v = local[k];
+      else if (lj === bj) v = remote[k];        // localは未変更 → remoteの変更（削除含む）を採用
+      else if (rj === bj) v = local[k];         // remoteは未変更 → localの変更を採用
+      else v = (rt > lt) ? remote[k] : local[k]; // 同じキーを両方で変更 → 新しい方
+      if (v !== undefined) out[k] = v;
+    }
+    const nt = (rt > lt) ? rt : lt;
+    if (nt) out._updatedAt = nt;
+    return out;
+  }
   // singleTs と同じだが、タイブレークの _updatedAt を「別キーの値(lref/rref)」から読む。
   // 配列など _updatedAt を自身に持てない値を、一括編集される相方(matrixSettings)の時刻で判定する用途。
   function mergeSingleRefTs3way(base, local, remote, lref, rref) {
@@ -217,6 +248,7 @@
       else if (rule[0] === 'max') out[key] = mergeMax(local[key], remote[key]);
       else if (rule[0] === 'maxNum') out[key] = mergeMaxNum(local[key], remote[key]);
       else if (rule[0] === 'singleTs') out[key] = mergeSingleTs3way(base[key], local[key], remote[key]);
+      else if (rule[0] === 'keyedTs') out[key] = mergeKeyedTs3way(base[key], local[key], remote[key]);
       else if (rule[0] === 'pairTs') out[key] = mergeSingleRefTs3way(base[key], local[key], remote[key], local[rule[1]], remote[rule[1]]);
       else if (rule[0] === 'bulkTs') out[key] = mergeBulkTs3way(base[key], local[key], remote[key], local[rule[1]], remote[rule[1]]);
       else if (rule[0] === 'colprefs') out[key] = mergeColPrefs3way(base[key], local[key], remote[key]);
@@ -225,6 +257,6 @@
     return out;
   }
 
-  const api = { mergeBundle, mergeRecords3way, mergeMap3way, mergeSingle3way, mergeSingleTs3way, mergeSingleRefTs3way, mergeColPrefs3way, mergeMax, mergeMaxNum, SCHEMA };
+  const api = { mergeBundle, mergeRecords3way, mergeMap3way, mergeSingle3way, mergeSingleTs3way, mergeKeyedTs3way, mergeSingleRefTs3way, mergeColPrefs3way, mergeMax, mergeMaxNum, SCHEMA };
   if (typeof globalThis !== 'undefined') globalThis.SyncMerge = api;
 })();

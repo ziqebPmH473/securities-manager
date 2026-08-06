@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260806-0210';
+const APP_VERSION = 'v20260806-0304';
 
 'use strict';
 
@@ -7093,7 +7093,8 @@ const MASTER_LAUNCH = [
 ];
 
 // ---------- 画面（タブ）の並び順マスタ ----------
-// 保存: store.data.settings.navOrder = { グループ名: [viewId, ...] }（Google同期対象。settings は singleTs）。
+// 保存: store.data.settings.navOrder = { グループ名: [viewId, ...] }（Google同期対象。settings はキー単位マージ
+// ＝keyedTs なので、他端末が別の設定を変えても並び順は巻き戻らない。2026-08-06 に singleTs から変更）。
 // 未知IDは無視、未登録IDは既定順のまま末尾に残す（画面追加時に設定が壊れない）。
 function navOrderedGroups() {
   // 起動時の renderNav() は store.load() より前に走るため store.data がまだ null。必ずガードする
