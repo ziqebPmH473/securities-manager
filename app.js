@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260806-0304';
+const APP_VERSION = 'v20260806-0352';
 
 'use strict';
 
@@ -254,16 +254,18 @@ const DEFAULT_VISIBLE = {
   ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
   ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
   // マーケットランキングタブ（既定＝現状維持）。順位/コード/名称は先頭固定列で、ここには含めない。
-  MKTRANK: ['market','price','day','high5y','dropFrom5y','turnover','marketCap'],
+  MKTRANK: ['market','price','day','high5y','dropFrom5y','turnover','marketCap','capToTop'],
 };
 // マーケットランキングで列設定に出せる項目（追加取得ゼロで出せる市場データ＋登録済み銘柄のツール内情報）。
 // MASTER_COLS に実在するkeyのみ（resetColPrefs 側で実在チェックして交差を取る）。表示順もこの順。
-const MKTRANK_KEYS = ['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap','sector','industry','category','investCategory','labels','ruleName','rating','per','pbr','dividend','divYield','buyAmount'];
+const MKTRANK_KEYS = ['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap','capToTop','sector','industry','category','investCategory','labels','ruleName','rating','per','pbr','dividend','divYield','buyAmount'];
 // このうち「市場データ列」＝ランキング取得値(it)から描画する（store.data.prices を参照しない）。残りは登録済み銘柄のみ COL_RENDERERS(sec) に委譲。
 const MKTRANK_IT_KEYS = new Set(['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap']);
 // 配当は米株のみランキング取得値に含まれる（USスクリーナーの同一レスポンス＝追加取得ゼロ）。
 // 日本株ランキングのHTMLには無いので、it に値が無ければ登録済み銘柄のマスタ値へフォールバックする両対応列。
-const MKTRANK_HYBRID_KEYS = new Set(['dividend','divYield']);
+// capToTop（時価1位まで）もハイブリッド: 時価総額ランキングは it.marketCap から算出でき、
+// 売買代金/値上がり等のランキングには時価総額が無いので登録済み銘柄の値（calc）へフォールバックする。
+const MKTRANK_HYBRID_KEYS = new Set(['dividend','divYield','capToTop']);
 const COL_PREFS_KEY = 'sm_colprefs_v2';
 
 // 分析メタの取込列マッピング（Excel「銘柄分析結果」のヘッダ名 → 内部キー）
@@ -3189,12 +3191,8 @@ const COL_RENDERERS = {
   // 時価総額: 兆/億/万（米株は$T/B）表記に統一（売買代金と同形式）。marketCapは百万単位なので×1e6で実額化
   marketCap: (s,c) => { const v = calc.marketCap(s); return `<td title="時価総額">${v != null ? fmtTurnover(v * 1e6, c.market) : muted}</td>`; },
   // 時価1位まで: 市場の時価総額1位まで何倍か（5T/1T＝5.00倍＝+400%）。タイトルに1位の銘柄・時価総額・％を出す
-  capToTop:  (s,c) => {
-    const t = topMarketCap(s.market); const r = calc.capToTop(s);
-    if (r == null) return `<td title="${t ? '時価総額が未取得' : '時価総額1位が未取得（取得に失敗しています）'}">${muted}</td>`;
-    const tip = `${s.market === 'US' ? '米国株' : '日本株'}の時価総額1位 ${esc(t.name || t.code)}(${esc(t.code)}) ${fmtTurnover(t.cap, s.market)} まで ${r.toFixed(2)}倍（${r > 1 ? '+' + ((r - 1) * 100).toFixed(0) + '%' : '到達済み'}）`;
-    return `<td title="${tip}">${r > 1 ? r.toFixed(2) + '倍' : '<span class="muted">1位</span>'}</td>`;
-  },
+  // （セルHTMLは capToTopTd。保有銘柄・銘柄マスタ・マーケットのランキングで同じ見た目にするため共通化）
+  capToTop:  (s,c) => capToTopTd(s.market, calc.capToTop(s)),
   turnover:  (s,c) => { const v = calc.turnover(s); return `<td title="現在値×当日出来高">${v != null ? fmtTurnover(v, c.market) : muted}</td>`; },
   value:     (s,c) => `<td>${c.th.qty ? fmtAmt(c.valN, c.market) + c.noPriceMark : muted}</td>`,
   cost:      (s,c) => `<td>${c.th.qty ? c.m(c.th.acquiredCost) : muted}</td>`,
@@ -4750,6 +4748,30 @@ function setTopMarketCap(market, it, at) {
   m[market] = next;
   return true;
 }
+// 「時価1位まで」の表示テキスト（保有/マスタ/カルテ/詳細/マーケットで共通）。r=倍率（1位の時価総額÷自分）。
+// 1位自身（r<=1）は「1位」。tip は1位の銘柄名・時価総額・上昇率。
+function capToTopFmt(market, r) {
+  const t = topMarketCap(market);
+  if (r == null) return { label: null, pct: null, tip: t ? '時価総額が未取得' : '時価総額1位が未取得（取得に失敗しています）' };
+  const up = r > 1;
+  const pct = up ? `+${((r - 1) * 100).toFixed(0)}%` : '到達済み';
+  return {
+    label: up ? `${r.toFixed(2)}倍` : '1位',
+    pct,
+    tip: t ? `${market === 'US' ? '米国株' : '日本株'}の時価総額1位 ${t.name || t.code}(${t.code}) ${fmtTurnover(t.cap, market)} まで ${r.toFixed(2)}倍（${pct}）` : '',
+  };
+}
+// 時価総額（原通貨の実額）から倍率を出す。マーケットのランキング行（保有していない銘柄）用。
+function capToTopOf(market, capRaw) {
+  const t = topMarketCap(market);
+  return (t && capRaw > 0) ? t.cap / capRaw : null;
+}
+// 「時価1位まで」のセル（表共通）。1位は控えめ表示、未取得は「—」＋理由をtooltipに。
+function capToTopTd(market, r) {
+  const f = capToTopFmt(market, r);
+  const body = f.label == null ? muted : (r > 1 ? esc(f.label) : `<span class="muted">${esc(f.label)}</span>`);
+  return `<td title="${esc(f.tip)}">${body}</td>`;
+}
 // 「時価1位まで」列の分子を自己補完する。未取得（or 前日以前）の市場だけ、時価総額ランキング1件を
 // 裏で取得して記録する。株価更新やマーケットタブを待たずに列が埋まるようにするための保険で、
 // 1市場あたり1日1回（失敗時もその日の再試行はしない＝毎描画のリトライを防ぐ）。
@@ -4970,7 +4992,8 @@ function mktItValue(it, key, market) {
   }
 }
 // ハイブリッド列は it（米株）→ 無ければ登録済み銘柄のマスタ値、の順で解決する。
-function mktHybridValue(it, sec, key) {
+function mktHybridValue(it, sec, key, market) {
+  if (key === 'capToTop') return capToTopOf(market, it.marketCap) ?? (sec ? calc.capToTop(sec) : null);
   const v = mktItValue(it, key, null);
   if (v != null) return v;
   if (!sec) return null;
@@ -4980,7 +5003,7 @@ function mktHybridValue(it, sec, key) {
 function mktCfValue(it, sec, ctx, key, market) {
   if (key === 'marketCap') return it.marketCap != null ? it.marketCap / 1e6 : null;
   if (MKTRANK_IT_KEYS.has(key)) return mktItValue(it, key, market);
-  if (MKTRANK_HYBRID_KEYS.has(key)) return mktHybridValue(it, sec, key);
+  if (MKTRANK_HYBRID_KEYS.has(key)) return mktHybridValue(it, sec, key, market);
   return sec ? cfCellValue(key, sec, ctx) : null;
 }
 // 市場データ列の <td>（表示）。値は it 由来。既存ランキングの見た目（かぶたんリンク・億/万表記）を踏襲。
@@ -5002,7 +5025,8 @@ function mktItCell(it, key, market) {
 }
 // ハイブリッド列の <td>。配当/株は市場通貨で、配当利回りは%で（保有銘柄の列と同じ書式）。
 function mktHybridCell(it, sec, key, market) {
-  const v = mktHybridValue(it, sec, key);
+  const v = mktHybridValue(it, sec, key, market);
+  if (key === 'capToTop') return capToTopTd(market, v);
   if (v == null) return `<td class="l"><span class="muted">—</span></td>`;
   return key === 'divYield' ? `<td>${v.toFixed(2)}%</td>` : `<td>${fmtAmt(v, market)}</td>`;
 }
@@ -5010,7 +5034,7 @@ function mktHybridCell(it, sec, key, market) {
 function mktSortVal(it, key, market) {
   if (MKTRANK_IT_KEYS.has(key)) { const v = mktItValue(it, key, market); return (typeof v === 'number') ? v : (v == null ? -Infinity : v); }
   const sec = mktFindSec(it.code, market);
-  if (MKTRANK_HYBRID_KEYS.has(key)) return mktHybridValue(it, sec, key) ?? -Infinity;
+  if (MKTRANK_HYBRID_KEYS.has(key)) return mktHybridValue(it, sec, key, market) ?? -Infinity;
   return sec ? sortValue(sec, key) : -Infinity;
 }
 // ランキング1行（順位・コード・名称は先頭固定、以降は列設定に従う）。
@@ -6899,7 +6923,9 @@ function renderSecMaster() {
   const SM_COLS = [
     { k: 'ticker', l: 'コード', c: 'l col-code' }, { k: 'name', l: '銘柄名', c: 'l' }, { k: 'market', l: '市場', c: 'l' },
     { k: 'detailType', l: '詳細種別', c: 'l' },
-    { k: 'sector', l: 'セクター', c: 'l' }, { k: 'industry', l: '業種', c: 'l' }, { k: 'rating', l: '格付', c: 'l' },
+    { k: 'sector', l: 'セクター', c: 'l' }, { k: 'industry', l: '業種', c: 'l' },
+    { k: 'capToTop', l: '時価1位まで', c: '' },   // 市場の時価総額1位までの倍率（保有銘柄の同名列と同じ値）
+    { k: 'rating', l: '格付', c: 'l' },
     { k: 'overallGrade', l: '総合評価', c: 'l' }, { k: 'buyGrade', l: '買い時評価', c: 'l' },
     { k: 'priority', l: '優先順位', c: '' }, { k: 'ruleName', l: '買い増しルール', c: 'l' }, { k: 'category', l: 'カテゴリ', c: 'l' }, { k: 'investCategory', l: '投資カテゴリ', c: 'l' },
     { k: 'createdAt', l: '追加日', c: 'l' }, { k: 'updatedAt', l: '更新日', c: 'l' },
@@ -6919,6 +6945,7 @@ function renderSecMaster() {
       ${inlineEditOn ? ieCellHtml(s, 'detailType', null) : `<td class="l">${dtTag}</td>`}
       <td class="l">${calc.field(s, 'sector') ? esc(jpInd(calc.field(s, 'sector'))) + ov('sector') : muted}</td>
       <td class="l">${calc.field(s, 'industry') ? esc(jpInd(calc.field(s, 'industry'))) + ov('industry') : muted}</td>
+      ${cfInject(capToTopTd(s.market, calc.capToTop(s)), 'capToTop', calc.capToTop(s), 'master')}
       <td class="l">${gradeBadge(s)}</td>
       ${cell(s.overallGrade, true)}
       ${cell(s.buyGrade, true)}
@@ -9371,8 +9398,8 @@ function openSecurityDetail(secId) {
     kv('時価総額 / 5年高値 / 52週高値', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'} / ${m(calc.high5y(sec))} / ${m(calc.high52w(sec))}`),
     // 市場の時価総額1位まで何倍か（1位が未取得なら行ごと出さない）
     ...(topMarketCap(sec.market) && calc.capToTop(sec) != null ? [(() => {
-      const t = topMarketCap(sec.market), r = calc.capToTop(sec);
-      return kv('時価総額1位まで', r > 1 ? `${r.toFixed(2)}倍（+${((r - 1) * 100).toFixed(0)}%） <span class="muted">1位 ${esc(t.name || t.code)} ${fmtTurnover(t.cap, sec.market)}</span>` : '到達済み（1位）');
+      const t = topMarketCap(sec.market), f = capToTopFmt(sec.market, calc.capToTop(sec));
+      return kv('時価総額1位まで', calc.capToTop(sec) > 1 ? `${esc(f.label)}（${f.pct}） <span class="muted">1位 ${esc(t.name || t.code)} ${fmtTurnover(t.cap, sec.market)}</span>` : '到達済み（1位）');
     })()] : []),
     kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
@@ -10258,6 +10285,14 @@ function karteCardHtml(sec) {
     row('PBR / PSR', `${calc.pbr(sec) != null ? num(calc.pbr(sec)) : '—'} / ${calc.psr(sec) != null ? num(calc.psr(sec)) : '—'}`),
     row('配当/株 / 利回り', `${calc.field(sec, 'dividend') != null ? m(calc.field(sec, 'dividend')) : '—'} / ${calc.divYield(sec) != null ? calc.divYield(sec).toFixed(2) + '%' : '—'}`),
     row('時価総額', `${calc.marketCap(sec) != null ? fmtTurnover(calc.marketCap(sec) * 1e6, sec.market) : '—'}`),
+    // 市場の時価総額1位まで何倍か（1位＝その市場のトップ銘柄。未取得なら「—」）
+    (() => {
+      const r = calc.capToTop(sec), t = topMarketCap(sec.market), f = capToTopFmt(sec.market, r);
+      if (r == null) return row('時価総額1位まで', '—');
+      return row('時価総額1位まで', r > 1
+        ? `${esc(f.label)}（${f.pct}） <span class="muted">1位 ${esc(t.name || t.code)} ${fmtTurnover(t.cap, sec.market)}</span>`
+        : '到達済み（1位）');
+    })(),
     row('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
     // 会社概要（株探の「会社情報→概要」。銘柄マスタ meta.summary にキャッシュ済みのものを表示）
     companySummary(sec) ? `<div class="kt-summary" title="${esc(companySummary(sec))}">${esc(companySummary(sec))}</div>` : '',
