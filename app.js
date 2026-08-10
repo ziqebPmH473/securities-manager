@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260806-0352';
+const APP_VERSION = 'v20260806-0421';
 
 'use strict';
 
@@ -6795,7 +6795,17 @@ function bulkSetDetailType() {
   renderSecMaster();
   toast(`${ids.length}件の詳細種別を「${val || '自動判定'}」に変更しました`);
 }
-let secMasterSort = { key: 'ticker', dir: 1 };
+// 銘柄マスタの起動時ソート: 追加日の新しい順 → 更新日の新しい順 → コード昇順（2026-08-06 すみぽん指示）。
+// ヘッダをクリックすると従来どおりその列の単一キーソートへ切り替わる（キー '_default' は列に無いので矢印も出ない）。
+const SM_DEFAULT_SORT = '_default';
+let secMasterSort = { key: SM_DEFAULT_SORT, dir: 1 };
+function smDefaultCmp(a, b) {
+  const s = (v) => v == null ? '' : String(v);
+  if (s(a.createdAt) !== s(b.createdAt)) return s(a.createdAt) > s(b.createdAt) ? -1 : 1;   // 追加日 降順（未設定は末尾）
+  if (s(a.updatedAt) !== s(b.updatedAt)) return s(a.updatedAt) > s(b.updatedAt) ? -1 : 1;   // 更新日 降順
+  const ta = s(a.ticker).toUpperCase(), tb = s(b.ticker).toUpperCase();
+  return ta === tb ? 0 : (ta < tb ? -1 : 1);                                                // コード 昇順
+}
 let secMasterFilter = 'all'; // all | noprice | noholding | holding
 let secMasterMarket = 'ALL'; // ALL(=全株式 US+JP) | US | JP | FUND
 function setSecMasterMarket(m) { secMasterMarket = m; renderSecMaster(); }
@@ -6900,7 +6910,8 @@ function renderSecMaster() {
   const sk = secMasterSort.key, dir = secMasterSort.dir;
   const smHasPrice = (s) => { const p = store.data.prices[priceKey(s)]; return !!(p && p.price != null); };
   const smHasHolding = (s) => store.data.holdings.some(h => h.securityId === s.id && h.quantity > 0);
-  const allSecs = [...store.data.securities].sort((a, b) => { const va = sortValue(a, sk), vb = sortValue(b, sk); if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0; });
+  const allSecs = [...store.data.securities].sort(sk === SM_DEFAULT_SORT ? smDefaultCmp
+    : (a, b) => { const va = sortValue(a, sk), vb = sortValue(b, sk); if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0; });
   let secs = allSecs.filter(s => {
     if (secMasterFilter === 'noprice') return !smHasPrice(s);
     if (secMasterFilter === 'noholding') return !smHasHolding(s);
