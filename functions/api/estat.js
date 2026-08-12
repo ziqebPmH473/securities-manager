@@ -31,7 +31,11 @@ export async function onRequestGet(context) {
 async function opList(appId, url) {
   const q = (url.searchParams.get('q') || '').trim();
   if (!q) throw new Error('q パラメータが必要です');
-  const u = `${BASE}/getStatsList?appId=${encodeURIComponent(appId)}&searchWord=${encodeURIComponent(q)}&limit=40&statsNameList=Y`;
+  // ★statsNameList=Y を付けると「統計表」ではなく「統計名」の一覧が返る（TABLE_INF が空になる）。付けないこと。
+  const extra = (url.searchParams.get('gov') || '').trim();   // 政府機関コードで絞る（総務省=00200 等）
+  const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '40', 10) || 40));
+  let u = `${BASE}/getStatsList?appId=${encodeURIComponent(appId)}&searchWord=${encodeURIComponent(q)}&limit=${limit}`;
+  if (/^\d{5}$/.test(extra)) u += `&govOrg=${extra}`;
   const d = await getJson(u);
   const root = d && d.GET_STATS_LIST && d.GET_STATS_LIST.DATALIST_INF;
   const rows = toArray(root && root.TABLE_INF);
