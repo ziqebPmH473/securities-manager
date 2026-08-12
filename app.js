@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260806-0421';
+const APP_VERSION = 'v20260812-0803';
 
 'use strict';
 
@@ -1156,6 +1156,7 @@ const dsync = {
       // その日最初の同期で、上書き前のDrive内容を1世代バックアップ（最大5世代・best-effort）
       if (remoteRaw) await this.backupDailyOnce(remoteRaw);
       const local = dataBundle();
+      const localJson = JSON.stringify(local);  // Drive書込(await)中にローカルが変わったかの判定基準
       const base = JSON.parse(this._loadBaseRaw());
       const merged = SyncMerge.mergeBundle(base, local, remote);
       // マージの削除伝播で rules が空になると restore 時に rules[0].isDefault で落ちる。
@@ -1164,10 +1165,24 @@ const dsync = {
       const json = JSON.stringify(merged);                 // 変更前にシリアライズ
       await this._writeFile(folderId, file ? file.id : null, json);
       this._saveBaseRaw(json);
-      restoreBundle(merged);                               // ローカル反映（mergedは以後変更されてよい）
+      // Driveの読み書き（await）中にローカルが変わっていたら、その変更を merged に取り込んでから反映する。
+      // 以前は merged をそのまま restoreBundle していたため、同期の往復中に確定した変更が
+      // 「同期開始時点のスナップショット」で丸ごと巻き戻っていた（実害: ニュース「更新」で増えた記事が
+      //  少し経つと更新前の状態に戻る。取得に最大25秒かかるので自動同期(25秒間隔)と重なりやすい）。
+      // base=同期開始時のローカル / local=現在のローカル / remote=merged で3-wayすると、
+      // 「同期中に変わったキーだけ」現在の値が勝ち、他は merged のまま。
+      let apply = merged;
+      const curJson = this._snapshot();
+      if (curJson !== localJson) {
+        apply = SyncMerge.mergeBundle(local, JSON.parse(curJson), merged);
+        if (!Array.isArray(apply.rules) || apply.rules.length === 0) apply.rules = [structuredClone(DEFAULT_RULE)];
+      }
+      restoreBundle(apply);                                // ローカル反映（apply は以後変更されてよい）
       try { localStorage.setItem('sm_sync_at', new Date().toISOString()); } catch (_) {}
-      this._lastSnap = this._snapshot();
-      return merged;
+      // 同期中の変更はまだ Drive に載っていない → _lastSnap を「書き込んだ内容」にしておくと
+      // 次の自動同期で差分ありと判定され、取りこぼさず push される。
+      this._lastSnap = (apply === merged) ? this._snapshot() : json;
+      return apply;
     } finally { this._busy = false; }
   },
   // 変更があれば同期（自動・ポップアップは出さない）。トークン失効時はサイレント再取得を試み、
