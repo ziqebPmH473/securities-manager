@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260813-1642';
+const APP_VERSION = 'v20260813-1728';
 
 'use strict';
 
@@ -6177,6 +6177,22 @@ function macroDeltaCls(d, id) {
   if (!good) return '';
   return ((d > 0) === (good === 'up')) ? 'pos' : 'neg';
 }
+// 「同じマイナスなのに指標によって緑だったり赤だったりする」のが分かりにくい、というすみぽん指摘
+// （2026-08-13）への対応。色のルール（緑＝望ましい向き）は変えず、その向きを指標名の横に明示して
+// 色が反転する理由を読み取れるようにする。↓良＝下がるほど追い風 / ↑良＝上がるほど追い風。
+function macroGoodMark(id) {
+  const good = (MACRO_SERIES[id] || {}).good;
+  if (!good) return '';
+  const down = good === 'down';
+  return `<span class="macro-good" title="${down ? '下がる' : '上がる'}ほど景気・相場にとって追い風とされる指標。緑＝この向きに動いた、赤＝逆向き">${down ? '↓' : '↑'}良</span>`;
+}
+// 変化の数値に付けるツールチップ（なぜこの色なのかを言葉でも出す）
+function macroDeltaTitle(d, id) {
+  const def = MACRO_SERIES[id] || {};
+  if (d == null || !isFinite(d) || !def.good || d === 0) return '';
+  const tail = ((d > 0) === (def.good === 'up')) ? '追い風' : '向かい風';
+  return `${def.label}は${def.good === 'down' ? '下がる' : '上がる'}ほど追い風とされる指標。この変化は${tail}の向き`;
+}
 
 // ---- 描画 ----
 function renderMacro() {
@@ -6205,9 +6221,9 @@ function renderMacro() {
     const d = (last && prev) ? last[1] - prev[1] : null;
     const dec = (MACRO_SERIES[id] || {}).dec ?? 2;
     return `<div class="card macro-card ${c.key === cardKey ? 'sel' : ''}" onclick="setMacroCard('${c.key}')" title="${esc(c.note || '')}">
-      <div class="label">${esc(c.label)}</div>
+      <div class="label">${esc(c.label)}${macroGoodMark(id)}</div>
       <div class="value">${last ? macroFmt(last[1], id) : '—'}${macroUnit(id)}</div>
-      <div class="sub"><span class="${macroDeltaCls(d, id)}">${d == null ? '—' : (d > 0 ? '+' : '') + Number(d).toFixed(dec)}</span>
+      <div class="sub"><span class="${macroDeltaCls(d, id)}" title="${esc(macroDeltaTitle(d, id))}">${d == null ? '—' : (d > 0 ? '+' : '') + Number(d).toFixed(dec)}</span>
         <span class="muted">前回比 ・ ${last ? esc(last[0]) : '—'}</span></div>
     </div>`;
   }).join('');
@@ -6223,7 +6239,7 @@ function renderMacro() {
     const dy = (last && y1) ? last[1] - y1[1] : null;
     const freq = ((store.data.macro || {})[id] || {}).freq || '';
     return `<tr>
-      <td class="l">${esc(def.label)}<span class="muted" style="font-size:11px"> ${esc(def.unit || '')}</span></td>
+      <td class="l">${esc(def.label)}<span class="muted" style="font-size:11px"> ${esc(def.unit || '')}</span>${macroGoodMark(id)}</td>
       <td class="c muted" style="font-size:11px">${esc(freq)}</td>
       <td class="r"><b>${macroFmt(last && last[1], id)}</b></td>
       <td class="c muted" style="font-size:11px">${last ? esc(last[0]) : '—'}</td>
@@ -6231,7 +6247,7 @@ function renderMacro() {
       <td class="r">${macroFmt(at(2), id)}</td>
       <td class="r">${macroFmt(at(3), id)}</td>
       <td class="r">${macroFmt(y1 && y1[1], id)}</td>
-      <td class="r ${macroDeltaCls(dy, id)}">${dy == null ? '—' : (dy > 0 ? '+' : '') + Number(dy).toFixed(def.dec ?? 2)}</td>
+      <td class="r ${macroDeltaCls(dy, id)}" title="${esc(macroDeltaTitle(dy, id))}">${dy == null ? '—' : (dy > 0 ? '+' : '') + Number(dy).toFixed(def.dec ?? 2)}</td>
     </tr>`;
   }).join('');
 
@@ -6253,7 +6269,9 @@ function renderMacro() {
             <th class="r">1期前</th><th class="r">2期前</th><th class="r">3期前</th><th class="r">1年前</th><th class="r">1年差</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
-        <div class="muted" style="font-size:11px;margin-top:8px">${MACRO_SRC_NOTE}</div>
+        <div class="muted" style="font-size:11px;margin-top:6px" title="変化の色は符号ではなく指標ごとの向きで付けています。例: CPI −0.2 はインフレ鈍化なので緑、失業率 −0.2 も雇用改善なので緑。逆に 非農業雇用 −87 は雇用の減速なので赤。数字の符号は増減そのものです。">
+          色: <span class="pos">緑</span>＝望ましい向きに動いた／<span class="neg">赤</span>＝逆向き（<span class="macro-good">↓良</span>下がるほど追い風・<span class="macro-good">↑良</span>上がるほど追い風）。符号は増減そのもの。　${MACRO_SRC_NOTE}
+        </div>
       </div>
     </div>`;
   renderMacroChart();

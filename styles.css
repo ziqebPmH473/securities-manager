@@ -1236,3 +1236,7 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .macro-card.sel { border-color: var(--navy); box-shadow: 0 0 0 1px var(--navy) inset; }
 .macro-card .value { font-size: 19px; margin-top: 2px; }
 .macro-card .sub { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+
+/* マクロ指標: 「望ましい向き」の印（↓良/↑良）。変化の色が指標ごとに反転する理由を読み取れるようにする */
+.macro-good { display: inline-block; margin-left: 5px; padding: 0 4px; border: 1px solid var(--hair); border-radius: 4px;
+  font-size: 10px; font-weight: 600; color: var(--muted); background: var(--panel-2); vertical-align: 1px; white-space: nowrap; cursor: help; }
