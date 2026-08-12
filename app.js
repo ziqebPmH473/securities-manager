@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260813-1912';
+const APP_VERSION = 'v20260813-2216';
 
 'use strict';
 
@@ -6030,8 +6030,19 @@ const MACRO_SERIES = {
   BAMLH0A0HYM2:    { label: 'ハイイールド・スプレッド', tf: 'raw',  unit: '%pt', dec: 2, good: 'down' },
   NFCI:            { label: '金融環境指数(シカゴ連銀)', tf: 'raw',  unit: '',    dec: 2, good: 'down' },
   VIXCLS:          { label: 'VIX',                      tf: 'raw',  unit: '',    dec: 1, good: 'down' },
-  // 日本（FRED経由）。★日本のCPI・鉱工業生産はFRED（OECD配信）が2021〜2024年で更新停止しているため
-  // ここには入れず、e-Stat（政府統計API）から取る（22.10 参照）。以下は現行で更新が続いている系列のみ。
+  // 日本CPI（src:'estat'）。FRED（OECD配信）の日本CPIは全系列が2021-06で更新停止しているため、
+  // e-Stat の「消費者物価指数（2025年基準）」statsDataId=0004052037 から直接取る。
+  // cdTab=3 が「前年同月比(%)」なので、こちらで前年比を計算する必要はない（tf:'raw'）。
+  // cdCat01 は品目コード（本番の getMetaInfo で実物を確認済み）: 0001総合 / 0161生鮮食品を除く総合 /
+  // 0178生鮮食品及びエネルギーを除く総合。cdArea=00000 が全国。
+  JP_CPI:      { label: '日本CPI 総合',     tf: 'raw', unit: '%', dec: 1, good: 'down', src: 'estat',
+                 estat: { id: '0004052037', cdTab: '3', cdCat01: '0001', cdArea: '00000' } },
+  JP_CPI_CORE: { label: '日本CPI コア',     tf: 'raw', unit: '%', dec: 1, good: 'down', src: 'estat',
+                 estat: { id: '0004052037', cdTab: '3', cdCat01: '0161', cdArea: '00000' } },
+  JP_CPI_CC:   { label: '日本CPI コアコア', tf: 'raw', unit: '%', dec: 1, good: 'down', src: 'estat',
+                 estat: { id: '0004052037', cdTab: '3', cdCat01: '0178', cdArea: '00000' } },
+  // 日本（FRED経由）。★鉱工業生産はFRED（OECD配信）が2024-03で更新停止。e-Statの現行基準の表も
+  // 検索で出てこなかったため未搭載（22.10 参照）。以下は現行で更新が続いている系列のみ。
   IRLTLT01JPM156N: { label: '日本10年国債',           tf: 'raw', unit: '%', dec: 2, good: 'down' },
   IRSTCI01JPM156N: { label: '日本 短期金利(コール)',  tf: 'raw', unit: '%', dec: 2, good: 'down' },
   LRHUTTTTJPM156S: { label: '日本 失業率',            tf: 'raw', unit: '%', dec: 1, good: 'down' },
@@ -6079,6 +6090,8 @@ const MACRO_GROUPS = [
     { key: 'vix',  label: 'VIX',                     ids: ['VIXCLS'],        note: '株式市場の変動率の織り込み' },
   ] },
   { key: 'jp', label: '日本', cards: [
+    { key: 'jpcpi',  label: '日本CPI（総合・コア）',   ids: ['JP_CPI', 'JP_CPI_CORE'], note: '前年同月比。日銀の物価目標は2%' },
+    { key: 'jpcpicc', label: '日本CPI コアコア',       ids: ['JP_CPI_CC'], note: '生鮮食品及びエネルギーを除く総合・前年同月比。基調的な物価' },
     { key: 'jprate', label: '日本の金利（10年・短期）', ids: ['IRLTLT01JPM156N', 'IRSTCI01JPM156N'], note: '長期＝10年国債・短期＝無担保コールレート（日銀の政策金利の実勢）' },
     { key: 'jpjob',  label: '日本 失業率',             ids: ['LRHUTTTTJPM156S'], note: '' },
     { key: 'jpgdp',  label: '日本 実質GDP（前年比）',  ids: ['JPNRGDPEXP'],      note: '四半期' },
@@ -6088,21 +6101,29 @@ const MACRO_GROUPS = [
   // norm:true＝重ね合わせを選んでいなくても常に起点=100で指数化するカード。
   // 桁の違う系列を同じ軸に並べると小さい方が潰れて読めないため（日経66,970とドル円159を実数で重ねると
   // ドル円が横一線になる）。単独系列（ドル円）は実数のままで良い。
+  // right: その系列を右軸に置く（桁が違う組み合わせを実値のまま両方読めるようにする）。
+  // 例: 日経平均 66,970 と TOPIX連動ETF 431 を同じ軸に置くと ETF が横一線になる。
   { key: 'idx', label: '指数・為替', cards: [
-    { key: 'us',  label: '米国株指数',   ids: ['^GSPC', '^NDX'],   norm: true, note: 'S&P500 と NASDAQ100' },
-    { key: 'jp',  label: '日本株指数',   ids: ['^N225', '1306.T'], norm: true, note: '日経平均と TOPIX（連動ETF）' },
-    { key: 'fx',  label: 'ドル円',       ids: ['USDJPY=X'],        note: '' },
-    { key: 'all', label: '主要指数まとめ', ids: ['^GSPC', '^N225', 'USDJPY=X'], norm: true, note: '桁が違うので起点=100 に指数化して形を比べる' },
+    { key: 'us',    label: '米国株指数',        ids: ['^GSPC', '^NDX'],    right: ['^NDX'],      note: 'S&P500（左）と NASDAQ100（右）' },
+    { key: 'jp',    label: '日本株指数',        ids: ['^N225', '1306.T'],  right: ['1306.T'],    note: '日経平均（左）と TOPIX連動ETF（右）' },
+    { key: 'fx',    label: 'ドル円',            ids: ['USDJPY=X'],         note: '' },
+    { key: 'nkfx',  label: '日経平均 × ドル円', ids: ['^N225', 'USDJPY=X'], right: ['USDJPY=X'], note: '日経平均（左）とドル円（右）' },
   ] },
 ];
-// 重ね合わせ比較で選べる指数・為替（Yahoo）。MACRO_SERIES に src:'idx' として登録済みのものだけ。
-const MACRO_OVERLAY = ['^GSPC', '^NDX', '^N225', '1306.T', 'USDJPY=X'];
+// 「比較」で重ねられる指数・為替（Yahoo）。MACRO_SERIES に src:'idx' として登録済みのものだけ。
+const MACRO_COMPARE = ['^GSPC', '^NDX', '^N225', '1306.T', 'USDJPY=X'];
 const MACRO_PERIODS = [['1y', '1年'], ['3y', '3年'], ['5y', '5年'], ['10y', '10年'], ['all', '全期間']];
 const MACRO_COLORS = ['#2563eb', '#dc2626', '#0d9488', '#7c3aed', '#ca8a04'];
-const MACRO_SRC_NOTE = '出典: FRED®（セントルイス連邦準備銀行）';
+// 出典表記は取得元ごとに必要（FREDもe-Statも出典明示が利用条件）。画面に出ている系列の取得元だけ並べる。
+const MACRO_SRC_LABEL = { fred: 'FRED®（セントルイス連邦準備銀行）', estat: 'e-Stat（政府統計の総合窓口）', idx: 'Yahoo Finance' };
+function macroSrcNote(ids) {
+  const srcs = [...new Set((ids || []).map(id => (MACRO_SERIES[id] || {}).src || 'fred'))];
+  const labels = srcs.map(s => MACRO_SRC_LABEL[s]).filter(Boolean);
+  return '出典: ' + (labels.length ? labels.join(' / ') : MACRO_SRC_LABEL.fred);
+}
 let macroBusy = false;
 let _macroTried = false;  // このセッションで自動取得を試したか（失敗時の無限リトライ防止）
-let _macroNorm = null;    // 直近の描画が指数化モードだったか {on, skipped:[除外した系列名]}
+let _macroNorm = null;    // 直近の描画の状態 {dual:2軸か, cmp:比較の選択数}
 
 // 表示状態（グループ/カード/期間）は端末をまたいで揃えたいので settings に置く（ルール7）
 function macroGroupKey() { const k = (store.data.settings || {}).macroGroup; return MACRO_GROUPS.some(g => g.key === k) ? k : 'infl'; }
@@ -6110,10 +6131,14 @@ function macroGroupDef() { return MACRO_GROUPS.find(g => g.key === macroGroupKey
 function macroCardKey() { const g = macroGroupDef(); const k = ((store.data.settings || {}).macroCard || {})[g.key]; return g.cards.some(c => c.key === k) ? k : g.cards[0].key; }
 function macroCardDef() { const g = macroGroupDef(); return g.cards.find(c => c.key === macroCardKey()) || g.cards[0]; }
 function macroPeriod() { const p = (store.data.settings || {}).macroPeriod; return MACRO_PERIODS.some(x => x[0] === p) ? p : '5y'; }
-// 重ね合わせる指数（複数可）。選択中は1つでもあればグラフを起点=100の指数化モードにする。
-function macroOverlay() {
-  const a = (store.data.settings || {}).macroOverlay;
-  return Array.isArray(a) ? a.filter(s => MACRO_OVERLAY.includes(s)) : [];
+// 比較で重ねる指数（複数可）。★指標（カード）ごとに別々に保持する。
+// 「CPIには日経を重ねたいが、VIXには重ねたくない」のように、見たい組み合わせは指標ごとに違うため
+// （2026-08-13 すみぽん指示）。キーは グループ/カード。
+function macroCompareKey() { return macroGroupKey() + '/' + macroCardKey(); }
+function macroCompare() {
+  const m = (store.data.settings || {}).macroCompare;
+  const a = (m && typeof m === 'object') ? m[macroCompareKey()] : null;
+  return Array.isArray(a) ? a.filter(s => MACRO_COMPARE.includes(s)) : [];
 }
 function macroSaveSetting(patch) {
   store.data.settings ||= {};
@@ -6129,13 +6154,14 @@ function setMacroCard(k) {
   renderMacro();
 }
 function setMacroPeriod(p) { macroSaveSetting({ macroPeriod: p }); renderMacro(); }
-function toggleMacroOverlay(sym) {
-  const cur = macroOverlay();
+function toggleMacroCompare(sym) {
+  const cur = macroCompare();
   const next = cur.includes(sym) ? cur.filter(s => s !== sym) : cur.concat(sym);
-  macroSaveSetting({ macroOverlay: next });
+  const m = Object.assign({}, (store.data.settings || {}).macroCompare || {});
+  if (next.length) m[macroCompareKey()] = next; else delete m[macroCompareKey()];
+  macroSaveSetting({ macroCompare: m });
   renderMacro();
 }
-function clearMacroOverlay() { macroSaveSetting({ macroOverlay: [] }); renderMacro(); }
 
 // ---- 取得 ----
 // FRED系列は /api/macro（12件ずつ）、指数・為替は /api/history（1銘柄1回）から取得する。
@@ -6144,8 +6170,10 @@ async function macroRefresh() {
   if (macroBusy) return;
   macroBusy = true;
   if (currentView === 'macro') renderMacro();
-  const fredIds = Object.keys(MACRO_SERIES).filter(id => MACRO_SERIES[id].src !== 'idx');
-  const idxIds = Object.keys(MACRO_SERIES).filter(id => MACRO_SERIES[id].src === 'idx');
+  const srcOf = (id) => MACRO_SERIES[id].src || 'fred';
+  const fredIds = Object.keys(MACRO_SERIES).filter(id => srcOf(id) === 'fred');
+  const idxIds = Object.keys(MACRO_SERIES).filter(id => srcOf(id) === 'idx');
+  const estatIds = Object.keys(MACRO_SERIES).filter(id => srcOf(id) === 'estat');
   const batches = [];
   for (let i = 0; i < fredIds.length; i += 12) batches.push(fredIds.slice(i, i + 12));
   let ok = 0, ng = 0, err = null;
@@ -6163,10 +6191,13 @@ async function macroRefresh() {
       }
     }
   } catch (e) { err = e; ng += fredIds.length - ok; }
-  // 指数・為替は別APIなので、FREDが失敗しても・こちらが失敗しても互いを巻き込まない
-  const idxRes = await Promise.all(idxIds.map(sym => macroFetchIndex(sym).then(() => true).catch(() => false)));
-  ok += idxRes.filter(Boolean).length;
-  ng += idxRes.filter(v => !v).length;
+  // 指数・為替(Yahoo)と日本CPI(e-Stat)は別APIなので、FREDが失敗しても互いを巻き込まない
+  const others = await Promise.all([
+    ...idxIds.map(sym => macroFetchIndex(sym).then(() => true).catch(() => false)),
+    ...estatIds.map(id => macroFetchEstat(id).then(() => true).catch(() => false)),
+  ]);
+  ok += others.filter(Boolean).length;
+  ng += others.filter(v => !v).length;
   // 1件でも取れたらその日の自動取得は済み扱い（全滅した日は翌回のタブ表示でまた試す）
   if (ok) macroSaveSetting({ lastMacroDate: todayJst() });
   else store.save();
@@ -6190,6 +6221,19 @@ async function macroFetchIndex(sym) {
   if (!obs.length) throw new Error('データなし (' + sym + ')');
   store.data.macroIdx ||= {};
   store.data.macroIdx[sym] = { obs: macroThin(obs), freq: '日次', at: new Date().toISOString() };
+}
+// 日本CPI1系列を e-Stat（/api/estat）から取得。返る形は /api/macro と同じなのでそのまま store.data.macro へ。
+async function macroFetchEstat(id) {
+  const q = (MACRO_SERIES[id] || {}).estat;
+  if (!q) throw new Error('e-Stat の取得条件が未定義 (' + id + ')');
+  const p = new URLSearchParams({ op: 'data', id: q.id });
+  for (const [k, v] of Object.entries(q)) if (k !== 'id') p.set(k, v);
+  const res = await fetch('/api/estat?' + p.toString());
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok || d.error) throw new Error(d.error || ('HTTP ' + res.status));
+  if (!Array.isArray(d.obs) || !d.obs.length) throw new Error('データなし (' + id + ')');
+  store.data.macro ||= {};
+  store.data.macro[id] = { obs: d.obs, freq: d.freq || '', at: new Date().toISOString() };
 }
 // 直近200点はそのまま残し、それ以前を等間隔に間引いて全体を320点以内にする（functions/api/macro.js と同じ規則）
 function macroThin(obs) {
@@ -6237,6 +6281,25 @@ function macroAtBefore(pts, date, days, tol) {
     if (Date.parse(pts[i][0]) < target - tol * 86400000) break;
   }
   return (best && bestDiff <= tol * 86400000) ? best : null;
+}
+// 2系列の相関係数（ピアソン）。頻度が違う（CPI=月次 / 日経=日次）ので、点の少ない方の各日付に対して
+// 「その日以前で最も新しい相手の値」を当てて対にする。共通期間に10点以上ある時だけ返す。
+function macroCorr(a, b) {
+  const base = a.length <= b.length ? a : b, other = a.length <= b.length ? b : a;
+  const xs = [], ys = [];
+  let j = 0;
+  for (const [d, v] of base) {
+    while (j + 1 < other.length && other[j + 1][0] <= d) j++;
+    if (other[j][0] > d) continue;   // 相手のデータが始まる前
+    xs.push(v); ys.push(other[j][1]);
+  }
+  const n = xs.length;
+  if (n < 10) return null;
+  const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+  if (sxx <= 0 || syy <= 0) return null;
+  return sxy / Math.sqrt(sxx * syy);
 }
 function macroCut(pts, period) {
   if (period === 'all' || !pts.length) return pts;
@@ -6299,12 +6362,11 @@ function renderMacro() {
 
   const groupSeg = `<div class="seg">${MACRO_GROUPS.map(x => `<button class="${x.key === g.key ? 'active' : ''}" onclick="setMacroGroup('${x.key}')">${esc(x.label)}</button>`).join('')}</div>`;
   const periodSeg = `<div class="seg">${MACRO_PERIODS.map(([v, l]) => `<button class="${period === v ? 'active' : ''}" onclick="setMacroPeriod('${v}')">${l}</button>`).join('')}</div>`;
-  // 重ね合わせ比較。選択中の指数はいまのグラフに重ねる（複数可）。桁が違うので選択中は起点=100の指数化モードになる
-  const ov = macroOverlay();
-  const ovSeg = `<div class="seg seg-toggle" style="flex-basis:100%;flex-wrap:wrap">
-    <span class="muted" style="align-self:center;font-size:11px;margin-right:2px" title="選んだ指数を今のグラフに重ねます。単位が違うので、1つでも選ぶと全系列を起点=100に指数化して形を比べます">重ねる:</span>
-    ${MACRO_OVERLAY.map(s => `<button class="${ov.includes(s) ? 'active' : ''}" onclick="toggleMacroOverlay('${jsq(s)}')">${esc((MACRO_SERIES[s] || {}).label || s)}</button>`).join('')}
-    ${ov.length ? `<button onclick="clearMacroOverlay()" title="重ね合わせを解除して実数表示に戻す">解除</button>` : ''}</div>`;
+  // 比較（ニュースの開示トグルと同じ見た目）。選択は指標（カード）ごとに保持される
+  const cmp = macroCompare();
+  const cmpSeg = `<div class="seg seg-toggle" style="flex-basis:100%;flex-wrap:wrap">
+    <span class="muted" style="align-self:center;font-size:11px;margin-right:2px" title="選んだ指数を今のグラフに重ねます。選択は指標ごとに保存されます。比較中は各系列を自分の値域で0〜100に正規化し、動きの形とタイミングを比べます">比較:</span>
+    ${MACRO_COMPARE.map(s => `<button class="${cmp.includes(s) ? 'active' : ''}" onclick="toggleMacroCompare('${jsq(s)}')">${esc((MACRO_SERIES[s] || {}).label || s)}</button>`).join('')}</div>`;
 
   // カード（クリックでグラフの対象を切替）。見出し数値＝ids[0] の最新値、下段に前回比と観測日
   const cardsHtml = g.cards.map(c => {
@@ -6353,12 +6415,12 @@ function renderMacro() {
           <span class="muted" style="font-size:11px">${fetchedAt ? '取得：' + mktFetchedAt(fetchedAt) : ''}</span>
           <button class="btn btn-sm btn-primary" onclick="macroRefresh()" ${macroBusy ? 'disabled' : ''}>${macroBusy ? '取得中…' : '更新'}</button>
         </div></div>
-      <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${groupSeg}${periodSeg}${ovSeg}</div>
+      <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${groupSeg}${periodSeg}${cmpSeg}</div>
       <div class="section-body" style="padding:12px 16px 16px">
         <div class="cards macro-cards">${cardsHtml}</div>
         <div id="macro-chart"></div>
-        <div class="muted" style="font-size:11px;margin:6px 2px 0" id="macro-chart-note">${(ov.length || card.norm)
-          ? `<b>起点=100 に指数化</b>して形を比べています（凡例の数値は実数の最新値、右は起点比）。${ov.length ? '' : esc(card.note || '')}`
+        <div class="muted" style="font-size:11px;margin:6px 2px 0" id="macro-chart-note">${cmp.length
+          ? `<b>比較中</b>: 指標は<b>左軸（実線）</b>、比較の指数は<b>右軸（破線）</b>で実際の値のまま重ねています。凡例の <b>r</b> は基準系列との相関係数。${cmp.length >= 2 ? '<span class="neg">指数を2つ以上選ぶと右軸は「起点=100」の指数表示に切り替わります（実値のままだと片方が潰れて読めないため。実値は凡例とカーソルで確認できます）。</span>' : ''}`
           : esc(card.note || '')}</div>
         <div class="table-wrap macro-managed" style="margin-top:12px"><table class="list">
           <thead><tr><th class="l">指標</th><th class="c">頻度</th><th class="r">最新</th><th class="c">観測日</th>
@@ -6366,7 +6428,7 @@ function renderMacro() {
           <tbody>${rows}</tbody>
         </table></div>
         <div class="muted" style="font-size:11px;margin-top:6px" title="変化の色は符号ではなく指標ごとの向きで付けています。例: CPI −0.2 はインフレ鈍化なので緑、失業率 −0.2 も雇用改善なので緑。逆に 非農業雇用 −87 は雇用の減速なので赤。数字の符号は増減そのものです。">
-          色: <span class="pos">緑</span>＝望ましい向きに動いた／<span class="neg">赤</span>＝逆向き（<span class="macro-good">↓良</span>下がるほど追い風・<span class="macro-good">↑良</span>上がるほど追い風）。符号は増減そのもの。　${MACRO_SRC_NOTE}
+          色: <span class="pos">緑</span>＝望ましい向きに動いた／<span class="neg">赤</span>＝逆向き（<span class="macro-good">↓良</span>下がるほど追い風・<span class="macro-good">↑良</span>上がるほど追い風）。符号は増減そのもの。　${macroSrcNote(ids)}
         </div>
       </div>
     </div>`;
@@ -6374,33 +6436,39 @@ function renderMacro() {
   scheduleFit();
 }
 
-// グラフ本体。カードの ids ＋「重ねる」で選んだ指数を折れ線で描く。
-// 重ね合わせが1つでもあると単位が混ざる（例: CPI 3.3% と 日経 67,500）ので、
-// **全系列を期間の起点=100 に指数化**して形だけを比べるモードに切り替える。
+// グラフ本体。カードの ids ＋「比較」で選んだ指数を折れ線で描く。
+//
+// ★2軸（左=指標の実値 / 右=指数の実値）にした理由（2026-08-13 すみぽん指示）:
+//   最初は「起点=100の指数化」、次に「各系列を0〜100に正規化」を試したが、
+//   前者は日経が+138%動く隣でCPI（1〜3%）が横一線になって見えず、
+//   後者は形は比べられても**元の指標の実値がグラフから読めなくなる**。
+//   比較で見たいのは「指数が暴落・回復したタイミングで指標がどう動いたか／相関があるか」なので、
+//   実値を保ったまま両方の振れが見える2軸にする。
+//   右軸に回すのは「比較で追加した指数」＋カードが right で指定した系列
+//   （日経66,970とTOPIX連動ETF431のように、同じ軸に置くと片方が潰れる組み合わせ）。
 function renderMacroChart() {
   const el = document.getElementById('macro-chart'); if (!el) return;
+  // ★データなしで抜ける経路でも収まり調整（macroFitTable）を通すこと。
+  //   通さないと表が縮まず、未取得の指標グループを開いた時にページがスクロールする（実測185px）。
+  const bail = (msg) => { el.style.height = ''; el.innerHTML = `<div class="notice" style="margin:0">${msg}</div>`; macroFitTable(el); };
   const card = macroCardDef(), period = macroPeriod();
-  const ov = macroOverlay();
-  const ids = card.ids.concat(ov.filter(s => !card.ids.includes(s)));
-  const norm = ov.length > 0 || !!card.norm;
-  let series = ids.map((id, i) => ({
+  const cmp = macroCompare();
+  const ids = card.ids.concat(cmp.filter(s => !card.ids.includes(s)));
+  const rightSet = new Set((card.right || []).concat(cmp));
+  const series = ids.map((id, i) => ({
     id, label: (MACRO_SERIES[id] || {}).label || id, color: MACRO_COLORS[i % MACRO_COLORS.length],
+    axis: rightSet.has(id) ? 'r' : 'l',
     pts: macroCut(macroPoints(id), period),
   })).filter(s => s.pts.length >= 2);
-  if (!series.length) { el.innerHTML = `<div class="notice" style="margin:0">この指標のデータがまだありません。「更新」で取得してください。</div>`; return; }
-  if (norm) {
-    // 指数化。起点は「その系列の期間内の最初の値」。0や負を含む系列（前年比・SLOOS等）は
-    // 割り算すると意味が壊れるので指数化せず、重ね合わせの対象から外して注記する。
-    series = series.map(s => {
-      const base = s.pts[0][1];
-      if (!(base > 0)) return Object.assign({}, s, { skip: true });
-      return Object.assign({}, s, { raw: s.pts, pts: s.pts.map(p => [p[0], p[1] / base * 100]) });
-    });
+  if (!series.length) { bail('この指標のデータがまだありません。「更新」で取得してください。'); return; }
+  // 左軸の系列が全部未取得だった時は、右軸の系列を左へ寄せて1軸で描く（右軸だけのグラフにしない）
+  if (!series.some(s => s.axis === 'l')) series.forEach(s => { s.axis = 'l'; });
+  // 比較中は主系列（カードの1本目）との相関係数を出す。「相関があるか見たい」への直接の答え
+  if (cmp.length && series.length >= 2) {
+    const base = series[0];
+    series.forEach((s, i) => { if (i > 0) s.corr = macroCorr(base.pts, s.pts); }); // 指数化は線形変換なので相関係数は変わらない
   }
-  const skipped = series.filter(s => s.skip);
-  series = series.filter(s => !s.skip);
-  if (!series.length) { el.innerHTML = `<div class="notice" style="margin:0">この指標は0や負の値を含むため、起点=100の指数化ができません。「解除」で実数表示に戻してください。</div>`; return; }
-  _macroNorm = { on: norm, skipped: skipped.map(s => s.label) };
+  _macroNorm = { dual: series.some(s => s.axis === 'r') && series.some(s => s.axis === 'l'), cmp: cmp.length };
   // 高さは「暫定で描く→実レイアウトを測って描き直す」で決める。初回は表(.table-wrap)がまだ
   // 高さ0で測れることがあり、一発計算だと必ず大きすぎる値になるため（実測で 338px vs 正解 182px）。
   // 2〜3回で収束する。
@@ -6416,11 +6484,7 @@ function renderMacroChart() {
     el.innerHTML = macroLineChart(series, w, h);
   }
   attachMacroHover(el, series);
-  // 0や負を含んで指数化できず外した系列があれば注記に足す（黙って消すと「消えた」と誤解されるため）
-  const note = document.getElementById('macro-chart-note');
-  if (note && skipped.length) {
-    note.innerHTML += ` <span class="neg">${esc(skipped.join('・'))} は0や負の値を含むため指数化できず、重ね合わせから外しています。</span>`;
-  }
+  // 2軸は実値のまま重ねるだけなので、系列を除外することは無い（正規化方式のときに必要だった注記は廃止）
   macroFitTable(el);
 }
 // グラフを最小高さまで縮めてもまだ収まらない時は、**表を枠内スクロール**にして残りを吸収する（ルール6）。
@@ -6436,7 +6500,7 @@ function macroFitTable(el) {
   const overflow = cont.scrollHeight - cont.clientHeight;
   if (overflow <= 1) return;
   const h = wrap.getBoundingClientRect().height;
-  wrap.style.maxHeight = Math.max(110, Math.round(h - overflow)) + 'px';
+  wrap.style.maxHeight = Math.max(88, Math.round(h - overflow)) + 'px';
 }
 // 今のレイアウトから「グラフに使ってよい高さ」を実測で求める。
 // 収まり判定は main.content 基準（ルール6。document 基準は body:overflow:hidden で常に0になり誤判定する）。
@@ -6457,35 +6521,97 @@ function macroChartFitH(el) {
   }
   // 下限150px: ツールバー3段（グループ/期間/重ねる）＋カード2段＋7行の表が重なる「景気・雇用」では
   // 180pxだと収まらない。ここで足りない分は macroFitTable が表を枠内スクロールにして吸収する。
-  return Math.max(150, Math.min(560, Math.round(limit - r.top - below - 4)));
+  return Math.max(140, Math.min(560, Math.round(limit - r.top - below - 4)));
 }
 function macroLineChart(series, W, H) {
   W = W || 800; H = H || 280;
-  const pad = { l: 54, r: 12, t: 10, b: 20 };
-  const all = series.flatMap(s => s.pts);
-  const xs = all.map(p => Date.parse(p[0]) / 1000);
+  const L = series.filter(s => s.axis === 'l'), R = series.filter(s => s.axis === 'r');
+  const dual = L.length > 0 && R.length > 0;
+  const pad = { l: 54, r: dual ? 54 : 12, t: 10, b: 20 };
+  const xs = series.flatMap(s => s.pts).map(p => Date.parse(p[0]) / 1000);
   const xmin = Math.min(...xs), xmax = Math.max(...xs);
-  let vmin = Math.min(...all.map(p => p[1])), vmax = Math.max(...all.map(p => p[1]));
-  if (vmin === vmax) { vmin -= 1; vmax += 1; }
-  const stepY = niceStep(vmax - vmin, 5);
-  let ylo = Math.floor(vmin / stepY) * stepY, yhi = Math.ceil(vmax / stepY) * stepY;
-  if (ylo === yhi) yhi = ylo + stepY;
-  const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
-  const py = v => pad.t + (1 - (v - ylo) / (yhi - ylo)) * (H - pad.t - pad.b);
-  // 指数化モードでは軸は「起点=100」の共通スケールなので、系列固有の小数桁ではなく1桁で揃える
-  const normOn = !!(_macroNorm && _macroNorm.on);
-  const dec = normOn ? 1 : ((MACRO_SERIES[series[0].id] || {}).dec ?? 2);
-  const ylab0 = (v) => Math.abs(v) >= 10000 ? Math.round(v).toLocaleString('ja-JP') : Number(v).toFixed(dec);
 
-  let grid = '', ylab = '';
-  for (let v = ylo; v <= yhi + stepY * 1e-6; v += stepY) {
-    const y = py(v).toFixed(1);
+  // 軸ごとに独立したスケールを作る。左右で目盛り本数を揃えると横線が1組で済む。
+  // ★目盛り幅は「データの範囲に収まる最小の切りのいい値」を探すこと。単純に niceStep 一発だと
+  //   刻みが粗くなりすぎ、日経(1.4万〜6.7万)が 0〜100,000 の軸に描かれて振れが半分に潰れた（実測span44%）。
+  const TICKS = 6;
+  // 目盛り幅の候補（小さい順）。1/2/2.5/5 × 10^n。共有の niceStep より刻みが細かく、軸をデータに詰められる。
+  const stepCands = (range) => {
+    const out = [], m0 = Math.floor(Math.log10(Math.max(range, 1e-9))) - 3;
+    for (let m = m0; m <= m0 + 6; m++) for (const f of [1, 2, 2.5, 5]) out.push(f * Math.pow(10, m));
+    return out.sort((a, b) => a - b);
+  };
+  const boundsOf = (list) => {
+    const vs = list.flatMap(s => s.pts).map(p => p[1]);
+    let lo = Math.min(...vs), hi = Math.max(...vs);
+    if (lo === hi) { lo -= 1; hi += 1; }
+    return [lo, hi];
+  };
+  // 目盛り本数を targetN ちょうどにしつつ、軸をデータへ最も詰める（＝最小の刻みを選ぶ）。
+  // ★左右で本数を揃える必要があるが、粗い方の軸を上に伸ばして合わせると軸が大きく余る
+  //   （実測: ドル円100〜162に対し軸100〜240、振れが画面の35%まで潰れた）。
+  //   伸ばすのではなく「本数が targetN に収まる最小の刻み」を選び直すこと。
+  const scaleTo = (list, targetN) => {
+    const [lo0, hi0] = boundsOf(list);
+    for (const step of stepCands(hi0 - lo0)) {
+      const lo = Math.floor(lo0 / step) * step;
+      const n = Math.round((Math.ceil(hi0 / step) * step - lo) / step);
+      if (n >= 1 && n <= targetN) return { lo, hi: lo + step * targetN, step, n: targetN };
+    }
+    const step = (hi0 - lo0) / targetN || 1;
+    return { lo: lo0, hi: lo0 + step * targetN, step, n: targetN };
+  };
+  // 自然な本数を先に求め、左右の多い方に合わせる
+  const naturalN = (list) => {
+    const [lo0, hi0] = boundsOf(list);
+    const step = niceStep(hi0 - lo0, TICKS);
+    return Math.max(1, Math.round((Math.ceil(hi0 / step) * step - Math.floor(lo0 / step) * step) / step));
+  };
+
+  // 右軸に2系列以上ある時（例: 日経 66,970 と S&P500 7,752）は、実値のままだと片方が潰れて
+  // 読めない（実測span4%）。指数どうしは「起点=100」で比べるのが標準的なので、右軸だけ指数化する。
+  // 左軸＝指標は実値のままなので、「元の指標の値が読めない」問題は起きない。
+  // ★この関数は収まり調整で同じ series を使って最大4回呼ばれる。s.raw が既にあるなら変換済みなので
+  //   絶対に再変換しないこと（2回目以降で指数値をさらに指数化し、凡例の「実値」が壊れる。実測で
+  //   日経の実値が 66,970 ではなく 396 と表示された）。
+  const rIndexed = R.length >= 2;
+  if (rIndexed) R.forEach(s => {
+    if (s.raw) return;
+    const base = s.pts.find(p => p[1] > 0);
+    if (!base) return;
+    s.raw = s.pts;
+    s.pts = s.pts.map(p => [p[0], p[1] / base[1] * 100]);
+  });
+
+  const Lp = L.length ? L : series;
+  const targetN = R.length ? Math.max(naturalN(Lp), naturalN(R)) : naturalN(Lp);
+  const sl = scaleTo(Lp, targetN);
+  const sr = R.length ? scaleTo(R, targetN) : null;
+
+  const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
+  const pyOn = (sc) => (v) => pad.t + (1 - (v - sc.lo) / (sc.hi - sc.lo)) * (H - pad.t - pad.b);
+  const pyl = pyOn(sl), pyr = sr ? pyOn(sr) : pyl;
+  const py = (v, axis) => (axis === 'r' && sr) ? pyr(v) : pyl(v);
+
+  const fmtTick = (v, list) => {
+    const d = (MACRO_SERIES[(list[0] || {}).id] || {}).dec ?? 2;
+    return Math.abs(v) >= 10000 ? Math.round(v).toLocaleString('ja-JP') : Number(v).toFixed(d);
+  };
+  // 横線は左軸の目盛り位置に引く（左右で本数を揃えてあるので右軸の目盛りとも一致する）
+  let grid = '', ylab = '', yrlab = '';
+  const lColor = (L[0] || series[0]).color, rColor = (R[0] || {}).color;
+  for (let i = 0; i <= sl.n; i++) {
+    const v = sl.lo + sl.step * i, y = pyl(v).toFixed(1);
     grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="rgba(100,116,139,.25)"/>`;
-    ylab += `<text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${ylab0(v)}</text>`;
+    ylab += `<text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="${dual ? lColor : 'var(--muted)'}" font-size="10" text-anchor="end">${fmtTick(v, L.length ? L : series)}</text>`;
+    if (sr) {
+      const rv = sr.lo + sr.step * i;
+      yrlab += `<text x="${W - pad.r + 6}" y="${(+y + 3).toFixed(1)}" fill="${rIndexed ? 'var(--muted)' : rColor}" font-size="10" text-anchor="start">${rIndexed ? Math.round(rv) : fmtTick(rv, R)}</text>`;
+    }
   }
   // ゼロ線（SLOOS・イールドカーブ差・前年比などは「0をまたぐか」が意味を持つので濃く引く）
-  const zero = (ylo < 0 && yhi > 0)
-    ? `<line x1="${pad.l}" y1="${py(0).toFixed(1)}" x2="${W - pad.r}" y2="${py(0).toFixed(1)}" stroke="var(--muted)" stroke-width="1.4"/>` : '';
+  const zero = (sl.lo < 0 && sl.hi > 0)
+    ? `<line x1="${pad.l}" y1="${pyl(0).toFixed(1)}" x2="${W - pad.r}" y2="${pyl(0).toFixed(1)}" stroke="var(--muted)" stroke-width="1.4"/>` : '';
   // X軸: 年初を等間隔に間引いて表示（データ位置ではなく時間軸で等間隔）
   let xlab = '';
   { const y0 = new Date(xmin * 1000).getUTCFullYear(), y1 = new Date(xmax * 1000).getUTCFullYear();
@@ -6498,25 +6624,29 @@ function macroLineChart(series, W, H) {
         + `<text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="9" text-anchor="middle">${new Date(t * 1000).getUTCFullYear()}</text>`;
     });
   }
+  // 右軸の系列は破線にして、線だけでもどちらの軸か分かるようにする（色覚に依存させない）
   const lines = series.map(s => {
-    const d = s.pts.map((p, i) => (i ? 'L' : 'M') + px(Date.parse(p[0]) / 1000).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ');
-    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6" stroke-linejoin="round"/>`;
+    const d = s.pts.map((p, i) => (i ? 'L' : 'M') + px(Date.parse(p[0]) / 1000).toFixed(1) + ' ' + py(p[1], s.axis).toFixed(1)).join(' ');
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6" stroke-linejoin="round"${(dual && s.axis === 'r') ? ' stroke-dasharray="5 3"' : ''}/>`;
   }).join('');
-  // 凡例の数値は**指数化後ではなく実数の最新値**を出す（100.0 ばかり並んでも意味が読めないため）。
-  // 指数化中は起点からの変化率も併記して「どちらが伸びたか」を数字でも分かるようにする。
-  const legend = series.map(s => {
-    const src = s.raw || s.pts;
+  const legend = series.map((s, i) => {
+    const src = s.raw || s.pts;                       // 右軸を指数化していても凡例は実値
     const last = src[src.length - 1];
-    const chg = s.raw ? (s.pts[s.pts.length - 1][1] - 100) : null;
+    const chg = s.raw ? s.pts[s.pts.length - 1][1] - 100 : null;
+    const axisTag = dual ? `<span class="macro-axis" title="${s.axis === 'r' ? '右軸（破線）' : '左軸（実線）'}の目盛りで描いています">${s.axis === 'r' ? '右' : '左'}</span>` : '';
+    let extra = '';
+    if (s.corr != null) extra = ` <span title="この期間の水準どうしの相関係数。+1に近いほど同じ向き、−1に近いほど逆向きに動いた。どちらも上昇トレンドというだけで高く出ることがあるので、因果関係の証拠にはなりません">r=${s.corr.toFixed(2)}</span>`;
+    else if (i === 0 && series.some(x => x.corr != null)) extra = ` <span class="muted" title="この系列を基準に相関係数を計算しています">基準</span>`;
+    const chgTag = chg == null ? '' : ` <span class="${chg > 0 ? 'pos' : chg < 0 ? 'neg' : ''}" title="期間の起点からの変化率">${(chg > 0 ? '+' : '') + chg.toFixed(0)}%</span>`;
     return `<div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px;font-size:11px">
       <span style="width:11px;height:11px;flex:0 0 11px;background:${s.color};border-radius:2px;margin-top:2px"></span>
-      <span style="min-width:0"><span style="word-break:break-all">${esc(s.label)}</span><br><b class="num">${macroFmt(last[1], s.id)}</b>${chg == null ? '' : ` <span class="${chg > 0 ? 'pos' : chg < 0 ? 'neg' : ''}">${(chg > 0 ? '+' : '') + chg.toFixed(1)}%</span>`}</span></div>`;
+      <span style="min-width:0"><span style="word-break:break-all">${esc(s.label)}</span>${axisTag}<br><b class="num">${macroFmt(last[1], s.id)}</b>${chgTag}${extra}</span></div>`;
   }).join('');
   const guide = `<line id="macro-guide" x1="0" y1="${pad.t}" x2="0" y2="${H - pad.b}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3" style="display:none"/>`;
-  _macroHover = { series, px, py, W, H, pad, xmin, xmax };
+  _macroHover = { series, px, W, H, pad, xmin, xmax };
   return `<div style="display:flex;gap:10px;align-items:flex-start">
     <div style="flex:1;min-width:0;position:relative">
-      <svg id="macro-svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px;cursor:crosshair">${grid}${xlab}${zero}${lines}${ylab}${guide}</svg>
+      <svg id="macro-svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px;cursor:crosshair">${grid}${xlab}${zero}${lines}${ylab}${yrlab}${guide}</svg>
       <div id="macro-tip" style="position:absolute;display:none;pointer-events:none;z-index:5;top:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:11px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.18);white-space:nowrap"></div>
     </div>
     <div style="flex:0 0 140px;width:140px">${legend}</div>
@@ -6535,13 +6665,11 @@ function attachMacroHover(host, series) {
     const t = st.xmin + (cx - st.pad.l) / (st.W - st.pad.l - st.pad.r) * (st.xmax - st.xmin);
     const date = new Date(t * 1000).toISOString().slice(0, 10);
     const rows = series.map(s => {
-      // 指数化中も**ツールチップは実数**を出す（s.raw が指数化前。無ければ pts がそのまま実数）
-      const src = s.raw || s.pts;
-      let hit = null, idx = 0;
-      for (let i = src.length - 1; i >= 0; i--) { if (src[i][0] <= date) { hit = src[i]; idx = i; break; } }
-      if (!hit) { hit = src[0]; idx = 0; }
-      const nz = s.raw ? ` <span class="muted">(${s.pts[idx][1].toFixed(1)})</span>` : '';
-      return `<div><span style="display:inline-block;width:9px;height:9px;background:${s.color};border-radius:2px;margin-right:5px"></span>${esc(s.label)} <b>${macroFmt(hit[1], s.id)}</b>${nz} <span class="muted">${esc(hit[0])}</span></div>`;
+      const src = s.raw || s.pts;                     // 右軸を指数化していてもツールチップは実値
+      let hit = null;
+      for (let i = src.length - 1; i >= 0; i--) { if (src[i][0] <= date) { hit = src[i]; break; } }
+      if (!hit) hit = src[0];
+      return `<div><span style="display:inline-block;width:9px;height:9px;background:${s.color};border-radius:2px;margin-right:5px"></span>${esc(s.label)} <b>${macroFmt(hit[1], s.id)}</b> <span class="muted">${esc(hit[0])}</span></div>`;
     }).join('');
     guide.setAttribute('x1', cx.toFixed(1)); guide.setAttribute('x2', cx.toFixed(1)); guide.style.display = '';
     tip.innerHTML = rows;
@@ -14073,8 +14201,7 @@ window.giDeleteFormat = giDeleteFormat;
 window.setMacroGroup = setMacroGroup;
 window.setMacroCard = setMacroCard;
 window.setMacroPeriod = setMacroPeriod;
-window.toggleMacroOverlay = toggleMacroOverlay;
-window.clearMacroOverlay = clearMacroOverlay;
+window.toggleMacroCompare = toggleMacroCompare;
 window.macroRefresh = macroRefresh;
 window.api = api;
 window.render = render;

@@ -1230,13 +1230,20 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .news-preview { display: block; font-size: 12px; color: var(--muted); line-height: 1.5; margin: 2px 0 0; overflow: hidden; }
 
 /* マクロ指標タブ: 指標カード（クリックでグラフの対象を切替。選択中は枠を強調） */
-.macro-cards { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-bottom: 12px; }
-.macro-card { cursor: pointer; padding: 10px 12px; transition: border-color .12s, box-shadow .12s; }
+/* カードは指標グループによって3〜7枚。窓が狭いと段数が増えてグラフ・表を圧迫するので、
+   最小幅と余白を詰めて1段に入る枚数を増やす（日本グループが4段=298pxになりページが溢れた） */
+.macro-cards { grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.macro-card { cursor: pointer; padding: 7px 10px; transition: border-color .12s, box-shadow .12s; }
+.macro-card .label { font-size: 11px; line-height: 1.35; }
 .macro-card:hover { border-color: var(--brass); }
 .macro-card.sel { border-color: var(--navy); box-shadow: 0 0 0 1px var(--navy) inset; }
-.macro-card .value { font-size: 19px; margin-top: 2px; }
+.macro-card .value { font-size: 17px; margin-top: 1px; }
 .macro-card .sub { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
 
 /* マクロ指標: 「望ましい向き」の印（↓良/↑良）。変化の色が指標ごとに反転する理由を読み取れるようにする */
 .macro-good { display: inline-block; margin-left: 5px; padding: 0 4px; border: 1px solid var(--hair); border-radius: 4px;
   font-size: 10px; font-weight: 600; color: var(--muted); background: var(--panel-2); vertical-align: 1px; white-space: nowrap; cursor: help; }
+
+/* マクロ指標: 凡例の左右軸バッジ（2軸グラフでどちらの目盛りか示す） */
+.macro-axis { display: inline-block; margin-left: 4px; padding: 0 3px; border: 1px solid var(--hair); border-radius: 3px;
+  font-size: 9px; font-weight: 600; color: var(--muted); background: var(--panel-2); vertical-align: 1px; cursor: help; }
