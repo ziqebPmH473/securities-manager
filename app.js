@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260813-1834';
+const APP_VERSION = 'v20260813-1912';
 
 'use strict';
 
@@ -6030,6 +6030,15 @@ const MACRO_SERIES = {
   BAMLH0A0HYM2:    { label: 'ハイイールド・スプレッド', tf: 'raw',  unit: '%pt', dec: 2, good: 'down' },
   NFCI:            { label: '金融環境指数(シカゴ連銀)', tf: 'raw',  unit: '',    dec: 2, good: 'down' },
   VIXCLS:          { label: 'VIX',                      tf: 'raw',  unit: '',    dec: 1, good: 'down' },
+  // 日本（FRED経由）。★日本のCPI・鉱工業生産はFRED（OECD配信）が2021〜2024年で更新停止しているため
+  // ここには入れず、e-Stat（政府統計API）から取る（22.10 参照）。以下は現行で更新が続いている系列のみ。
+  IRLTLT01JPM156N: { label: '日本10年国債',           tf: 'raw', unit: '%', dec: 2, good: 'down' },
+  IRSTCI01JPM156N: { label: '日本 短期金利(コール)',  tf: 'raw', unit: '%', dec: 2, good: 'down' },
+  LRHUTTTTJPM156S: { label: '日本 失業率',            tf: 'raw', unit: '%', dec: 1, good: 'down' },
+  JPNRGDPEXP:      { label: '日本 実質GDP(前年比)',   tf: 'yoy', unit: '%', dec: 1, good: 'up' },
+  XTEXVA01JPM667S: { label: '日本 輸出額(前年比)',    tf: 'yoy', unit: '%', dec: 1, good: 'up' },
+  // 実質実効為替レート: 下落＝円安。輸出企業には追い風・輸入コストには逆風で良し悪しが一概に言えないため good なし＝色付けしない
+  RBJPBIS:         { label: '円 実質実効為替レート',  tf: 'raw', unit: '', dec: 1 },
   // 指数・為替（src:'idx'）。FREDではなく Yahoo（/api/history）から取得し store.data.macroIdx に入れる。
   // 桁が指標とまったく違う（S&P500約6,000 / 日経約67,500 / ドル円約157）ため、重ねる時は起点=100で指数化する。
   '^GSPC':         { label: 'S&P500',      tf: 'raw', unit: '', dec: 0, good: 'up', src: 'idx' },
@@ -6068,6 +6077,13 @@ const MACRO_GROUPS = [
     { key: 'hy',   label: 'ハイイールド・スプレッド', ids: ['BAMLH0A0HYM2'], note: '低格付け社債の上乗せ金利。拡大＝リスク回避' },
     { key: 'nfci', label: '金融環境指数',            ids: ['NFCI'],          note: 'プラス＝金融環境が引き締まっている' },
     { key: 'vix',  label: 'VIX',                     ids: ['VIXCLS'],        note: '株式市場の変動率の織り込み' },
+  ] },
+  { key: 'jp', label: '日本', cards: [
+    { key: 'jprate', label: '日本の金利（10年・短期）', ids: ['IRLTLT01JPM156N', 'IRSTCI01JPM156N'], note: '長期＝10年国債・短期＝無担保コールレート（日銀の政策金利の実勢）' },
+    { key: 'jpjob',  label: '日本 失業率',             ids: ['LRHUTTTTJPM156S'], note: '' },
+    { key: 'jpgdp',  label: '日本 実質GDP（前年比）',  ids: ['JPNRGDPEXP'],      note: '四半期' },
+    { key: 'jpexp',  label: '日本 輸出額（前年比）',   ids: ['XTEXVA01JPM667S'], note: '外需の強さ。円安局面では円建て額が膨らむ点に注意' },
+    { key: 'jpfx',   label: '円 実質実効為替レート',   ids: ['RBJPBIS'],         note: '物価差を調整した円の総合的な強さ。下がるほど円安' },
   ] },
   // norm:true＝重ね合わせを選んでいなくても常に起点=100で指数化するカード。
   // 桁の違う系列を同じ軸に並べると小さい方が潰れて読めないため（日経66,970とドル円159を実数で重ねると
