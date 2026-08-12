@@ -8,3 +8,8 @@
 # 取得方法: https://finnhub.io/ で無料アカウント作成 → API Keys
 # 未設定の場合は Yahoo Finance（15〜20分遅延）にフォールバックします
 FINNHUB_API_KEY=your_finnhub_api_key_here
+
+# FRED APIキー（マクロ指標タブ: インフレ・金利・SLOOS 等）
+# 取得方法: https://fredaccount.stlouisfed.org/apikeys で無料アカウント作成 → Request API Key
+# 未設定の場合は fredgraph.csv（キー不要の公開CSV）にフォールバックします
+FRED_API_KEY=your_fred_api_key_here

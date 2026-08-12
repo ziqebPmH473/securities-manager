@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260812-0803';
+const APP_VERSION = 'v20260813-1642';
 
 'use strict';
 
@@ -340,6 +340,7 @@ const store = {
     this.data.lastHighsDate ||= null; // 5年/52週高値を取得した日（YYYY-MM-DD）。その日初回の価格更新で高値も取得
     this.data.indices ||= {};         // 参考指数の price/prevClose キャッシュ
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
+    this.data.macro ||= {};           // マクロ指標キャッシュ（FRED系列ID→{obs:[[date,値],...],freq,at}）。同期対象（SCHEMA: map+byAt）
     this.data.earnings ||= {};        // 決算日キャッシュ priceKey→{prev,next,nextEstimate,exDiv,at}。1日1回取得・同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     this.data.mktTopCap ||= {};       // 市場の時価総額1位（US/JP→{code,name,cap,at}）。「時価1位まで」列の分子・自動取得キャッシュ
@@ -2307,6 +2308,7 @@ const NAV_GROUPS = [
   { group: 'メイン', items: [
     { id: 'dashboard', label: 'ダッシュボード', icon: 'dashboard' },
     { id: 'market',    label: 'マーケット',     icon: 'report' },
+    { id: 'macro',     label: 'マクロ指標',     icon: 'signal' },
     { id: 'news',      label: 'ニュース',       icon: 'news' },
     { id: 'holdings',  label: '保有銘柄',       icon: 'holdings' },
     { id: 'trade',     label: '銘柄カルテ',     icon: 'trade' },
@@ -2328,7 +2330,7 @@ const PAGE_TITLE = {
   dashboard: 'ダッシュボード', market: 'マーケット', holdings: '保有銘柄', signals: '買い増しサイン',
   report: 'レポート', import: '取込', secmaster: '銘柄マスタ', splits: '株式分割', trade: '銘柄カルテ',
   transfer: '転記用', master: 'マスタ・設定', us: '米国株', jp: '日本株', analysis: '分析（チャートパターン）',
-  news: 'ニュース',
+  news: 'ニュース', macro: 'マクロ指標',
 };
 const ICON_PATHS = {
   dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
@@ -3548,6 +3550,7 @@ function _render() {
   switch (currentView) {
     case 'dashboard': renderDashboard(); break;
     case 'market': renderMarketTab(); break;
+    case 'macro': renderMacro(); break;
     case 'news': renderNews(); break;
     case 'holdings': renderMarket(holdingsMarket); break;
     case 'us': renderMarket('US'); break;
@@ -3623,7 +3626,7 @@ function layoutTickerMarquee() {
   }
 }
 let _fitTimer = null;
-window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { if (document.querySelector('#app .mx-table')) { fitMatrix(); sizeMatrixChips(); } fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); }, 120); });
+window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { if (document.querySelector('#app .mx-table')) { fitMatrix(); sizeMatrixChips(); } fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); if (document.getElementById('macro-chart')) renderMacroChart(); }, 120); });
 
 // 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート等で左端に戻らないように）
 function preserveTableScroll(fn) {
@@ -5985,6 +5988,411 @@ function newsItemHtml(it, read, matches, opts = {}) {
       <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
     </a>`;
 }
+// ============ マクロ指標（FRED）タブ ============
+// インフレ・金利・SLOOS（FRBが銀行の融資担当者に行う調査）・景気・信用の指標を、カード＋グラフ＋表で表示する。
+// 取得は /api/macro（Cloudflare Function → FRED）。結果は store.data.macro にキャッシュし Google同期の
+// 対象にする（ルール7: localStorage 単独に置かない。sync-merge の SCHEMA に map+byAt で登録済み）。
+// 表示は「値・変化・過去比」の事実のみ。売買の推奨は出さない。
+
+// 系列定義。tf=表示変換（raw / yoy=前年比% / diff=前期差）、good=その方向に動くと景気に追い風（色付け用）。
+// 系列IDは fredgraph で実在と直近値を確認済み（2026-08-13）。
+const MACRO_SERIES = {
+  // インフレ
+  CPIAUCSL:        { label: 'CPI 総合',                 tf: 'yoy',  unit: '%',   dec: 1, good: 'down' },
+  CPILFESL:        { label: 'コアCPI',                  tf: 'yoy',  unit: '%',   dec: 1, good: 'down' },
+  PCEPILFE:        { label: 'コアPCE',                  tf: 'yoy',  unit: '%',   dec: 1, good: 'down' },
+  T10YIE:          { label: '期待インフレ(10年BEI)',    tf: 'raw',  unit: '%',   dec: 2, good: 'down' },
+  // 金利
+  DFF:             { label: 'FF金利(実効)',             tf: 'raw',  unit: '%',   dec: 2, good: 'down' },
+  DGS2:            { label: '米2年債',                  tf: 'raw',  unit: '%',   dec: 2, good: 'down' },
+  DGS10:           { label: '米10年債',                 tf: 'raw',  unit: '%',   dec: 2, good: 'down' },
+  T10Y2Y:          { label: '10年−2年',                 tf: 'raw',  unit: '%pt', dec: 2, good: 'up' },
+  MORTGAGE30US:    { label: '住宅ローン30年',           tf: 'raw',  unit: '%',   dec: 2, good: 'down' },
+  // SLOOS（融資担当者調査・四半期）。プラス＝「厳格化した」と答えた銀行が多い（純％）
+  DRTSCILM:        { label: 'C&I 基準厳格化(大企業)',   tf: 'raw',  unit: '%pt', dec: 1, good: 'down' },
+  DRTSCIS:         { label: 'C&I 基準厳格化(中小)',     tf: 'raw',  unit: '%pt', dec: 1, good: 'down' },
+  DRSDCILM:        { label: 'C&I 需要(大企業)',         tf: 'raw',  unit: '%pt', dec: 1, good: 'up' },
+  DRSDCIS:         { label: 'C&I 需要(中小)',           tf: 'raw',  unit: '%pt', dec: 1, good: 'up' },
+  DRTSCLCC:        { label: 'カードローン 基準厳格化',  tf: 'raw',  unit: '%pt', dec: 1, good: 'down' },
+  SUBLPDHMSGNQ:    { label: '住宅ローン 基準厳格化',    tf: 'raw',  unit: '%pt', dec: 1, good: 'down' },
+  // 景気・雇用
+  UNRATE:          { label: '失業率',                   tf: 'raw',  unit: '%',   dec: 1, good: 'down' },
+  PAYEMS:          { label: '非農業雇用(前月差)',       tf: 'diff', unit: '千人', dec: 0, good: 'up' },
+  ICSA:            { label: '新規失業保険申請',         tf: 'raw',  unit: '件',  dec: 0, good: 'down' },
+  A191RL1Q225SBEA: { label: '実質GDP成長率(年率)',      tf: 'raw',  unit: '%',   dec: 1, good: 'up' },
+  INDPRO:          { label: '鉱工業生産(前年比)',       tf: 'yoy',  unit: '%',   dec: 1, good: 'up' },
+  RSAFS:           { label: '小売売上(前年比)',         tf: 'yoy',  unit: '%',   dec: 1, good: 'up' },
+  UMCSENT:         { label: '消費者信頼感(ミシガン大)', tf: 'raw',  unit: '',    dec: 1, good: 'up' },
+  // 信用・リスク
+  BAMLH0A0HYM2:    { label: 'ハイイールド・スプレッド', tf: 'raw',  unit: '%pt', dec: 2, good: 'down' },
+  NFCI:            { label: '金融環境指数(シカゴ連銀)', tf: 'raw',  unit: '',    dec: 2, good: 'down' },
+  VIXCLS:          { label: 'VIX',                      tf: 'raw',  unit: '',    dec: 1, good: 'down' },
+};
+// グループ（画面のセグメント）とカード。1カード＝1グラフで、ids が複数なら同じグラフに重ねる
+// （重ねるのは単位が揃う組み合わせだけ）。カードの見出し数値は ids[0]。
+const MACRO_GROUPS = [
+  { key: 'infl', label: 'インフレ', cards: [
+    { key: 'cpi',  label: 'CPI（総合・コア）',   ids: ['CPIAUCSL', 'CPILFESL'], note: '前年比。FRBの目標は2%' },
+    { key: 'pce',  label: 'コアPCE',             ids: ['PCEPILFE'],             note: '前年比。FRBが最重視する物価指標' },
+    { key: 'bei',  label: '期待インフレ(10年)',  ids: ['T10YIE'],               note: '債券市場が織り込む先々のインフレ率' },
+  ] },
+  { key: 'rate', label: '金利', cards: [
+    { key: 'curve',  label: '米金利（FF・2年・10年）', ids: ['DFF', 'DGS2', 'DGS10'], note: '政策金利と国債利回り' },
+    { key: 'spread', label: '10年−2年',                ids: ['T10Y2Y'],               note: 'マイナス＝逆イールド（景気後退の先行指標とされる）' },
+    { key: 'mort',   label: '住宅ローン30年',          ids: ['MORTGAGE30US'],         note: '家計の借入コスト' },
+  ] },
+  { key: 'sloos', label: '融資動向(SLOOS)', cards: [
+    { key: 'ci',   label: 'C&I融資 基準厳格化',   ids: ['DRTSCILM', 'DRTSCIS'],  note: 'プラス＝貸出基準を厳しくした銀行が多い（企業の資金繰りに逆風）' },
+    { key: 'cid',  label: 'C&I融資 需要',         ids: ['DRSDCILM', 'DRSDCIS'],  note: 'プラス＝借入需要が強いと答えた銀行が多い' },
+    { key: 'cons', label: '家計向け 基準厳格化',  ids: ['DRTSCLCC', 'SUBLPDHMSGNQ'], note: 'カードローン・住宅ローンの貸出基準' },
+  ] },
+  { key: 'econ', label: '景気・雇用', cards: [
+    { key: 'unrate', label: '失業率',             ids: ['UNRATE'],            note: '' },
+    { key: 'payems', label: '非農業雇用(前月差)', ids: ['PAYEMS'],            note: '毎月の雇用の増減（千人）' },
+    { key: 'claims', label: '新規失業保険申請',   ids: ['ICSA'],              note: '週次。雇用の悪化がいちばん早く出る' },
+    { key: 'gdp',    label: '実質GDP成長率',      ids: ['A191RL1Q225SBEA'],   note: '四半期・年率換算' },
+    { key: 'prod',   label: '生産・小売（前年比）', ids: ['INDPRO', 'RSAFS'], note: '' },
+    { key: 'senti',  label: '消費者信頼感',       ids: ['UMCSENT'],           note: '' },
+  ] },
+  { key: 'credit', label: '信用・リスク', cards: [
+    { key: 'hy',   label: 'ハイイールド・スプレッド', ids: ['BAMLH0A0HYM2'], note: '低格付け社債の上乗せ金利。拡大＝リスク回避' },
+    { key: 'nfci', label: '金融環境指数',            ids: ['NFCI'],          note: 'プラス＝金融環境が引き締まっている' },
+    { key: 'vix',  label: 'VIX',                     ids: ['VIXCLS'],        note: '株式市場の変動率の織り込み' },
+  ] },
+];
+const MACRO_PERIODS = [['1y', '1年'], ['3y', '3年'], ['5y', '5年'], ['10y', '10年'], ['all', '全期間']];
+const MACRO_COLORS = ['#2563eb', '#dc2626', '#0d9488', '#7c3aed', '#ca8a04'];
+const MACRO_SRC_NOTE = '出典: FRED®（セントルイス連邦準備銀行）';
+let macroBusy = false;
+let _macroTried = false;  // このセッションで自動取得を試したか（失敗時の無限リトライ防止）
+
+// 表示状態（グループ/カード/期間）は端末をまたいで揃えたいので settings に置く（ルール7）
+function macroGroupKey() { const k = (store.data.settings || {}).macroGroup; return MACRO_GROUPS.some(g => g.key === k) ? k : 'infl'; }
+function macroGroupDef() { return MACRO_GROUPS.find(g => g.key === macroGroupKey()) || MACRO_GROUPS[0]; }
+function macroCardKey() { const g = macroGroupDef(); const k = ((store.data.settings || {}).macroCard || {})[g.key]; return g.cards.some(c => c.key === k) ? k : g.cards[0].key; }
+function macroCardDef() { const g = macroGroupDef(); return g.cards.find(c => c.key === macroCardKey()) || g.cards[0]; }
+function macroPeriod() { const p = (store.data.settings || {}).macroPeriod; return MACRO_PERIODS.some(x => x[0] === p) ? p : '5y'; }
+function macroSaveSetting(patch) {
+  store.data.settings ||= {};
+  Object.assign(store.data.settings, patch);
+  store.data.settings._updatedAt = store._now();
+  store.save();
+}
+function setMacroGroup(k) { macroSaveSetting({ macroGroup: k }); renderMacro(); }
+function setMacroCard(k) {
+  const card = Object.assign({}, (store.data.settings || {}).macroCard || {});
+  card[macroGroupKey()] = k;
+  macroSaveSetting({ macroCard: card });
+  renderMacro();
+}
+function setMacroPeriod(p) { macroSaveSetting({ macroPeriod: p }); renderMacro(); }
+
+// ---- 取得 ----
+// 全系列を2バッチに分けて /api/macro から取得し、store.data.macro にキャッシュする。
+// FRED の更新は日次〜四半期なので自動再取得はせず、「更新」ボタン＋初回のみ自動取得にする。
+async function macroRefresh() {
+  if (macroBusy) return;
+  macroBusy = true;
+  if (currentView === 'macro') renderMacro();
+  const ids = Object.keys(MACRO_SERIES);
+  const batches = [];
+  for (let i = 0; i < ids.length; i += 12) batches.push(ids.slice(i, i + 12));
+  let ok = 0, ng = 0;
+  try {
+    for (const b of batches) {
+      const res = await fetch('/api/macro?ids=' + encodeURIComponent(b.join(',')));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const d = await res.json();
+      const at = (d && d.at) || new Date().toISOString();
+      store.data.macro ||= {};
+      for (const id of b) {
+        const s = d && d.series && d.series[id];
+        if (s && Array.isArray(s.obs) && s.obs.length) { store.data.macro[id] = { obs: s.obs, freq: s.freq || '', at }; ok++; }
+        else ng++;
+      }
+    }
+    store.save();
+    toast(ng ? `マクロ指標を更新（${ok}件成功・${ng}件失敗）` : `マクロ指標を更新しました（${ok}件）`);
+  } catch (e) {
+    toast('マクロ指標の取得に失敗: ' + ((e && e.message) || e), 4000);
+  } finally {
+    macroBusy = false;
+    if (currentView === 'macro') renderMacro();
+  }
+}
+
+// ---- 値の変換・取り出し ----
+// 生の観測列 [[date,value],...] を系列定義の tf に従って表示用の点列に変換する。
+// yoy: 約1年前の観測に対する変化率%（日付でいちばん近い過去の点を探す）/ diff: 直前の点との差
+function macroPoints(id) {
+  const def = MACRO_SERIES[id]; if (!def) return [];
+  const raw = ((store.data.macro || {})[id] || {}).obs || [];
+  if (!raw.length) return [];
+  if (def.tf === 'diff') {
+    const out = [];
+    for (let i = 1; i < raw.length; i++) out.push([raw[i][0], raw[i][1] - raw[i - 1][1]]);
+    return out;
+  }
+  if (def.tf === 'yoy') {
+    const out = [];
+    for (let i = 0; i < raw.length; i++) {
+      const prev = macroAtBefore(raw, raw[i][0], 365, 60);
+      if (prev && prev[1]) out.push([raw[i][0], (raw[i][1] / prev[1] - 1) * 100]);
+    }
+    return out;
+  }
+  return raw.slice();
+}
+// pts の中から「date より days 日前」に最も近い点を返す（許容 tol 日）。見つからなければ null。
+function macroAtBefore(pts, date, days, tol) {
+  const target = Date.parse(date) - days * 86400000;
+  let best = null, bestDiff = Infinity;
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const diff = Math.abs(Date.parse(pts[i][0]) - target);
+    if (diff < bestDiff) { bestDiff = diff; best = pts[i]; }
+    if (Date.parse(pts[i][0]) < target - tol * 86400000) break;
+  }
+  return (best && bestDiff <= tol * 86400000) ? best : null;
+}
+function macroCut(pts, period) {
+  if (period === 'all' || !pts.length) return pts;
+  const yrs = { '1y': 1, '3y': 3, '5y': 5, '10y': 10 }[period] || 5;
+  const cut = new Date(); cut.setFullYear(cut.getFullYear() - yrs);
+  const cs = cut.toISOString().slice(0, 10);
+  const out = pts.filter(p => p[0] >= cs);
+  return out.length >= 2 ? out : pts.slice(-2);
+}
+function macroFmt(v, id) {
+  if (v == null || !isFinite(v)) return '—';
+  const def = MACRO_SERIES[id] || {};
+  const dec = def.dec == null ? 2 : def.dec;
+  return Number(v).toLocaleString('ja-JP', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+}
+function macroUnit(id) { const u = (MACRO_SERIES[id] || {}).unit || ''; return u ? `<span class="muted" style="font-size:12px;font-weight:500"> ${esc(u)}</span>` : ''; }
+// 変化の色: 系列ごとの good（望ましい方向）に沿って動いていれば pos、逆なら neg。
+// 「良い/悪い」の断定ではなく、景気・金融環境にとっての向きを色で見分けるための補助。
+function macroDeltaCls(d, id) {
+  if (d == null || !isFinite(d) || d === 0) return '';
+  const good = (MACRO_SERIES[id] || {}).good;
+  if (!good) return '';
+  return ((d > 0) === (good === 'up')) ? 'pos' : 'neg';
+}
+
+// ---- 描画 ----
+function renderMacro() {
+  if (currentView !== 'macro') return;
+  const cache = store.data.macro || {};
+  const gotAny = Object.keys(cache).length > 0;
+  const g = macroGroupDef();
+  const cardKey = macroCardKey();
+  const period = macroPeriod();
+  const ats = Object.values(cache).map(c => c && c.at).filter(Boolean).sort();
+  const fetchedAt = ats.length ? ats[ats.length - 1] : '';
+
+  // 未取得ならセッション中1回だけ自動で取りに行く（以後は「更新」ボタンのみ。FREDの更新は日次〜四半期）。
+  // ★_macroTried が無いと「取得失敗→再描画→また自動取得」で無限リトライになる（取得失敗時に実際に発生）。
+  if (!gotAny && !macroBusy && !_macroTried) { _macroTried = true; macroRefresh(); }
+
+  const groupSeg = `<div class="seg">${MACRO_GROUPS.map(x => `<button class="${x.key === g.key ? 'active' : ''}" onclick="setMacroGroup('${x.key}')">${esc(x.label)}</button>`).join('')}</div>`;
+  const periodSeg = `<div class="seg">${MACRO_PERIODS.map(([v, l]) => `<button class="${period === v ? 'active' : ''}" onclick="setMacroPeriod('${v}')">${l}</button>`).join('')}</div>`;
+
+  // カード（クリックでグラフの対象を切替）。見出し数値＝ids[0] の最新値、下段に前回比と観測日
+  const cardsHtml = g.cards.map(c => {
+    const id = c.ids[0];
+    const pts = macroPoints(id);
+    const last = pts.length ? pts[pts.length - 1] : null;
+    const prev = pts.length >= 2 ? pts[pts.length - 2] : null;
+    const d = (last && prev) ? last[1] - prev[1] : null;
+    const dec = (MACRO_SERIES[id] || {}).dec ?? 2;
+    return `<div class="card macro-card ${c.key === cardKey ? 'sel' : ''}" onclick="setMacroCard('${c.key}')" title="${esc(c.note || '')}">
+      <div class="label">${esc(c.label)}</div>
+      <div class="value">${last ? macroFmt(last[1], id) : '—'}${macroUnit(id)}</div>
+      <div class="sub"><span class="${macroDeltaCls(d, id)}">${d == null ? '—' : (d > 0 ? '+' : '') + Number(d).toFixed(dec)}</span>
+        <span class="muted">前回比 ・ ${last ? esc(last[0]) : '—'}</span></div>
+    </div>`;
+  }).join('');
+
+  // 表: グループ内の全系列 × 直近の推移（頻度が違う系列が混ざるので「n期前」で揃える）
+  const ids = [...new Set(g.cards.flatMap(c => c.ids))];
+  const rows = ids.map(id => {
+    const def = MACRO_SERIES[id];
+    const pts = macroPoints(id);
+    const last = pts.length ? pts[pts.length - 1] : null;
+    const at = (n) => (pts.length > n ? pts[pts.length - 1 - n][1] : null);
+    const y1 = last ? macroAtBefore(pts, last[0], 365, 60) : null;
+    const dy = (last && y1) ? last[1] - y1[1] : null;
+    const freq = ((store.data.macro || {})[id] || {}).freq || '';
+    return `<tr>
+      <td class="l">${esc(def.label)}<span class="muted" style="font-size:11px"> ${esc(def.unit || '')}</span></td>
+      <td class="c muted" style="font-size:11px">${esc(freq)}</td>
+      <td class="r"><b>${macroFmt(last && last[1], id)}</b></td>
+      <td class="c muted" style="font-size:11px">${last ? esc(last[0]) : '—'}</td>
+      <td class="r">${macroFmt(at(1), id)}</td>
+      <td class="r">${macroFmt(at(2), id)}</td>
+      <td class="r">${macroFmt(at(3), id)}</td>
+      <td class="r">${macroFmt(y1 && y1[1], id)}</td>
+      <td class="r ${macroDeltaCls(dy, id)}">${dy == null ? '—' : (dy > 0 ? '+' : '') + Number(dy).toFixed(def.dec ?? 2)}</td>
+    </tr>`;
+  }).join('');
+
+  const card = macroCardDef();
+  app.innerHTML = `
+    <div class="section">
+      <div class="section-head"><h2>マクロ指標</h2>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="muted" style="font-size:11px">${fetchedAt ? '取得：' + mktFetchedAt(fetchedAt) : ''}</span>
+          <button class="btn btn-sm btn-primary" onclick="macroRefresh()" ${macroBusy ? 'disabled' : ''}>${macroBusy ? '取得中…' : '更新'}</button>
+        </div></div>
+      <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${groupSeg}${periodSeg}</div>
+      <div class="section-body" style="padding:12px 16px 16px">
+        <div class="cards macro-cards">${cardsHtml}</div>
+        <div id="macro-chart"></div>
+        ${card.note ? `<div class="muted" style="font-size:11px;margin:6px 2px 0">${esc(card.note)}</div>` : ''}
+        <div class="table-wrap" style="margin-top:12px"><table class="list">
+          <thead><tr><th class="l">指標</th><th class="c">頻度</th><th class="r">最新</th><th class="c">観測日</th>
+            <th class="r">1期前</th><th class="r">2期前</th><th class="r">3期前</th><th class="r">1年前</th><th class="r">1年差</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>
+        <div class="muted" style="font-size:11px;margin-top:8px">${MACRO_SRC_NOTE}</div>
+      </div>
+    </div>`;
+  renderMacroChart();
+  scheduleFit();
+}
+
+// グラフ本体。カードの ids を重ねて折れ線で描く（単位が揃う組み合わせのみ定義してある）。
+function renderMacroChart() {
+  const el = document.getElementById('macro-chart'); if (!el) return;
+  const card = macroCardDef(), period = macroPeriod();
+  const series = card.ids.map((id, i) => ({
+    id, label: (MACRO_SERIES[id] || {}).label || id, color: MACRO_COLORS[i % MACRO_COLORS.length],
+    pts: macroCut(macroPoints(id), period),
+  })).filter(s => s.pts.length >= 2);
+  if (!series.length) { el.innerHTML = `<div class="notice" style="margin:0">この指標のデータがまだありません。「更新」で取得してください。</div>`; return; }
+  // 高さは「暫定で描く→実レイアウトを測って描き直す」で決める。初回は表(.table-wrap)がまだ
+  // 高さ0で測れることがあり、一発計算だと必ず大きすぎる値になるため（実測で 338px vs 正解 182px）。
+  // 2〜3回で収束する。
+  const w = Math.max(240, Math.round((el.clientWidth || 600) - 150)); // 凡例140＋gap10
+  let h = 260;
+  el.style.height = h + 'px';
+  el.innerHTML = macroLineChart(series, w, h);
+  for (let i = 0; i < 3; i++) {
+    const t = macroChartFitH(el);
+    if (Math.abs(t - h) <= 2) break;
+    h = t;
+    el.style.height = h + 'px';
+    el.innerHTML = macroLineChart(series, w, h);
+  }
+  attachMacroHover(el, series);
+}
+// 今のレイアウトから「グラフに使ってよい高さ」を実測で求める。
+// 収まり判定は main.content 基準（ルール6。document 基準は body:overflow:hidden で常に0になり誤判定する）。
+// ★ main.content 自身の下パディング（実測53px）を引く。これを忘れると毎回その分だけページがスクロールする。
+function macroChartFitH(el) {
+  const cont = el.closest('.content');
+  if (!cont) return 260;
+  const limit = cont.getBoundingClientRect().bottom - (parseFloat(getComputedStyle(cont).paddingBottom) || 0);
+  const r = el.getBoundingClientRect();
+  const sec = el.closest('.section');
+  // グラフより下にあるもの（注記・表・出典・section下padding）の実高さ。中身が変わっても効くよう毎回測る。
+  // section の margin-bottom は getBoundingClientRect に含まれないが scrollHeight には効くので足す
+  // （これを落とすと毎回その分＝約16px はみ出したままになる）。
+  let below = 0;
+  if (sec) {
+    below = Math.max(0, sec.getBoundingClientRect().bottom - (r.top + r.height))
+      + (parseFloat(getComputedStyle(sec).marginBottom) || 0);
+  }
+  return Math.max(180, Math.min(560, Math.round(limit - r.top - below - 4)));
+}
+function macroLineChart(series, W, H) {
+  W = W || 800; H = H || 280;
+  const pad = { l: 54, r: 12, t: 10, b: 20 };
+  const all = series.flatMap(s => s.pts);
+  const xs = all.map(p => Date.parse(p[0]) / 1000);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  let vmin = Math.min(...all.map(p => p[1])), vmax = Math.max(...all.map(p => p[1]));
+  if (vmin === vmax) { vmin -= 1; vmax += 1; }
+  const stepY = niceStep(vmax - vmin, 5);
+  let ylo = Math.floor(vmin / stepY) * stepY, yhi = Math.ceil(vmax / stepY) * stepY;
+  if (ylo === yhi) yhi = ylo + stepY;
+  const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
+  const py = v => pad.t + (1 - (v - ylo) / (yhi - ylo)) * (H - pad.t - pad.b);
+  const dec = (MACRO_SERIES[series[0].id] || {}).dec ?? 2;
+  const ylab0 = (v) => Math.abs(v) >= 10000 ? Math.round(v).toLocaleString('ja-JP') : Number(v).toFixed(dec);
+
+  let grid = '', ylab = '';
+  for (let v = ylo; v <= yhi + stepY * 1e-6; v += stepY) {
+    const y = py(v).toFixed(1);
+    grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="rgba(100,116,139,.25)"/>`;
+    ylab += `<text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${ylab0(v)}</text>`;
+  }
+  // ゼロ線（SLOOS・イールドカーブ差・前年比などは「0をまたぐか」が意味を持つので濃く引く）
+  const zero = (ylo < 0 && yhi > 0)
+    ? `<line x1="${pad.l}" y1="${py(0).toFixed(1)}" x2="${W - pad.r}" y2="${py(0).toFixed(1)}" stroke="var(--muted)" stroke-width="1.4"/>` : '';
+  // X軸: 年初を等間隔に間引いて表示（データ位置ではなく時間軸で等間隔）
+  let xlab = '';
+  { const y0 = new Date(xmin * 1000).getUTCFullYear(), y1 = new Date(xmax * 1000).getUTCFullYear();
+    const years = []; for (let y = y0; y <= y1; y++) years.push(Date.UTC(y, 0, 1) / 1000);
+    const st = Math.max(1, Math.ceil(years.length / 8));
+    years.forEach((t, i) => {
+      if (i % st || t < xmin || t > xmax) return;
+      const x = px(t).toFixed(1);
+      xlab += `<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${H - pad.b}" stroke="rgba(100,116,139,.18)" stroke-dasharray="2 3"/>`
+        + `<text x="${x}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="9" text-anchor="middle">${new Date(t * 1000).getUTCFullYear()}</text>`;
+    });
+  }
+  const lines = series.map(s => {
+    const d = s.pts.map((p, i) => (i ? 'L' : 'M') + px(Date.parse(p[0]) / 1000).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ');
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6" stroke-linejoin="round"/>`;
+  }).join('');
+  const legend = series.map(s => {
+    const last = s.pts[s.pts.length - 1];
+    return `<div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px;font-size:11px">
+      <span style="width:11px;height:11px;flex:0 0 11px;background:${s.color};border-radius:2px;margin-top:2px"></span>
+      <span style="min-width:0"><span style="word-break:break-all">${esc(s.label)}</span><br><b class="num">${macroFmt(last[1], s.id)}</b></span></div>`;
+  }).join('');
+  const guide = `<line id="macro-guide" x1="0" y1="${pad.t}" x2="0" y2="${H - pad.b}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3" style="display:none"/>`;
+  _macroHover = { series, px, py, W, H, pad, xmin, xmax };
+  return `<div style="display:flex;gap:10px;align-items:flex-start">
+    <div style="flex:1;min-width:0;position:relative">
+      <svg id="macro-svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px;cursor:crosshair">${grid}${xlab}${zero}${lines}${ylab}${guide}</svg>
+      <div id="macro-tip" style="position:absolute;display:none;pointer-events:none;z-index:5;top:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:11px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.18);white-space:nowrap"></div>
+    </div>
+    <div style="flex:0 0 140px;width:140px">${legend}</div>
+  </div>`;
+}
+let _macroHover = null;
+// カーソル位置の日付と各系列の値をツールチップ表示（その日以前で最新の観測値を拾う）
+function attachMacroHover(host, series) {
+  const svg = host.querySelector('#macro-svg'), tip = host.querySelector('#macro-tip'), guide = host.querySelector('#macro-guide');
+  if (!svg || !tip || !guide) return;
+  const move = (ev) => {
+    const st = _macroHover; if (!st) return;
+    const r = svg.getBoundingClientRect();
+    const cx = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width * st.W;
+    if (cx < st.pad.l || cx > st.W - st.pad.r) { tip.style.display = 'none'; guide.style.display = 'none'; return; }
+    const t = st.xmin + (cx - st.pad.l) / (st.W - st.pad.l - st.pad.r) * (st.xmax - st.xmin);
+    const date = new Date(t * 1000).toISOString().slice(0, 10);
+    const rows = series.map(s => {
+      let hit = null;
+      for (let i = s.pts.length - 1; i >= 0; i--) { if (s.pts[i][0] <= date) { hit = s.pts[i]; break; } }
+      if (!hit) hit = s.pts[0];
+      return `<div><span style="display:inline-block;width:9px;height:9px;background:${s.color};border-radius:2px;margin-right:5px"></span>${esc(s.label)} <b>${macroFmt(hit[1], s.id)}</b> <span class="muted">${esc(hit[0])}</span></div>`;
+    }).join('');
+    guide.setAttribute('x1', cx.toFixed(1)); guide.setAttribute('x2', cx.toFixed(1)); guide.style.display = '';
+    tip.innerHTML = rows;
+    tip.style.display = 'block';
+    // カーソルが右寄りならツールチップを左に出す（枠外へはみ出さないように）
+    const leftPx = (cx / st.W) * r.width;
+    tip.style.left = (leftPx > r.width * 0.6 ? Math.max(4, leftPx - tip.offsetWidth - 12) : leftPx + 12) + 'px';
+  };
+  const leave = () => { tip.style.display = 'none'; guide.style.display = 'none'; };
+  svg.addEventListener('mousemove', move);
+  svg.addEventListener('mouseleave', leave);
+  svg.addEventListener('touchmove', move, { passive: true });
+  svg.addEventListener('touchend', leave);
+}
+
 function renderNews() {
   if (currentView !== 'news') return;
   newsPinCatSession(); // 開いた時点のカテゴリ選択を固定（裏の同期で勝手に切り替わらないように）
@@ -13498,6 +13906,10 @@ window.runGenericImport = runGenericImport;
 window.giSaveFormat = giSaveFormat;
 window.giLoadFormat = giLoadFormat;
 window.giDeleteFormat = giDeleteFormat;
+window.setMacroGroup = setMacroGroup;
+window.setMacroCard = setMacroCard;
+window.setMacroPeriod = setMacroPeriod;
+window.macroRefresh = macroRefresh;
 window.api = api;
 window.render = render;
 

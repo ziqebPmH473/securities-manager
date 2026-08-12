@@ -42,6 +42,7 @@
     _filterPresets:  ['records', (r) => `fp:${r.id}`],
     mktRanking:      ['map', byAt],
     mktTopCap:       ['map', byAt],   // 市場の時価総額1位 US/JP→{code,name,cap,at}。取得時刻 at の新しい方（settings に置くと navOrder 等を巻き戻すため独立キー）
+    macro:           ['map', byAt],   // マクロ指標キャッシュ FRED系列ID→{obs,freq,at}。系列ごとに取得時刻 at の新しい方（settings に入れず独立キー＝ルール7-2）
     earnings:        ['map', byAt],   // 決算日キャッシュ priceKey→{prev,next,...,at}。取得時刻 at の新しい方
     amountHistory:   ['records', (r) => `ah:${r.id}`],
     amountSnapshots: ['records', (r) => `as:${r.id}`],
