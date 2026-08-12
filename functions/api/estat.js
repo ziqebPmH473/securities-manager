@@ -58,17 +58,22 @@ async function opList(appId, url) {
 // ---- 表のメタ情報（分類コード。どのコードで絞ると欲しい系列になるかを調べる用） ----
 async function opMeta(appId, url) {
   const id = reqId(url);
+  const find = (url.searchParams.get('find') || '').trim();
   const d = await getJson(`${BASE}/getMetaInfo?appId=${encodeURIComponent(appId)}&statsDataId=${encodeURIComponent(id)}`);
   const meta = d && d.GET_META_INFO && d.GET_META_INFO.METADATA_INF;
   const objs = toArray(meta && meta.CLASS_INF && meta.CLASS_INF.CLASS_OBJ);
   return {
     title: pick(meta && meta.TABLE_INF && meta.TABLE_INF.TITLE),
-    classes: objs.map(o => ({
-      id: o['@id'], name: o['@name'],
-      // 項目が多い表があるので先頭30件だけ返す（探索用途には十分）
-      items: toArray(o.CLASS).slice(0, 30).map(c => ({ code: c['@code'], name: c['@name'], unit: c['@unit'] })),
-      total: toArray(o.CLASS).length,
-    })),
+    classes: objs.map(o => {
+      const all = toArray(o.CLASS);
+      // 品目が797件ある表（CPI）もあるので、find で名前の部分一致に絞れるようにする
+      const hit = find ? all.filter(c => String(c['@name'] || '').includes(find)) : all;
+      return {
+        id: o['@id'], name: o['@name'],
+        items: hit.slice(0, 40).map(c => ({ code: c['@code'], name: c['@name'], unit: c['@unit'] })),
+        matched: hit.length, total: all.length,
+      };
+    }),
     source: SOURCE_NOTE,
   };
 }
@@ -111,21 +116,22 @@ async function opData(appId, url) {
   return { obs: thin(obs), freq: guessFreq(obs), last: obs[obs.length - 1], source: SOURCE_NOTE };
 }
 
-// e-Stat の @time は「YYYYMMDD形式のコード」。月次=YYYY0M0M（例 202607→"2026000707"風）ではなく
-// 実際は 年(4)＋区分(2)＋期(2)。例: 2026年7月＝"2026000707"ではなく "202607" ではない点に注意し、
-// 実データで確認できた形（10桁: YYYY + 種別2 + 期2 ... ）と 6桁/8桁の両方を許容する。
+// e-Stat の時間軸コード（10桁）は YYYY(4) + 期間種別(2) + 期(2) + 期(2)。実データで確認した形:
+//   月次   "2026000606" = 2026年6月   （種別 00・期＝月）
+//   年度   "2025100000" = 2025年度    （種別 10）
+//   四半期 "2026002204" 等            （種別 02・期＝四半期）
+// ★年次・年度の行を月次に混ぜると系列の頻度が壊れる（2025年度が2025年1月として紛れ込む）ので、
+//   月次・四半期として解釈できないコードは null を返して落とす。呼び出し側は cdTime 等で絞る想定。
 function timeToDate(t) {
   const s = String(t || '');
-  // 10桁: YYYY(4) + 分類(2) + 期(2) + 予備(2)。月次は分類=00・期=月、四半期は分類=10・期=四半期
   if (/^\d{10}$/.test(s)) {
     const y = s.slice(0, 4), kind = s.slice(4, 6), n = parseInt(s.slice(6, 8), 10);
-    if (kind === '01' || kind === '00') return `${y}-${String(Math.min(12, Math.max(1, n))).padStart(2, '0')}-01`; // 月次
-    if (kind === '02' || kind === '10') return `${y}-${String(Math.min(12, Math.max(1, n * 3 - 2))).padStart(2, '0')}-01`; // 四半期→期初月
-    return `${y}-01-01`; // 年次
+    if (kind === '00' && n >= 1 && n <= 12) return `${y}-${String(n).padStart(2, '0')}-01`;        // 月次
+    if (kind === '02' && n >= 1 && n <= 4) return `${y}-${String(n * 3 - 2).padStart(2, '0')}-01`; // 四半期→期初月
+    return null;  // 年次・年度・その他は落とす
   }
   if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
   if (/^\d{6}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-01`;
-  if (/^\d{4}$/.test(s)) return `${s}-01-01`;
   return null;
 }
 
