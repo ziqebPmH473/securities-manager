@@ -88,11 +88,15 @@ export async function onRequestGet(context) {
 
 // リクエストの作り方を段階的に単純化する組み合わせ。上から順に試し、invalid argument なら次へ落とす。
 // 全部盛り（低解像度＋0.2fps＋前半60分）が通るなら従来どおりトークンを節約できる。
+// ★落とす順番が重要。2026-08-14 に thinkingConfig(thinkingBudget:0) が invalid argument で
+//   弾かれるようになったが、fps・切り出し・低解像度は生きている。トークン節約の指定を先に捨てると
+//   長尺動画で全編フル解像度を読ませることになりTPM超過・コスト増を招くので、**thinkingConfig を最初に外す**。
+//   思考を無効化できない分、出力が途中で切れないよう maxOutputTokens を増やす（makeBody 参照）。
 const VARIANTS = [
-  { name: 'full',      fps: true,  clip: true,  mediaRes: true,  noThink: true },
-  { name: 'no-fps',    fps: false, clip: true,  mediaRes: true,  noThink: true },
-  { name: 'no-media',  fps: false, clip: true,  mediaRes: false, noThink: true },
-  { name: 'no-clip',   fps: false, clip: false, mediaRes: false, noThink: true },
+  { name: 'no-think',  fps: true,  clip: true,  mediaRes: true,  noThink: false },
+  { name: 'full',      fps: true,  clip: true,  mediaRes: true,  noThink: true  },
+  { name: 'no-fps',    fps: false, clip: true,  mediaRes: true,  noThink: false },
+  { name: 'no-media',  fps: false, clip: true,  mediaRes: false, noThink: false },
   { name: 'minimal',   fps: false, clip: false, mediaRes: false, noThink: false },
 ];
 function makeBody(v, opt) {
@@ -104,7 +108,8 @@ function makeBody(v, opt) {
   if (opt.fps) vm.fps = 0.2;
   if (Object.keys(vm).length) fd.videoMetadata = vm;
   // thinkingBudget:0＝思考を無効化（思考が出力トークンを食って本文が途中で切れるのを防ぐ）
-  const gc = { temperature: 0.3, maxOutputTokens: 1500 };
+  // 思考を無効化できない時は、思考が出力枠を食って本文が途中で切れるので上限を広げておく
+  const gc = { temperature: 0.3, maxOutputTokens: opt.noThink ? 1500 : 4000 };
   if (opt.mediaRes) gc.mediaResolution = 'MEDIA_RESOLUTION_LOW';
   if (opt.noThink) gc.thinkingConfig = { thinkingBudget: 0 };
   return { contents: [{ role: 'user', parts: [{ text: PROMPT }, fd] }], generationConfig: gc };
