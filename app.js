@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260814-0512';
+const APP_VERSION = 'v20260814-0603';
 
 'use strict';
 
@@ -347,6 +347,7 @@ const store = {
     // 「どれか1つでも変わった時刻」。そこにマクロの表示状態を置くと、他機能・他端末の書き込みが
     // マクロの選択を巻き込んで巻き戻す（実害: 日本を開いていたのに時間が経つとインフレに戻る）。
     // 独立キー＋keyedTs にして、マクロの表示状態を変えた時だけ時刻が動くようにする（ルール7-2）。
+    this.data.lastVideoCheck ||= null; // 購読YouTubeの新着を確認した日（YYYY-MM-DD）。日付なので max マージ
     this.data.macroAlerts ||= [];     // マクロ指標の基準値・警告 [{id,seriesId,mode,cmp,value,enabled,updatedAt,deleted}]
     this.data.updates ||= [];         // 更新情報フィード（経済指標の更新・YouTube新着）。NEWバッジとダッシュボードのお知らせ用
     this.data.updSeen ||= {};         // 更新情報の既読（key→既読日時ISO）
@@ -6310,6 +6311,34 @@ function updNoteVideos(items) {
   }
 }
 
+// ---- 1日1回の裏取得（起動時） ----
+// ★これが無いと更新情報は「マクロ指標タブを開いた後」「ニュースで更新を押した後」にしか増えず、
+//   ダッシュボードに出す意味が無い（2026-08-14 すみぽん指摘）。起動時に裏で取りに行って、
+//   ダッシュボードを開いただけで新着が分かるようにする。
+// ニュース一覧（newsPool）には触らない。「開いたら勝手に更新される」のを止めた経緯があるため
+//   （2026-07-23 すみぽん要望）。ここで取るのは**購読YouTubeの新着だけ**。
+async function updDailyCheck() {
+  // ★マクロと動画は**並列**に走らせること。直列(await)にすると、マクロの取得が遅い時に
+  //   動画の確認が始まらない（実測: ローカルでFREDに繋がらず90秒以上ブロックされ、動画が取れなかった）。
+  const done = () => { if (currentView === 'dashboard') render(); else renderNav(); };  // NEWバッジだけは即反映
+  const jobs = [];
+  if (store.data.lastMacroDate !== todayJst() && !macroBusy && !_macroTried) {
+    _macroTried = true;
+    jobs.push(macroRefresh({ quiet: true }).catch(() => {}));   // 起動時はトーストを出さない
+  }
+  jobs.push(updVideoCheck().catch(() => {}));
+  jobs.forEach(pr => pr.then(done));   // 終わったものから順に画面へ反映（片方が遅くても待たせない）
+  await Promise.allSettled(jobs);
+}
+// 購読チャンネルの新着動画を1日1回だけ確認して更新情報に積む（/api/youtube を1回叩くだけ）
+async function updVideoCheck() {
+  if (store.data.lastVideoCheck === todayJst()) return;
+  const vids = await _newsVideos();
+  store.data.lastVideoCheck = todayJst();
+  if (vids && vids.length) updNoteVideos(vids);
+  store.save();
+}
+
 // ---- ダッシュボードの「更新情報」 ----
 function updFeedHtml() {
   const rows = updList(null).slice(0, UPD_SHOW);
@@ -6365,7 +6394,9 @@ function updOpen(key) {
       }
       // 一覧に出ていない（期間やカテゴリの絞り込み外・保持期間外）場合でも、プールに記事があれば
       // 直接パネルを開く。勝手に外部タブは開かない（ポップアップ扱いで塞がれるうえ不意に別サイトが開く）。
-      const it = (typeof newsFindItem === 'function' && r.link) ? newsFindItem(r.link) : null;
+      // プールに無くても、更新情報の記録だけで動画パネルは開ける（起動時の裏取得はプールに入れないため）
+      const it = ((typeof newsFindItem === 'function' && r.link) ? newsFindItem(r.link) : null)
+        || (r.videoId ? { title: r.title, link: r.link, videoId: r.videoId, source: (r.sub || '').split(' ・ ')[0] || 'YouTube', pubDate: r.date, cat: 'video' } : null);
       if (it) {
         store.data.newsRead ||= {}; store.data.newsRead[r.link] = new Date().toISOString(); store.save();
         if (it.cat === 'video' && typeof openVideoPanel === 'function') openVideoPanel(it);
@@ -6558,7 +6589,8 @@ function toggleMacroCompare(sym) {
 // ---- 取得 ----
 // FRED系列は /api/macro（12件ずつ）、指数・為替は /api/history（1銘柄1回）から取得する。
 // 「更新」ボタン＋タブ初回＋1日1回の自動取得で走る。
-async function macroRefresh() {
+async function macroRefresh(opts) {
+  const quiet = !!(opts && opts.quiet);   // 起動時の裏取得はトーストを出さない
   if (macroBusy) return;
   macroBusy = true;
   if (currentView === 'macro') renderMacro();
@@ -6601,8 +6633,10 @@ async function macroRefresh() {
   if (ok) store.data.lastMacroDate = todayJst();
   store.save();
   macroBusy = false;
-  if (err && !ok) toast('マクロ指標の取得に失敗: ' + ((err && err.message) || err), 4000);
-  else toast(ng ? `マクロ指標を更新（${ok}件成功・${ng}件失敗）` : `マクロ指標を更新しました（${ok}件）`);
+  if (!quiet) {
+    if (err && !ok) toast('マクロ指標の取得に失敗: ' + ((err && err.message) || err), 4000);
+    else toast(ng ? `マクロ指標を更新（${ok}件成功・${ng}件失敗）` : `マクロ指標を更新しました（${ok}件）`);
+  }
   if (currentView === 'macro') renderMacro();
 }
 // 指数・為替1銘柄を Yahoo（/api/history）から取得し、FRED系列と同じ形 [[YYYY-MM-DD, 値], ...] にして保存する。
@@ -14690,6 +14724,8 @@ gsync.restoreSession().catch(() => {});
 render();
 // 1日1回（起動時）だけ銘柄名・セクター・業種・高値を更新
 api.dailyStartup();
+// 1日1回（起動時）マクロ指標と購読YouTubeの新着を裏で確認し、更新情報（ダッシュボード・NEWバッジ）を作る
+updDailyCheck();
 // 公開設定(clientId等)を CF env から取得→反映し、その後 Drive自動同期ループを準備
 // （未ログイン時は何もしない＝ポップアップ無し。ログイン後に同期開始）
 loadServerConfig().then(() => {
