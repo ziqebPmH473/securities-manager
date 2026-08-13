@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260814-0148';
+const APP_VERSION = 'v20260814-0231';
 
 'use strict';
 
@@ -2424,10 +2424,16 @@ function fitUpdList() {
   const main = document.querySelector('main.content');
   if (!main) return;
   el.style.maxHeight = '';
-  let h = Math.min(el.scrollHeight, 300);      // 出しても300pxまで
+  const natural = el.scrollHeight;             // 中身そのままの高さ
+  let h = Math.min(natural, 300);              // 出しても300pxまで
   el.style.maxHeight = h + 'px';
   const overflow = main.scrollHeight - main.clientHeight;
-  if (overflow > 1) h = Math.max(120, h - overflow);   // 4行未満にはしない（一覧の体をなさなくなる）
+  if (overflow > 1) {
+    // 縮める下限は120px（約3行）。ただし**自然高さを超えて広げない**こと。
+    // 単純に Math.max(120, ...) にすると、更新情報が0件で自然高さ40pxの時に120pxへ膨らみ、
+    // 空の枠が無駄に場所を取る（実測: 0件なのにセクション225px）。
+    h = Math.max(Math.min(120, natural), h - overflow);
+  }
   el.style.maxHeight = h + 'px';
 }
 
