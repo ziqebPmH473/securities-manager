@@ -53,7 +53,10 @@ export async function onRequestGet(context) {
 // リトライURLには連番を付ける: cf.cacheEverything を付けているため、失敗応答がエッジに
 // キャッシュされて再試行が同じ失敗を引き当てるのを避ける。
 async function yahooFetch(url, tag) {
-  const waits = [250, 700];
+  // Yahoo は「短時間に何度も叩く」と数秒間まとめて 429 を返す（本番実測: 50銘柄取得を
+  // 連続2回まわすと2回目で3件が429）。待ちは秒オーダーまで伸ばし、揃って再試行して
+  // また同時に弾かれないようジッタを入れる。
+  const waits = [300, 900, 2000];
   for (let a = 0; ; a++) {
     const res = await fetch(a === 0 ? url : `${url}&_r=${a}`, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' },
@@ -61,7 +64,7 @@ async function yahooFetch(url, tag) {
     });
     if (res.ok) return res;
     if (a >= waits.length || !(res.status === 429 || res.status >= 500)) throw new Error(`Yahoo ${res.status} (${tag})`);
-    await new Promise(r => setTimeout(r, waits[a]));
+    await new Promise(r => setTimeout(r, waits[a] + Math.floor(Math.random() * 250)));
   }
 }
 

@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260813-2318';
+const APP_VERSION = 'v20260813-2320';
 
 'use strict';
 
@@ -5002,6 +5002,18 @@ async function mktFetchHighs(syms) {
     const batch = syms.slice(i, i + 15);
     const pr = await fetch(`/api/price?highs=1&symbols=${encodeURIComponent(batch.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
     Object.assign(out, pr);
+  }
+  // 穴埋め: それでも取れなかった銘柄だけ、間を置いて少人数でもう一度。
+  // 日本株ランキングは現在値・前日比をこの取得に依存しており、1件でも落ちると
+  // 「売買代金だけあって現在値が—」の行になるため、サーバ側リトライに加えて最後に1回さらう。
+  const missing = syms.filter(s => { const q = out[s]; return !q || q.error || q.price == null; });
+  if (missing.length) {
+    await new Promise(r => setTimeout(r, 1500));
+    for (let i = 0; i < missing.length; i += 8) {
+      const batch = missing.slice(i, i + 8);
+      const pr = await fetch(`/api/price?highs=1&symbols=${encodeURIComponent(batch.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
+      for (const [k, v] of Object.entries(pr)) if (v && !v.error && v.price != null) out[k] = v;
+    }
   }
   return out;
 }
