@@ -1247,3 +1247,28 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 /* マクロ指標: 凡例の左右軸バッジ（2軸グラフでどちらの目盛りか示す） */
 .macro-axis { display: inline-block; margin-left: 4px; padding: 0 3px; border: 1px solid var(--hair); border-radius: 3px;
   font-size: 9px; font-weight: 600; color: var(--muted); background: var(--panel-2); vertical-align: 1px; cursor: help; }
+
+/* ===== 更新情報（ダッシュボードのお知らせ一覧・企業サイトのニュースリリース風） ===== */
+.upd-section { padding: 8px 14px 10px; margin-bottom: 14px; }
+.upd-head { display: flex; align-items: center; gap: 8px; font-size: 13px; padding-bottom: 4px; }
+/* 一覧はダッシュボードを押し下げないよう枠内スクロール（ルール6）。高さは fitUpdList() が
+   残りスペースに合わせて決める（12件そのまま出すと746pxになりダッシュボードが大きく溢れる）。 */
+.upd-list { display: flex; flex-direction: column; overflow-y: auto; max-height: 240px; }
+.upd-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: none; border-bottom: 1px solid var(--hair); padding: 7px 4px; font: inherit; color: inherit; }
+.upd-item:last-child { border-bottom: none; }
+.upd-item:hover { background: var(--panel-2); }
+.upd-item.unseen .upd-title { font-weight: 700; }
+.upd-kind { flex: 0 0 62px; text-align: center; padding: 2px 0; border-radius: 4px; font-size: 10px; font-weight: 700; }
+.upd-kind.macro { background: rgba(37, 99, 235, .12); color: #2563eb; }
+.upd-kind.video { background: rgba(220, 38, 38, .12); color: #dc2626; }
+.upd-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.upd-title { font-size: 13px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upd-sub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upd-meta { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.upd-new { background: var(--red); color: #fff; border-radius: 3px; padding: 1px 5px; font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+/* サイドナビの NEW バッジ（件数バッジと違い数字を出さない） */
+.nav-badge.nav-new { background: var(--red); color: #fff; font-size: 9px; letter-spacing: .04em; padding: 1px 5px; }
+/* 更新情報からニュースの該当行へ飛んだ時の一瞬の強調 */
+.news-item.upd-flash { animation: updFlash 2s ease-out; }
+@keyframes updFlash { 0%, 40% { background: rgba(245, 158, 11, .28); } 100% { background: transparent; } }

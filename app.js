@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260814-0012';
+const APP_VERSION = 'v20260814-0148';
 
 'use strict';
 
@@ -347,6 +347,8 @@ const store = {
     // 「どれか1つでも変わった時刻」。そこにマクロの表示状態を置くと、他機能・他端末の書き込みが
     // マクロの選択を巻き込んで巻き戻す（実害: 日本を開いていたのに時間が経つとインフレに戻る）。
     // 独立キー＋keyedTs にして、マクロの表示状態を変えた時だけ時刻が動くようにする（ルール7-2）。
+    this.data.updates ||= [];         // 更新情報フィード（経済指標の更新・YouTube新着）。NEWバッジとダッシュボードのお知らせ用
+    this.data.updSeen ||= {};         // 更新情報の既読（key→既読日時ISO）
     this.data.macroView ||= {};
     this.data.lastMacroDate ||= null; // マクロ指標を自動取得した日（YYYY-MM-DD）。日付なので max マージ
     // v20260813-2216 以前は settings 配下だった。1回だけ引っ越す（自動書き込みが settings._updatedAt を
@@ -2330,9 +2332,9 @@ function setHoldingsSearch(v) {
 const NAV_GROUPS = [
   { group: 'メイン', items: [
     { id: 'dashboard', label: 'ダッシュボード', icon: 'dashboard' },
-    { id: 'market',    label: 'マーケット',     icon: 'report' },
-    { id: 'macro',     label: 'マクロ指標',     icon: 'signal' },
-    { id: 'news',      label: 'ニュース',       icon: 'news' },
+    { id: 'market',    label: 'マーケット',     icon: 'podium' },
+    { id: 'macro',     label: 'マクロ指標',     icon: 'gauge', badge: 'new:macro' },
+    { id: 'news',      label: 'ニュース',       icon: 'news', badge: 'new:video' },
     { id: 'holdings',  label: '保有銘柄',       icon: 'holdings' },
     { id: 'trade',     label: '銘柄カルテ',     icon: 'trade' },
     { id: 'signals',   label: '買い増しサイン', icon: 'signal', badge: 'sig' },
@@ -2375,6 +2377,10 @@ const ICON_PATHS = {
   edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
   external: 'M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
   news: 'M4 4h13v16H6a2 2 0 0 1-2-2zM17 8h3v10a2 2 0 0 1-2 2M8 8h5M8 12h5M8 16h5',
+  // マクロ指標＝メーター（景気の温度計）。買い増しサイン(signal)と同じ折れ線アイコンだったので変更
+  gauge: 'M3 19a9 9 0 1 1 18 0M12 19l4.5-5.5M12 19h.01',
+  // マーケット＝ランキングの表彰台。レポート(report)と同じ棒グラフアイコンだったので変更
+  podium: 'M3 21h18M9 21v-8h6v8M9 13H4v8M20 21v-5h-5M12 3l1.3 2.7 3 .4-2.2 2.1.5 3-2.6-1.4-2.6 1.4.5-3L7.7 6.1l3-.4z',
 };
 // SVGアイコン生成。クラス省略時はナビ用(nav-ico)
 function svgIcon(name, cls = 'nav-ico') {
@@ -2391,16 +2397,38 @@ function renderNav() {
   const sig = (ready && typeof allSignals === 'function') ? allSignals().length : 0;
   const split = (ready && typeof pendingSplits === 'function') ? pendingSplits().length : 0;
   const badgeVal = (b) => b === 'sig' ? sig : b === 'split' ? split : 0;
+  // 'new:種別' は件数ではなく「NEW」を出す（経済指標の更新・YouTube動画の新着）
+  const newBadge = (b) => (ready && typeof updUnseenCount === 'function' && b.startsWith('new:')) ? updUnseenCount(b.slice(4)) : 0;
   nav.innerHTML = navOrderedGroups().map(grp => `
     <div class="nav-group">
       <div class="nav-label">${grp.group}</div>
       ${grp.items.map(it => {
-        const bv = it.badge ? badgeVal(it.badge) : 0;
-        const badge = (it.badge && bv > 0) ? `<span class="nav-badge ${it.badge === 'split' ? 'amber' : ''}">${bv}</span>` : '';
+        const isNew = !!(it.badge && it.badge.startsWith('new:'));
+        const bv = it.badge ? (isNew ? newBadge(it.badge) : badgeVal(it.badge)) : 0;
+        const badge = (it.badge && bv > 0)
+          ? (isNew ? `<span class="nav-badge nav-new" title="${bv}件の新着">NEW</span>`
+                   : `<span class="nav-badge ${it.badge === 'split' ? 'amber' : ''}">${bv}</span>`)
+          : '';
         return `<button class="nav-item ${active(it.id) ? 'active' : ''}" data-view="${it.id}">${navIcon(it.icon)}<span class="lbl">${it.label}</span>${badge}</button>`;
       }).join('')}
     </div>`).join('');
   nav.querySelectorAll('.nav-item').forEach(b => b.onclick = () => go(b.dataset.view));
+}
+
+// ダッシュボードの「更新情報」一覧の高さを残りスペースに合わせる。
+// ダッシュボードは元々ちょうど収まっていた（実測: 余り5px）ので、12件そのまま出すと
+// 310px ぶんページが溢れる。空きがあれば広げ、足りなければ縮めて枠内スクロールにする（ルール6）。
+function fitUpdList() {
+  const el = document.querySelector('#app .upd-list');
+  if (!el) return;
+  const main = document.querySelector('main.content');
+  if (!main) return;
+  el.style.maxHeight = '';
+  let h = Math.min(el.scrollHeight, 300);      // 出しても300pxまで
+  el.style.maxHeight = h + 'px';
+  const overflow = main.scrollHeight - main.clientHeight;
+  if (overflow > 1) h = Math.max(120, h - overflow);   // 4行未満にはしない（一覧の体をなさなくなる）
+  el.style.maxHeight = h + 'px';
 }
 
 // 一覧のソート/フィルタ・カラム設定（市場ごと）。デフォルトはティッカー順
@@ -3612,6 +3640,7 @@ function scheduleFit() {
 function fitListTables() {
   const main = document.querySelector('main.content');
   if (!main) return;
+  fitUpdList();   // ダッシュボードの更新情報も残りスペースに合わせる（表より先に確定させる）
   // .macro-managed はマクロ指標タブが自前で高さを決める枠（macroFitTable）。ここで触ると
   // グラフ高さの計算と食い合って毎回ちらつくので対象外にする。
   const wraps = [...main.querySelectorAll('.section .table-wrap:not(.macro-managed)')];
@@ -3887,6 +3916,7 @@ function renderDashboard() {
       <h2>ダッシュボード <span class="dash-meta">${esc(luStr)} 時点・USD/JPY ${fxNow}</span></h2>
     </div>
     ${notes.map(n => `<div class="notice">${esc(n)}</div>`).join('')}
+    ${updFeedHtml()}
     <div class="cards">
       <div class="stat feature">
         <div class="s-label">総資産（円換算${fxMissing ? '・米株除く' : ''}）</div>
@@ -5341,6 +5371,7 @@ async function newsRefresh(auto) {
       ]);
       const data = await res.json();
       let items = (data && Array.isArray(data.items)) ? data.items : [];
+      updNoteVideos(videoItems);   // 新着動画を更新情報フィードへ（NEWバッジ・ダッシュボード用）
       items = items.concat(discItems).concat(videoItems);
       // リンク重複排除・新しい順
       const seen = new Set();
@@ -6037,6 +6068,150 @@ function newsItemHtml(it, read, matches, opts = {}) {
       <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
     </a>`;
 }
+// ============ 更新情報フィード（NEWバッジ／ダッシュボードのお知らせ） ============
+// 「経済指標が更新された」「YouTube動画が上がった」を1本のフィードに貯め、
+//   ・サイドナビの該当タブに NEW バッジ
+//   ・ダッシュボードの「更新情報」一覧（クリックでその指標・動画へ遷移）
+// として見せる。既読は updSeen（キー→既読日時）で持ち、端末をまたいで同期する。
+const UPD_MAX = 80;          // 保持する件数（古いものから捨てる）
+const UPD_SHOW = 12;         // ダッシュボードに出す件数
+const UPD_KIND_LABEL = { macro: '経済指標', video: '動画' };
+
+// フィードに1件積む。key が同じものは「最新の1件」に上書きする（同じ指標の再更新で行が増えないように）。
+function updPush(rec) {
+  store.data.updates ||= [];
+  const now = store._now();
+  const i = store.data.updates.findIndex(r => r.key === rec.key);
+  const row = Object.assign({ id: rec.key, at: now, updatedAt: now }, rec);
+  if (i >= 0) store.data.updates[i] = row; else store.data.updates.push(row);
+  // 新しい順に並べ、上限を超えた分は捨てる
+  store.data.updates.sort((a, b) => (b.at || '') < (a.at || '') ? -1 : 1);
+  if (store.data.updates.length > UPD_MAX) store.data.updates = store.data.updates.slice(0, UPD_MAX);
+}
+function updList(kind) {
+  const all = (store.data.updates || []).filter(r => r && r.key && (!kind || r.kind === kind));
+  return all.slice().sort((a, b) => (b.at || '') < (a.at || '') ? -1 : 1);
+}
+function updIsUnseen(r) { return !((store.data.updSeen || {})[r.key]); }
+function updUnseenCount(kind) { return updList(kind).filter(updIsUnseen).length; }
+// 既読にする。kind を渡すとその種別を全部、rec を渡すと1件だけ。
+function updMarkSeen(kind, key) {
+  store.data.updSeen ||= {};
+  const now = store._now();
+  let changed = false;
+  for (const r of updList(kind)) {
+    if (key && r.key !== key) continue;
+    if (!store.data.updSeen[r.key]) { store.data.updSeen[r.key] = now; changed = true; }
+  }
+  if (changed) store.save();
+  return changed;
+}
+
+// ---- 検知: 経済指標の更新 ----
+// 取得前の最終観測日と比べ、新しい観測が入った時だけ積む（同じ日のデータ再取得では積まない）。
+// 指数・為替(src:'idx')は毎日動くので対象外。「指標が更新された」だけを拾う。
+function updNoteMacro(id, prevLastDate, obs) {
+  const def = MACRO_SERIES[id];
+  if (!def || def.src === 'idx' || !obs || !obs.length) return;
+  const last = obs[obs.length - 1];
+  if (!last || !last[0]) return;
+  if (!prevLastDate || !(last[0] > prevLastDate)) return;   // 初回取得・更新なしは積まない
+  const where = macroWhereIs(id);
+  updPush({
+    kind: 'macro', key: 'macro:' + id + ':' + last[0],
+    title: def.label,
+    sub: `${last[0]} ＝ ${macroFmt(macroTransformLast(id, obs), id)}${def.unit ? ' ' + def.unit : ''}`,
+    date: last[0], seriesId: id, group: where.group, card: where.card,
+  });
+}
+// 表示用の変換（前年比など）を通した最新値。カード表示と数字を揃えるため macroPoints と同じ経路を使う。
+function macroTransformLast(id, obs) {
+  const prev = (store.data.macro || {})[id];
+  store.data.macro ||= {};
+  store.data.macro[id] = { obs, freq: (prev && prev.freq) || '', at: store._now() };
+  const pts = macroPoints(id);
+  if (prev) store.data.macro[id] = prev; else delete store.data.macro[id];
+  return pts.length ? pts[pts.length - 1][1] : null;
+}
+// その系列がどのグループ・カードで見られるかを引く（クリックでその指標へ遷移するため）
+function macroWhereIs(id) {
+  for (const g of MACRO_GROUPS) for (const c of g.cards) if (c.ids.includes(id)) return { group: g.key, card: c.key };
+  return { group: 'infl', card: 'cpi' };
+}
+
+// ---- 検知: YouTube動画の新着 ----
+// ニュース取得で得た動画のうち、まだフィードに無いものを積む。
+function updNoteVideos(items) {
+  for (const v of items || []) {
+    if (!v || !v.videoId) continue;
+    const key = 'video:' + v.videoId;
+    if ((store.data.updates || []).some(r => r.key === key)) continue;   // 既に積んである
+    updPush({
+      kind: 'video', key,
+      title: v.title || '(無題の動画)',
+      sub: [v.source || 'YouTube', (v.pubDate || '').slice(0, 10)].filter(Boolean).join(' ・ '),
+      date: (v.pubDate || '').slice(0, 10),
+      // ★並び順(at)は「気づいた時刻」で統一する。動画だけ公開日時にすると、経済指標(検知時刻)と
+      //   時計が混ざって、新着動画が古い扱いで一覧の下に沈む（実測で先頭12件に出てこなかった）。
+      link: v.link, videoId: v.videoId,
+    });
+  }
+}
+
+// ---- ダッシュボードの「更新情報」 ----
+function updFeedHtml() {
+  const rows = updList(null).slice(0, UPD_SHOW);
+  const unseen = updList(null).filter(updIsUnseen).length;
+  const body = rows.length ? rows.map(r => {
+    const isNew = updIsUnseen(r);
+    return `<button class="upd-item${isNew ? ' unseen' : ''}" onclick="updOpen('${jsq(r.key)}')" title="クリックで${r.kind === 'video' ? 'ニュースタブの該当動画' : 'この指標'}へ移動">
+      <span class="upd-kind ${r.kind}">${UPD_KIND_LABEL[r.kind] || ''}</span>
+      <span class="upd-body"><span class="upd-title">${esc(r.title)}</span><span class="upd-sub">${esc(r.sub || '')}</span></span>
+      <span class="upd-meta">${isNew ? '<span class="upd-new">NEW</span>' : ''}<span class="muted">${esc(updWhen(r))}</span></span>
+    </button>`;
+  }).join('') : '<div class="muted" style="padding:10px 2px;font-size:12px">まだ更新情報はありません。マクロ指標の更新やYouTubeの新着があるとここに出ます。</div>';
+  // ダッシュボードは元々ちょうど窓いっぱいなので、見出し・余白は最小限にする（section-head を使うと
+  // それだけで60px使い、一覧が3行しか出せなくなる）
+  return `<div class="section upd-section">
+    <div class="upd-head"><b>更新情報</b>${unseen ? `<span class="upd-new">新着 ${unseen}</span>` : ''}
+      <span style="margin-left:auto"></span>
+      ${unseen ? '<button class="btn btn-sm" onclick="updMarkAllSeen()">すべて既読</button>' : ''}</div>
+    <div class="upd-list">${body}</div>
+  </div>`;
+}
+function updWhen(r) {
+  const t = r.at || r.date; if (!t) return '';
+  try {
+    const d = new Date(t), now = Date.now(), diff = (now - d.getTime()) / 86400000;
+    if (diff < 1) return d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    if (diff < 7) return Math.floor(diff) + '日前';
+    return d.toLocaleDateString('ja-JP', { month: '2-digit', day: '2-digit' });
+  } catch (_) { return ''; }
+}
+// クリック: その指標／その動画へ遷移し、その1件を既読にする
+function updOpen(key) {
+  const r = (store.data.updates || []).find(x => x.key === key);
+  if (!r) return;
+  updMarkSeen(null, key);
+  if (r.kind === 'macro') {
+    macroSaveView({ macroGroup: r.group, macroCard: Object.assign({}, (store.data.macroView || {}).macroCard || {}, { [r.group]: r.card }) });
+    go('macro');
+  } else {
+    go('news');
+    // 一覧の該当行までスクロールして強調（描画後に探す）
+    setTimeout(() => {
+      // ★CSS.escape は「識別子」用。引用符付き属性値に使うと URL が https\:\/\/... とエスケープされ
+      //   生の値と一致しない（実際に該当行を見つけられなかった）。DOM を走査して素直に比較する。
+      const el = r.link ? [...document.querySelectorAll('.news-item')].find(a => a.dataset.link === r.link) : null;
+      if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('upd-flash'); setTimeout(() => el.classList.remove('upd-flash'), 2000); }
+      // 一覧に無い場合は勝手に外部タブを開かない（ポップアップ扱いで塞がれるうえ、不意に別サイトが開くため）。
+      // ニュースを「更新」すれば一覧に載る、と伝えるだけにする。
+      else toast('この動画はニュース一覧にまだありません。「更新」で取得できます', 3500);
+    }, 250);
+  }
+}
+function updMarkAllSeen() { updMarkSeen(null); render(); }
+
 // ============ マクロ指標（FRED）タブ ============
 // インフレ・金利・SLOOS（FRBが銀行の融資担当者に行う調査）・景気・信用の指標を、カード＋グラフ＋表で表示する。
 // 取得は /api/macro（Cloudflare Function → FRED）。結果は store.data.macro にキャッシュし Google同期の
@@ -6234,8 +6409,13 @@ async function macroRefresh() {
       store.data.macro ||= {};
       for (const id of b) {
         const s = d && d.series && d.series[id];
-        if (s && Array.isArray(s.obs) && s.obs.length) { store.data.macro[id] = { obs: s.obs, freq: s.freq || '', at }; ok++; }
-        else ng++;
+        if (s && Array.isArray(s.obs) && s.obs.length) {
+          // 取得「前」の最終観測日と比べて、新しい観測が入った時だけ更新情報に積む
+          const prev = store.data.macro[id];
+          const prevLast = (prev && prev.obs && prev.obs.length) ? prev.obs[prev.obs.length - 1][0] : null;
+          updNoteMacro(id, prevLast, s.obs);
+          store.data.macro[id] = { obs: s.obs, freq: s.freq || '', at }; ok++;
+        } else ng++;
       }
     }
   } catch (e) { err = e; ng += fredIds.length - ok; }
@@ -6283,6 +6463,9 @@ async function macroFetchEstat(id) {
   if (!res.ok || d.error) throw new Error(d.error || ('HTTP ' + res.status));
   if (!Array.isArray(d.obs) || !d.obs.length) throw new Error('データなし (' + id + ')');
   store.data.macro ||= {};
+  const prev = store.data.macro[id];
+  const prevLast = (prev && prev.obs && prev.obs.length) ? prev.obs[prev.obs.length - 1][0] : null;
+  updNoteMacro(id, prevLast, d.obs);
   store.data.macro[id] = { obs: d.obs, freq: d.freq || '', at: new Date().toISOString() };
 }
 // 直近200点はそのまま残し、それ以前を等間隔に間引いて全体を320点以内にする（functions/api/macro.js と同じ規則）
@@ -13680,6 +13863,9 @@ function timeBasedMarket() {
   return (day >= 1 && day <= 5 && hour >= 8 && hour < 18) ? 'JP' : 'US';
 }
 function go(view) {
+  // そのタブを開いたら NEW を解除する（マクロ＝経済指標 / ニュース＝動画）
+  const kind = view === 'macro' ? 'macro' : view === 'news' ? 'video' : null;
+  if (kind) updMarkSeen(kind);
   // ニュースの黄○はタブ移動→戻るでは消さない（消えるのはアプリ開き直し/リロード時と「更新」時のみ。
   // _newsSeenMark はセッション開始時の renderNews で一度だけ初期化される。すみぽん仕様 2026-07-23）
   currentView = view;
@@ -14252,6 +14438,8 @@ window.setMacroGroup = setMacroGroup;
 window.setMacroCard = setMacroCard;
 window.setMacroPeriod = setMacroPeriod;
 window.toggleMacroCompare = toggleMacroCompare;
+window.updOpen = updOpen;
+window.updMarkAllSeen = updMarkAllSeen;
 window.macroRefresh = macroRefresh;
 window.api = api;
 window.render = render;

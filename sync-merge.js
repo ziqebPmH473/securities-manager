@@ -46,6 +46,9 @@
     // settings は多機能が共有する1つのオブジェクトで _updatedAt は「どれか1つでも変わった時刻」。
     // そこに同居させると、他機能・他端末の書き込みがマクロの選択を巻き込んで巻き戻す
     // （実害: 日本を開いていたのに時間が経つとインフレに戻る・2026-08-13）。
+    // 更新情報フィード（経済指標の更新・YouTube新着）。key で一致＋updatedAt の新しい方。
+    updates:         ['records', (r) => `upd:${r && r.key}`],
+    updSeen:         ['map', null],   // 更新情報の既読（key→日時）。キー単位3-way・両在はlocal
     macroView:       ['keyedTs'],
     macro:           ['map', byAt],   // マクロ指標キャッシュ FRED系列ID→{obs,freq,at}。系列ごとに取得時刻 at の新しい方（settings に入れず独立キー＝ルール7-2）
     macroIdx:        ['map', byAt],   // 指数・為替キャッシュ Yahooシンボル→{obs,freq,at}（重ね合わせ比較用）。系列ごとに at の新しい方
