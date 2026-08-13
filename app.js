@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260814-0304';
+const APP_VERSION = 'v20260814-0402';
 
 'use strict';
 
@@ -347,6 +347,7 @@ const store = {
     // 「どれか1つでも変わった時刻」。そこにマクロの表示状態を置くと、他機能・他端末の書き込みが
     // マクロの選択を巻き込んで巻き戻す（実害: 日本を開いていたのに時間が経つとインフレに戻る）。
     // 独立キー＋keyedTs にして、マクロの表示状態を変えた時だけ時刻が動くようにする（ルール7-2）。
+    this.data.macroAlerts ||= [];     // マクロ指標の基準値・警告 [{id,seriesId,mode,cmp,value,enabled,updatedAt,deleted}]
     this.data.updates ||= [];         // 更新情報フィード（経済指標の更新・YouTube新着）。NEWバッジとダッシュボードのお知らせ用
     this.data.updSeen ||= {};         // 更新情報の既読（key→既読日時ISO）
     this.data.macroView ||= {};
@@ -3922,6 +3923,7 @@ function renderDashboard() {
       <h2>ダッシュボード <span class="dash-meta">${esc(luStr)} 時点・USD/JPY ${fxNow}</span></h2>
     </div>
     ${notes.map(n => `<div class="notice">${esc(n)}</div>`).join('')}
+    ${macroAlertCardHtml()}
     ${updFeedHtml()}
     <div class="cards">
       <div class="stat feature">
@@ -6076,6 +6078,132 @@ function newsItemHtml(it, read, matches, opts = {}) {
       <span class="news-meta">${catChip}<span>${esc(it.source || '')}</span><span>${newsTime(it.pubDate)}</span>${secChips}${tagChips}${majorChips}</span>
     </a>`;
 }
+// ============ マクロ指標の基準値ライン・警告 ============
+// 指標ごとに「基準値」と「どちらへ抜けたら警告か」を登録し、
+//   ・グラフに基準値の水平線
+//   ・ダッシュボードの「マクロ警告」カード
+//   ・定時通知メールの「マクロ警告」欄（サーバー側で最新値を取り直して判定）
+// で知らせる。**設定した条件を満たした事実を伝えるだけで、売買の推奨はしない。**
+const MA_MODES = [
+  ['level', '実値',   'その時点の値そのもの'],
+  ['chg',   '前期差', '1つ前の観測との差'],
+  ['yoy',   '1年差',  '約1年前の観測との差'],
+];
+const MA_CMPS = [['gt', '上回ったら'], ['lt', '下回ったら']];
+const maModeLabel = (m) => (MA_MODES.find(x => x[0] === m) || MA_MODES[0])[1];
+const maCmpLabel = (c) => (MA_CMPS.find(x => x[0] === c) || MA_CMPS[0])[1];
+
+function macroAlerts() { return (store.data.macroAlerts || []).filter(a => a && !a.deleted); }
+// 1件の判定。表示と同じ値（前年比などの変換後）で判定するため macroPoints を使う。
+// 戻り値: null=データ不足 / {fired, value, date}
+function macroAlertState(a) {
+  if (!a || !a.seriesId || !isFinite(a.value)) return null;
+  const pts = macroPoints(a.seriesId);
+  if (!pts.length) return null;
+  const last = pts[pts.length - 1];
+  let v = null;
+  if (a.mode === 'chg') { if (pts.length < 2) return null; v = last[1] - pts[pts.length - 2][1]; }
+  else if (a.mode === 'yoy') { const y = macroAtBefore(pts, last[0], 365, 60); if (!y) return null; v = last[1] - y[1]; }
+  else v = last[1];
+  if (v == null || !isFinite(v)) return null;
+  return { fired: a.cmp === 'lt' ? (v < a.value) : (v > a.value), value: v, date: last[0] };
+}
+function macroFiredAlerts() {
+  return macroAlerts().filter(a => a.enabled !== false).map(a => ({ a, st: macroAlertState(a) }))
+    .filter(x => x.st && x.st.fired);
+}
+function macroAlertText(a, st) {
+  const def = MACRO_SERIES[a.seriesId] || {};
+  const unit = def.unit ? ' ' + def.unit : '';
+  return `${def.label || a.seriesId}（${maModeLabel(a.mode)}）が ${macroFmt(a.value, a.seriesId)}${unit} を${maCmpLabel(a.cmp)}`
+    + `：現在 ${macroFmt(st.value, a.seriesId)}${unit}（${st.date}）`;
+}
+
+// ---- 編集UI ----
+function openMacroAlerts() {
+  const rows = macroAlerts().map(a => {
+    const st = macroAlertState(a);
+    const def = MACRO_SERIES[a.seriesId] || {};
+    const status = !st ? '<span class="muted">データ不足</span>'
+      : st.fired ? '<span class="neg" style="font-weight:700">条件成立</span>'
+      : '<span class="muted">条件外</span>';
+    return `<tr>
+      <td class="l">${esc(def.label || a.seriesId)}</td>
+      <td class="c">${esc(maModeLabel(a.mode))}</td>
+      <td class="c">${esc(maCmpLabel(a.cmp))}</td>
+      <td class="r">${macroFmt(a.value, a.seriesId)}${def.unit ? ' ' + esc(def.unit) : ''}</td>
+      <td class="r">${st ? macroFmt(st.value, a.seriesId) : '—'}</td>
+      <td class="c">${status}</td>
+      <td class="c"><label style="display:inline-flex;align-items:center;gap:4px;font-size:11px">
+        <input type="checkbox" ${a.enabled === false ? '' : 'checked'} onchange="maToggle('${jsq(a.id)}', this.checked)">有効</label></td>
+      <td class="c"><button class="btn btn-sm" onclick="maDelete('${jsq(a.id)}')">削除</button></td>
+    </tr>`;
+  }).join('');
+  // 選べる指標は「グラフに出せる指標」＝指数・為替を除いた系列
+  const opts = Object.keys(MACRO_SERIES).filter(id => MACRO_SERIES[id].src !== 'idx')
+    .map(id => `<option value="${esc(id)}">${esc(MACRO_SERIES[id].label)}${MACRO_SERIES[id].unit ? '（' + esc(MACRO_SERIES[id].unit) + '）' : ''}</option>`).join('');
+  showModal('基準値と警告', `
+    <p class="muted" style="margin:0 0 10px;font-size:12px">指標が設定した基準値を抜けたら、グラフの水平線・ダッシュボード・定時通知メールで知らせます。
+      判定は画面と同じ値（前年比などの変換後）で行います。<b>条件を満たした事実をお知らせするもので、売買の判断を示すものではありません。</b></p>
+    <div class="table-wrap" style="max-height:260px">
+      <table class="list"><thead><tr><th class="l">指標</th><th class="c">判定</th><th class="c">向き</th><th class="r">基準値</th><th class="r">現在</th><th class="c">状態</th><th class="c">有効</th><th class="c"></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="8" class="c muted" style="padding:14px">まだ登録がありません。下から追加してください。</td></tr>'}</tbody></table></div>
+    <div style="margin-top:12px;display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;align-items:end">
+      <label>指標<select id="ma-series">${opts}</select></label>
+      <label>判定<select id="ma-mode">${MA_MODES.map(([v, l, t]) => `<option value="${v}" title="${esc(t)}">${l}</option>`).join('')}</select></label>
+      <label>向き<select id="ma-cmp">${MA_CMPS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
+      <label>基準値<input id="ma-value" type="number" step="any" placeholder="例: 3"></label>
+      <button class="btn btn-primary" onclick="maAdd()">追加</button>
+    </div>`, { wide: true });
+}
+function maAdd() {
+  const seriesId = (document.getElementById('ma-series') || {}).value;
+  const mode = (document.getElementById('ma-mode') || {}).value || 'level';
+  const cmp = (document.getElementById('ma-cmp') || {}).value || 'gt';
+  const value = parseFloat((document.getElementById('ma-value') || {}).value);
+  if (!seriesId || !isFinite(value)) { toast('基準値を数値で入力してください'); return; }
+  store.data.macroAlerts ||= [];
+  store.data.macroAlerts.push({ id: 'ma' + store.nextId(), seriesId, mode, cmp, value, enabled: true, updatedAt: store._now() });
+  store.save();
+  openMacroAlerts(); render();
+}
+// 削除はトンボストン（deleted:true＋新しい updatedAt）。配列から消すと同期で復活する（ルール5-8）
+function maDelete(id) {
+  const a = (store.data.macroAlerts || []).find(x => x.id === id);
+  if (!a) return;
+  a.deleted = true; a.updatedAt = store._now(); store.save();
+  openMacroAlerts(); render();
+}
+function maToggle(id, on) {
+  const a = (store.data.macroAlerts || []).find(x => x.id === id);
+  if (!a) return;
+  a.enabled = !!on; a.updatedAt = store._now(); store.save();
+  openMacroAlerts(); render();
+}
+
+// ---- ダッシュボードのカード ----
+function macroAlertCardHtml() {
+  const fired = macroFiredAlerts();
+  const total = macroAlerts().filter(a => a.enabled !== false).length;
+  if (!total) return '';   // 未設定なら何も出さない（空枠で場所を取らない）
+  const body = fired.length
+    ? `<div class="upd-list">${fired.map(({ a, st }) => `<button class="upd-item unseen" onclick="maOpenSeries('${jsq(a.seriesId)}')">
+        <span class="upd-kind alert">警告</span>
+        <span class="upd-body"><span class="upd-title">${esc(macroAlertText(a, st))}</span></span>
+      </button>`).join('')}</div>`
+    : `<div class="empty empty-sm">設定した ${total} 件の基準値はいずれも条件外です。</div>`;
+  return `<div class="section upd-section">
+    <div class="upd-head"><b>マクロ警告</b>${fired.length ? `<span class="upd-new">${fired.length}件</span>` : ''}
+      <span style="margin-left:auto"></span>
+      <button class="btn btn-sm" onclick="openMacroAlerts()">設定</button></div>
+    ${body}</div>`;
+}
+function maOpenSeries(seriesId) {
+  const w = macroWhereIs(seriesId);
+  macroSaveView({ macroGroup: w.group, macroCard: Object.assign({}, (store.data.macroView || {}).macroCard || {}, { [w.group]: w.card }) });
+  go('macro');
+}
+
 // ============ 更新情報フィード（NEWバッジ／ダッシュボードのお知らせ） ============
 // 「経済指標が更新された」「YouTube動画が上がった」を1本のフィードに貯め、
 //   ・サイドナビの該当タブに NEW バッジ
@@ -6654,6 +6782,7 @@ function renderMacro() {
       <div class="section-head"><h2>マクロ指標</h2>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span class="muted" style="font-size:11px">${fetchedAt ? '取得：' + mktFetchedAt(fetchedAt) : ''}</span>
+          <button class="btn btn-sm" onclick="openMacroAlerts()" title="指標が基準値を抜けたら知らせる設定">基準値・警告${macroFiredAlerts().length ? `（${macroFiredAlerts().length}）` : ''}</button>
           <button class="btn btn-sm btn-primary" onclick="macroRefresh()" ${macroBusy ? 'disabled' : ''}>${macroBusy ? '取得中…' : '更新'}</button>
         </div></div>
       <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${groupSeg}${periodSeg}${cmpSeg}</div>
@@ -6853,6 +6982,19 @@ function macroLineChart(series, W, H) {
   // ゼロ線（SLOOS・イールドカーブ差・前年比などは「0をまたぐか」が意味を持つので濃く引く）
   const zero = (sl.lo < 0 && sl.hi > 0)
     ? `<line x1="${pad.l}" y1="${pyl(0).toFixed(1)}" x2="${W - pad.r}" y2="${pyl(0).toFixed(1)}" stroke="var(--muted)" stroke-width="1.4"/>` : '';
+  // 基準値の水平線。**実値(level)の警告だけ**描く（前期差・1年差は「差」なので値の軸には乗らない）。
+  // 左軸に出ている系列のものだけ。軸の外なら描かない（枠外に線が出るため）。
+  let thresholds = '';
+  for (const a of macroAlerts()) {
+    if (a.enabled === false || a.mode !== 'level') continue;
+    if (!L.some(x => x.id === a.seriesId)) continue;
+    if (a.value < sl.lo || a.value > sl.hi) continue;
+    const y = pyl(a.value).toFixed(1);
+    const st = macroAlertState(a);
+    const col = (st && st.fired) ? 'var(--red)' : 'var(--amber)';
+    thresholds += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="${col}" stroke-width="1.2" stroke-dasharray="6 4"/>`
+      + `<text x="${W - pad.r - 4}" y="${(+y - 4).toFixed(1)}" fill="${col}" font-size="9" text-anchor="end">基準 ${macroFmt(a.value, a.seriesId)}</text>`;
+  }
   // X軸: 年初を等間隔に間引いて表示（データ位置ではなく時間軸で等間隔）
   let xlab = '';
   { const y0 = new Date(xmin * 1000).getUTCFullYear(), y1 = new Date(xmax * 1000).getUTCFullYear();
@@ -6887,7 +7029,7 @@ function macroLineChart(series, W, H) {
   _macroHover = { series, px, W, H, pad, xmin, xmax };
   return `<div style="display:flex;gap:10px;align-items:flex-start">
     <div style="flex:1;min-width:0;position:relative">
-      <svg id="macro-svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px;cursor:crosshair">${grid}${xlab}${zero}${lines}${ylab}${yrlab}${guide}</svg>
+      <svg id="macro-svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px;cursor:crosshair">${grid}${xlab}${zero}${thresholds}${lines}${ylab}${yrlab}${guide}</svg>
       <div id="macro-tip" style="position:absolute;display:none;pointer-events:none;z-index:5;top:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:11px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.18);white-space:nowrap"></div>
     </div>
     <div style="flex:0 0 140px;width:140px">${legend}</div>
@@ -14446,6 +14588,11 @@ window.setMacroGroup = setMacroGroup;
 window.setMacroCard = setMacroCard;
 window.setMacroPeriod = setMacroPeriod;
 window.toggleMacroCompare = toggleMacroCompare;
+window.openMacroAlerts = openMacroAlerts;
+window.maAdd = maAdd;
+window.maDelete = maDelete;
+window.maToggle = maToggle;
+window.maOpenSeries = maOpenSeries;
 window.updOpen = updOpen;
 window.updMarkAllSeen = updMarkAllSeen;
 window.macroRefresh = macroRefresh;

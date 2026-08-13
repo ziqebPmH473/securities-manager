@@ -9,6 +9,7 @@ import { computeSignals, computeBreakdowns } from '../lib/portfolio.js';
 import { fetchFreshPrices, mergeFreshPrices } from '../lib/prices.js';
 import { buildSignalEmail, sendResend } from '../lib/notify.js';
 import { checkToken } from '../lib/auth.js';
+import { evaluateMacroAlerts, macroAlertSection } from '../lib/macro-alerts.js';
 
 const MARKET_LABEL = { JP: '日本株', US: '米国株' };
 
@@ -49,9 +50,21 @@ export async function onRequestGet(context) {
     const notifyCfg = (bundle.settings && bundle.settings.notify) || null;
     const email = buildSignalEmail(signals, dateLabel, MARKET_LABEL[market] || '', notifyCfg, market);
 
+    // マクロ指標の基準値警告（設定があるときだけ）。値はその場で取り直すので、端末が同期していなくても最新で判定できる。
+    // 取得に失敗しても通知全体は止めない（best-effort）。
+    let macro = { fired: [], checked: 0, skipped: 0 };
+    try { macro = await evaluateMacroAlerts(url.origin, bundle); } catch (e) { macro = { fired: [], checked: 0, skipped: 0, error: String(e && e.message || e) }; }
+    const macroText = macroAlertSection(macro);
+    if (macroText) {
+      email.text += '\n' + macroText;
+      email.html = `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif"><pre style="font:13px/1.7 ui-monospace,monospace;white-space:pre-wrap;margin:0">${escapeHtml(email.text)}</pre></div>`;
+      if (macro.fired.length) email.subject += `／マクロ警告${macro.fired.length}件`;
+    }
+
     let sent = null, skipped = null;
     if (doSend) {
-      if (signals.length === 0) skipped = 'サインなしのため送信スキップ';
+      // サインが無くてもマクロ警告があれば送る（そのための警告設定なので）
+      if (signals.length === 0 && !macro.fired.length) skipped = 'サイン・マクロ警告なしのため送信スキップ';
       else sent = await sendResend(context.env, email);
     }
 
@@ -60,6 +73,7 @@ export async function onRequestGet(context) {
       market: market || 'ALL',
       source: bundle._source || null,
       freshPrices: Object.keys(fresh).length,
+      macroAlerts: { fired: macro.fired.length, checked: macro.checked, skipped: macro.skipped, error: macro.error || null },
       reached: signals.filter(s => s.reached).length,
       near: signals.filter(s => !s.reached).length,
       snapshot,
@@ -77,4 +91,9 @@ function json(obj, status = 200) {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
+}
+
+// メール本文をHTML化する時のエスケープ（lib/notify.js と同じ規則）
+function escapeHtml(t) {
+  return String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }

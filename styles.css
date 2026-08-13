@@ -1282,3 +1282,6 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
    ダッシュボードは元々ちょうど窓いっぱいなので、ここを詰めた分がそのまま余白になる。 */
 .section-head.head-sm { padding: 9px 16px; }
 .section-head.head-sm h2 { font-size: 14px; }
+
+/* マクロ警告のラベル（更新情報の一覧スタイルを共用） */
+.upd-kind.alert { background: rgba(220, 38, 38, .14); color: var(--red); }

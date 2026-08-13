@@ -49,6 +49,8 @@
     // 更新情報フィード（経済指標の更新・YouTube新着）。key で一致＋updatedAt の新しい方。
     updates:         ['records', (r) => `upd:${r && r.key}`],
     updSeen:         ['map', null],   // 更新情報の既読（key→日時）。キー単位3-way・両在はlocal
+    // マクロ指標の基準値・警告。id キー＋updatedAt。削除はトンボストン（deleted:true）で伝播
+    macroAlerts:     ['records', (r) => `ma:${r && r.id}`],
     macroView:       ['keyedTs'],
     macro:           ['map', byAt],   // マクロ指標キャッシュ FRED系列ID→{obs,freq,at}。系列ごとに取得時刻 at の新しい方（settings に入れず独立キー＝ルール7-2）
     macroIdx:        ['map', byAt],   // 指数・為替キャッシュ Yahooシンボル→{obs,freq,at}（重ね合わせ比較用）。系列ごとに at の新しい方
