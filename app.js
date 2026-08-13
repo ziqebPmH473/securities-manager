@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260814-0231';
+const APP_VERSION = 'v20260814-0304';
 
 'use strict';
 
@@ -2429,10 +2429,10 @@ function fitUpdList() {
   el.style.maxHeight = h + 'px';
   const overflow = main.scrollHeight - main.clientHeight;
   if (overflow > 1) {
-    // 縮める下限は120px（約3行）。ただし**自然高さを超えて広げない**こと。
+    // 縮める下限は84px（約2行）。ただし**自然高さを超えて広げない**こと。
     // 単純に Math.max(120, ...) にすると、更新情報が0件で自然高さ40pxの時に120pxへ膨らみ、
     // 空の枠が無駄に場所を取る（実測: 0件なのにセクション225px）。
-    h = Math.max(Math.min(120, natural), h - overflow);
+    h = Math.max(Math.min(84, natural), h - overflow);   // 下限は約2行。3行固定にするとダッシュボードが収まらない
   }
   el.style.maxHeight = h + 'px';
 }
@@ -3978,7 +3978,7 @@ function renderDashboard() {
     </div>
 
     <div class="section" style="margin-top:14px">
-      <div class="section-head"><h2>買い増しサイン（本日 新規到達）</h2>
+      <div class="section-head head-sm"><h2>買い増しサイン（本日 新規到達）</h2>
         <span class="muted" style="margin-left:8px;font-size:12px">新 ${newReached.length} 件 / 到達計 ${reachedSecs.length} 件</span>
         <button class="btn btn-sm" style="margin-left:auto" onclick="go('signals')">一覧へ</button></div>
       <div class="section-body">${dashSignalsTable()}</div>
@@ -4639,7 +4639,9 @@ function renderSignals() {
 function dashSignalsTable() {
   const { reached } = signalRows();
   const newReached = reached.filter(s => calc.reachKind(s) === '新');
-  if (newReached.length === 0) return `<div class="empty">本日新しく買い増しサインに到達した銘柄はありません。</div>`;
+  // ダッシュボードは画面いっぱいなので、0件の空表示は詰まった見た目にする（既定の .empty は
+  // 上下56pxの余白で134pxも使い、その分だけページがスクロールしていた）
+  if (newReached.length === 0) return `<div class="empty empty-sm">本日新しく買い増しサインに到達した銘柄はありません。</div>`;
   const cols = ['ticker', 'name', 'market', 'price', 'drop', 'trigger', 'buyAmount']
     .map(k => MASTER_COLS.find(m => m.key === k));
   const head = cols.map(c => `<th class="${c.left ? 'l' : ''}" title="${esc(c.label)}">${c.label}</th>`).join('');

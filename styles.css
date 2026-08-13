@@ -1272,3 +1272,13 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 /* 更新情報からニュースの該当行へ飛んだ時の一瞬の強調 */
 .news-item.upd-flash { animation: updFlash 2s ease-out; }
 @keyframes updFlash { 0%, 40% { background: rgba(245, 158, 11, .28); } 100% { background: transparent; } }
+
+/* 0件表示の詰まった版。ダッシュボードのように画面いっぱいの画面で使う
+   （既定の .empty は上下56pxの余白があり、空なのに134px場所を取る） */
+.empty.empty-sm { padding: 14px 16px; font-size: 12px; }
+.empty.empty-sm .ico { display: none; }
+
+/* ダッシュボード用の詰まったセクション見出し（既定は上下15pxで60px使う）。
+   ダッシュボードは元々ちょうど窓いっぱいなので、ここを詰めた分がそのまま余白になる。 */
+.section-head.head-sm { padding: 9px 16px; }
+.section-head.head-sm h2 { font-size: 14px; }
