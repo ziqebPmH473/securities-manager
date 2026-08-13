@@ -29,14 +29,40 @@ export async function onRequestGet(context) {
 
   const finnhubKey = context.env && context.env.FINNHUB_API_KEY;
   const out = {};
-  await Promise.all(symbols.map(async (sym) => {
-    try {
-      out[sym] = await fetchOne(sym, finnhubKey, { mode, range, withHighs, ext });
-    } catch (e) {
-      out[sym] = { error: String(e && e.message || e) };
+  // 同時実行を絞る（2026-08-13）。以前は symbols を全部 Promise.all で一斉に投げていたため、
+  // 1リクエスト15銘柄でも Yahoo が 429 を返し、当たった銘柄だけ現在値・高値が空になった
+  // （マーケットランキングで「売買代金だけあって現在値が—」の行が出る症状）。
+  // 5並列＋yahooFetch のリトライで、実測の欠損がゼロになる。
+  const POOL = 5;
+  let next = 0;
+  const worker = async () => {
+    while (next < symbols.length) {
+      const sym = symbols[next++];
+      try {
+        out[sym] = await fetchOne(sym, finnhubKey, { mode, range, withHighs, ext });
+      } catch (e) {
+        out[sym] = { error: String(e && e.message || e) };
+      }
     }
-  }));
+  };
+  await Promise.all(Array.from({ length: Math.min(POOL, symbols.length) }, worker));
   return json(out);
+}
+
+// Yahoo への GET（429・5xx は短いバックオフで最大2回リトライ）。
+// リトライURLには連番を付ける: cf.cacheEverything を付けているため、失敗応答がエッジに
+// キャッシュされて再試行が同じ失敗を引き当てるのを避ける。
+async function yahooFetch(url, tag) {
+  const waits = [250, 700];
+  for (let a = 0; ; a++) {
+    const res = await fetch(a === 0 ? url : `${url}&_r=${a}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' },
+      cf: { cacheTtl: 60, cacheEverything: true },
+    });
+    if (res.ok) return res;
+    if (a >= waits.length || !(res.status === 429 || res.status >= 500)) throw new Error(`Yahoo ${res.status} (${tag})`);
+    await new Promise(r => setTimeout(r, waits[a]));
+  }
 }
 
 // シンボルの種別を判定
@@ -102,8 +128,7 @@ async function fetchFinnhub(symbol, token, withHighs) {
 // 現在がプレ/アフターの取引時間内のときだけ extPrice を返す（それ以外は null＝時間外取引なし）。
 async function fetchUsExtended(symbol) {
   const u = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m&includePrePost=true${bust()}`;
-  const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' }, cf: { cacheTtl: 60, cacheEverything: true } });
-  if (!res.ok) throw new Error(`Yahoo ext ${res.status} (${symbol})`);
+  const res = await yahooFetch(u, `ext ${symbol}`);
   const data = await res.json();
   const r = data && data.chart && data.chart.result && data.chart.result[0];
   if (!r) throw new Error('データなし');
@@ -166,11 +191,7 @@ async function fetchYahoo(symbol, type, rangeOverride, withHighs) {
 
 async function fetchYahooChart(symbol, range, interval) {
   const u = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}${bust()}`;
-  const res = await fetch(u, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; securities-manager/1.0)' },
-    cf: { cacheTtl: 60, cacheEverything: true },
-  });
-  if (!res.ok) throw new Error(`Yahoo ${res.status} (${symbol})`);
+  const res = await yahooFetch(u, symbol);
   const data = await res.json();
   const r = data && data.chart && data.chart.result && data.chart.result[0];
   if (!r) throw new Error('データなし');
