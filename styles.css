@@ -1285,3 +1285,6 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 
 /* マクロ警告のラベル（更新情報の一覧スタイルを共用） */
 .upd-kind.alert { background: rgba(220, 38, 38, .14); color: var(--red); }
+
+/* マクロ警告の一覧は件数が増えても場所を取りすぎないよう枠内スクロール（更新情報は fitUpdList が可変で決める） */
+.upd-list.ma-list { max-height: 132px; }

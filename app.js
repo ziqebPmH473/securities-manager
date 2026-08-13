@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260814-0435';
+const APP_VERSION = 'v20260814-0512';
 
 'use strict';
 
@@ -2420,7 +2420,9 @@ function renderNav() {
 // ダッシュボードは元々ちょうど収まっていた（実測: 余り5px）ので、12件そのまま出すと
 // 310px ぶんページが溢れる。空きがあれば広げ、足りなければ縮めて枠内スクロールにする（ルール6）。
 function fitUpdList() {
-  const el = document.querySelector('#app .upd-list');
+  // ★ID指定。マクロ警告カードも .upd-list を使うので、クラスだけで探すとそちらを縮めてしまい
+  //   更新情報が縮まない（実測: ダッシュボードが305pxはみ出した）。
+  const el = document.getElementById('upd-feed-list');
   if (!el) return;
   const main = document.querySelector('main.content');
   if (!main) return;
@@ -6187,7 +6189,7 @@ function macroAlertCardHtml() {
   const total = macroAlerts().filter(a => a.enabled !== false).length;
   if (!total) return '';   // 未設定なら何も出さない（空枠で場所を取らない）
   const body = fired.length
-    ? `<div class="upd-list">${fired.map(({ a, st }) => `<button class="upd-item unseen" onclick="maOpenSeries('${jsq(a.seriesId)}')">
+    ? `<div class="upd-list ma-list">${fired.map(({ a, st }) => `<button class="upd-item unseen" onclick="maOpenSeries('${jsq(a.seriesId)}')">
         <span class="upd-kind alert">警告</span>
         <span class="upd-body"><span class="upd-title">${esc(macroAlertText(a, st))}</span></span>
       </button>`).join('')}</div>`
@@ -6214,19 +6216,29 @@ const UPD_SHOW = 12;         // ダッシュボードに出す件数
 const UPD_KIND_LABEL = { macro: '経済指標', video: '動画' };
 
 // フィードに1件積む。key が同じものは「最新の1件」に上書きする（同じ指標の再更新で行が増えないように）。
+// 並び替えのキー。★「気づいた時刻(at)」ではなく**出来事の日付(date)**で並べる。
+// at で並べると、同じ更新でまとめて取得した指標が全部同じ時刻になって順不同に見えるうえ、
+// 「7月分のCPI」と「3月公開の動画」が取得順で混ざる（すみぽん指摘 2026-08-14）。
+// date（指標＝観測日 / 動画＝公開日）で降順、同日なら at で降順。
+const updSortKey = (r) => [(r && r.date) || '', (r && r.at) || ''];
+function updCmp(a, b) {
+  const ka = updSortKey(a), kb = updSortKey(b);
+  if (ka[0] !== kb[0]) return ka[0] < kb[0] ? 1 : -1;
+  if (ka[1] !== kb[1]) return ka[1] < kb[1] ? 1 : -1;
+  return 0;
+}
 function updPush(rec) {
   store.data.updates ||= [];
   const now = store._now();
   const i = store.data.updates.findIndex(r => r.key === rec.key);
   const row = Object.assign({ id: rec.key, at: now, updatedAt: now }, rec);
   if (i >= 0) store.data.updates[i] = row; else store.data.updates.push(row);
-  // 新しい順に並べ、上限を超えた分は捨てる
-  store.data.updates.sort((a, b) => (b.at || '') < (a.at || '') ? -1 : 1);
+  store.data.updates.sort(updCmp);
   if (store.data.updates.length > UPD_MAX) store.data.updates = store.data.updates.slice(0, UPD_MAX);
 }
 function updList(kind) {
   const all = (store.data.updates || []).filter(r => r && r.key && (!kind || r.kind === kind));
-  return all.slice().sort((a, b) => (b.at || '') < (a.at || '') ? -1 : 1);
+  return all.slice().sort(updCmp);
 }
 function updIsUnseen(r) { return !((store.data.updSeen || {})[r.key]); }
 function updUnseenCount(kind) { return updList(kind).filter(updIsUnseen).length; }
@@ -6246,9 +6258,13 @@ function updMarkSeen(kind, key) {
 // ---- 検知: 経済指標の更新 ----
 // 取得前の最終観測日と比べ、新しい観測が入った時だけ積む（同じ日のデータ再取得では積まない）。
 // 指数・為替(src:'idx')は毎日動くので対象外。「指標が更新された」だけを拾う。
-function updNoteMacro(id, prevLastDate, obs) {
+function updNoteMacro(id, prevLastDate, obs, freq) {
   const def = MACRO_SERIES[id];
   if (!def || def.src === 'idx' || !obs || !obs.length) return;
+  // ★日次の指標（米国債利回り・FF金利・期待インフレ・VIX等）は毎営業日に値が入るので、
+  //   お知らせに出すと毎日大量に流れて他の更新が埋もれる（すみぽん指摘 2026-08-14）。
+  //   「指標が更新された」と言えるのは月次・四半期（と週次）なので、日次は積まない。
+  if (freq === '日次') return;
   const last = obs[obs.length - 1];
   if (!last || !last[0]) return;
   if (!prevLastDate || !(last[0] > prevLastDate)) return;   // 初回取得・更新なしは積まない
@@ -6312,11 +6328,13 @@ function updFeedHtml() {
     <div class="upd-head"><b>更新情報</b>${unseen ? `<span class="upd-new">新着 ${unseen}</span>` : ''}
       <span style="margin-left:auto"></span>
       ${unseen ? '<button class="btn btn-sm" onclick="updMarkAllSeen()">すべて既読</button>' : ''}</div>
-    <div class="upd-list">${body}</div>
+    <div class="upd-list" id="upd-feed-list">${body}</div>
   </div>`;
 }
+// 一覧の右に出す日付。並び順と揃えるため**出来事の日付(date)**を優先する
+// （at＝気づいた時刻を出すと、7月分のCPIが「13:05」と表示されて時系列に見えない）
 function updWhen(r) {
-  const t = r.at || r.date; if (!t) return '';
+  const t = r.date || r.at; if (!t) return '';
   try {
     const d = new Date(t), now = Date.now(), diff = (now - d.getTime()) / 86400000;
     if (diff < 1) return d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
@@ -6334,15 +6352,30 @@ function updOpen(key) {
     go('macro');
   } else {
     go('news');
-    // 一覧の該当行までスクロールして強調（描画後に探す）
+    // 一覧の該当行を選択して、記事（動画は要約パネル）のモーダルまで開く（描画後に探す）
     setTimeout(() => {
       // ★CSS.escape は「識別子」用。引用符付き属性値に使うと URL が https\:\/\/... とエスケープされ
       //   生の値と一致しない（実際に該当行を見つけられなかった）。DOM を走査して素直に比較する。
       const el = r.link ? [...document.querySelectorAll('.news-item')].find(a => a.dataset.link === r.link) : null;
-      if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('upd-flash'); setTimeout(() => el.classList.remove('upd-flash'), 2000); }
-      // 一覧に無い場合は勝手に外部タブを開かない（ポップアップ扱いで塞がれるうえ、不意に別サイトが開くため）。
-      // ニュースを「更新」すれば一覧に載る、と伝えるだけにする。
-      else toast('この動画はニュース一覧にまだありません。「更新」で取得できます', 3500);
+      if (el) {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.classList.add('upd-flash'); setTimeout(() => el.classList.remove('upd-flash'), 2000);
+        el.click();   // 一覧の行を押したのと同じ＝既読にしてパネルを開く
+        return;
+      }
+      // 一覧に出ていない（期間やカテゴリの絞り込み外・保持期間外）場合でも、プールに記事があれば
+      // 直接パネルを開く。勝手に外部タブは開かない（ポップアップ扱いで塞がれるうえ不意に別サイトが開く）。
+      const it = (typeof newsFindItem === 'function' && r.link) ? newsFindItem(r.link) : null;
+      if (it) {
+        store.data.newsRead ||= {}; store.data.newsRead[r.link] = new Date().toISOString(); store.save();
+        if (it.cat === 'video' && typeof openVideoPanel === 'function') openVideoPanel(it);
+        else if (typeof newsOpenArticle === 'function') {
+          const fake = { preventDefault() {} };
+          newsOpenArticle(fake, { dataset: { link: r.link }, classList: { remove() {} } });
+        }
+        return;
+      }
+      toast('この動画はニュース一覧にまだありません。「更新」で取得できます', 3500);
     }, 250);
   }
 }
@@ -6549,7 +6582,7 @@ async function macroRefresh() {
           // 取得「前」の最終観測日と比べて、新しい観測が入った時だけ更新情報に積む
           const prev = store.data.macro[id];
           const prevLast = (prev && prev.obs && prev.obs.length) ? prev.obs[prev.obs.length - 1][0] : null;
-          updNoteMacro(id, prevLast, s.obs);
+          updNoteMacro(id, prevLast, s.obs, s.freq);
           store.data.macro[id] = { obs: s.obs, freq: s.freq || '', at }; ok++;
         } else ng++;
       }
@@ -6601,7 +6634,7 @@ async function macroFetchEstat(id) {
   store.data.macro ||= {};
   const prev = store.data.macro[id];
   const prevLast = (prev && prev.obs && prev.obs.length) ? prev.obs[prev.obs.length - 1][0] : null;
-  updNoteMacro(id, prevLast, d.obs);
+  updNoteMacro(id, prevLast, d.obs, d.freq);
   store.data.macro[id] = { obs: d.obs, freq: d.freq || '', at: new Date().toISOString() };
 }
 // 直近200点はそのまま残し、それ以前を等間隔に間引いて全体を320点以内にする（functions/api/macro.js と同じ規則）
