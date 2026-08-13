@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260814-0402';
+const APP_VERSION = 'v20260814-0435';
 
 'use strict';
 
@@ -6911,8 +6911,10 @@ function macroLineChart(series, W, H) {
     for (let m = m0; m <= m0 + 6; m++) for (const f of [1, 2, 2.5, 5]) out.push(f * Math.pow(10, m));
     return out.sort((a, b) => a - b);
   };
-  const boundsOf = (list) => {
-    const vs = list.flatMap(s => s.pts).map(p => p[1]);
+  // extra = 軸に必ず収めたい値（基準値ライン）。データの範囲外に基準値があると線が引けず、
+  // 期間を変えただけで設定した線が消えて見える（実測: コアPCEの基準2.0が5年表示の軸2.5〜6.0から外れて消えた）。
+  const boundsOf = (list, extra) => {
+    const vs = list.flatMap(s => s.pts).map(p => p[1]).concat(extra || []);
     let lo = Math.min(...vs), hi = Math.max(...vs);
     if (lo === hi) { lo -= 1; hi += 1; }
     return [lo, hi];
@@ -6921,8 +6923,8 @@ function macroLineChart(series, W, H) {
   // ★左右で本数を揃える必要があるが、粗い方の軸を上に伸ばして合わせると軸が大きく余る
   //   （実測: ドル円100〜162に対し軸100〜240、振れが画面の35%まで潰れた）。
   //   伸ばすのではなく「本数が targetN に収まる最小の刻み」を選び直すこと。
-  const scaleTo = (list, targetN) => {
-    const [lo0, hi0] = boundsOf(list);
+  const scaleTo = (list, targetN, extra) => {
+    const [lo0, hi0] = boundsOf(list, extra);
     for (const step of stepCands(hi0 - lo0)) {
       const lo = Math.floor(lo0 / step) * step;
       const n = Math.round((Math.ceil(hi0 / step) * step - lo) / step);
@@ -6932,8 +6934,8 @@ function macroLineChart(series, W, H) {
     return { lo: lo0, hi: lo0 + step * targetN, step, n: targetN };
   };
   // 自然な本数を先に求め、左右の多い方に合わせる
-  const naturalN = (list) => {
-    const [lo0, hi0] = boundsOf(list);
+  const naturalN = (list, extra) => {
+    const [lo0, hi0] = boundsOf(list, extra);
     const step = niceStep(hi0 - lo0, TICKS);
     return Math.max(1, Math.round((Math.ceil(hi0 / step) * step - Math.floor(lo0 / step) * step) / step));
   };
@@ -6954,8 +6956,12 @@ function macroLineChart(series, W, H) {
   });
 
   const Lp = L.length ? L : series;
-  const targetN = R.length ? Math.max(naturalN(Lp), naturalN(R)) : naturalN(Lp);
-  const sl = scaleTo(Lp, targetN);
+  // 左軸の系列に付いている基準値（実値の警告）は軸に必ず収める＝設定した線が期間によって消えないように
+  const thrVals = macroAlerts()
+    .filter(a => a.enabled !== false && a.mode === 'level' && isFinite(a.value) && Lp.some(x => x.id === a.seriesId))
+    .map(a => a.value);
+  const targetN = R.length ? Math.max(naturalN(Lp, thrVals), naturalN(R)) : naturalN(Lp, thrVals);
+  const sl = scaleTo(Lp, targetN, thrVals);
   const sr = R.length ? scaleTo(R, targetN) : null;
 
   const px = t => pad.l + (xmax === xmin ? 0 : (t - xmin) / (xmax - xmin)) * (W - pad.l - pad.r);
@@ -6988,7 +6994,7 @@ function macroLineChart(series, W, H) {
   for (const a of macroAlerts()) {
     if (a.enabled === false || a.mode !== 'level') continue;
     if (!L.some(x => x.id === a.seriesId)) continue;
-    if (a.value < sl.lo || a.value > sl.hi) continue;
+    if (a.value < sl.lo || a.value > sl.hi) continue;   // 保険（上で軸に含めているので通常は通る）
     const y = pyl(a.value).toFixed(1);
     const st = macroAlertState(a);
     const col = (st && st.fired) ? 'var(--red)' : 'var(--amber)';
