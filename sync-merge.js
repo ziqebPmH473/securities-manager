@@ -42,6 +42,11 @@
     _filterPresets:  ['records', (r) => `fp:${r.id}`],
     mktRanking:      ['map', byAt],
     mktTopCap:       ['map', byAt],   // 市場の時価総額1位 US/JP→{code,name,cap,at}。取得時刻 at の新しい方（settings に置くと navOrder 等を巻き戻すため独立キー）
+    // マクロ指標タブの表示状態（グループ/カード/期間/比較）。**settings とは別キー**にしてある。
+    // settings は多機能が共有する1つのオブジェクトで _updatedAt は「どれか1つでも変わった時刻」。
+    // そこに同居させると、他機能・他端末の書き込みがマクロの選択を巻き込んで巻き戻す
+    // （実害: 日本を開いていたのに時間が経つとインフレに戻る・2026-08-13）。
+    macroView:       ['keyedTs'],
     macro:           ['map', byAt],   // マクロ指標キャッシュ FRED系列ID→{obs,freq,at}。系列ごとに取得時刻 at の新しい方（settings に入れず独立キー＝ルール7-2）
     macroIdx:        ['map', byAt],   // 指数・為替キャッシュ Yahooシンボル→{obs,freq,at}（重ね合わせ比較用）。系列ごとに at の新しい方
     earnings:        ['map', byAt],   // 決算日キャッシュ priceKey→{prev,next,...,at}。取得時刻 at の新しい方
@@ -90,6 +95,7 @@
     lastPriceUpdate: ['max'],
     lastInfoDate:    ['max'],
     lastHighsDate:   ['max'],
+    lastMacroDate:   ['max'],   // マクロ指標を自動取得した日。自動書き込みなので settings に入れず独立キー＋max
     lastPriceSource: ['single'],
     seq:             ['maxNum'],
   };

@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260813-2216';
+const APP_VERSION = 'v20260814-0012';
 
 'use strict';
 
@@ -342,6 +342,27 @@ const store = {
     this.data.mktRanking ||= {};      // マーケットランキングのキャッシュ（key→{items(5年高値込),at}）。localStorage保存＋Google同期
     this.data.macro ||= {};           // マクロ指標キャッシュ（FRED系列ID→{obs:[[date,値],...],freq,at}）。同期対象（SCHEMA: map+byAt）
     this.data.macroIdx ||= {};        // 指数・為替キャッシュ（Yahooシンボル→{obs,freq,at}）。重ね合わせ比較用。同期対象（SCHEMA: map+byAt）
+    // マクロ指標タブの表示状態（グループ/カード/期間/比較）。★settings に同居させてはいけない。
+    // settings は Google連携・比率分母・マトリックス等が共有する1つのオブジェクトで、_updatedAt は
+    // 「どれか1つでも変わった時刻」。そこにマクロの表示状態を置くと、他機能・他端末の書き込みが
+    // マクロの選択を巻き込んで巻き戻す（実害: 日本を開いていたのに時間が経つとインフレに戻る）。
+    // 独立キー＋keyedTs にして、マクロの表示状態を変えた時だけ時刻が動くようにする（ルール7-2）。
+    this.data.macroView ||= {};
+    this.data.lastMacroDate ||= null; // マクロ指標を自動取得した日（YYYY-MM-DD）。日付なので max マージ
+    // v20260813-2216 以前は settings 配下だった。1回だけ引っ越す（自動書き込みが settings._updatedAt を
+    // 押し上げるのを止めるため。CLAUDE.md ルール7-2「自動取得・派生キャッシュを settings に入れない」）
+    if (this.data.settings) {
+      for (const k of ['macroGroup', 'macroCard', 'macroPeriod', 'macroCompare']) {
+        if (this.data.settings[k] !== undefined) {
+          if (this.data.macroView[k] === undefined) this.data.macroView[k] = this.data.settings[k];
+          delete this.data.settings[k];
+        }
+      }
+      if (this.data.settings.lastMacroDate !== undefined) {
+        if (!this.data.lastMacroDate) this.data.lastMacroDate = this.data.settings.lastMacroDate;
+        delete this.data.settings.lastMacroDate;
+      }
+    }
     this.data.earnings ||= {};        // 決算日キャッシュ priceKey→{prev,next,nextEstimate,exDiv,at}。1日1回取得・同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     this.data.mktTopCap ||= {};       // 市場の時価総額1位（US/JP→{code,name,cap,at}）。「時価1位まで」列の分子・自動取得キャッシュ
@@ -422,6 +443,7 @@ const store = {
     let freed = 0;
     const drop = (k) => { const v = this.data[k]; if (v && typeof v === 'object' && Object.keys(v).length) { freed += JSON.stringify(v).length; this.data[k] = {}; } };
     drop('mktRanking'); drop('indices'); drop('newsTrans');
+    drop('macro'); drop('macroIdx');   // マクロ指標・指数の履歴（約190KB）。「更新」で取り直せる
     freed += this._pruneTechAnalysis(true); // 登録外の分析結果も強めに整理（過去実測で最大の容量食い）
     return freed;
   },
@@ -3629,6 +3651,30 @@ function layoutTickerMarquee() {
   }
 }
 let _fitTimer = null;
+// ===== 別タブ／別ウィンドウの保存を取り込む（「時間が経つと元に戻る」の根本対策・2026-08-13）=====
+// このアプリは同じブラウザで複数タブを開ける。store.data は**タブごとのメモリ**にあるのに、
+// 同期の基準 sm_sync_base は localStorage で**全タブ共有**。そのため:
+//   タブAで「日本」に変更→同期（Drive=jp / base=jp）→ 開きっぱなしのタブBのメモリは infl のまま
+//   → タブBが同期すると base=jp / local(B)=infl / remote=jp となり「Bが意図的に infl に変えた」と
+//      判定され、infl が Drive に押し戻される → しばらくして選択が元に戻る
+// storage イベントは「変更したタブ以外」で発火するので、ここで読み直せば古い内容を持ち続けなくなる。
+// マクロの表示グループだけでなく、タブ・列設定・設定全般で起きていた同じ症状の共通原因。
+let _xtabTimer = null;
+window.addEventListener('storage', (e) => {
+  if (e.key && e.key !== STORAGE_KEY) return;   // 本体データ以外（同期base・トークン等）は無視
+  clearTimeout(_xtabTimer);
+  _xtabTimer = setTimeout(() => {
+    try {
+      store.load(); loadColPrefs(); loadFilterPresets();
+    } catch (_) { return; }
+    // 入力中・モーダル/ドロワー表示中は描画し直さない（打鍵や編集中の内容を消さないため）。
+    // データだけ取り込んでおけば、次の描画から新しい内容になる。
+    const ae = document.activeElement;
+    const editing = ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
+    const overlayOpen = ['modal-overlay', 'drawer-overlay'].some(id => { const el = document.getElementById(id); return el && !el.hidden; });
+    if (!editing && !overlayOpen) render();
+  }, 150);
+});
 window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { if (document.querySelector('#app .mx-table')) { fitMatrix(); sizeMatrixChips(); } fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); if (document.getElementById('macro-chart')) renderMacroChart(); }, 120); });
 
 // 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート等で左端に戻らないように）
@@ -6126,40 +6172,42 @@ let _macroTried = false;  // このセッションで自動取得を試したか
 let _macroNorm = null;    // 直近の描画の状態 {dual:2軸か, cmp:比較の選択数}
 
 // 表示状態（グループ/カード/期間）は端末をまたいで揃えたいので settings に置く（ルール7）
-function macroGroupKey() { const k = (store.data.settings || {}).macroGroup; return MACRO_GROUPS.some(g => g.key === k) ? k : 'infl'; }
+function macroGroupKey() { const k = (store.data.macroView || {}).macroGroup; return MACRO_GROUPS.some(g => g.key === k) ? k : 'infl'; }
 function macroGroupDef() { return MACRO_GROUPS.find(g => g.key === macroGroupKey()) || MACRO_GROUPS[0]; }
-function macroCardKey() { const g = macroGroupDef(); const k = ((store.data.settings || {}).macroCard || {})[g.key]; return g.cards.some(c => c.key === k) ? k : g.cards[0].key; }
+function macroCardKey() { const g = macroGroupDef(); const k = ((store.data.macroView || {}).macroCard || {})[g.key]; return g.cards.some(c => c.key === k) ? k : g.cards[0].key; }
 function macroCardDef() { const g = macroGroupDef(); return g.cards.find(c => c.key === macroCardKey()) || g.cards[0]; }
-function macroPeriod() { const p = (store.data.settings || {}).macroPeriod; return MACRO_PERIODS.some(x => x[0] === p) ? p : '5y'; }
+function macroPeriod() { const p = (store.data.macroView || {}).macroPeriod; return MACRO_PERIODS.some(x => x[0] === p) ? p : '5y'; }
 // 比較で重ねる指数（複数可）。★指標（カード）ごとに別々に保持する。
 // 「CPIには日経を重ねたいが、VIXには重ねたくない」のように、見たい組み合わせは指標ごとに違うため
 // （2026-08-13 すみぽん指示）。キーは グループ/カード。
 function macroCompareKey() { return macroGroupKey() + '/' + macroCardKey(); }
 function macroCompare() {
-  const m = (store.data.settings || {}).macroCompare;
+  const m = (store.data.macroView || {}).macroCompare;
   const a = (m && typeof m === 'object') ? m[macroCompareKey()] : null;
   return Array.isArray(a) ? a.filter(s => MACRO_COMPARE.includes(s)) : [];
 }
-function macroSaveSetting(patch) {
-  store.data.settings ||= {};
-  Object.assign(store.data.settings, patch);
-  store.data.settings._updatedAt = store._now();
+// マクロ表示状態の保存。★settings ではなく macroView に書く（settings に同居させると他機能の
+// 書き込みが巻き込んで巻き戻る。ルール7-2）。_updatedAt はマクロ表示状態専用の編集時刻になる。
+function macroSaveView(patch) {
+  store.data.macroView ||= {};
+  Object.assign(store.data.macroView, patch);
+  store.data.macroView._updatedAt = store._now();
   store.save();
 }
-function setMacroGroup(k) { macroSaveSetting({ macroGroup: k }); renderMacro(); }
+function setMacroGroup(k) { macroSaveView({ macroGroup: k }); renderMacro(); }
 function setMacroCard(k) {
-  const card = Object.assign({}, (store.data.settings || {}).macroCard || {});
+  const card = Object.assign({}, (store.data.macroView || {}).macroCard || {});
   card[macroGroupKey()] = k;
-  macroSaveSetting({ macroCard: card });
+  macroSaveView({ macroCard: card });
   renderMacro();
 }
-function setMacroPeriod(p) { macroSaveSetting({ macroPeriod: p }); renderMacro(); }
+function setMacroPeriod(p) { macroSaveView({ macroPeriod: p }); renderMacro(); }
 function toggleMacroCompare(sym) {
   const cur = macroCompare();
   const next = cur.includes(sym) ? cur.filter(s => s !== sym) : cur.concat(sym);
-  const m = Object.assign({}, (store.data.settings || {}).macroCompare || {});
+  const m = Object.assign({}, (store.data.macroView || {}).macroCompare || {});
   if (next.length) m[macroCompareKey()] = next; else delete m[macroCompareKey()];
-  macroSaveSetting({ macroCompare: m });
+  macroSaveView({ macroCompare: m });
   renderMacro();
 }
 
@@ -6198,9 +6246,11 @@ async function macroRefresh() {
   ]);
   ok += others.filter(Boolean).length;
   ng += others.filter(v => !v).length;
-  // 1件でも取れたらその日の自動取得は済み扱い（全滅した日は翌回のタブ表示でまた試す）
-  if (ok) macroSaveSetting({ lastMacroDate: todayJst() });
-  else store.save();
+  // 1件でも取れたらその日の自動取得は済み扱い（全滅した日は翌回のタブ表示でまた試す）。
+  // ★これは自動書き込みなので settings には入れない（settings._updatedAt を押し上げると
+  //   他端末の設定変更を巻き戻す。ルール7-2）。独立キー＋max マージにしてある。
+  if (ok) store.data.lastMacroDate = todayJst();
+  store.save();
   macroBusy = false;
   if (err && !ok) toast('マクロ指標の取得に失敗: ' + ((err && err.message) || err), 4000);
   else toast(ng ? `マクロ指標を更新（${ok}件成功・${ng}件失敗）` : `マクロ指標を更新しました（${ok}件）`);
@@ -6357,7 +6407,7 @@ function renderMacro() {
   // ★_macroTried が無いと「取得失敗→再描画→また自動取得」で無限リトライになる（取得失敗時に実際に発生）。
   // 未取得なら初回、取得済みでも日付が変わっていれば1日1回だけ自動で取り直す（手動「更新」は常に可）。
   // ★_macroTried が無いと「取得失敗→再描画→また自動取得」で無限リトライになる（取得失敗時に実際に発生）。
-  const stale = gotAny && (store.data.settings || {}).lastMacroDate !== todayJst();
+  const stale = gotAny && store.data.lastMacroDate !== todayJst();
   if ((!gotAny || stale) && !macroBusy && !_macroTried) { _macroTried = true; macroRefresh(); }
 
   const groupSeg = `<div class="seg">${MACRO_GROUPS.map(x => `<button class="${x.key === g.key ? 'active' : ''}" onclick="setMacroGroup('${x.key}')">${esc(x.label)}</button>`).join('')}</div>`;
