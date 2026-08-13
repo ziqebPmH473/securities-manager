@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260814-0603';
+const APP_VERSION = 'v20260814-0641';
 
 'use strict';
 
@@ -5385,6 +5385,7 @@ async function newsRefresh(auto) {
       const data = await res.json();
       let items = (data && Array.isArray(data.items)) ? data.items : [];
       updNoteVideos(videoItems);   // 新着動画を更新情報フィードへ（NEWバッジ・ダッシュボード用）
+      store.data.lastVideoCheck = store._now();   // ここで取得済み＝直後の裏取得を省く
       items = items.concat(discItems).concat(videoItems);
       // リンク重複排除・新しい順
       const seen = new Set();
@@ -5396,6 +5397,7 @@ async function newsRefresh(auto) {
   finally { newsBusy = false; }
   // 取得完了時に別タブへ移っていたら描画しない（マーケットタブと同じ配慮。DESIGN.md参照）
   if (currentView === 'news') renderNews();
+  updDailyCheck(true);   // ニュース更新のついでにマクロ指標の更新も確認（動画は上で取得済み）
 }
 // ===== ニュース一覧の共有プール（store.data.newsPool・Google同期） =====
 // 一覧は「更新」ボタンで取得して newsPool に保存し同期する＝全端末が同じ一覧・同じ○の色（2026-07-23 すみぽん要望）。
@@ -6317,24 +6319,37 @@ function updNoteVideos(items) {
 //   ダッシュボードを開いただけで新着が分かるようにする。
 // ニュース一覧（newsPool）には触らない。「開いたら勝手に更新される」のを止めた経緯があるため
 //   （2026-07-23 すみぽん要望）。ここで取るのは**購読YouTubeの新着だけ**。
-async function updDailyCheck() {
-  // ★マクロと動画は**並列**に走らせること。直列(await)にすると、マクロの取得が遅い時に
-  //   動画の確認が始まらない（実測: ローカルでFREDに繋がらず90秒以上ブロックされ、動画が取れなかった）。
+// 起動時と、「価格更新」「ニュース更新」を押した時に走る裏取得。
+// manual=true（ボタン起点）のときは、セッション内で一度失敗していても再挑戦する。
+// ★マクロと動画は**並列**に走らせること。直列(await)にすると、マクロの取得が遅い時に
+//   動画の確認が始まらない（実測: ローカルでFREDに繋がらず90秒以上ブロックされ、動画が取れなかった）。
+async function updDailyCheck(manual) {
   const done = () => { if (currentView === 'dashboard') render(); else renderNav(); };  // NEWバッジだけは即反映
   const jobs = [];
-  if (store.data.lastMacroDate !== todayJst() && !macroBusy && !_macroTried) {
+  // マクロは日付ガードのまま（月次・四半期・週次の指標が1日に何度も変わることはない）。
+  // FRED側も6時間エッジキャッシュなので、押し直しても外部への負荷にはならない。
+  if (store.data.lastMacroDate !== todayJst() && !macroBusy && (manual || !_macroTried)) {
     _macroTried = true;
-    jobs.push(macroRefresh({ quiet: true }).catch(() => {}));   // 起動時はトーストを出さない
+    jobs.push(macroRefresh({ quiet: true }).catch(() => {}));   // 裏取得なのでトーストを出さない
   }
   jobs.push(updVideoCheck().catch(() => {}));
   jobs.forEach(pr => pr.then(done));   // 終わったものから順に画面へ反映（片方が遅くても待たせない）
   await Promise.allSettled(jobs);
 }
-// 購読チャンネルの新着動画を1日1回だけ確認して更新情報に積む（/api/youtube を1回叩くだけ）
-async function updVideoCheck() {
-  if (store.data.lastVideoCheck === todayJst()) return;
+// 購読チャンネルの新着動画を確認して更新情報に積む（/api/youtube を1回叩くだけ）。
+// 起動時のほか「価格更新」「ニュース更新」でも走らせるので、無駄打ち防止に UPD_VIDEO_COOLDOWN 分の
+// クールダウンを置く。※取得元は YouTube 公式RSS（APIキー不要・クォータ無し）で、さらに
+// /api/youtube 側が Cloudflare で10分キャッシュしているため、頻度を上げても外部への負荷は増えない。
+const UPD_VIDEO_COOLDOWN = 10 * 60 * 1000;   // 10分（/api/youtube のエッジキャッシュと同じ）
+async function updVideoCheck(force) {
+  const last = store.data.lastVideoCheck;
+  if (!force && last) {
+    // 旧データは 'YYYY-MM-DD'（日付）で入っている。どちらでも Date.parse で扱える
+    const t = Date.parse(last);
+    if (isFinite(t) && Date.now() - t < UPD_VIDEO_COOLDOWN) return;
+  }
   const vids = await _newsVideos();
-  store.data.lastVideoCheck = todayJst();
+  store.data.lastVideoCheck = store._now();
   if (vids && vids.length) updNoteVideos(vids);
   store.save();
 }
@@ -14691,6 +14706,8 @@ document.getElementById('btn-refresh').onclick = () => withBusy('価格を更新
   await api.refreshAll({ withHighs: store.data.lastHighsDate !== today() });
   if (currentView === 'market') mktRefresh();
   render();
+  // 価格更新のついでに更新情報（経済指標・YouTube新着）も確認する。待たせないよう裏で走らせる
+  updDailyCheck(true);
 }, '価格を更新しました').catch(() => {});
 
 // IME変換中は検索の再描画を抑止（innerHTML生成の oncomposition* 属性はハンドラ登録されないため、
