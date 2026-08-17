@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260818-0155';
+const APP_VERSION = 'v20260818-0200';
 
 'use strict';
 
@@ -8326,7 +8326,67 @@ const MASTER_LAUNCH = [
   { v: 'ytchannel', label: 'YouTubeチャンネル（動画取得元）', open: () => openYtChannelMaster(), note: 'ニュースの「動画」に出す購読チャンネル。チャンネルID（UCで始まる）と表示名を登録。' },
   { v: 'listed', label: '上場銘柄マスタ（自動タグ用）', open: () => openListedMaster(), note: 'JPXの上場銘柄一覧（コード＋銘柄名）を取り込むと、保有外の全上場銘柄もニュース見出しで自動タグ。' },
   { v: 'navorder', label: '画面（タブ）の並び順', open: () => openNavOrderMaster(), note: '左メニューの画面の並びをグループ内で入れ替え。よく使う画面を上に。' },
+  { v: 'storage', label: '保存容量（ブラウザ）', open: () => openStorageMaster(), note: 'localStorage の使用量をキー別に確認。上限に達すると「保存失敗」になるので、再取得できるキャッシュをここで整理できる。' },
 ];
+
+// ---------- 保存容量（localStorage 診断） ----------
+// 銘柄情報の「取得OK・保存失敗（容量不足の可能性）」など、保存が通らない時の原因調査用。
+// localStorage は1オリジン約5MB。どのキーが食っているかを可視化し、再取得できるキャッシュだけ整理する。
+const STORAGE_NOTES = {
+  securities: '銘柄マスタ（消さない）', holdings: '保有（消さない）', transactions: '取引履歴（消さない）',
+  acqLedger: '取得円台帳（消さない）', analyses: '銘柄分析の履歴（消さない）',
+  meta: '銘柄情報キャッシュ（再取得可）', prices: '価格キャッシュ（再取得可）',
+  techAnalysis: 'テクニカル分析結果（再取得可）', newsPool: 'ニュース一覧（再取得可）',
+  newsTrans: 'ニュース翻訳（再取得可）', mktRanking: 'マーケットランキング（再取得可）',
+  indices: '参考指数（再取得可）', macro: 'マクロ指標（再取得可）', macroIdx: '指数・為替履歴（再取得可）',
+  earnings: '決算日（再取得可）', listedMaster: '上場銘柄マスタ（取込データ・再取込可）',
+  updates: '更新情報フィード（再取得可）', amountSnapshots: '金額スナップショット',
+};
+function jsonSize(v) { try { return JSON.stringify(v).length; } catch (_) { return 0; } }
+function storageBreakdown() {
+  const d = store.data || {};
+  const rows = Object.keys(d).map(k => ({ k, size: jsonSize(d[k]) })).filter(r => r.size > 2).sort((a, b) => b.size - a.size);
+  return { rows, total: jsonSize(d) };
+}
+function fmtKB(n) { return (n / 1024).toFixed(1) + ' KB'; }
+function openStorageMaster() {
+  const { rows, total } = storageBreakdown();
+  // 他キー（同期ベース・トークン等）も含めた localStorage 全体の実使用量
+  let all = 0;
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); all += k.length + (localStorage.getItem(k) || '').length; } } catch (_) { }
+  const pct = Math.round(all / (5 * 1024 * 1024) * 100);
+  showModal('保存容量（ブラウザ）', `
+    <p class="muted">ブラウザの保存領域（localStorage）は1サイト約5MBです。上限に達すると銘柄情報などが
+      <b>「取得OK・保存失敗（容量不足の可能性）」</b>になります。</p>
+    <p><b>アプリのデータ ${fmtKB(total)}</b> ／ このサイト全体 ${fmtKB(all)}（目安 約${pct}% 使用）</p>
+    <div class="table-wrap" style="max-height:46vh">
+      <table class="table"><thead><tr><th class="l">キー</th><th class="r">サイズ</th><th class="l">内容</th></tr></thead>
+        <tbody>${rows.map(r => `<tr><td class="l">${esc(r.k)}</td><td class="r">${fmtKB(r.size)}</td><td class="l muted">${esc(STORAGE_NOTES[r.k] || '')}</td></tr>`).join('')}</tbody></table>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="btn" id="stg-copy" title="この内訳をコピー（相談用）">内訳をコピー</button>
+      <button type="button" class="btn" id="stg-free" title="市場ランキング・参考指数・翻訳・マクロ・登録外の分析結果を消す（「更新」で取り直せます）">再取得できるキャッシュを整理</button>
+      <button type="button" class="btn" id="stg-news" title="ニュース一覧の保存分を消す（「更新」で取り直せます）">ニュース一覧も消す</button>
+      <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
+    </div>`);
+  document.getElementById('stg-copy').onclick = () => {
+    const txt = `合計 ${fmtKB(total)} / サイト全体 ${fmtKB(all)}\n` + rows.map(r => `${r.k}\t${fmtKB(r.size)}`).join('\n');
+    navigator.clipboard.writeText(txt).then(() => toast('内訳をコピーしました'), () => toast('コピーできませんでした'));
+  };
+  document.getElementById('stg-free').onclick = () => {
+    const freed = store._freeCacheSpace();
+    store.save();
+    toast(`約${Math.round(freed / 1024)}KB を整理しました`, 4000);
+    openStorageMaster();
+  };
+  document.getElementById('stg-news').onclick = () => {
+    if (!confirm('保存済みのニュース一覧を消します（ニュース画面の「更新」で取り直せます）。よろしいですか？')) return;
+    const freed = jsonSize(store.data.newsPool);
+    store.data.newsPool = null; store.save();
+    toast(`ニュース一覧 約${Math.round(freed / 1024)}KB を消しました`, 4000);
+    openStorageMaster();
+  };
+}
 
 // ---------- 画面（タブ）の並び順マスタ ----------
 // 保存: store.data.settings.navOrder = { グループ名: [viewId, ...] }（Google同期対象。settings はキー単位マージ
