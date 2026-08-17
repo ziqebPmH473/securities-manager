@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260818-0200';
+const APP_VERSION = 'v20260818-0204';
 
 'use strict';
 
@@ -8349,43 +8349,96 @@ function storageBreakdown() {
   return { rows, total: jsonSize(d) };
 }
 function fmtKB(n) { return (n / 1024).toFixed(1) + ' KB'; }
+// localStorage の全キー（sm_data_v1 本体・同期ベース sm_sync_base・列設定 等）の実使用量。
+// ★sm_sync_base は dataBundle（＝store.data 全体）のコピーなので、データが大きいと容量を「2倍」使う。
+function rawStorageRows() {
+  const rows = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      rows.push({ k, size: k.length + (localStorage.getItem(k) || '').length });
+    }
+  } catch (_) { }
+  return rows.sort((a, b) => b.size - a.size);
+}
+// techAnalysis のフィールド別内訳（どの項目が容量を食っているかの特定用）
+function techFieldBreakdown() {
+  const ta = (store.data && store.data.techAnalysis) || {};
+  const keys = Object.keys(ta);
+  const sum = {};
+  for (const k of keys) { const r = ta[k] || {}; for (const f in r) sum[f] = (sum[f] || 0) + jsonSize(r[f]); }
+  return { count: keys.length, rows: Object.keys(sum).map(f => ({ f, size: sum[f] })).sort((a, b) => b.size - a.size) };
+}
 function openStorageMaster() {
   const { rows, total } = storageBreakdown();
-  // 他キー（同期ベース・トークン等）も含めた localStorage 全体の実使用量
-  let all = 0;
-  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); all += k.length + (localStorage.getItem(k) || '').length; } } catch (_) { }
+  const raws = rawStorageRows();
+  const tech = techFieldBreakdown();
+  const all = raws.reduce((a, r) => a + r.size, 0);
   const pct = Math.round(all / (5 * 1024 * 1024) * 100);
+  const sizeTable = (list, label, nameOf) => `
+    <div class="table-wrap" style="max-height:28vh">
+      <table class="table"><thead><tr><th class="l">${label}</th><th class="r">サイズ</th><th class="l">内容</th></tr></thead>
+        <tbody>${list.map(r => `<tr><td class="l">${esc(r.k || r.f)}</td><td class="r">${fmtKB(r.size)}</td><td class="l muted">${esc(nameOf(r))}</td></tr>`).join('')}</tbody></table>
+    </div>`;
   showModal('保存容量（ブラウザ）', `
     <p class="muted">ブラウザの保存領域（localStorage）は1サイト約5MBです。上限に達すると銘柄情報などが
       <b>「取得OK・保存失敗（容量不足の可能性）」</b>になります。</p>
     <p><b>アプリのデータ ${fmtKB(total)}</b> ／ このサイト全体 ${fmtKB(all)}（目安 約${pct}% 使用）</p>
-    <div class="table-wrap" style="max-height:46vh">
-      <table class="table"><thead><tr><th class="l">キー</th><th class="r">サイズ</th><th class="l">内容</th></tr></thead>
-        <tbody>${rows.map(r => `<tr><td class="l">${esc(r.k)}</td><td class="r">${fmtKB(r.size)}</td><td class="l muted">${esc(STORAGE_NOTES[r.k] || '')}</td></tr>`).join('')}</tbody></table>
-    </div>
-    <div class="form-actions">
+    <fieldset class="form-group"><legend>アプリのデータ（sm_data_v1）の内訳</legend>
+      ${sizeTable(rows, 'キー', r => STORAGE_NOTES[r.k] || '')}
+    </fieldset>
+    <fieldset class="form-group"><legend>ブラウザ保存キー全体（同期の基準データを含む）</legend>
+      ${sizeTable(raws, 'キー', r => r.k === 'sm_sync_base' ? '同期の基準（アプリデータのコピー＝同じ分だけ倍で使う）' : r.k === STORAGE_KEY ? 'アプリのデータ本体' : '')}
+    </fieldset>
+    <fieldset class="form-group"><legend>テクニカル分析（${tech.count}件）のフィールド別内訳</legend>
+      ${sizeTable(tech.rows, '項目', () => '')}
+    </fieldset>
+    <div class="form-actions" style="flex-wrap:wrap">
       <button type="button" class="btn" id="stg-copy" title="この内訳をコピー（相談用）">内訳をコピー</button>
       <button type="button" class="btn" id="stg-free" title="市場ランキング・参考指数・翻訳・マクロ・登録外の分析結果を消す（「更新」で取り直せます）">再取得できるキャッシュを整理</button>
+      <button type="button" class="btn" id="stg-tech" title="保存済みのテクニカル分析結果を全部消す（分析タブで再実行すれば戻ります）">テクニカル分析の結果を消す</button>
       <button type="button" class="btn" id="stg-news" title="ニュース一覧の保存分を消す（「更新」で取り直せます）">ニュース一覧も消す</button>
+      <button type="button" class="btn" id="stg-base" title="同期の基準データ（アプリデータのコピー）を捨てる。次の同期で作り直されます">同期の基準を作り直す</button>
       <button type="button" class="btn btn-primary" onclick="closeModal()">閉じる</button>
     </div>`);
+  // 押しても何も起きない（＝整理できるものが無かった/例外）が分からないと詰むので、必ず結果をトーストで返す
+  const act = (fn) => () => {
+    try {
+      const msg = fn();
+      if (msg) toast(msg, 5000);
+      openStorageMaster();
+    } catch (e) { console.warn('[storage]', e); toast('整理できませんでした: ' + (e && e.message || e), 6000); }
+  };
   document.getElementById('stg-copy').onclick = () => {
-    const txt = `合計 ${fmtKB(total)} / サイト全体 ${fmtKB(all)}\n` + rows.map(r => `${r.k}\t${fmtKB(r.size)}`).join('\n');
+    const txt = `合計 ${fmtKB(total)} / サイト全体 ${fmtKB(all)}\n`
+      + rows.map(r => `${r.k}\t${fmtKB(r.size)}`).join('\n')
+      + `\n--- localStorage 全体 ---\n` + raws.map(r => `${r.k}\t${fmtKB(r.size)}`).join('\n')
+      + `\n--- techAnalysis ${tech.count}件 ---\n` + tech.rows.map(r => `${r.f}\t${fmtKB(r.size)}`).join('\n');
     navigator.clipboard.writeText(txt).then(() => toast('内訳をコピーしました'), () => toast('コピーできませんでした'));
   };
-  document.getElementById('stg-free').onclick = () => {
+  document.getElementById('stg-free').onclick = act(() => {
     const freed = store._freeCacheSpace();
     store.save();
-    toast(`約${Math.round(freed / 1024)}KB を整理しました`, 4000);
-    openStorageMaster();
-  };
-  document.getElementById('stg-news').onclick = () => {
-    if (!confirm('保存済みのニュース一覧を消します（ニュース画面の「更新」で取り直せます）。よろしいですか？')) return;
+    return freed > 0 ? `約${Math.round(freed / 1024)}KB を整理しました` : '整理できるキャッシュはありませんでした（下の個別ボタンを使ってください）';
+  });
+  document.getElementById('stg-tech').onclick = act(() => {
+    if (!confirm(`保存済みのテクニカル分析結果（${tech.count}件）を全部消します。分析タブで再実行すれば取り直せます。よろしいですか？`)) return '';
+    const freed = jsonSize(store.data.techAnalysis);
+    store.data.techAnalysis = {}; store.save();
+    return `テクニカル分析 約${Math.round(freed / 1024)}KB を消しました`;
+  });
+  document.getElementById('stg-news').onclick = act(() => {
+    if (!confirm('保存済みのニュース一覧を消します（ニュース画面の「更新」で取り直せます）。よろしいですか？')) return '';
     const freed = jsonSize(store.data.newsPool);
     store.data.newsPool = null; store.save();
-    toast(`ニュース一覧 約${Math.round(freed / 1024)}KB を消しました`, 4000);
-    openStorageMaster();
-  };
+    return `ニュース一覧 約${Math.round(freed / 1024)}KB を消しました`;
+  });
+  document.getElementById('stg-base').onclick = act(() => {
+    if (!confirm('同期の基準データ（アプリデータのコピー）を捨てます。次回の同期で作り直されますが、それまでに他端末で削除した銘柄などが復活することがあります。よろしいですか？')) return '';
+    const freed = (localStorage.getItem('sm_sync_base') || '').length;
+    localStorage.removeItem('sm_sync_base');
+    return `同期の基準 約${Math.round(freed / 1024)}KB を消しました（次の同期で作り直されます）`;
+  });
 }
 
 // ---------- 画面（タブ）の並び順マスタ ----------
