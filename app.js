@@ -11,14 +11,14 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260818-0204';
+const APP_VERSION = 'v20260818-0209';
 
 'use strict';
 
 // ---------- 定数・初期データ ----------
 const STORAGE_KEY = 'sm_data_v1';
 // テクニカル分析結果(techAnalysis)の保持上限（localStorage 約5MB対策。実測でここが全体の約8割を占めていた）
-const TECH_HISTORY_MAX = 52;   // スコア履歴の点数（週次1年相当）
+const TECH_HISTORY_MAX = 26;   // スコア履歴の点数（容量対策で52→26。現状どこからも読まれていない・§16.7.4）
 const TECH_UNREG_DAYS = 14;    // 未登録銘柄（分析タブのトップ50等）の分析結果を残す日数
 const TECH_UNREG_MAX = 30;     // 未登録銘柄の分析結果の最大保持件数（新しい順。実測54件→30件に圧縮）
 
@@ -11151,6 +11151,7 @@ async function runAnalysis() {
     } catch (_) { fail++; }
   }
   store.save();
+  techSizeWatch();   // 保存量が上限に近づいていたら知らせる（消すかはユーザーが決める）
   busyHide();
   const infoNote = (needMeta.length || needPrice.length) ? ` / 基本情報 ${needMeta.length ? `名称${needMeta.length}` : ''}${needMeta.length && needPrice.length ? '・' : ''}${needPrice.length ? `株価${needPrice.length}` : ''}` : '';
   toast(`分析完了：成功 ${ok}（取得 ${toFetch.length} / 採点のみ ${toRescore.length}）${fail ? ` / 失敗 ${fail}` : ''}${infoNote}`);
@@ -11163,14 +11164,23 @@ function rescoreFromMetrics(r, th) {
   const shim = { byPattern: {} };
   for (const p of Object.keys(r.metrics)) shim.byPattern[p] = { metrics: r.metrics[p] };
   const sc = TA.score(shim, th);
-  r.patterns = sc.patterns; r.best = sc.best; r.bestTrend = sc.bestTrend; r.bestContra = sc.bestContra; r.warn = sc.warn;
+  r.patterns = techRound(sc.patterns); r.best = sc.best; r.bestTrend = sc.bestTrend; r.bestContra = sc.bestContra; r.warn = sc.warn;
   const tt = (TA.recomputeTotals && TA.recomputeTotals(r)) || sc;   // ma200Pos/rsiState等の文脈込みの正しい総合
-  r.trendTotal = tt.trendTotal; r.contraTotal = tt.contraTotal; r.totalScore = tt.totalScore; r.contraScore = tt.contraTotal;
+  r.trendTotal = techRound(tt.trendTotal); r.contraTotal = techRound(tt.contraTotal); r.totalScore = techRound(tt.totalScore); r.contraScore = techRound(tt.contraTotal);
   r._updatedAt = new Date().toISOString();
-  if (r.history && r.history.length) { const last = r.history[r.history.length - 1]; if (last && last.date === r.lastAnalyzed) { last.best = sc.best; for (const p of Object.keys(sc.patterns)) last.scores[p] = sc.patterns[p].score; } }
+  if (r.history && r.history.length) { const last = r.history[r.history.length - 1]; if (last && last.date === r.lastAnalyzed) { last.best = sc.best; for (const p of Object.keys(sc.patterns)) last.scores[p] = techRound(sc.patterns[p].score); } }
   return true;
 }
 
+// 保存前に浮動小数を丸める（容量対策）。0.05860000000000032 のような値が1つ19文字を食い、
+// metrics×patterns×history の全体では techAnalysis の容量を数割押し上げる（実測 2.3MB まで肥大した主因の一つ）。
+// 小数4桁は表示・採点に影響しない精度（しきい値判定は %/倍率なので十分）。
+function techRound(v) {
+  if (typeof v === 'number') return Number.isInteger(v) ? v : Math.round(v * 1e4) / 1e4;
+  if (Array.isArray(v)) return v.map(techRound);
+  if (v && typeof v === 'object') { const o = {}; for (const k in v) o[k] = techRound(v[k]); return o; }
+  return v;
+}
 function saveTechResult(sec, result, today) {
   const key = priceKey(sec);
   const prev = store.data.techAnalysis[key] || {};
@@ -11178,7 +11188,7 @@ function saveTechResult(sec, result, today) {
   const scores = {}; for (const p of Object.keys(result.patterns)) scores[p] = result.patterns[p].score;
   history.push({ date: today, best: result.best, scores }); // 1日1点
   while (history.length > TECH_HISTORY_MAX) history.shift(); // 上限TECH_HISTORY_MAX点で剪定（§5・容量対策で104→52）
-  store.data.techAnalysis[key] = {
+  store.data.techAnalysis[key] = techRound({
     ver: MEASURE_VER, measureVer: MEASURE_VER, scoreVer: SCORE_VER, dataDate: today,
     lastAnalyzed: today, best: result.best, bestTrend: result.bestTrend, bestContra: result.bestContra, trendTotal: result.trendTotal, contraTotal: result.contraTotal, totalScore: result.totalScore, contraScore: result.contraScore, warn: result.warn, patterns: result.patterns,
     metrics: result.metrics, levels: result.levels, marks: result.marks,
@@ -11187,7 +11197,18 @@ function saveTechResult(sec, result, today) {
     rsi: result.rsi, rsiState: result.rsiState, macd: result.macd, macdCross: result.macdCross,
     dev52w: result.dev52w, above5: result.above5,
     history, _updatedAt: new Date().toISOString(),
-  };
+  });
+}
+// テクニカル分析の合計サイズが大きくなりすぎたら知らせる（localStorage 約5MB・同期の基準で実質2倍使うため）。
+// 1回の分析実行につき最大1度だけ。閾値超えでも勝手には消さない（消すかはマスタ→保存容量でユーザーが決める）。
+const TECH_WARN_BYTES = 1200 * 1024;
+let _techWarned = false;
+function techSizeWatch() {
+  if (_techWarned) return;
+  const size = jsonSize(store.data.techAnalysis);
+  if (size < TECH_WARN_BYTES) return;
+  _techWarned = true;
+  toast(`テクニカル分析の保存量が約${Math.round(size / 1024)}KBです。ブラウザの保存上限に近づくと保存できなくなります（マスタ→「保存容量（ブラウザ）」で整理できます）`, 8000);
 }
 
 // しきい値変更時: 保存済み metrics から採点のみ再実行（API再取得なし・§3.5）
