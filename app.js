@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260813-2320';
+const APP_VERSION = 'v20260818-0155';
 
 'use strict';
 
@@ -10309,18 +10309,37 @@ async function autoFetchInfo(tickerEl) {
   }
   const symbol = (market === 'JP' || market === 'FUND') ? `${ticker}.T` : ticker;
   const key = `${market}:${ticker}`;
-  if (status) { status.textContent = '取得中…'; status.style.color = 'var(--muted)'; }
-  try {
-    const res = await fetch(`/api/info?symbol=${encodeURIComponent(symbol)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const d = await res.json();
-    if (d.error) throw new Error(d.error);
-    store.setMeta(key, clean(d)); // マスタへ保存（null/空は上書きしない）
-    if (panel) panel.innerHTML = autoInfoPanelHtml(market, ticker);
-    if (status) { status.textContent = d.name ? '✓ 取得済み' : '✓ 取得（一部のみ）'; status.style.color = 'var(--green)'; }
-  } catch (e) {
-    if (status) { status.textContent = '取得失敗（再試行可）'; status.style.color = 'var(--muted)'; }
+  if (status) { status.textContent = '取得中…'; status.style.color = 'var(--muted)'; status.title = ''; }
+  const fail = (label, e) => {
+    console.warn('[autoFetchInfo]', symbol, label, e);
+    if (status) { status.textContent = label; status.style.color = 'var(--muted)'; status.title = String(e?.message || e || ''); }
+  };
+  // ★取得(通信)と保存(localStorage)を分けて扱う。以前は両方まとめて「取得失敗」と出していたため、
+  //   実際は取得できていて localStorage 容量オーバーで保存に失敗しただけのケースまで「取得失敗」に見えていた。
+  let d = null;
+  for (let attempt = 0; attempt < 2; attempt++) { // 一時的な通信エラー/エッジのゆらぎ向けに1回だけ再試行
+    try {
+      const res = await fetch(`/api/info?symbol=${encodeURIComponent(symbol)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      d = j; break;
+    } catch (e) {
+      if (attempt === 0) { await new Promise(r => setTimeout(r, 600)); continue; }
+      fail('取得失敗（通信・再試行可）', e);
+      return;
+    }
   }
+  try {
+    store.setMeta(key, clean(d)); // マスタへ保存（null/空は上書きしない）
+  } catch (e) {
+    // 保存だけ失敗（localStorage 容量オーバー等）。取得値は画面に出す（保存されていない旨だけ明示）。
+    if (panel) panel.innerHTML = autoInfoPanelHtml(market, ticker);
+    fail('取得OK・保存失敗（容量不足の可能性）', e);
+    return;
+  }
+  if (panel) panel.innerHTML = autoInfoPanelHtml(market, ticker);
+  if (status) { status.textContent = d.name ? '✓ 取得済み' : '✓ 取得（一部のみ）'; status.style.color = 'var(--green)'; }
 }
 
 // 「今すぐ取得」ボタン: フォームのティッカーで autoFetchInfo を実行
