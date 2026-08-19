@@ -892,7 +892,26 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - **`TECH_HISTORY_MAX` 52→26**: `history` は**現状どこからも読まれていない**（書き込みと剪定のみ）。将来のスコア推移表示のため形は残すが点数を半減。
 - **`techSizeWatch()`**: 分析実行後に techAnalysis が 1,200KB を超えていたらトーストで警告（自動削除はしない。消すかはユーザーが決める）。
 
-残課題: 上記でも銘柄数が増えれば再び上限に近づく。**techAnalysis を localStorage から IndexedDB へ退避**すれば5MB制限から外れる（Google同期の対象範囲＝`dataBundle()` をどうするかの設計判断が必要）。
+残課題: 上記でも銘柄数が増えれば再び上限に近づく。**techAnalysis を localStorage から IndexedDB へ退避**すれば5MB制限から外れる（Google同期の対象範囲＝`dataBundle()` をどうするかの設計判断が必要）。→ **§16.7.5 で実施（2026-08-18）**
+
+### 16.7.5 techAnalysis と同期基準の IndexedDB 退避（2026-08-18）
+localStorage の5MB制限問題の恒久対応。**保存先だけ**を IndexedDB（DB `sm_idb` / ストア `kv`・上限GB級）へ移し、**メモリ（`store.data`）と Google 同期バンドル（`dataBundle()`）には従来どおり含める**＝同期・画面表示・SCHEMA は無変更（ルール7を満たす）。
+
+**保存レイアウト**:
+- `kv['techAnalysis']` … テクニカル分析結果（オブジェクトそのまま）
+- `kv['syncBase']` … 同期の基準（JSON文字列）。旧 `sm_sync_base`（localStorage）は **dataBundle 全体のコピーで容量を実質2倍**使っていた（2026-08-18 実測: 本体730KB＋基準2550KB＝サイト97%）
+- IndexedDB 不可の環境（`idb.ok=false`）は従来どおり localStorage に保存（後方互換）
+
+**実装の要点（app.js）**:
+- `idb` ヘルパー（get/set/del・全例外を握って ok=false へフォールバック）
+- `store.save()` → `_lsJson()` が techAnalysis を除いた JSON を localStorage へ、techAnalysis は `idb.set`（fire-and-forget。失敗しても次の save で再書込）
+- 起動時 `store.idbReady`（Promise）で IDB→メモリを読み込み。**旧形式（sm_data_v1 内に techAnalysis）は初回起動で自動移行**（IDBへ書いて save で localStorage から除去）
+- `dsync._loadBaseRaw()` を async 化し**毎回 IDB から読む**（メモリキャッシュにしない＝2026-08-13 のクロスタブ対策を維持）。旧 `sm_sync_base` は初回同期時に IDB へ自動移行
+- **★同期ゲート**: `dsync.syncNow()` は `await store.idbReady` してから `dataBundle()` を作る。**未ロード（=techAnalysis 空）のまま同期すると `mergeMap3way` が「ローカルで全削除」と誤解釈し、Drive・他端末の分析結果まで消える**（マージ実験で確認済み）。同じ理由で:
+  - `store.load()` はクロスタブ再読込時にメモリの techAnalysis を退避して引き継ぐ（localStorage に無いため落ちる）
+  - storage イベントハンドラは load 後に IDB から techAnalysis を読み直す（別タブの分析追加分を反映）
+- 基準クリアは `dsync._clearBase()` に集約（IDB＋旧 localStorage の両方を削除）。呼び出し元: バックアップ復元・インポート・全データ削除・保存容量パネル。全データ削除は `kv['techAnalysis']` も削除
+- 保存容量パネル（§16.7.4）に IndexedDB の枠を追加（techAnalysis / syncBase のサイズ表示）
 
 ### 16.7.3 同期でニュースのカテゴリ選択が勝手に変わる問題（2026-07-20）
 `newsPrefs.hideCats`（表示カテゴリ）はGoogle同期対象のため、**裏の自動同期（25秒間隔）で別端末の選択状態を受け取ると、開いている画面のカテゴリが勝手に切り替わっていた**（「すべて」で見ていたら数十秒後に「動画だけ」になる）。

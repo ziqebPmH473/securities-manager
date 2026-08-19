@@ -11,12 +11,67 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260818-0209';
+const APP_VERSION = 'v20260819-1213';
 
 'use strict';
 
 // ---------- 定数・初期データ ----------
 const STORAGE_KEY = 'sm_data_v1';
+
+// ===== IndexedDB（大容量データの保存先。localStorage 約5MB制限の外・§16.7.5） =====
+// techAnalysis（テクニカル分析結果）と同期の基準(syncBase)をここに置く。localStorage は
+// 「本体データ＋同期基準のコピー」で実質2倍消費し上限97%に達した（2026-08-18 実測）ための退避先。
+// IndexedDB が使えない環境では idb.ok=false になり、従来どおり localStorage に保存する（後方互換）。
+const idb = {
+  _dbp: null, ok: (typeof indexedDB !== 'undefined'),
+  _open() {
+    if (this._dbp) return this._dbp;
+    this._dbp = new Promise((resolve) => {
+      try {
+        const req = indexedDB.open('sm_idb', 1);
+        req.onupgradeneeded = () => { try { req.result.createObjectStore('kv'); } catch (_) {} };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => { idb.ok = false; resolve(null); };
+        req.onblocked = () => { idb.ok = false; resolve(null); };
+      } catch (_) { idb.ok = false; resolve(null); }
+    });
+    return this._dbp;
+  },
+  async get(key) {
+    const db = await this._open(); if (!db) return undefined;
+    return new Promise((resolve) => {
+      try {
+        const rq = db.transaction('kv').objectStore('kv').get(key);
+        rq.onsuccess = () => resolve(rq.result);
+        rq.onerror = () => resolve(undefined);
+      } catch (_) { resolve(undefined); }
+    });
+  },
+  async set(key, val) {
+    const db = await this._open(); if (!db) return false;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('kv', 'readwrite');
+        tx.objectStore('kv').put(val, key);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+      } catch (_) { resolve(false); }
+    });
+  },
+  async del(key) {
+    const db = await this._open(); if (!db) return false;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('kv', 'readwrite');
+        tx.objectStore('kv').delete(key);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+      } catch (_) { resolve(false); }
+    });
+  },
+};
 // テクニカル分析結果(techAnalysis)の保持上限（localStorage 約5MB対策。実測でここが全体の約8割を占めていた）
 const TECH_HISTORY_MAX = 26;   // スコア履歴の点数（容量対策で52→26。現状どこからも読まれていない・§16.7.4）
 const TECH_UNREG_DAYS = 14;    // 未登録銘柄（分析タブのトップ50等）の分析結果を残す日数
@@ -304,10 +359,14 @@ const HOLDING_COLMAP = {
 const store = {
   data: null,
   load() {
+    // techAnalysis は IndexedDB 保存のため localStorage には無い。クロスタブ再読込（storageイベント→load()）で
+    // メモリの分析結果を落とさないよう退避して引き継ぐ（落とすと同期で「削除」と誤解釈され Drive から消える）。
+    const prevTech = this.data && this.data.techAnalysis;
     try {
       this.data = JSON.parse(localStorage.getItem(STORAGE_KEY));
     } catch (_) { this.data = null; }
     if (!this.data) this.data = this.seed();
+    if (!this.data.techAnalysis && prevTech) this.data.techAnalysis = prevTech;
     // 後方互換: 欠損キーを補完
     this.data.securities ||= [];
     this.data.holdings ||= [];
@@ -415,15 +474,25 @@ const store = {
     try { if (this._pruneTechAnalysis() > 0) this.save(); } catch (_) {}
     return this.data;
   },
+  // localStorage 向けの JSON。IndexedDB が使える環境では techAnalysis を除外する（IDB 側に保存・§16.7.5）。
+  // メモリ(this.data)と同期バンドル(dataBundle)には残るので、端末間同期・画面表示は従来どおり。
+  _lsJson() {
+    if (!idb.ok) return JSON.stringify(this.data);
+    const rest = Object.assign({}, this.data);
+    delete rest.techAnalysis;
+    return JSON.stringify(rest);
+  },
   save() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data)); }
+    // techAnalysis は IndexedDB へ（失敗は無視＝次の save で再書込される。IDB不可なら _lsJson が本体に含める）
+    if (idb.ok) idb.set('techAnalysis', this.data.techAnalysis || {}).catch(() => {});
+    try { localStorage.setItem(STORAGE_KEY, this._lsJson()); }
     catch (e) {
       // localStorage は1オリジン約5MB。超過(QuotaExceededError)時は「再取得できるキャッシュ」だけ捨てて再保存を試みる。
       const quota = e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014 || /quota|exceeded/i.test(e.message || ''));
       if (!quota) throw e;
       const freedKB = Math.round(this._freeCacheSpace() / 1024);
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+        localStorage.setItem(STORAGE_KEY, this._lsJson());
         if (typeof toast === 'function') toast(`保存容量が上限に近づいたため、再取得できるキャッシュ（市場ランキング/参考指数/翻訳/分析）約${freedKB}KBを整理して保存しました`, 5000);
       } catch (e2) {
         // 最終手段: ニュース一覧プールも捨てて再試行（「更新」で取り直せる・銘柄データ優先）。
@@ -431,7 +500,7 @@ const store = {
         //   タブ復帰時に新着記事が消える事故が起きたため、プール破棄は本当に最後の手段に限定する。
         if (this.data.newsPool) this.data.newsPool = null;
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+          localStorage.setItem(STORAGE_KEY, this._lsJson());
           if (typeof toast === 'function') toast('保存容量が上限のため、ニュース一覧の保存を一時的に見送りました（「更新」で取り直せます）。マスタのデータ整理をおすすめします', 7000);
         } catch (e3) {
           if (typeof toast === 'function') toast('ブラウザの保存容量が上限です。マスタ→「上場銘柄マスタ」で「全消去」するか、不要な保有/取込データを整理してください', 7000);
@@ -1059,8 +1128,29 @@ const dsync = {
   enabled() { try { return localStorage.getItem('sm_drive_autosync') === '1'; } catch (_) { return false; } },
   setEnabled(on) { try { localStorage.setItem('sm_drive_autosync', on ? '1' : '0'); } catch (_) {} },
   syncedAt() { try { return localStorage.getItem('sm_sync_at'); } catch (_) { return null; } },
-  _loadBaseRaw() { try { return localStorage.getItem('sm_sync_base') || '{}'; } catch (_) { return '{}'; } },
-  _saveBaseRaw(json) { try { localStorage.setItem('sm_sync_base', json); } catch (_) {} },
+  // 同期の基準(base)＝dataBundle 全体のコピー。localStorage に置くと本体と合わせて容量を実質2倍
+  // 使うため IndexedDB に保存する（§16.7.5）。毎回 IDB から読む＝全タブ共有もこれまでどおり
+  // （2026-08-13 のクロスタブ対策を壊さない。メモリにキャッシュすると別タブの更新で古くなる）。
+  async _loadBaseRaw() {
+    if (idb.ok) {
+      const v = await idb.get('syncBase');
+      if (typeof v === 'string' && v) return v;
+      // 移行(初回): 旧版は localStorage 'sm_sync_base'。IDB へ移して localStorage から外す（約5MB枠の解放）
+      let ls = null; try { ls = localStorage.getItem('sm_sync_base'); } catch (_) {}
+      if (ls) { await idb.set('syncBase', ls); try { localStorage.removeItem('sm_sync_base'); } catch (_) {} return ls; }
+      return '{}';
+    }
+    try { return localStorage.getItem('sm_sync_base') || '{}'; } catch (_) { return '{}'; }
+  },
+  _saveBaseRaw(json) {
+    if (idb.ok) { idb.set('syncBase', json).catch(() => {}); return; }
+    try { localStorage.setItem('sm_sync_base', json); } catch (_) {}
+  },
+  // 基準点のクリア（リセット/インポート/バックアップ復元用）。IDB と旧 localStorage の両方を消す
+  _clearBase() {
+    try { localStorage.removeItem('sm_sync_base'); localStorage.removeItem('sm_sync_at'); } catch (_) {}
+    if (idb.ok) idb.del('syncBase').catch(() => {});
+  },
   _snapshot() { return JSON.stringify(dataBundle()); },
 
   async _driveFetch(url, opts = {}, _retried) {
@@ -1183,9 +1273,12 @@ const dsync = {
       if (file) { try { remoteRaw = await this._readFile(file.id); remote = JSON.parse(remoteRaw); } catch (_) { remote = {}; remoteRaw = null; } }
       // その日最初の同期で、上書き前のDrive内容を1世代バックアップ（最大5世代・best-effort）
       if (remoteRaw) await this.backupDailyOnce(remoteRaw);
+      // techAnalysis の IndexedDB 読み込み完了を待つ（§16.7.5）。未ロード＝空のまま bundle を作ると
+      // 3-way マージが「ローカルで全削除」と誤解釈し、Drive・他端末の分析結果まで消える。
+      await (store.idbReady || Promise.resolve());
       const local = dataBundle();
       const localJson = JSON.stringify(local);  // Drive書込(await)中にローカルが変わったかの判定基準
-      const base = JSON.parse(this._loadBaseRaw());
+      const base = JSON.parse(await this._loadBaseRaw());
       const merged = SyncMerge.mergeBundle(base, local, remote);
       // マージの削除伝播で rules が空になると restore 時に rules[0].isDefault で落ちる。
       // 空なら既定ルールを補い、Drive 側にも壊れた空配列を残さない（自己修復）
@@ -1286,7 +1379,7 @@ const dsync = {
   async restoreFromBackup(fileId) {
     const obj = JSON.parse(await this._readFile(fileId));
     restoreBundle(obj);
-    try { localStorage.removeItem('sm_sync_base'); localStorage.removeItem('sm_sync_at'); } catch (_) {}
+    this._clearBase();
   },
 };
 function gsaveSettings(f) {
@@ -3705,6 +3798,9 @@ window.addEventListener('storage', (e) => {
   _xtabTimer = setTimeout(() => {
     try {
       store.load(); loadColPrefs(); loadFilterPresets();
+      // techAnalysis は IndexedDB 保存（sm_data_v1 に無い）。別タブが分析を実行していた場合に備えて
+      // IDB から読み直す（古いメモリのままだと、別タブ追加分が同期で「削除」と誤解釈されうる）
+      if (idb.ok) idb.get('techAnalysis').then(v => { if (v && typeof v === 'object') store.data.techAnalysis = v; }).catch(() => {});
     } catch (_) { return; }
     // 入力中・モーダル/ドロワー表示中は描画し直さない（打鍵や編集中の内容を消さないため）。
     // データだけ取り込んでおけば、次の描画から新しい内容になる。
@@ -8336,7 +8432,7 @@ const STORAGE_NOTES = {
   securities: '銘柄マスタ（消さない）', holdings: '保有（消さない）', transactions: '取引履歴（消さない）',
   acqLedger: '取得円台帳（消さない）', analyses: '銘柄分析の履歴（消さない）',
   meta: '銘柄情報キャッシュ（再取得可）', prices: '価格キャッシュ（再取得可）',
-  techAnalysis: 'テクニカル分析結果（再取得可）', newsPool: 'ニュース一覧（再取得可）',
+  techAnalysis: 'テクニカル分析結果（IndexedDB保存・再取得可）', newsPool: 'ニュース一覧（再取得可）',
   newsTrans: 'ニュース翻訳（再取得可）', mktRanking: 'マーケットランキング（再取得可）',
   indices: '参考指数（再取得可）', macro: 'マクロ指標（再取得可）', macroIdx: '指数・為替履歴（再取得可）',
   earnings: '決算日（再取得可）', listedMaster: '上場銘柄マスタ（取込データ・再取込可）',
@@ -8345,12 +8441,15 @@ const STORAGE_NOTES = {
 function jsonSize(v) { try { return JSON.stringify(v).length; } catch (_) { return 0; } }
 function storageBreakdown() {
   const d = store.data || {};
-  const rows = Object.keys(d).map(k => ({ k, size: jsonSize(d[k]) })).filter(r => r.size > 2).sort((a, b) => b.size - a.size);
-  return { rows, total: jsonSize(d) };
+  // techAnalysis は IndexedDB 保存（§16.7.5）のため localStorage(sm_data_v1) には含まれない。別枠で表示する
+  const rows = Object.keys(d).filter(k => !(idb.ok && k === 'techAnalysis'))
+    .map(k => ({ k, size: jsonSize(d[k]) })).filter(r => r.size > 2).sort((a, b) => b.size - a.size);
+  return { rows, total: rows.reduce((a, r) => a + r.size, 0) };
 }
 function fmtKB(n) { return (n / 1024).toFixed(1) + ' KB'; }
-// localStorage の全キー（sm_data_v1 本体・同期ベース sm_sync_base・列設定 等）の実使用量。
-// ★sm_sync_base は dataBundle（＝store.data 全体）のコピーなので、データが大きいと容量を「2倍」使う。
+// localStorage の全キー（sm_data_v1 本体・列設定 等）の実使用量。
+// 同期の基準(syncBase)とテクニカル分析(techAnalysis)は IndexedDB 保存（§16.7.5）で、この5MB枠には入らない。
+// 旧形式の sm_sync_base（localStorage）が残っていれば次の同期時に IDB へ移して消える。
 function rawStorageRows() {
   const rows = [];
   try {
@@ -8369,12 +8468,20 @@ function techFieldBreakdown() {
   for (const k of keys) { const r = ta[k] || {}; for (const f in r) sum[f] = (sum[f] || 0) + jsonSize(r[f]); }
   return { count: keys.length, rows: Object.keys(sum).map(f => ({ f, size: sum[f] })).sort((a, b) => b.size - a.size) };
 }
-function openStorageMaster() {
+async function openStorageMaster() {
   const { rows, total } = storageBreakdown();
   const raws = rawStorageRows();
   const tech = techFieldBreakdown();
   const all = raws.reduce((a, r) => a + r.size, 0);
   const pct = Math.round(all / (5 * 1024 * 1024) * 100);
+  // IndexedDB 側（5MB枠の外・§16.7.5）: techAnalysis と同期の基準(syncBase)
+  const techSize = jsonSize(store.data.techAnalysis);
+  let baseSize = 0;
+  if (idb.ok) { try { const b = await idb.get('syncBase'); baseSize = (typeof b === 'string') ? b.length : 0; } catch (_) {} }
+  const idbRows = idb.ok ? [
+    { k: 'techAnalysis', size: techSize, note: `テクニカル分析結果 ${tech.count}件（再取得可）` },
+    { k: 'syncBase', size: baseSize, note: '同期の基準（アプリデータのコピー・同期のたびに更新）' },
+  ] : [];
   const sizeTable = (list, label, nameOf) => `
     <div class="table-wrap" style="max-height:28vh">
       <table class="table"><thead><tr><th class="l">${label}</th><th class="r">サイズ</th><th class="l">内容</th></tr></thead>
@@ -8383,13 +8490,16 @@ function openStorageMaster() {
   showModal('保存容量（ブラウザ）', `
     <p class="muted">ブラウザの保存領域（localStorage）は1サイト約5MBです。上限に達すると銘柄情報などが
       <b>「取得OK・保存失敗（容量不足の可能性）」</b>になります。</p>
-    <p><b>アプリのデータ ${fmtKB(total)}</b> ／ このサイト全体 ${fmtKB(all)}（目安 約${pct}% 使用）</p>
+    <p><b>アプリのデータ ${fmtKB(total)}</b> ／ localStorage 全体 ${fmtKB(all)}（上限約5MBの${pct}%）${idb.ok ? `<br>IndexedDB ${fmtKB(techSize + baseSize)}<span class="muted">（別枠・上限はGB級。テクニカル分析と同期の基準はこちら）</span>` : ''}</p>
     <fieldset class="form-group"><legend>アプリのデータ（sm_data_v1）の内訳</legend>
       ${sizeTable(rows, 'キー', r => STORAGE_NOTES[r.k] || '')}
     </fieldset>
-    <fieldset class="form-group"><legend>ブラウザ保存キー全体（同期の基準データを含む）</legend>
-      ${sizeTable(raws, 'キー', r => r.k === 'sm_sync_base' ? '同期の基準（アプリデータのコピー＝同じ分だけ倍で使う）' : r.k === STORAGE_KEY ? 'アプリのデータ本体' : '')}
+    <fieldset class="form-group"><legend>localStorage 全キー（上限約5MBの対象）</legend>
+      ${sizeTable(raws, 'キー', r => r.k === 'sm_sync_base' ? '旧形式の同期基準（現在は IndexedDB 保存。次の同期時に自動で消える）' : r.k === STORAGE_KEY ? 'アプリのデータ本体' : '')}
     </fieldset>
+    ${idb.ok ? `<fieldset class="form-group"><legend>IndexedDB（5MB制限の対象外）</legend>
+      ${sizeTable(idbRows, 'キー', r => r.note || '')}
+    </fieldset>` : ''}
     <fieldset class="form-group"><legend>テクニカル分析（${tech.count}件）のフィールド別内訳</legend>
       ${sizeTable(tech.rows, '項目', () => '')}
     </fieldset>
@@ -8410,9 +8520,10 @@ function openStorageMaster() {
     } catch (e) { console.warn('[storage]', e); toast('整理できませんでした: ' + (e && e.message || e), 6000); }
   };
   document.getElementById('stg-copy').onclick = () => {
-    const txt = `合計 ${fmtKB(total)} / サイト全体 ${fmtKB(all)}\n`
+    const txt = `アプリ ${fmtKB(total)} / localStorage全体 ${fmtKB(all)} / IndexedDB ${fmtKB(techSize + baseSize)}\n`
       + rows.map(r => `${r.k}\t${fmtKB(r.size)}`).join('\n')
       + `\n--- localStorage 全体 ---\n` + raws.map(r => `${r.k}\t${fmtKB(r.size)}`).join('\n')
+      + `\n--- IndexedDB ---\n` + idbRows.map(r => `${r.k}\t${fmtKB(r.size)}`).join('\n')
       + `\n--- techAnalysis ${tech.count}件 ---\n` + tech.rows.map(r => `${r.f}\t${fmtKB(r.size)}`).join('\n');
     navigator.clipboard.writeText(txt).then(() => toast('内訳をコピーしました'), () => toast('コピーできませんでした'));
   };
@@ -8435,8 +8546,8 @@ function openStorageMaster() {
   });
   document.getElementById('stg-base').onclick = act(() => {
     if (!confirm('同期の基準データ（アプリデータのコピー）を捨てます。次回の同期で作り直されますが、それまでに他端末で削除した銘柄などが復活することがあります。よろしいですか？')) return '';
-    const freed = (localStorage.getItem('sm_sync_base') || '').length;
-    localStorage.removeItem('sm_sync_base');
+    const freed = baseSize || (localStorage.getItem('sm_sync_base') || '').length;
+    dsync._clearBase();
     return `同期の基準 約${Math.round(freed / 1024)}KB を消しました（次の同期で作り直されます）`;
   });
 }
@@ -13752,7 +13863,7 @@ function importData() {
         restoreBundle(parsed);
         // インポート＝この端末のデータを正本に戻す操作。同期基準点を消し、次回同期で
         // 取り込んだ全データを Drive へ反映（push）させる。base を残すと一部が削除扱いで消えうる。
-        try { localStorage.removeItem('sm_sync_base'); localStorage.removeItem('sm_sync_at'); } catch (_) {}
+        dsync._clearBase();
         render(); toast('インポートしました（列設定も復元）');
       }
       catch (_) { toast('JSONの読み込みに失敗しました'); }
@@ -13770,7 +13881,9 @@ async function resetData() {
     // 同期の基準点(base)も消す。残すとローカルの「空」が3-wayマージで「全削除」と解釈され、
     // 次の自動同期で Drive と他端末まで空に上書きされてしまう（＝端末のローカル削除のつもりが全消失）。
     // base を消せば次回同期は base={} の新規扱いとなり Drive 側を保持（pull）する。
-    try { localStorage.removeItem('sm_sync_base'); localStorage.removeItem('sm_sync_at'); } catch (_) {}
+    dsync._clearBase();
+    // IndexedDB 側の分析結果も消す（残すと次回起動時に読み戻されて「全削除」が不完全になる）
+    if (idb.ok) { try { await idb.del('techAnalysis'); } catch (_) {} }
     store.data = null; store.load(); render();
     toast('全データを削除しました（バックアップJSONをダウンロード済み）');
   }
@@ -14890,6 +15003,25 @@ document.addEventListener('compositionend', (e) => {
 }, true);
 
 store.load();
+// techAnalysis を IndexedDB から読み込む（§16.7.5）。同期(dsync.syncNow)はこの完了を必ず待つこと。
+// 未ロード（=空）のまま同期すると 3-way マージが「ローカルで全削除」と誤解釈し、Drive・他端末の
+// 分析結果まで消してしまう（mergeMap3way の削除伝播）。
+store.idbReady = (async () => {
+  if (!idb.ok) return;
+  const cur = store.data.techAnalysis || {};
+  if (Object.keys(cur).length > 0) {
+    // 移行(初回): 旧版は localStorage の sm_data_v1 内に入っていた。IDB へ書き、save() で localStorage から外す
+    await idb.set('techAnalysis', cur);
+    store.save();
+    return;
+  }
+  const v = await idb.get('techAnalysis');
+  if (v && typeof v === 'object') {
+    store.data.techAnalysis = v;
+    try { store._pruneTechAnalysis(); } catch (_) {}
+    if (currentView === 'analysis') render();   // 分析タブを開いた状態のリロードなら読み込み後に反映
+  }
+})().catch(() => {});
 loadColPrefs();
 loadFilterState();    // 分析・個別銘柄の列フィルター（次回起動時の引継ぎ）
 loadFilterPresets();  // フィルターのパターン（3タブ共通）
