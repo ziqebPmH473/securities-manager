@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260819-1213';
+const APP_VERSION = 'v20260821-0011';
 
 'use strict';
 
@@ -2596,25 +2596,26 @@ function secMatchesQuery(sec, rawQuery) {
 const FILTER_STATE_KEY = 'sm_filters_v1';
 const FILTER_PRESETS_KEY = 'sm_filter_presets_v1';
 // open=詳細パネルの開閉（保存しない）。presetId=ツールバーで適用中のパターン（手編集で空に戻す）。
+// not={key:true}=その項目を「除外」条件として使う（選択肢＝選んだ値を除く / 数値＝範囲の外だけ残す）。
 const fltState = {
-  holdings:  { open: false, presetId: '', rows: [], num: {}, sel: {} },
-  analysis:  { open: false, presetId: '', rows: [], num: {}, sel: {} },
-  secmaster: { open: false, presetId: '', rows: [], num: {}, sel: {} },
-  news:      { open: false, presetId: '', rows: [], num: {}, sel: {} }, // ニュースの銘柄フィルタ（保有銘柄と同じ機構を流用）
+  holdings:  { open: false, presetId: '', rows: [], num: {}, sel: {}, not: {} },
+  analysis:  { open: false, presetId: '', rows: [], num: {}, sel: {}, not: {} },
+  secmaster: { open: false, presetId: '', rows: [], num: {}, sel: {}, not: {} },
+  news:      { open: false, presetId: '', rows: [], num: {}, sel: {}, not: {} }, // ニュースの銘柄フィルタ（保有銘柄と同じ機構を流用）
 };
-let fltPresets = []; // [{id, name, rows:[{key}], num:{key:{min,max}}, sel:{key:[vals]}}]
+let fltPresets = []; // [{id, name, rows:[{key}], num:{key:{min,max}}, sel:{key:[vals]}, not:{key:true}}]
 function loadFilterState() {
   try {
     const o = JSON.parse(localStorage.getItem(FILTER_STATE_KEY) || '{}');
     for (const sc of ['holdings', 'analysis', 'news']) {
       const s = o[sc]; if (!s || typeof s !== 'object') continue;
-      fltState[sc] = { open: false, presetId: s.presetId || '', rows: Array.isArray(s.rows) ? s.rows : [], num: s.num || {}, sel: s.sel || {} };
+      fltState[sc] = { open: false, presetId: s.presetId || '', rows: Array.isArray(s.rows) ? s.rows : [], num: s.num || {}, sel: s.sel || {}, not: s.not || {} };
     }
   } catch (_) {}
 }
 function saveFilterState() {
   const o = {};
-  for (const sc of ['holdings', 'analysis', 'news']) { const s = fltState[sc]; o[sc] = { presetId: s.presetId, rows: s.rows, num: s.num, sel: s.sel }; }
+  for (const sc of ['holdings', 'analysis', 'news']) { const s = fltState[sc]; o[sc] = { presetId: s.presetId, rows: s.rows, num: s.num, sel: s.sel, not: s.not }; }
   try { localStorage.setItem(FILTER_STATE_KEY, JSON.stringify(o)); } catch (_) {}
 }
 function loadFilterPresets() { try { fltPresets = JSON.parse(localStorage.getItem(FILTER_PRESETS_KEY)) || []; } catch (_) { fltPresets = []; } }
@@ -2679,21 +2680,26 @@ function filterableCols(scope) {
   return out;
 }
 // 列フィルタ適用（数値＝範囲 / 選択肢＝いずれかに一致）。scope に無効な列は無視。
+// not[key]=true の項目は判定を反転＝「除外」条件（例: セクター=金融 を除く / PER 30〜50 を除く）。
+// 除外では値なし・非数値の銘柄は「条件に当てはまらない＝除外されない」ので残す（絞り込みと逆の扱い）。
 function applyColFilters(secs, scope) {
   const st = fltState[scope];
   const valid = new Set(filterableCols(scope).map(c => c.key));
+  const nt = st.not || {};
   for (const key in st.num) {
     if (!valid.has(key)) continue;
     const { min, max } = st.num[key]; if (min == null && max == null) continue;
-    secs = secs.filter(s => { const v = sortValue(s, key); if (typeof v !== 'number' || !isFinite(v)) return false; if (min != null && v < min) return false; if (max != null && v > max) return false; return true; });
+    const inRange = s => { const v = sortValue(s, key); if (typeof v !== 'number' || !isFinite(v)) return false; if (min != null && v < min) return false; if (max != null && v > max) return false; return true; };
+    secs = nt[key] ? secs.filter(s => !inRange(s)) : secs.filter(inRange);
   }
   for (const key in st.sel) {
     if (!valid.has(key)) continue;
     const want = st.sel[key]; if (!Array.isArray(want) || !want.length) continue;
     const spec = fltSelectSpec(key); if (!spec) continue;
     const set = new Set(want.map(String));
-    if (spec.multi) secs = secs.filter(s => (spec.val(s) || []).some(v => set.has(String(v)))); // 複数値（ラベル）＝いずれか一致
-    else secs = secs.filter(s => set.has(String(spec.val(s) ?? '')));
+    // 複数値（ラベル）＝いずれか一致 / 単一値＝一致
+    const hit = spec.multi ? (s => (spec.val(s) || []).some(v => set.has(String(v)))) : (s => set.has(String(spec.val(s) ?? '')));
+    secs = nt[key] ? secs.filter(s => !hit(s)) : secs.filter(hit);
   }
   return secs;
 }
@@ -2734,7 +2740,7 @@ function fltAddFilter(scope, key) {
 }
 function fltRemoveFilter(scope, key) {
   const st = fltState[scope];
-  st.rows = st.rows.filter(r => r.key !== key); delete st.num[key]; delete st.sel[key];
+  st.rows = st.rows.filter(r => r.key !== key); delete st.num[key]; delete st.sel[key]; delete st.not[key];
   st.presetId = ''; fltPersist(scope); fltRerender(scope);
 }
 function fltSetNum(scope, key, which, v) {
@@ -2749,8 +2755,15 @@ function fltToggleSel(scope, key, idx) {
   if (at >= 0) arr.splice(at, 1); else arr.push(val);
   st.presetId = ''; fltPersist(scope); fltRerender(scope);
 }
+// 項目ごとの「含む(絞り込み) ⇔ 除く(除外)」切替
+function fltToggleNot(scope, key) {
+  const st = fltState[scope];
+  if (!st.not) st.not = {};
+  if (st.not[key]) delete st.not[key]; else st.not[key] = true;
+  st.presetId = ''; fltPersist(scope); fltRerender(scope);
+}
 function fltClear(scope) {
-  const st = fltState[scope]; st.rows = []; st.num = {}; st.sel = {}; st.presetId = '';
+  const st = fltState[scope]; st.rows = []; st.num = {}; st.sel = {}; st.not = {}; st.presetId = '';
   fltPersist(scope); fltRerender(scope);
 }
 // パターン（プリセット）：現在の条件を名前付きで保存。3タブ共通の1リスト。
@@ -2760,13 +2773,13 @@ function fltSavePreset(scope) {
   const name = (prompt('パターン名を入力してください') || '').trim();
   if (!name) return;
   const rows = st.rows.map(r => ({ key: r.key }));
-  const num = {}, sel = {};
-  for (const r of st.rows) { if (st.num[r.key]) num[r.key] = { ...st.num[r.key] }; if (st.sel[r.key]) sel[r.key] = [...st.sel[r.key]]; }
+  const num = {}, sel = {}, not = {};
+  for (const r of st.rows) { if (st.num[r.key]) num[r.key] = { ...st.num[r.key] }; if (st.sel[r.key]) sel[r.key] = [...st.sel[r.key]]; if (st.not && st.not[r.key]) not[r.key] = true; }
   const ex = fltPresets.find(p => p.name === name);
   let pid;
   // 同名があれば内容更新＆復活（deleted解除）。updatedAt で同期マージの新しい方が勝つ。
-  if (ex) { ex.rows = rows; ex.num = num; ex.sel = sel; ex.deleted = false; ex.updatedAt = store._now(); pid = ex.id; }
-  else { pid = 'p' + Date.now(); fltPresets.push({ id: pid, name, rows, num, sel, updatedAt: store._now() }); }
+  if (ex) { ex.rows = rows; ex.num = num; ex.sel = sel; ex.not = not; ex.deleted = false; ex.updatedAt = store._now(); pid = ex.id; }
+  else { pid = 'p' + Date.now(); fltPresets.push({ id: pid, name, rows, num, sel, not, updatedAt: store._now() }); }
   fltState[scope].presetId = pid; // 保存後はそのパターンが選択中の状態に
   saveFilterPresets(); fltPersist(scope); fltRerender(scope);
   toast(`パターン「${name}」を保存しました`);
@@ -2774,13 +2787,14 @@ function fltSavePreset(scope) {
 // パターン適用（ツールバーのセレクトから）。空＝フィルター解除。詳細パネルは自動で開かない。
 function fltApplyPreset(scope, id) {
   const st = fltState[scope];
-  if (!id) { st.rows = []; st.num = {}; st.sel = {}; st.presetId = ''; fltPersist(scope); fltRerender(scope); return; }
+  if (!id) { st.rows = []; st.num = {}; st.sel = {}; st.not = {}; st.presetId = ''; fltPersist(scope); fltRerender(scope); return; }
   const p = fltPresets.find(x => String(x.id) === String(id)); if (!p || p.deleted) return;
   const valid = new Set(filterableCols(scope).map(c => c.key));
   st.rows = (p.rows || []).filter(r => valid.has(r.key)).map(r => ({ key: r.key }));
-  st.num = {}; st.sel = {};
+  st.num = {}; st.sel = {}; st.not = {};
   for (const k in (p.num || {})) if (valid.has(k)) st.num[k] = { ...p.num[k] };
   for (const k in (p.sel || {})) if (valid.has(k)) st.sel[k] = [...p.sel[k]];
+  for (const k in (p.not || {})) if (valid.has(k) && p.not[k]) st.not[k] = true;
   st.presetId = String(id);
   fltPersist(scope); fltRerender(scope);
 }
@@ -2816,12 +2830,15 @@ function filterPanelHtml(scope) {
       const rg = st.num[r.key] || {};
       ctrl = `<input type="number" class="afl-num" placeholder="最小" value="${rg.min ?? ''}" onchange="fltSetNum('${scope}','${r.key}','min',this.value)"><span class="afl-tilde">〜</span><input type="number" class="afl-num" placeholder="最大" value="${rg.max ?? ''}" onchange="fltSetNum('${scope}','${r.key}','max',this.value)">`;
     }
-    return `<div class="afl-row" data-key="${r.key}"><span class="afl-l">${esc(c.label)}</span><div class="afl-ctrl">${ctrl}</div><button class="afl-x" title="削除" onclick="fltRemoveFilter('${scope}','${r.key}')">×</button></div>`;
+    // 含む(絞り込み) / 除く(除外) の切替。除外時は行を赤系にして一目で分かるようにする
+    const isNot = !!(st.not && st.not[r.key]);
+    const modeBtn = `<button class="afl-mode${isNot ? ' not' : ''}" onclick="fltToggleNot('${scope}','${r.key}')" title="クリックで「含む（この条件で絞り込む）⇔ 除く（この条件に当てはまる銘柄を除外）」を切替">${isNot ? '除く' : '含む'}</button>`;
+    return `<div class="afl-row${isNot ? ' not' : ''}" data-key="${r.key}"><span class="afl-l">${esc(c.label)}</span>${modeBtn}<div class="afl-ctrl">${ctrl}</div><button class="afl-x" title="削除" onclick="fltRemoveFilter('${scope}','${r.key}')">×</button></div>`;
   }).join('');
   const presetList = fltPresets.filter(p => !p.deleted);
   const presetDel = presetList.length ? `<select class="afl-add" onchange="fltDeletePreset('${scope}',this.value)"><option value="">パターン削除…</option>${presetList.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>` : '';
   return `<div class="ana-panel afl-panel">
-    <div class="afl-head"><b>列フィルター</b><span class="muted">項目を追加して条件を設定。「パターン保存」で名前を付けると、次回からツールバーの選択だけで呼び出せます。</span><div class="tb-spacer"></div>
+    <div class="afl-head"><b>列フィルター</b><span class="muted">項目を追加して条件を設定。各行の「含む／除く」で除外条件にもできます。「パターン保存」で名前を付けると、次回からツールバーの選択だけで呼び出せます。</span><div class="tb-spacer"></div>
       <button class="btn btn-sm" onclick="fltSavePreset('${scope}')">現在の条件をパターン保存</button>
       ${presetDel}
       <select class="afl-add" onchange="fltAddFilter('${scope}',this.value)">${addOpts}</select>

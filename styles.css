@@ -540,6 +540,10 @@ button { font-family: inherit; }
 .afl-row .afl-l { flex: 0 0 130px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .afl-ctrl { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .afl-num { width: 78px; padding: 4px 6px; font-size: 12px; }
+.afl-mode { flex: 0 0 auto; padding: 2px 9px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.afl-mode.not { border-color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
+.afl-row.not { border-color: color-mix(in srgb, var(--red) 45%, var(--hair)); }
+.afl-row.not .afl-chk.on { background: color-mix(in srgb, var(--red) 16%, transparent); border-color: var(--red); }
 .afl-tilde { color: var(--muted); }
 .afl-chks { display: flex; flex-wrap: wrap; gap: 5px; }
 .afl-chk { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; cursor: pointer; user-select: none; color: var(--muted); }
