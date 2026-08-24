@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260821-0011';
+const APP_VERSION = 'v20260825-0053';
 
 'use strict';
 
@@ -7032,11 +7032,21 @@ function renderMacroChart() {
   const cmp = macroCompare();
   const ids = card.ids.concat(cmp.filter(s => !card.ids.includes(s)));
   const rightSet = new Set((card.right || []).concat(cmp));
-  const series = ids.map((id, i) => ({
+  let series = ids.map((id, i) => ({
     id, label: (MACRO_SERIES[id] || {}).label || id, color: MACRO_COLORS[i % MACRO_COLORS.length],
     axis: rightSet.has(id) ? 'r' : 'l',
     pts: macroCut(macroPoints(id), period),
   })).filter(s => s.pts.length >= 2);
+  // 比較指数は「指標（カード側）のデータがある期間」に切り詰める。指標が主役なので、
+  // ハイイールドスプレッド等で指標の履歴が選択期間より短い時に、指数側の長い履歴へ
+  // x軸を合わせると肝心の指標が右端の一部にしか描かれない（2026-08-25 すみぽん指摘）。
+  const mains = series.filter(s => card.ids.includes(s.id));
+  if (mains.length && series.length > mains.length) {
+    const lo = mains.map(s => s.pts[0][0]).sort()[0];
+    const hi = mains.map(s => s.pts[s.pts.length - 1][0]).sort().pop();
+    for (const s of series) if (!card.ids.includes(s.id)) s.pts = s.pts.filter(p => p[0] >= lo && p[0] <= hi);
+    series = series.filter(s => s.pts.length >= 2);
+  }
   if (!series.length) { bail('この指標のデータがまだありません。「更新」で取得してください。'); return; }
   // 左軸の系列が全部未取得だった時は、右軸の系列を左へ寄せて1軸で描く（右軸だけのグラフにしない）
   if (!series.some(s => s.axis === 'l')) series.forEach(s => { s.axis = 'l'; });
