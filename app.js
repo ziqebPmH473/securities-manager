@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260825-1745';
+const APP_VERSION = 'v20260825-1749';
 
 'use strict';
 
@@ -10607,6 +10607,8 @@ function openSecurityForm(id, presetMarket, presetTicker) {
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
     </form>`);
+  // コードが初期セットされた時（カルテの未登録→登録ボタン等）は、blurを待たず銘柄情報を自動取得する
+  if (initTicker) { const t = document.getElementById('sec-form').elements.ticker; if (t) autoFetchInfo(t); }
   document.getElementById('sec-form').onsubmit = (e) => {
     e.preventDefault();
     const f = e.target;
