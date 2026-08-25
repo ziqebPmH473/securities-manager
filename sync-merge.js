@@ -58,6 +58,8 @@
     amountHistory:   ['records', (r) => `ah:${r.id}`],
     amountSnapshots: ['records', (r) => `as:${r.id}`],
     analyses:        ['records', (r) => `an:${r.securityId}|${r.analysisDate}`],
+    priceScenarios:  ['records', (r) => `ps:${r.securityId}|${r.scenarioDate}`], // 株価シナリオ分析の履歴（銘柄×分析日）。行単位3-way
+
     importHistory:   ['records', (r) => `ih:${r.id}`],
     importFormats:   ['records', (f) => f && f.name != null ? `if:n:${f.name}` : `if:${JSON.stringify(f)}`],
     prices:          ['map', byFetchedAt],

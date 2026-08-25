@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260825-0053';
+const APP_VERSION = 'v20260825-1542';
 
 'use strict';
 
@@ -258,6 +258,13 @@ const MASTER_COLS = [
   { key: 'stars',        label: '★(ﾊﾞﾘｭ/強/ﾘｽｸ)', left: true,  markets: STKM, noSort: true },
   { key: 'analysisDate', label: '評価日',          left: true,  markets: STKM, noSort: false },
   { key: 'analysisNote', label: '分析メモ',        left: true,  markets: STKM, noSort: true },
+  // 株価シナリオ分析（短期・中期の予想レンジ。既定非表示・列設定で表示可）。位置=現在値がどのレンジか（派生）
+  { key: 'stScenario',    label: '短期シナリオ',       left: true,  markets: STKM, noSort: false },
+  { key: 'mtScenario',    label: '中期シナリオ',       left: true,  markets: STKM, noSort: false },
+  { key: 'stScenPos',     label: '短期シナリオ位置',   left: true,  markets: STKM, noSort: false },
+  { key: 'mtScenPos',     label: '中期シナリオ位置',   left: true,  markets: STKM, noSort: false },
+  { key: 'scenarioDate',  label: 'シナリオ分析日',     left: true,  markets: STKM, noSort: false },
+  { key: 'scenarioPrice', label: 'シナリオ時株価',     left: false, markets: STKM, noSort: false },
   { key: 'memo',        label: 'メモ',             left: true,  markets: ALLM, noSort: true },
   // 元本売却（情報管理のみ・既定非表示）
   { key: 'principalSold',       label: '元本売却済み',   left: true,  markets: ALLM, noSort: false },
@@ -348,6 +355,55 @@ const IMPORT_FIELD_LABELS = {
 // 実体はこの項目群を securityId×評価日(analysisDate)ごとに analyses へ積む（履歴）。
 // フォーム保存・取込の両方がこの集合を上書き源にする（手入力↔取込↔ミラーで一貫）。
 const ANALYSIS_FIELDS = ['overallGrade', 'rating', 'buyGrade', 'starValuation', 'starStrength', 'starRisk', 'priority', 'recoAmount', 'analysisNote'];
+// 株価シナリオ分析（短期・中期×弱気/ベース/強気の予想レンジ）。銘柄平置きは「最新シナリオのミラー」で、
+// 実体は priceScenarios（securityId×分析日 scenarioDate）へ履歴として積む。銘柄分析(analyses)とは
+// 別の分析・別の日付体系なので混ぜない（混ぜると syncLatestAnalysis が互いの値を null で潰す）。
+// scenarioPrice=分析時株価（数値）、st*/mt* はレンジ文字列（正規化して「1000~1500」の形で保存）。
+const SCENARIO_FIELDS = ['scenarioPrice', 'stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull'];
+// レンジ文字列の正規化: 「1000～1500」「1,000〜1,500」「1000-1500」等を「1000~1500」へ。単一値も可。
+// 数値化できない入力はそのまま返す（取込データを黙って捨てない。表示はそのまま・位置判定は不可になるだけ）。
+function scNormRange(v) {
+  if (v == null) return null;
+  const s = String(v).normalize('NFKC').trim();
+  if (!s) return null;
+  const m = s.replace(/[,，円$¥\s]/g, '').match(/^(\d+(?:\.\d+)?)(?:[~〜～\-−–—ー/／]+(\d+(?:\.\d+)?))?$/);
+  if (!m) return s;
+  const lo = parseFloat(m[1]), hi = m[2] != null ? parseFloat(m[2]) : null;
+  if (hi == null) return String(lo);
+  return `${Math.min(lo, hi)}~${Math.max(lo, hi)}`;
+}
+// 正規化済みレンジ文字列 → {lo,hi}（単一値は lo=hi）。解釈できなければ null
+function scParseRange(v) {
+  if (v == null || v === '') return null;
+  const m = String(v).match(/^(\d+(?:\.\d+)?)(?:~(\d+(?:\.\d+)?))?$/);
+  if (!m) return null;
+  const lo = parseFloat(m[1]);
+  return { lo, hi: m[2] != null ? parseFloat(m[2]) : lo };
+}
+// 表示用: 「1000~1500」→「1,000～1,500」（市場の桁書式）。未正規化の文字列はそのまま見せる
+function scFmtRange(v, market) {
+  const r = scParseRange(v);
+  if (!r) return v ? esc(String(v)) : null;
+  return r.lo === r.hi ? fmtAmt(r.lo, market) : `${fmtAmt(r.lo, market)}～${fmtAmt(r.hi, market)}`;
+}
+// 現在値が短期/中期シナリオのどのレンジにいるか（派生値・表とカルテの「位置」表示用）。
+// term='st'|'mt'。戻り: {label, cls, ord} / データ不足は null。ord はソート用（下ほど小さい）。
+// 弱気レンジ未満=neg / 強気レンジ超え=pos、レンジ内・レンジ間は中立。
+function scPosition(sec, term) {
+  const price = calc.price(sec);
+  if (price == null) return null;
+  const zones = [[sec[term + 'Bear'], '弱気'], [sec[term + 'Base'], 'ベース'], [sec[term + 'Bull'], '強気']]
+    .map(([v, label]) => ({ r: scParseRange(v), label })).filter(z => z.r)
+    .sort((a, b) => a.r.lo - b.r.lo);
+  if (!zones.length) return null;
+  if (price < zones[0].r.lo) return { label: `${zones[0].label}未満`, cls: 'neg', ord: -1 };
+  for (let i = 0; i < zones.length; i++) {
+    if (price <= zones[i].r.hi) return { label: `${zones[i].label}圏`, cls: '', ord: i * 2 };
+    const next = zones[i + 1];
+    if (next && price < next.r.lo) return { label: `${zones[i].label}〜${next.label}`, cls: '', ord: i * 2 + 1 };
+  }
+  return { label: `${zones[zones.length - 1].label}超え`, cls: 'pos', ord: zones.length * 2 };
+}
 // 保有取込列マッピング（Excel「10_保有株」）
 const HOLDING_COLMAP = {
   'ティッカー': 'ticker', '証券会社': 'broker', '口座種別': 'accountType',
@@ -388,6 +444,7 @@ const store = {
     this.data.amountHistory ||= [];   // 金額マスタ変更履歴（版管理）
     this.data.amountSnapshots ||= []; // 銘柄ごとの適用金額スナップショット
     this.data.analyses ||= [];        // 銘柄分析の履歴（securityId×評価日がキー。銘柄平置きは最新のミラー）
+    this.data.priceScenarios ||= [];  // 株価シナリオ分析の履歴（securityId×分析日 scenarioDate がキー。平置きは最新のミラー）。同期対象（SCHEMA: records）
     this._migrateAnalyses();          // 後方互換: 平置きの分析を履歴へ1件起こす
     this.data.techAnalysis ||= {};    // テクニカル分析（チャートパターン）結果: priceKey→{lastAnalyzed,best,patterns,metrics,levels,history,_updatedAt}
     this.data.importHistory ||= [];   // 取込履歴
@@ -591,6 +648,7 @@ const store = {
     this.data.holdings = this.data.holdings.filter(h => h.securityId !== id);
     this.data.transactions = this.data.transactions.filter(t => t.securityId !== id);
     this.data.analyses = (this.data.analyses || []).filter(a => a.securityId !== id);
+    this.data.priceScenarios = (this.data.priceScenarios || []).filter(a => a.securityId !== id);
     this.save();
   },
   findSecurity(market, ticker) {
@@ -954,6 +1012,38 @@ const store = {
     if (added) this.save();
   },
 
+  // ===== 株価シナリオ分析の履歴（priceScenarios） =====
+  // 1銘柄×1分析日(scenarioDate)=1レコード。銘柄分析(analyses)とは別の分析なので別マスタ（混ぜると
+  // 互いのミラーが null で潰し合う）。同期マージは自然キー `ps:securityId|scenarioDate`（sync-merge.js）。
+  scenariosOf(secId) { return (this.data.priceScenarios || []).filter(a => a.securityId === secId); },
+  scenariosSorted(secId) {
+    return this.scenariosOf(secId).slice().sort((a, b) =>
+      a.scenarioDate < b.scenarioDate ? 1 : a.scenarioDate > b.scenarioDate ? -1 : ((a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1));
+  },
+  latestScenario(secId) { const l = this.scenariosSorted(secId); return l[0] || null; },
+  // 履歴へ upsert（securityId×scenarioDate がキー）。fields は SCENARIO_FIELDS のサブセット（渡さないキーは触らない）
+  upsertScenario(secId, scenarioDate, fields) {
+    if (!scenarioDate) return null;
+    this.data.priceScenarios ||= [];
+    const now = this._now();
+    let a = this.data.priceScenarios.find(x => x.securityId === secId && x.scenarioDate === scenarioDate);
+    if (a) Object.assign(a, fields, { updatedAt: now });
+    else { a = { id: this.nextId(), securityId: secId, scenarioDate, ...fields, createdAt: now, updatedAt: now }; this.data.priceScenarios.push(a); }
+    this.save();
+    return a;
+  },
+  // 最新シナリオを銘柄平置きへミラー（scenarioDate＋SCENARIO_FIELDS）。履歴を更新したら必ず呼ぶ
+  syncLatestScenario(secId) {
+    const sec = this.data.securities.find(s => s.id === secId);
+    if (!sec) return;
+    const a = this.latestScenario(secId);
+    if (!a) return;
+    sec.scenarioDate = a.scenarioDate;
+    for (const k of SCENARIO_FIELDS) sec[k] = (a[k] !== undefined ? a[k] : null);
+    sec.updatedAt = this._now();
+    this.save();
+  },
+
   // 株式分割・併合を適用（比率 r。1:5分割→5 / 5:1併合→0.2）
   // mode='full': 保有(数量×r/単価÷r)＋手入力＋取引 を調整 / mode='manual': 手入力＋取引のみ（保有は取込済みとして触らない）
   // 金額（取得価額・1回購入額）・算出値（PER等）・自動取得値は触らない
@@ -968,6 +1058,19 @@ const store = {
     if (typeof sec.prevBuyPrice === 'number') { sec.prevBuyPrice /= r; secChanged = true; }
     if (typeof sec.baseHighManual === 'number') { sec.baseHighManual /= r; secChanged = true; }
     if (typeof sec.fixedBuyPrice === 'number') { sec.fixedBuyPrice /= r; secChanged = true; }
+    // 株価シナリオ（分析時株価・予想レンジ）も株価水準なので調整。履歴も調整しないと
+    // 次の syncLatestScenario で未調整の履歴値が平置きへミラーされ戻ってしまう
+    const scAdj = (o) => {
+      let ch = false;
+      if (typeof o.scenarioPrice === 'number') { o.scenarioPrice /= r; ch = true; }
+      for (const k of ['stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull']) {
+        const p = scParseRange(o[k]);
+        if (p) { o[k] = p.lo === p.hi ? String(p.lo / r) : `${p.lo / r}~${p.hi / r}`; ch = true; }
+      }
+      return ch;
+    };
+    if (scAdj(sec)) secChanged = true;
+    for (const ps of (this.data.priceScenarios || []).filter(x => x.securityId === secId)) { if (scAdj(ps)) this.touch(ps); }
     for (const t of this.data.transactions.filter(t => t.securityId === secId && t.tradedAt && t.tradedAt < date)) { t.price /= r; t.quantity *= r; this.touch(t); }
     // 自動取得の価格キャッシュ（現在値・前日終値・5年/52週高値）は触らない。
     // Yahoo はEx-date以降は分割調整済みの値を返すため、削除せず手入力項目だけ調整する（次の価格更新で最新化）。
@@ -2880,6 +2983,9 @@ function colDefaultWidth(key) {
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
   if (key === 'analysisNote' || key === 'memo') return 160;
+  if (key === 'stScenario' || key === 'mtScenario') return 150; // 弱/ベ/強の3レンジ縦並び
+  if (key === 'stScenPos' || key === 'mtScenPos') return 100;   // 位置タグ（「弱気〜ベース」等）
+  if (key === 'scenarioDate') return 92;
   if (key === 'labels') return 150; // 複数タグ
   if (key === 'origCost') return 96; // 金額（本来の購入額）
   if (key === 'capToTop') return 92; // 見出し「時価1位まで」＋「3.99倍」
@@ -3316,6 +3422,22 @@ function nameAbbr(name) {
 }
 // 表ラベル用の略記名（保有・サイン等の名称列で使用）
 function displayNameAbbr(sec) { return nameAbbr(calc.displayName(sec)); }
+// 株価シナリオのセル（弱/ベ/強の3レンジを1セルに縦並び・小さめ文字）。term='st'|'mt'
+function scenarioTd(s, term) {
+  const rows = [['Bear', '弱'], ['Base', 'ベ'], ['Bull', '強']]
+    .map(([k, lb]) => { const f = scFmtRange(s[term + k], s.market); return f ? `<span style="white-space:nowrap"><span class="muted">${lb}</span> ${f}</span>` : null; })
+    .filter(Boolean);
+  if (!rows.length) return `<td class="l"><span class="muted">—</span></td>`;
+  const title = `${term === 'st' ? '短期' : '中期'}シナリオ（弱気/ベース/強気）${s.scenarioDate ? `　分析日 ${s.scenarioDate}` : ''}`;
+  return `<td class="l" style="font-size:11px;line-height:1.5" title="${esc(title)}">${rows.join('<br>')}</td>`;
+}
+// 現在値がシナリオのどのレンジにいるか（派生）。弱気未満=赤 / 強気超え=緑 / 他は中立タグ
+function scenarioPosTd(s, term) {
+  const p = scPosition(s, term);
+  if (!p) return `<td class="l"><span class="muted">—</span></td>`;
+  const price = calc.price(s);
+  return `<td class="l" title="現在値 ${price != null ? fmtAmt(price, s.market) : '—'} の位置"><span class="tag ${p.cls}">${esc(p.label)}</span></td>`;
+}
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
   name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}${earnLabelHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`; },
@@ -3439,6 +3561,13 @@ const COL_RENDERERS = {
   stars:     (s,c) => { const a = [s.starValuation, s.starStrength, s.starRisk]; return `<td class="l">${a.some(x => x != null) ? a.map(x => x ?? '—').join('/') : muted}</td>`; },
   analysisDate: (s,c) => `<td class="l">${s.analysisDate ? esc(s.analysisDate) : muted}</td>`,
   analysisNote: (s,c) => `<td class="l" title="${esc(s.analysisNote || '')}">${s.analysisNote ? esc(String(s.analysisNote).slice(0, 24)) + (s.analysisNote.length > 24 ? '…' : '') : muted}</td>`,
+  // 株価シナリオ: 弱/ベ/強の3レンジを1セルに（列を増やしすぎない・2026-08-25 すみぽん決定）
+  stScenario:   (s,c) => scenarioTd(s, 'st'),
+  mtScenario:   (s,c) => scenarioTd(s, 'mt'),
+  stScenPos:    (s,c) => scenarioPosTd(s, 'st'),
+  mtScenPos:    (s,c) => scenarioPosTd(s, 'mt'),
+  scenarioDate: (s,c) => `<td class="l">${s.scenarioDate ? esc(s.scenarioDate) : muted}</td>`,
+  scenarioPrice: (s,c) => `<td title="シナリオ分析時点の株価${s.scenarioDate ? `（${esc(s.scenarioDate)}）` : ''}">${typeof s.scenarioPrice === 'number' ? fmtAmt(s.scenarioPrice, c.market) : muted}</td>`,
   memo:      (s,c) => `<td class="l" title="${esc(s.memo || '')}">${s.memo ? esc(String(s.memo).slice(0, 24)) + (s.memo.length > 24 ? '…' : '') : muted}</td>`,
   // 元本売却（情報管理のみ）。金額は銘柄の原通貨
   principalSold:       (s,c) => `<td class="l">${s.principalSold ? '<span class="tag">売却済</span>' : muted}</td>`,
@@ -4186,6 +4315,13 @@ function sortValue(sec, key) {
     case 'overallGrade': return GRADE_RANK[sec.overallGrade] ?? 99;
     case 'buyGrade': return GRADE_RANK[sec.buyGrade] ?? 99;
     case 'analysisDate': return sec.analysisDate || '';
+    // 株価シナリオ: レンジ列はベースレンジ下限で数値ソート（未設定は末尾）。位置列は下(弱気未満)→上(強気超え)の順
+    case 'stScenario': return scParseRange(sec.stBase)?.lo ?? scParseRange(sec.stBear)?.lo ?? -Infinity;
+    case 'mtScenario': return scParseRange(sec.mtBase)?.lo ?? scParseRange(sec.mtBear)?.lo ?? -Infinity;
+    case 'stScenPos': return scPosition(sec, 'st')?.ord ?? -Infinity;
+    case 'mtScenPos': return scPosition(sec, 'mt')?.ord ?? -Infinity;
+    case 'scenarioDate': return sec.scenarioDate || '';
+    case 'scenarioPrice': return sec.scenarioPrice ?? -Infinity;
     case 'buyCount': return calc.buyCount(sec) || 0;
     case 'buyAmount': return calc.buyAmount(sec) ?? -Infinity;
     case 'reco': return store.categoryAmountFor(sec.category, sec.market) || -Infinity;
@@ -4847,11 +4983,27 @@ function openAnalysisHistory(secId) {
     <td>${a.priority != null ? a.priority : dash}</td>
     <td class="ah-memo">${a.analysisNote ? esc(a.analysisNote) : dash}</td>
   </tr>`).join('');
+  // 株価シナリオ分析の履歴（短期・中期の予想レンジ）。銘柄分析とは別の履歴（priceScenarios）
+  const scList = store.scenariosSorted(secId);
+  const scCell = (v) => { const f = scFmtRange(v, sec.market); return f || dash; };
+  const scRows = scList.map(a => `<tr>
+    <td>${esc(a.scenarioDate)}</td>
+    <td style="text-align:right">${a.scenarioPrice != null ? fmtAmt(a.scenarioPrice, sec.market) : dash}</td>
+    <td>${scCell(a.stBear)}</td><td>${scCell(a.stBase)}</td><td>${scCell(a.stBull)}</td>
+    <td>${scCell(a.mtBear)}</td><td>${scCell(a.mtBase)}</td><td>${scCell(a.mtBull)}</td>
+  </tr>`).join('');
+  const scTable = scList.length ? `
+    <h4 style="margin:14px 0 6px">株価シナリオ履歴</h4>
+    <div class="table-wrap"><table class="ah-table" style="width:100%;min-width:660px">
+      <thead><tr><th>分析日</th><th>分析時株価</th><th>短期弱気</th><th>短期ベース</th><th>短期強気</th><th>中期弱気</th><th>中期ベース</th><th>中期強気</th></tr></thead>
+      <tbody>${scRows}</tbody>
+    </table></div>` : '';
   showModal(`分析履歴 — ${esc(calc.displayName(sec))}`, `
     <p class="muted">この銘柄の分析評価の履歴です（評価日の新しい順）。記録は銘柄編集フォームの「分析メタ」保存、または分析結果の取込でたまります。先頭が現在の表示値です。横にスクロールできます。</p>
     ${list.length ? `<div class="table-wrap"><table class="ah-table" style="width:100%;min-width:${minW}px">${colgroup}
       <thead>${head}</thead><tbody>${rows}</tbody>
     </table></div>` : '<div class="empty">分析履歴はまだありません。</div>'}
+    ${scTable}
     <div class="form-actions"><button type="button" class="btn" onclick="openSecurityForm(${secId})">← 編集に戻る</button><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
 }
 
@@ -10407,6 +10559,26 @@ function openSecurityForm(id, presetMarket) {
         <div class="field"><label>備考 / 分析メモ</label><textarea name="analysisNote" rows="2">${sec ? esc(sec.analysisNote || '') : ''}</textarea></div>
       </details>
 
+      <details class="form-group">
+        <summary>株価シナリオ（短期・中期の予想レンジ）</summary>
+        <div class="row">
+          <div class="field"><label title="株価シナリオ分析を行った日。履歴のキーになる（同じ日=上書き / 別の日=新エントリ）">シナリオ分析日</label>
+            <input name="scenarioDate" inputmode="numeric" maxlength="10" placeholder="YYYY-MM-DD" oninput="maskDate(this)" value="${sec && sec.scenarioDate ? esc(sec.scenarioDate) : ''}"></div>
+          <div class="field"><label>分析時株価 (${ccy})</label>
+            <input name="scenarioPrice" type="number" step="any" value="${sec && sec.scenarioPrice != null ? sec.scenarioPrice : ''}"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>短期・弱気</label><input name="stBear" placeholder="例: 1000～1500" value="${sec && sec.stBear != null ? esc(String(sec.stBear)) : ''}"></div>
+          <div class="field"><label>短期・ベース</label><input name="stBase" placeholder="例: 1000～1500" value="${sec && sec.stBase != null ? esc(String(sec.stBase)) : ''}"></div>
+          <div class="field"><label>短期・強気</label><input name="stBull" placeholder="例: 1000～1500" value="${sec && sec.stBull != null ? esc(String(sec.stBull)) : ''}"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>中期・弱気</label><input name="mtBear" placeholder="例: 1000～1500" value="${sec && sec.mtBear != null ? esc(String(sec.mtBear)) : ''}"></div>
+          <div class="field"><label>中期・ベース</label><input name="mtBase" placeholder="例: 1000～1500" value="${sec && sec.mtBase != null ? esc(String(sec.mtBase)) : ''}"></div>
+          <div class="field"><label>中期・強気</label><input name="mtBull" placeholder="例: 1000～1500" value="${sec && sec.mtBull != null ? esc(String(sec.mtBull)) : ''}"></div>
+        </div>
+      </details>
+
       ${id ? '' : `
       <fieldset class="form-group"><legend title="任意。後から「保有」で編集できます">初期保有</legend>
         <div class="row">
@@ -10467,6 +10639,10 @@ function openSecurityForm(id, presetMarket) {
       starValuation: intOrNull(f.starValuation.value), starStrength: intOrNull(f.starStrength.value), starRisk: intOrNull(f.starRisk.value),
       priority: intOrNull(f.priority.value), analysisDate: f.analysisDate.value || null,
       analysisNote: f.analysisNote.value.trim() || null,
+      // 株価シナリオ（レンジは「1000~1500」に正規化して保存。数値化できない入力はそのまま保持）
+      scenarioDate: f.scenarioDate.value || null, scenarioPrice: numOrNull(f.scenarioPrice.value),
+      stBear: scNormRange(f.stBear.value), stBase: scNormRange(f.stBase.value), stBull: scNormRange(f.stBull.value),
+      mtBear: scNormRange(f.mtBear.value), mtBase: scNormRange(f.mtBase.value), mtBull: scNormRange(f.mtBull.value),
       // 名前・セクター・業種の手動上書き（空＝自動取得を使用。自動取得では潰れない）
       nameOverride: f.nameOverride && f.nameOverride.value.trim() || null,
       sectorOverride: f.sectorOverride && f.sectorOverride.value.trim() || null,
@@ -10504,6 +10680,16 @@ function openSecurityForm(id, presetMarket) {
         category: target.category ?? null, // 推奨額(recoAmount)はフォーム入力欄が無いため触らない（取込値を消さない）
       });
       store.syncLatestAnalysis(target.id);
+    }
+    // 株価シナリオも履歴(priceScenarios)へ記録（分析日がある時のみ）。分析メタと同じ「upsert→最新をミラー」方式。
+    // フォーム値は空＝null をそのまま渡し、クリアも反映する
+    if (target && patch.scenarioDate) {
+      store.upsertScenario(target.id, patch.scenarioDate, {
+        scenarioPrice: patch.scenarioPrice ?? null,
+        stBear: patch.stBear ?? null, stBase: patch.stBase ?? null, stBull: patch.stBull ?? null,
+        mtBear: patch.mtBear ?? null, mtBase: patch.mtBase ?? null, mtBull: patch.mtBull ?? null,
+      });
+      store.syncLatestScenario(target.id);
     }
     // 編集時は一覧のスクロール位置を維持（保存後に先頭へ戻らないように）。新規追加は先頭から見せる
     closeModal(); if (id) preserveTableScroll(render); else render();
@@ -10918,6 +11104,18 @@ function openSecurityDetail(secId) {
     kv('優先順位 / 評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
   ].join('');
   const sectionBox = (title, inner) => `<fieldset class="form-group"><legend>${title}</legend><div class="auto-info">${inner}</div></fieldset>`;
+  // 株価シナリオ（短期・中期の予想レンジ＋現在値がどのレンジにいるか）。データがある時だけボックスを出す
+  const scRow = (term, label) => {
+    const parts = [['Bear', '弱気'], ['Base', 'ベース'], ['Bull', '強気']]
+      .map(([k, lb]) => { const f = scFmtRange(sec[term + k], sec.market); return f ? `<span class="muted">${lb}</span> ${f}` : null; }).filter(Boolean);
+    if (!parts.length) return '';
+    const pos = scPosition(sec, term);
+    return kv(`${label}シナリオ`, `${parts.join('　')}${pos ? `　<span class="tag ${pos.cls}" title="現在値がどのレンジにいるか">現在: ${esc(pos.label)}</span>` : ''}`);
+  };
+  const scenarioBox = [
+    scRow('st', '短期'), scRow('mt', '中期'),
+    (sec.scenarioDate || sec.scenarioPrice != null) ? kv('分析日 / 分析時株価', `${esc(sec.scenarioDate || '—')} / ${sec.scenarioPrice != null ? m(sec.scenarioPrice) : '—'}`) : '',
+  ].join('');
 
   showDrawer(`${calc.displayName(sec)}`, `
     ${held ? `<div style="display:flex;gap:24px;align-items:flex-end;flex-wrap:wrap;margin-bottom:2px">
@@ -10947,6 +11145,7 @@ function openSecurityDetail(secId) {
     </fieldset>
     ${sectionBox('ファンダ', fund)}
     ${sectionBox('評価', evalBox)}
+    ${scenarioBox ? sectionBox('株価シナリオ', scenarioBox) : ''}
     ${sectionBox('判定', judge)}
     ${sectionBox('保有', holdRows + (holdSummary || '') + (origCostRow || '') + (principalSoldRow || ''))}
     ${sec.memo ? sectionBox('メモ', `<div style="white-space:pre-wrap;word-break:break-word">${esc(sec.memo)}</div>`) : ''}
@@ -11776,6 +11975,15 @@ function karteCardHtml(sec) {
     row('推奨額', sec.category && store.categoryAmountFor(sec.category, sec.market) ? m(store.categoryAmountFor(sec.category, sec.market)) : '—'),
     row('優先順位/評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
     sec.analysisNote ? row('分析メモ', esc(sec.analysisNote)) : '',
+    // 株価シナリオ（データがある行だけ）。現在値がどのレンジにいるかをタグで併記
+    ...(['st', 'mt'].map(term => {
+      const parts = [['Bear', '弱気'], ['Base', 'ベース'], ['Bull', '強気']]
+        .map(([k, lb]) => { const f = scFmtRange(sec[term + k], sec.market); return f ? `<span class="muted">${lb}</span> ${f}` : null; }).filter(Boolean);
+      if (!parts.length) return '';
+      const pos = scPosition(sec, term);
+      return row(`${term === 'st' ? '短期' : '中期'}シナリオ`, `${parts.join('　')}${pos ? `　<span class="tag ${pos.cls}">現在: ${esc(pos.label)}</span>` : ''}`);
+    })),
+    (sec.scenarioDate || sec.scenarioPrice != null) ? row('シナリオ分析日/株価', `${esc(sec.scenarioDate || '—')} / ${sec.scenarioPrice != null ? m(sec.scenarioPrice) : '—'}`) : '',
   ].join('');
   // ファンダボックス
   const fundBox = [
@@ -12837,9 +13045,13 @@ const GENERIC_MAP = {
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount',
   '売却前購入額': 'origBuyAmount', 'メモ': 'memo',
   '目標PER': 'targetPer', '目標PBR': 'targetPbr', '目標配当利回り': 'targetYield', '目標利回り': 'targetYield',
+  // 株価シナリオ分析（短期・中期×弱気/ベース/強気の予想レンジ）
+  'シナリオ分析日': 'scenarioDate', '分析時株価': 'scenarioPrice',
+  '短期弱気': 'stBear', '短期ベース': 'stBase', '短期強気': 'stBull',
+  '中期弱気': 'mtBear', '中期ベース': 'mtBase', '中期強気': 'mtBull',
 };
 // 標準レイアウトの列。exportGeneric はこの列名→GENERIC_MAP でフィールドキーを引き、genericFieldValue で値を出す（位置合わせ不要）。列を足すなら GENERIC_MAP にも登録。
-const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', '買増を初回基準', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル', '目標PER', '目標PBR', '目標配当利回り'];
+const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', '買増を初回基準', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル', '目標PER', '目標PBR', '目標配当利回り', 'シナリオ分析日', '分析時株価', '短期弱気', '短期ベース', '短期強気', '中期弱気', '中期ベース', '中期強気'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -12884,6 +13096,10 @@ function parseGeneric(text) {
     if ('targetPer' in rec) sec.targetPer = numClean(rec.targetPer);
     if ('targetPbr' in rec) sec.targetPbr = numClean(rec.targetPbr);
     if ('targetYield' in rec) sec.targetYield = numClean(rec.targetYield);
+    // 株価シナリオ（レンジは正規化・分析日は日付正規化。履歴 upsert は取込実行側で行う）
+    if ('scenarioDate' in rec) sec.scenarioDate = normDate(rec.scenarioDate);
+    if ('scenarioPrice' in rec) sec.scenarioPrice = numClean(rec.scenarioPrice);
+    for (const k of ['stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull']) if (k in rec) sec[k] = scNormRange(rec[k]);
     if ('memo' in rec) sec.memo = rec.memo || null;
     if ('labels' in rec) sec.labels = parseLabels(rec.labels); // 銘柄ラベル（; 区切り→配列）
     // 売却前購入額は保有(holding)単位。row 直下に持たせる（_sec＝銘柄属性ではない）
@@ -13051,6 +13267,13 @@ async function runBrokerImport() {
       if ('ruleName' in p) { const rn = convMaster('ruleName', p.ruleName); delete p.ruleName; if (rn !== SKIP) { const r = store.data.rules.find(x => x.name === rn); if (r) p.ruleId = r.id; } }
       if (Array.isArray(p.labels)) ensureLabelDefs(p.labels); // 未登録ラベルはマスタへ自動追加
       store.updateSecurity(sec.id, p);
+      // 株価シナリオはシナリオ分析日があれば履歴(priceScenarios)へ upsert→最新をミラー
+      if (p.scenarioDate) {
+        const scFields = {};
+        for (const k of SCENARIO_FIELDS) if (k in p) scFields[k] = p[k];
+        store.upsertScenario(sec.id, p.scenarioDate, scFields);
+        store.syncLatestScenario(sec.id);
+      }
     }
     // 数量がある行のみ保有を作成/更新
     if (row.quantity != null) {
@@ -13275,6 +13498,15 @@ function genericFieldValue(key, s, h) {
     case 'targetPer': return s.targetPer ?? '';
     case 'targetPbr': return s.targetPbr ?? '';
     case 'targetYield': return s.targetYield ?? '';
+    // 株価シナリオ（レンジは保存形式「1000~1500」のまま出力＝取込で往復可能）
+    case 'scenarioDate': return s.scenarioDate || '';
+    case 'scenarioPrice': return s.scenarioPrice ?? '';
+    case 'stBear': return s.stBear ?? '';
+    case 'stBase': return s.stBase ?? '';
+    case 'stBull': return s.stBull ?? '';
+    case 'mtBear': return s.mtBear ?? '';
+    case 'mtBase': return s.mtBase ?? '';
+    case 'mtBull': return s.mtBull ?? '';
     case 'memo': return s.memo || '';
     default: return ''; // 分析結果・未対応フィールドは空欄
   }
@@ -13353,6 +13585,14 @@ const GI_FIELDS = [
   { key: 'starValuation', label: '★バリュエーション' },
   { key: 'starStrength',  label: '★独自の強み' },
   { key: 'starRisk',      label: '★リスク' },
+  { key: 'scenarioDate',  label: 'シナリオ分析日' },
+  { key: 'scenarioPrice', label: 'シナリオ分析時株価' },
+  { key: 'stBear',        label: '短期シナリオ・弱気' },
+  { key: 'stBase',        label: '短期シナリオ・ベース' },
+  { key: 'stBull',        label: '短期シナリオ・強気' },
+  { key: 'mtBear',        label: '中期シナリオ・弱気' },
+  { key: 'mtBase',        label: '中期シナリオ・ベース' },
+  { key: 'mtBull',        label: '中期シナリオ・強気' },
   { key: 'targetPer',     label: '目標PER' },
   { key: 'targetPbr',     label: '目標PBR' },
   { key: 'targetYield',   label: '目標配当利回り(%)' },
@@ -13361,7 +13601,7 @@ const GI_FIELDS = [
   { key: 'origBuyAmount', label: '売却前購入額' },
   { key: 'memo',          label: 'メモ' },
 ];
-const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'category', 'investCategory', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo', 'targetPer', 'targetPbr', 'targetYield']);
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'category', 'investCategory', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo', 'targetPer', 'targetPbr', 'targetYield', 'scenarioDate', 'scenarioPrice', 'stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull']);
 // 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
@@ -13369,6 +13609,7 @@ const GI_GROUPS = [
   { g: '判定・属性', keys: ['category', 'investCategory', 'labels', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'targetPer', 'targetPbr', 'targetYield', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
   { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride', 'memo'] },
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
+  { g: '株価シナリオ', keys: ['scenarioDate', 'scenarioPrice', 'stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull'] },
 ];
 const GI_FIXED_KEYS = ['market', 'broker', 'account', 'detailType', 'category', 'investCategory', 'ruleName'];
 // ヘッダ名→フィールドの自動対応（汎用出力の列もそのまま読める）
@@ -13384,6 +13625,12 @@ const GI_AUTOMAP = { ...GENERIC_MAP,
   'セクター': 'sectorOverride', '業種': 'industryOverride',
   // 銘柄名は自動取得名を優先するため、取込列の自動割当からは外す（既定=取込まない。必要なら手動で割当可）
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount', '売却元本': 'principalSoldAmount',
+  // 株価シナリオ分析（短期・中期×弱気/ベース/強気の予想レンジ）。「分析日」は銘柄分析の「評価日」とは別
+  '分析日': 'scenarioDate', 'シナリオ分析日': 'scenarioDate', '分析時株価': 'scenarioPrice', 'シナリオ分析時株価': 'scenarioPrice',
+  '短期弱気': 'stBear', '短期ベース': 'stBase', '短期強気': 'stBull',
+  '中期弱気': 'mtBear', '中期ベース': 'mtBase', '中期強気': 'mtBull',
+  '短期シナリオ弱気': 'stBear', '短期シナリオベース': 'stBase', '短期シナリオ強気': 'stBull',
+  '中期シナリオ弱気': 'mtBear', '中期シナリオベース': 'mtBase', '中期シナリオ強気': 'mtBull',
 };
 let _giHeaders = [], _giRows = [], _giMapping = []; // _giMapping[colIdx] = fieldKey | ''
 // 列見出しの正規化キー。全角/半角(NFKC)・空白・★☆・英字大小を無視して一致させる。
@@ -13493,8 +13740,11 @@ function giParseValue(field, raw) {
   const v = raw == null ? '' : String(raw).trim();
   switch (field) {
     case 'quantity': case 'avgCost': case 'acqValue': case 'acqJpy': case 'prevBuyPrice': case 'fixedBuyPrice': case 'baseHighManual': case 'buyAmount': case 'principalSoldAmount': case 'origBuyAmount':
-    case 'targetPer': case 'targetPbr': case 'targetYield':
+    case 'targetPer': case 'targetPbr': case 'targetYield': case 'scenarioPrice':
       return numClean(v);
+    // 株価シナリオ: レンジは「1000~1500」へ正規化。分析日は日付正規化（履歴の自然キーになるため表記を揃える）
+    case 'stBear': case 'stBase': case 'stBull': case 'mtBear': case 'mtBase': case 'mtBull': return scNormRange(v);
+    case 'scenarioDate': return normDate(v);
     case 'principalSold': return /売却|済|^1$|true|yes|○|有/i.test(v);
     case 'buyCount': case 'priority': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
     // ★評価は分析取込と同じ parseStars で「5」「★5」「★★★★★」いずれも数値化
@@ -13564,6 +13814,14 @@ async function runGenericImport() {
     }
     if (Array.isArray(rec.labels)) { ensureLabelDefs(rec.labels); patch.labels = rec.labels; } // 銘柄ラベル（配列・未登録はマスタ追加）
     if (Object.keys(patch).length) store.updateSecurity(sec.id, patch);
+    // 株価シナリオはシナリオ分析日があれば履歴(priceScenarios)へ upsert→最新をミラー（割り当てた列だけ。
+    // 分析日が無い行は平置きのみ＝上の patch で反映済み）
+    if (patch.scenarioDate) {
+      const scFields = {};
+      for (const k of SCENARIO_FIELDS) if (k in patch) scFields[k] = patch[k];
+      store.upsertScenario(sec.id, patch.scenarioDate, scFields);
+      store.syncLatestScenario(sec.id);
+    }
     // 保有・取得円・売却前購入額
     const hasQty = ('quantity' in rec) && rec.quantity != null;
     const hasAcq = ('acqJpy' in rec) && rec.acqJpy != null;
