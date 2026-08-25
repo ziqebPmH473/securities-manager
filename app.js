@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260825-1805';
+const APP_VERSION = 'v20260825-1814';
 
 'use strict';
 
@@ -3001,6 +3001,13 @@ function colDefaultWidth(key) {
   return mc.left ? 110 : 84; // 左寄せ(テキスト系)は広め・数値は狭め
 }
 function colWidthPx(item) { return Math.max(40, item.width || colDefaultWidth(item.key)); }
+// 列設定「列の固定」。colPrefs['<scope>#sticky']＝左から固定する表示列数（0=固定なし）。
+// 未設定は null（既定＝コード・銘柄名の自動検出）。疑似キーは mergeColPrefs3way で市場と同様に
+// キー単位＋_ts でマージされるので、sync-merge.js の変更は不要。
+function colStickyCount(scope) {
+  const v = colPrefs[scope + '#sticky'];
+  return (typeof v === 'number' && v >= 0) ? v : null;
+}
 function getColOrder(market) {
   if (!colPrefs[market]) resetColPrefs(market);
   else reconcileColPrefs(market);
@@ -3804,8 +3811,10 @@ function toggleInlineEdit() {
   inlineEditOn = !inlineEditOn; preserveTableScroll(render);
 }
 // コード・銘柄名（と先頭の選択列）を横スクロール時に左端固定。table-layout/auto 両対応。
-// 先頭から連続する「選択列→コード→銘柄名」のみ固定（途中に他列が挟まる並べ替え時は固定しない＝レイアウト破綻防止）。
-function applyStickyCols(table) {
+// 既定は先頭から連続する「選択列→コード→銘柄名」のみ固定（途中に他列が挟まる並べ替え時は固定しない＝レイアウト破綻防止）。
+// scope（US/JP/SIGNAL/MKTRANK/ANALYSIS等）を渡すと、列設定の「列の固定」（colPrefs['<scope>#sticky']＝
+// 左から固定する表示列数。0=固定なし）を優先する（2026-08-25 すみぽん依頼）。
+function applyStickyCols(table, scope) {
   if (!table || !table.tHead || !table.tBodies[0]) return;
   const headRow = table.tHead.rows[0];
   // 代表データ行は「ヘッダと同じ列数」の行を選ぶ。サインの🔴到達等のグループ見出し行（colspan＝1セル）を
@@ -3813,14 +3822,24 @@ function applyStickyCols(table) {
   const bodyRow = [...table.tBodies[0].rows].find(r => r.cells.length === (headRow ? headRow.cells.length : 0));
   if (!headRow || !bodyRow) return;
   [...table.rows].forEach(r => [...r.cells].forEach(c => { if (c.colSpan > 1) return; c.classList.remove('stick', 'stick-edge'); c.style.left = ''; }));
-  const want = new Set([0]); // 先頭=選択(チェックボックス)列
-  [...bodyRow.cells].forEach((td, i) => {
-    if (i === 0) return;
-    if (td.classList.contains('col-code')) want.add(i);                 // コード
-    else if (td.querySelector && td.querySelector('.nm-strong')) want.add(i); // 銘柄名
-  });
+  const fixedN = scope != null ? colStickyCount(scope) : null;
   const contiguous = [];
-  for (let i = 0; want.has(i); i++) contiguous.push(i); // 0から連続するものだけ
+  if (fixedN != null) {
+    // ユーザー指定: 表示列の左から fixedN 列（先頭に選択チェックボックス列がある表はそれも含めて固定）。0=固定なし
+    if (fixedN > 0) {
+      const hasSel = !!(bodyRow.cells[0] && bodyRow.cells[0].querySelector && bodyRow.cells[0].querySelector('input[type="checkbox"]'));
+      const total = Math.min((hasSel ? 1 : 0) + fixedN, bodyRow.cells.length);
+      for (let i = 0; i < total; i++) contiguous.push(i);
+    }
+  } else {
+    const want = new Set([0]); // 先頭=選択(チェックボックス)列
+    [...bodyRow.cells].forEach((td, i) => {
+      if (i === 0) return;
+      if (td.classList.contains('col-code')) want.add(i);                 // コード
+      else if (td.querySelector && td.querySelector('.nm-strong')) want.add(i); // 銘柄名
+    });
+    for (let i = 0; want.has(i); i++) contiguous.push(i); // 0から連続するものだけ
+  }
   let left = 0;
   contiguous.forEach((ci, n) => {
     const w = headRow.cells[ci] ? headRow.cells[ci].getBoundingClientRect().width : 0;
@@ -4480,7 +4499,7 @@ function renderMarket(market) {
     </div>`;
   bindRowSelect();
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
-  applyStickyCols(document.querySelector('#app table.fixed-cols'));
+  applyStickyCols(document.querySelector('#app table.fixed-cols'), market);
 }
 
 // ヘッダHTML生成（一覧・サイン共通）
@@ -4764,6 +4783,17 @@ function openColPicker(market) {
       <span style="flex:1"></span>
       <button type="button" class="btn btn-sm" onclick="cpReset()">既定に戻す</button>
     </div>
+    <div class="btn-row" style="align-items:center;margin:0 0 8px">
+      <span class="muted" title="横スクロール時に左端へ固定する列の範囲">列の固定（横スクロール時）</span>
+      <select onchange="cpSetSticky(this.value)" style="width:auto">
+        ${(() => {
+          const stickyN = colStickyCount(market);
+          const vis = order.filter(c => c.visible).slice(0, 12);
+          const opts = vis.map((c, i) => { const mc = MASTER_COLS.find(m => m.key === c.key) || {}; return `<option value="${i + 1}" ${stickyN === i + 1 ? 'selected' : ''}>「${esc(c.labelOverride || mc.label || c.key)}」まで（${i + 1}列）</option>`; }).join('');
+          return `<option value="" ${stickyN == null ? 'selected' : ''}>既定（コード・銘柄名）</option><option value="0" ${stickyN === 0 ? 'selected' : ''}>固定なし</option>${opts}`;
+        })()}
+      </select>
+    </div>
     <div class="cp-wrapper">
       <div id="cp-list">${itemsHtml}</div>
     </div>
@@ -4783,6 +4813,10 @@ function colMarketLabel(m) { return ({ US: '米国株', JP: '日本株', FUND: '
 function copyColLayout(fromMarket, toMarket) {
   reconcileColPrefs(fromMarket);
   colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width, labelOverride: c.labelOverride, auto: c.auto }));
+  // 列の固定範囲も一緒にコピー（未設定なら相手側も未設定に揃える）
+  if (colPrefs[fromMarket + '#sticky'] != null) colPrefs[toMarket + '#sticky'] = colPrefs[fromMarket + '#sticky'];
+  else delete colPrefs[toMarket + '#sticky'];
+  touchColPrefs(toMarket + '#sticky');
   reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（同一列群なので実質そのまま）
   saveColPrefs(); touchColPrefs(toMarket);
   toast(`列設定を${colMarketLabel(toMarket)}ビューにコピーしました`, 4000);
@@ -4829,7 +4863,14 @@ function cpDrop(e, idx) {
   openColPicker(_colPickerMarket);
 }
 function cpDragEnd() { _dragSrcIdx = null; document.querySelectorAll('.cp-dragging').forEach(el => el.classList.remove('cp-dragging')); }
-function cpReset() { resetColPrefs(_colPickerMarket); touchColPrefs(_colPickerMarket); openColPicker(_colPickerMarket); }
+function cpReset() { resetColPrefs(_colPickerMarket); delete colPrefs[_colPickerMarket + '#sticky']; saveColPrefs(); touchColPrefs(_colPickerMarket); touchColPrefs(_colPickerMarket + '#sticky'); openColPicker(_colPickerMarket); }
+// 列の固定範囲（''=既定 / 0=固定なし / N=左からN列）。表示列の並び・表示状態が変わっても列数指定として維持される
+function cpSetSticky(v) {
+  const key = _colPickerMarket + '#sticky';
+  if (v === '') delete colPrefs[key];
+  else colPrefs[key] = Math.max(0, parseInt(v, 10) || 0);
+  saveColPrefs(); touchColPrefs(key);
+}
 
 // ---------- サイン一覧 ----------
 // 到達（reached）と もうすぐ（残り5%以内）の銘柄を分けて返す
@@ -4891,7 +4932,7 @@ function renderSignals() {
       </div>
     </div>`;
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
-  applyStickyCols(document.querySelector('#app table.fixed-cols')); // コード・銘柄名を左端固定（保有銘柄と同様）
+  applyStickyCols(document.querySelector('#app table.fixed-cols'), 'SIGNAL'); // コード・銘柄名を左端固定（列設定の「列の固定」対応）
   scheduleFit(); // 市場フィルタ切替で renderSignals() を直接呼ばれた時も枠内スクロール化（render() を経由しないため自前で）
 }
 
@@ -5500,7 +5541,7 @@ function renderMarketTab() {
       <div class="section-body" style="padding:12px 16px 16px">${body}</div>
     </div>`;
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
-  applyStickyCols(document.querySelector('#app table.fixed-cols'));
+  applyStickyCols(document.querySelector('#app table.fixed-cols'), 'MKTRANK');
   scheduleFit(); // 表を枠内スクロールに（ページ全体でなく表内でスクロール・画面に収める）。非同期データ到着後の高さで確定させる
   if (!items && !mktBusy) loadRanking(false); // タブを開いた時（起動時相当）に自動取得
 }
@@ -11364,7 +11405,7 @@ function renderAnalysis() {
       </div>
     </div>`;
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
-  applyStickyCols(document.querySelector('#app table.fixed-cols'));
+  applyStickyCols(document.querySelector('#app table.fixed-cols'), AKEY);
   // 直接再描画（検索/フィルタ/分析/しきい値）でも main.content 基準で表を枠内に収める（[[scroll-container-main-content]]）
   scheduleFit();
 }
@@ -13621,7 +13662,7 @@ const GI_GROUPS = [
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
   { g: '株価シナリオ', keys: ['scenarioDate', 'scenarioPrice', 'stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull'] },
 ];
-const GI_FIXED_KEYS = ['market', 'broker', 'account', 'detailType', 'category', 'investCategory', 'ruleName'];
+const GI_FIXED_KEYS = ['market', 'broker', 'account', 'detailType', 'category', 'investCategory', 'ruleName', 'enabled'];
 // ヘッダ名→フィールドの自動対応（汎用出力の列もそのまま読める）
 const GI_AUTOMAP = { ...GENERIC_MAP,
   '取得円': 'acqJpy', '取得額(円)': 'acqJpy', '取得額（円）': 'acqJpy', '受渡金額(円)': 'acqJpy',
@@ -13692,6 +13733,8 @@ function openGenericImport() {
         <select id="gi-fix-investCategory" onchange="giRenderPreview()"><option value="">―</option>${[...store.data.investCategories].sort((a, b) => a.sortOrder - b.sortOrder).map(c => `<option>${esc(c.name)}</option>`).join('')}</select></div>
       <div class="field" style="width:auto"><label style="font-size:11px">買い増しルール</label>
         <select id="gi-fix-ruleName" onchange="giRenderPreview()"><option value="">―</option>${store.data.rules.map(r => `<option>${esc(r.name)}</option>`).join('')}</select></div>
+      <div class="field" style="width:auto"><label style="font-size:11px">判定対象</label>
+        <select id="gi-fix-enabled" onchange="giRenderPreview()"><option value="">―</option><option>有効</option><option>無効</option></select></div>
     </div>
     <div id="gi-preview"></div>
     <div class="btn-row" style="margin-top:10px;align-items:center">
@@ -13771,6 +13814,32 @@ function giParseValue(field, raw) {
     default: return v || null;
   }
 }
+// 新規追加される銘柄の確認モーダル。戻り: Set(取込しない 'market:ticker') / null=中止
+function confirmNewSecurities(list) {
+  return new Promise(resolve => {
+    const rows = list.map(it => `<label class="check" style="display:flex;gap:8px;align-items:center;margin:4px 0">
+      <input type="checkbox" class="cns-chk" data-key="${esc(it.market + ':' + it.ticker)}" checked style="width:auto">
+      <span class="tag ${it.market.toLowerCase()}">${MARKET_LABEL[it.market]}</span><strong>${esc(it.ticker)}</strong>${it.name ? `<span class="muted">${esc(it.name)}</span>` : ''}
+    </label>`).join('');
+    showModal('新規追加される銘柄の確認', `
+      <p class="muted" style="margin:0 0 8px">未登録の銘柄が ${list.length} 件あります。チェックを外した銘柄は取込しません（既存銘柄の更新はそのまま行われます）。</p>
+      <div class="btn-row" style="margin:0 0 6px">
+        <button type="button" class="btn btn-sm" onclick="document.querySelectorAll('.cns-chk').forEach(c=>c.checked=true)">全選択</button>
+        <button type="button" class="btn btn-sm" onclick="document.querySelectorAll('.cns-chk').forEach(c=>c.checked=false)">全解除</button>
+      </div>
+      <div style="max-height:300px;overflow:auto">${rows}</div>
+      <div class="form-actions">
+        <button type="button" class="btn" onclick="__cnsResolve(false)">中止</button>
+        <button type="button" class="btn btn-primary" onclick="__cnsResolve(true)">この内容で取込</button>
+      </div>`);
+    window.__cnsResolve = (ok) => {
+      if (!ok) { closeModal(); resolve(null); return; }
+      const skip = new Set();
+      document.querySelectorAll('.cns-chk').forEach(c => { if (!c.checked) skip.add(c.dataset.key); });
+      closeModal(); resolve(skip);
+    };
+  });
+}
 async function runGenericImport() {
   if (!_giRows.length) { toast('データがありません'); return; }
   const fixed = giFixedValues();
@@ -13783,6 +13852,28 @@ async function runGenericImport() {
   for (const row of _giRows) _giMapping.forEach((f, i) => { if (f && FIELD_DOMAIN[f]) giPairs.push({ field: f, raw: giParseValue(f, row[i]) }); });
   GI_FIXED_KEYS.forEach(k => { if (FIELD_DOMAIN[k] && fixed[k] != null && fixed[k] !== '') giPairs.push({ field: k, raw: fixed[k] }); });
   if (!(await ensureMasterConversions(giPairs))) { toast('取込を中止しました'); return; }
+  // 追加と更新が混在する時は、新規作成される銘柄を一覧で確認（チェックを外した銘柄は取込しない・2026-08-25 すみぽん依頼）。
+  // 全行が新規（初回取込）の時は確認を出さない＝従来どおり
+  let skipNew = null; // Set('market:ticker')
+  if (create && mode !== 'update') {
+    const newList = []; const seen = new Set(); let hasExisting = false;
+    for (const row of _giRows) {
+      const rec = {};
+      _giMapping.forEach((f, i) => { if (f === 'ticker' || f === 'market' || f === 'nameOverride') rec[f] = giParseValue(f, row[i]); });
+      if ((rec.market == null || rec.market === '') && fixed.market) rec.market = giParseValue('market', fixed.market);
+      const market = rec.market, ticker = (rec.ticker || '').toString().trim();
+      if (!ticker || !market) continue;
+      const tk = market === 'US' ? ticker.toUpperCase() : ticker;
+      if (!validTicker(tk, market)) continue;
+      if (store.findSecurity(market, tk)) { hasExisting = true; continue; }
+      const key = market + ':' + tk;
+      if (!seen.has(key)) { seen.add(key); newList.push({ market, ticker: tk, name: rec.nameOverride || '' }); }
+    }
+    if (newList.length && hasExisting) {
+      skipNew = await confirmNewSecurities(newList);
+      if (skipNew === null) { toast('取込を中止しました'); return; }
+    }
+  }
   // 洗い替え: 固定の証券会社×市場が必須。そのスコープの保有を先に削除
   // 洗い替えで消える取得円・投信評価額・売却前購入額は退避し、取込後に同一キーへ復元（削除前に退避）
   let removed = 0;
@@ -13815,6 +13906,8 @@ async function runGenericImport() {
     if (!sec) {
       // 上書きのみモードは未登録を作らない（「新規作成」チェックより優先）
       if (!create || mode === 'update') { skipped++; continue; }
+      // 新規追加の確認でチェックを外した銘柄は取込しない
+      if (skipNew && skipNew.has(market + ':' + tk)) { skipped++; continue; }
       sec = store.addSecurity({ market, ticker: tk, currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, ruleId: store.defaultRule().id });
       created++;
     } else updated++;
