@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260826-0036';
+const APP_VERSION = 'v20260826-0101';
 
 'use strict';
 
@@ -3991,14 +3991,24 @@ window.addEventListener('storage', (e) => {
 });
 window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => { if (document.querySelector('#app .mx-table')) { fitMatrix(); sizeMatrixChips(); } fitListTables(); layoutTickerMarquee(); if (document.getElementById('portfolio-chart') && (_assetSnaps || []).length >= 2) renderAssetChart(); if (document.getElementById('macro-chart')) renderMacroChart(); }, 120); });
 
-// 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート等で左端に戻らないように）
+// 再描画をはさんでも一覧テーブルの横/縦スクロール位置を維持する（ソート・編集保存・一括変更等で左上に戻らないように）。
+// 縦は .table-wrap（枠内スクロール）と main.content（ページ相当のスクロール。ルール6）の両方を保存する。
+// ★復元は多段リトライ: fitListTables が遅れて max-height を付けるまで .table-wrap はスクロール不能で、
+//   早いタイミングの復元だけだと 0 のまま確定してしまう（実害: 編集保存で表の一番上に戻る）。
 function preserveTableScroll(fn) {
   const w = document.querySelector('#app .table-wrap');
+  const main = document.querySelector('main.content');
   const sl = w ? w.scrollLeft : 0, st = w ? w.scrollTop : 0;
+  const mt = main ? main.scrollTop : 0;
   fn();
-  if (!(sl || st)) return;
-  const apply = () => { const w2 = document.querySelector('#app .table-wrap'); if (w2) { w2.scrollLeft = sl; w2.scrollTop = st; } };
-  apply(); requestAnimationFrame(apply); setTimeout(apply, 30);
+  if (!(sl || st || mt)) return;
+  const apply = () => {
+    const w2 = document.querySelector('#app .table-wrap');
+    if (w2) { w2.scrollLeft = sl; w2.scrollTop = st; }
+    const m2 = document.querySelector('main.content');
+    if (m2) m2.scrollTop = mt;
+  };
+  apply(); requestAnimationFrame(apply); setTimeout(apply, 30); setTimeout(apply, 150); setTimeout(apply, 350);
 }
 
 // colgroup の <col> タグ。auto=データ幅自動（描画後に実測）／既定=固定px
@@ -8413,7 +8423,7 @@ function smBulkApply() {
   if (!ids.length) { toast('銘柄を選択してください'); return; }
   const val = bulkConvert(smBulkField, (document.getElementById('sm-bulk-value') || {}).value);
   for (const id of ids) store.updateSecurity(id, bulkPatch(smBulkField, val, store.data.securities.find(s => s.id === id)));
-  store.save(); renderSecMaster();
+  store.save(); preserveTableScroll(renderSecMaster); // 一括変更後もスクロール位置を維持
   const fl = SM_BULK_FIELDS.find(f => f.key === smBulkField);
   toast(`${ids.length}件の「${fl ? fl.label : smBulkField}」を${smBulkField === 'clearOverrides' ? '削除' : '変更'}しました`, 4000);
 }
@@ -8425,7 +8435,7 @@ function holdBulkApply() {
   if (!ids.length) { toast('銘柄を選択してください'); return; }
   const val = bulkConvert(holdBulkField, (document.getElementById('hold-bulk-value') || {}).value);
   for (const id of ids) store.updateSecurity(id, bulkPatch(holdBulkField, val, store.data.securities.find(s => s.id === id)));
-  store.save(); render();
+  store.save(); preserveTableScroll(render); // 一括変更後もスクロール位置を維持
   const fl = SM_BULK_FIELDS.find(f => f.key === holdBulkField);
   toast(`${ids.length}件の「${fl ? fl.label : holdBulkField}」を${holdBulkField === 'clearOverrides' ? '削除' : '変更'}しました`, 4000);
 }
