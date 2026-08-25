@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260825-1749';
+const APP_VERSION = 'v20260825-1805';
 
 'use strict';
 
@@ -13665,6 +13665,7 @@ function openGenericImport() {
       <label style="margin:0;font-size:12px">取込モード
         <select id="gi-mode">
           <option value="upsert">上書き（一致を更新・無ければ追加）</option>
+          <option value="update">上書きのみ（一致を更新・追加しない）</option>
           <option value="append">追加（既存はそのまま）</option>
           <option value="replace">洗い替え（固定の証券会社×市場を入替）</option>
         </select></label>
@@ -13812,7 +13813,8 @@ async function runGenericImport() {
     if (!validTicker(tk, market)) { badFmt++; continue; }   // 形式NG（日本株4桁/米国株大文字英字）は取込まない
     let sec = store.findSecurity(market, tk);
     if (!sec) {
-      if (!create) { skipped++; continue; }
+      // 上書きのみモードは未登録を作らない（「新規作成」チェックより優先）
+      if (!create || mode === 'update') { skipped++; continue; }
       sec = store.addSecurity({ market, ticker: tk, currency: market === 'US' ? 'USD' : 'JPY', assetClass: 'stock', enabled: true, ruleId: store.defaultRule().id });
       created++;
     } else updated++;
@@ -13841,6 +13843,7 @@ async function runGenericImport() {
       if (broker) {
         const ex = store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account);
         if (mode === 'append' && ex) { /* 追加モード: 既存はそのまま（上書きしない） */ }
+        else if (mode === 'update' && !ex) { /* 上書きのみモード: 無い保有行（証券会社×口座）は作らない */ }
         else {
           if (hasQty) {
             const ac = rec.avgCost != null ? rec.avgCost : (ex ? ex.avgCost : 0);
