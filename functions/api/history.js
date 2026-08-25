@@ -27,6 +27,12 @@ export async function onRequestGet(context) {
     const q = (r.indicators && r.indicators.quote && r.indicators.quote[0]) || {};
     const meta = r.meta || {};
     const metaOut = { price: num(meta.regularMarketPrice), currency: meta.currency || null };
+    // 異常バーの除外: 上場廃止・再上場をまたぐ銘柄でYahooがダミー値を混入させる
+    // （実測: 8303.T の廃止期間に 高値553億・出来高0 のバーが混入し、チャートが暴騰表示になった）。
+    // 終値の中央値から1000倍超/1000分の1未満は実在の株価ではないため足ごと除外する。
+    const _sorted = (q.close || []).filter(x => typeof x === 'number' && x > 0).sort((a, b) => a - b);
+    const med = _sorted.length ? _sorted[Math.floor(_sorted.length / 2)] : null;
+    const sane = (x) => !med || (x < med * 1000 && x > med / 1000);
 
     if (format === 'ohlcv') {
       const opens = q.open || [], highs = q.high || [], lows = q.low || [], closes = q.close || [], vols = q.volume || [];
@@ -36,6 +42,7 @@ export async function onRequestGet(context) {
         const o = opens[i], h = highs[i], l = lows[i], c = closes[i];
         // 終値が無い足（休場・未確定）はスキップ。OHLCのいずれか欠けは中立に終値で補完
         if (!(typeof c === 'number' && isFinite(c))) continue;
+        if ([o, h, l, c].some(v => typeof v === 'number' && v > 0 && !sane(v))) continue; // 異常バーは足ごと除外
         bars.push({
           t: ts[i],
           o: num(o) != null ? o : c,
@@ -53,7 +60,7 @@ export async function onRequestGet(context) {
     const points = [];
     for (let i = 0; i < ts.length; i++) {
       const c = closes[i];
-      if (typeof c === 'number' && isFinite(c)) points.push([ts[i], c]);
+      if (typeof c === 'number' && isFinite(c) && sane(c)) points.push([ts[i], c]);
     }
     return json({ symbol, points, meta: metaOut });
   } catch (e) {

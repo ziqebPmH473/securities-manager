@@ -210,6 +210,23 @@ async function fetchYahooChart(symbol, range, interval) {
   // そこで timestamp で「現在値の営業日」を特定し、それより前の日の最後の有効終値を選ぶ。
   const ts = r.timestamp || [];
   const closeArr = (quotes && quotes.close) || [];
+  // 異常バーの除外: 上場廃止・再上場をまたぐ銘柄でYahooがダミー値を混入させることがある
+  // （実測: 8303.T の廃止期間に 高値553億・出来高0 のバーが12本、meta.fiftyTwoWeekHigh まで553億に汚染）。
+  // 終値の中央値から1000倍超/1000分の1未満に外れた値は実在の株価ではありえないため、そのバーの
+  // 高値・安値・終値を null 化し、5年/52週高値・安値・前日終値・現在値のすべての算出から外す。
+  const _sorted = closeArr.filter(x => typeof x === 'number' && x > 0).sort((a, b) => a - b);
+  const med = _sorted.length ? _sorted[Math.floor(_sorted.length / 2)] : null;
+  const sane = (x) => typeof x === 'number' && x > 0 && (!med || (x < med * 1000 && x > med / 1000));
+  if (med && quotes) {
+    for (let i = 0; i < closeArr.length; i++) {
+      const vals = [quotes.high && quotes.high[i], quotes.low && quotes.low[i], closeArr[i]];
+      if (vals.some(v => typeof v === 'number' && v > 0 && !sane(v))) {
+        if (quotes.high) quotes.high[i] = null;
+        if (quotes.low) quotes.low[i] = null;
+        closeArr[i] = null;
+      }
+    }
+  }
   const closes = closeArr.filter(c => typeof c === 'number');
   // 日付は取引所TZの暦日に正規化（UTCのままだと米株の夜間で日付がズレる）。gmtoffset(秒)を使う。
   const tzoff = (typeof meta.gmtoffset === 'number') ? meta.gmtoffset : 0;
@@ -237,9 +254,10 @@ async function fetchYahooChart(symbol, range, interval) {
     const d = dayOf(ts[i]);
     if (curDay == null || d == null || d < curDay) { prevCloseArr = closeArr[i]; prevCloseTs = ts[i] || null; break; }
   }
+  const metaPrev = num(meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose);
   const prevClose = prevCloseArr != null
     ? prevCloseArr
-    : num(meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose);
+    : (sane(metaPrev) ? metaPrev : null); // metaの前日終値も異常値検証を通す
   const prevCloseDate = toDateTz(prevCloseTs); // 前日終値が付いた実際の引け日（休場を正しく反映）。配列から取れた時のみ
 
   // 52週高値（直近52週の最大値）。高値が付いた日付も記録（高値更新判定で「前回購入後に高値更新したか」を見るため）
@@ -265,7 +283,7 @@ async function fetchYahooChart(symbol, range, interval) {
   const toDate = (t) => (typeof t === 'number') ? new Date(t * 1000).toISOString().slice(0, 10) : null;
 
   // 現在値: regularMarketPrice が空なら終値配列の最後（当日 or 直近）で補完（取得漏れ防止）
-  const price = num(meta.regularMarketPrice) ?? (closes.length ? closes[closes.length - 1] : null);
+  const price = (sane(num(meta.regularMarketPrice)) ? num(meta.regularMarketPrice) : null) ?? (closes.length ? closes[closes.length - 1] : null);
   // 前営業日の値動き%（＝前日終値の日の前日比）。寄り付き前(現在値==前日終値で0%)に「前営業日どうだったか」を表示するため。
   // = (前日終値 − その前の終値) / その前の終値。日足が3本以上ある時のみ。
   const prevDayPct = closes.length >= 3 ? (closes[closes.length - 2] - closes[closes.length - 3]) / closes[closes.length - 3] * 100 : null;
@@ -274,8 +292,9 @@ async function fetchYahooChart(symbol, range, interval) {
     prevClose: num(prevClose),
     prevCloseDate,
     prevDayPct,
-    high5y:   high5y || num(meta.fiftyTwoWeekHigh),
-    high52w:  high52w || num(meta.fiftyTwoWeekHigh),
+    // metaへのフォールバックも異常値検証を通す（8303.TではfiftyTwoWeekHigh自体が553億に汚染されていた）
+    high5y:   high5y || (sane(num(meta.fiftyTwoWeekHigh)) ? num(meta.fiftyTwoWeekHigh) : null),
+    high52w:  high52w || (sane(num(meta.fiftyTwoWeekHigh)) ? num(meta.fiftyTwoWeekHigh) : null),
     high5yDate:  toDate(high5yTs),   // 5年高値が付いた日（YYYY-MM-DD）
     high52wDate: toDate(high52wTs),  // 52週高値が付いた日
     low1y:    low1y === Infinity ? null : low1y,   // 1年安値

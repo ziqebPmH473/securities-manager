@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260825-1814';
+const APP_VERSION = 'v20260826-0036';
 
 'use strict';
 
@@ -443,6 +443,14 @@ const store = {
     this.data.matrixSettings ||= {};
     if (this.data.matrixSettings.usdJpy == null) this.data.matrixSettings.usdJpy = DEFAULT_MATRIX_USDJPY; // 全部表示の円換算レート
     this.data.prices ||= {};
+    // 異常な高値キャッシュの自己修復（2026-08-26）: 上場廃止期間のYahooダミー値（実測: 8303の5年高値553億）を
+    // 取り込んでいた場合に破棄する。現在値の1000倍超の高値・安値は実在しない。highsAt も消して
+    // 当日の補完取得（refreshAll末尾の高値欠け拾い）で正しい値を取り直させる。サーバー側にも同じフィルタ導入済み。
+    for (const p of Object.values(this.data.prices)) {
+      if (!p || typeof p.price !== 'number' || p.price <= 0) continue;
+      const bad = ['high5y', 'high52w', 'low1y', 'low3y'].some(k => typeof p[k] === 'number' && (p[k] > p.price * 1000 || (p[k] > 0 && p[k] < p.price / 1000)));
+      if (bad) { for (const k of ['high5y', 'high52w', 'high5yDate', 'high52wDate', 'low1y', 'low3y', 'low1yDate', 'low3yDate']) p[k] = null; p.highsAt = null; }
+    }
     this.data.fx ||= { USDJPY: null };
     this.data.meta ||= {}; // 銘柄情報マスタ（名前・セクター・ファンダ）priceKeyでキャッシュ
     this.data.amountHistory ||= [];   // 金額マスタ変更履歴（版管理）
