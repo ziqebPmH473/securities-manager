@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260825-1542';
+const APP_VERSION = 'v20260825-1727';
 
 'use strict';
 
@@ -387,22 +387,26 @@ function scFmtRange(v, market) {
   return r.lo === r.hi ? fmtAmt(r.lo, market) : `${fmtAmt(r.lo, market)}～${fmtAmt(r.hi, market)}`;
 }
 // 現在値が短期/中期シナリオのどのレンジにいるか（派生値・表とカルテの「位置」表示用）。
-// term='st'|'mt'。戻り: {label, cls, ord} / データ不足は null。ord はソート用（下ほど小さい）。
-// 弱気レンジ未満=neg / 強気レンジ超え=pos、レンジ内・レンジ間は中立。
+// term='st'|'mt'。戻り: {label, lvl, color} / データ不足は null。
+// lvl＝1〜7の位置レベル（1=弱気未満 … 4=ベース圏 … 7=強気超え。ソート・背景色ルールの数値）。
+// 一部レンジ未入力でも「弱気=2/ベース=4/強気=6」の基準ランクからレベルを安定して割り当てる。
+// color は既定色（LABEL_COLORS のキー。表のタグ・カルテで使用。セル背景はマスタの背景色ルールで変更可）。
+const SC_POS_COLORS = { 1: 'red', 2: 'orange', 3: 'gold', 4: 'blue', 5: 'cyan', 6: 'green', 7: 'purple' };
 function scPosition(sec, term) {
   const price = calc.price(sec);
   if (price == null) return null;
-  const zones = [[sec[term + 'Bear'], '弱気'], [sec[term + 'Base'], 'ベース'], [sec[term + 'Bull'], '強気']]
-    .map(([v, label]) => ({ r: scParseRange(v), label })).filter(z => z.r)
+  const zones = [[sec[term + 'Bear'], '弱気', 2], [sec[term + 'Base'], 'ベース', 4], [sec[term + 'Bull'], '強気', 6]]
+    .map(([v, label, rank]) => ({ r: scParseRange(v), label, rank })).filter(z => z.r)
     .sort((a, b) => a.r.lo - b.r.lo);
   if (!zones.length) return null;
-  if (price < zones[0].r.lo) return { label: `${zones[0].label}未満`, cls: 'neg', ord: -1 };
+  const mk = (label, lvl) => ({ label, lvl, color: SC_POS_COLORS[Math.max(1, Math.min(7, lvl))] || 'gray' });
+  if (price < zones[0].r.lo) return mk(`${zones[0].label}未満`, zones[0].rank - 1);
   for (let i = 0; i < zones.length; i++) {
-    if (price <= zones[i].r.hi) return { label: `${zones[i].label}圏`, cls: '', ord: i * 2 };
+    if (price <= zones[i].r.hi) return mk(`${zones[i].label}圏`, zones[i].rank);
     const next = zones[i + 1];
-    if (next && price < next.r.lo) return { label: `${zones[i].label}〜${next.label}`, cls: '', ord: i * 2 + 1 };
+    if (next && price < next.r.lo) return mk(`${zones[i].label}〜${next.label}`, zones[i].rank + 1);
   }
-  return { label: `${zones[zones.length - 1].label}超え`, cls: 'pos', ord: zones.length * 2 };
+  return mk(`${zones[zones.length - 1].label}超え`, zones[zones.length - 1].rank + 1);
 }
 // 保有取込列マッピング（Excel「10_保有株」）
 const HOLDING_COLMAP = {
@@ -2983,7 +2987,7 @@ function colDefaultWidth(key) {
   if (['createdAt', 'updatedAt', 'analysisDate'].includes(key)) return 92;
   if (key === 'stars') return 120;
   if (key === 'analysisNote' || key === 'memo') return 160;
-  if (key === 'stScenario' || key === 'mtScenario') return 150; // 弱/ベ/強の3レンジ縦並び
+  if (key === 'stScenario' || key === 'mtScenario') return 210; // 弱気/ベース/強気を「/」区切りで1行
   if (key === 'stScenPos' || key === 'mtScenPos') return 100;   // 位置タグ（「弱気〜ベース」等）
   if (key === 'scenarioDate') return 92;
   if (key === 'labels') return 150; // 複数タグ
@@ -3083,7 +3087,7 @@ const CF_SCREENS = [
   { id: 'analysis', label: '分析' },
 ];
 // 背景色ルールを設定できる数値列（設定UIの選択肢）。
-const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'capToTop', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'ratioValue', 'ratioCost', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail'];
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'capToTop', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'ratioValue', 'ratioCost', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail', 'stScenPos', 'mtScenPos'];
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
@@ -3373,6 +3377,9 @@ function cfCellValue(key, sec, ctx) {
     case 'targetPbrPrice': return calc.targetPbrPrice(sec);
     case 'targetYieldPrice': return calc.targetYieldPrice(sec);
     case 'priority': return sec.priority;
+    // シナリオ位置レベル（1=弱気未満〜7=強気超え）。マスタの背景色ルールでこの数値に色を設定できる
+    case 'stScenPos': return scPosition(sec, 'st')?.lvl ?? null;
+    case 'mtScenPos': return scPosition(sec, 'mt')?.lvl ?? null;
     case 'marginRatio': return sec.market === 'JP' ? calc.marginRatio(sec) : null;
     case 'principalSoldAmount': return sec.principalSoldAmount;
     case 'anaTotal': return techComposite(sec);
@@ -3422,21 +3429,20 @@ function nameAbbr(name) {
 }
 // 表ラベル用の略記名（保有・サイン等の名称列で使用）
 function displayNameAbbr(sec) { return nameAbbr(calc.displayName(sec)); }
-// 株価シナリオのセル（弱/ベ/強の3レンジを1セルに縦並び・小さめ文字）。term='st'|'mt'
+// 株価シナリオのセル（弱気/ベース/強気の順に「/」区切りで1行。改行で行が高くなるのはNG・2026-08-25 すみぽん指示）。term='st'|'mt'
 function scenarioTd(s, term) {
-  const rows = [['Bear', '弱'], ['Base', 'ベ'], ['Bull', '強']]
-    .map(([k, lb]) => { const f = scFmtRange(s[term + k], s.market); return f ? `<span style="white-space:nowrap"><span class="muted">${lb}</span> ${f}</span>` : null; })
-    .filter(Boolean);
-  if (!rows.length) return `<td class="l"><span class="muted">—</span></td>`;
-  const title = `${term === 'st' ? '短期' : '中期'}シナリオ（弱気/ベース/強気）${s.scenarioDate ? `　分析日 ${s.scenarioDate}` : ''}`;
-  return `<td class="l" style="font-size:11px;line-height:1.5" title="${esc(title)}">${rows.join('<br>')}</td>`;
+  const parts = ['Bear', 'Base', 'Bull'].map(k => scFmtRange(s[term + k], s.market));
+  if (!parts.some(Boolean)) return `<td class="l"><span class="muted">—</span></td>`;
+  const title = `${term === 'st' ? '短期' : '中期'}シナリオ（弱気 / ベース / 強気）${s.scenarioDate ? `　分析日 ${s.scenarioDate}` : ''}`;
+  return `<td class="l" style="font-size:11px;white-space:nowrap" title="${esc(title)}">${parts.map(p => p || '<span class="muted">—</span>').join(' <span class="muted">/</span> ')}</td>`;
 }
-// 現在値がシナリオのどのレンジにいるか（派生）。弱気未満=赤 / 強気超え=緑 / 他は中立タグ
+// 現在値がシナリオのどのレンジにいるか（派生）。タグはレベル別の既定色（SC_POS_COLORS）、
+// セル背景はマスタの背景色ルール（レベル1〜7の数値・cfCellValue）で変更できる
 function scenarioPosTd(s, term) {
   const p = scPosition(s, term);
   if (!p) return `<td class="l"><span class="muted">—</span></td>`;
   const price = calc.price(s);
-  return `<td class="l" title="現在値 ${price != null ? fmtAmt(price, s.market) : '—'} の位置"><span class="tag ${p.cls}">${esc(p.label)}</span></td>`;
+  return `<td class="l" title="現在値 ${price != null ? fmtAmt(price, s.market) : '—'} の位置（レベル ${p.lvl}/7。1=弱気未満〜7=強気超え。背景色ルールはこのレベル値で設定）"><span class="tag" style="${labelColorStyle(p.color)}">${esc(p.label)}</span></td>`;
 }
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
@@ -4318,8 +4324,8 @@ function sortValue(sec, key) {
     // 株価シナリオ: レンジ列はベースレンジ下限で数値ソート（未設定は末尾）。位置列は下(弱気未満)→上(強気超え)の順
     case 'stScenario': return scParseRange(sec.stBase)?.lo ?? scParseRange(sec.stBear)?.lo ?? -Infinity;
     case 'mtScenario': return scParseRange(sec.mtBase)?.lo ?? scParseRange(sec.mtBear)?.lo ?? -Infinity;
-    case 'stScenPos': return scPosition(sec, 'st')?.ord ?? -Infinity;
-    case 'mtScenPos': return scPosition(sec, 'mt')?.ord ?? -Infinity;
+    case 'stScenPos': return scPosition(sec, 'st')?.lvl ?? -Infinity;
+    case 'mtScenPos': return scPosition(sec, 'mt')?.lvl ?? -Infinity;
     case 'scenarioDate': return sec.scenarioDate || '';
     case 'scenarioPrice': return sec.scenarioPrice ?? -Infinity;
     case 'buyCount': return calc.buyCount(sec) || 0;
@@ -11110,7 +11116,7 @@ function openSecurityDetail(secId) {
       .map(([k, lb]) => { const f = scFmtRange(sec[term + k], sec.market); return f ? `<span class="muted">${lb}</span> ${f}` : null; }).filter(Boolean);
     if (!parts.length) return '';
     const pos = scPosition(sec, term);
-    return kv(`${label}シナリオ`, `${parts.join('　')}${pos ? `　<span class="tag ${pos.cls}" title="現在値がどのレンジにいるか">現在: ${esc(pos.label)}</span>` : ''}`);
+    return kv(`${label}シナリオ`, `${parts.join('　')}${pos ? `　<span class="tag" style="${labelColorStyle(pos.color)}" title="現在値がどのレンジにいるか">現在: ${esc(pos.label)}</span>` : ''}`);
   };
   const scenarioBox = [
     scRow('st', '短期'), scRow('mt', '中期'),
@@ -11981,7 +11987,7 @@ function karteCardHtml(sec) {
         .map(([k, lb]) => { const f = scFmtRange(sec[term + k], sec.market); return f ? `<span class="muted">${lb}</span> ${f}` : null; }).filter(Boolean);
       if (!parts.length) return '';
       const pos = scPosition(sec, term);
-      return row(`${term === 'st' ? '短期' : '中期'}シナリオ`, `${parts.join('　')}${pos ? `　<span class="tag ${pos.cls}">現在: ${esc(pos.label)}</span>` : ''}`);
+      return row(`${term === 'st' ? '短期' : '中期'}シナリオ`, `${parts.join('　')}${pos ? `　<span class="tag" style="${labelColorStyle(pos.color)}">現在: ${esc(pos.label)}</span>` : ''}`);
     })),
     (sec.scenarioDate || sec.scenarioPrice != null) ? row('シナリオ分析日/株価', `${esc(sec.scenarioDate || '—')} / ${sec.scenarioPrice != null ? m(sec.scenarioPrice) : '—'}`) : '',
   ].join('');
