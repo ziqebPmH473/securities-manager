@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260825-1727';
+const APP_VERSION = 'v20260825-1745';
 
 'use strict';
 
@@ -10421,9 +10421,11 @@ function secNavBar(secId, current) {
     <span class="muted" style="font-size:11px">表示切替</span>${items}</div>`;
 }
 
-function openSecurityForm(id, presetMarket) {
+function openSecurityForm(id, presetMarket, presetTicker) {
   const sec = id ? store.data.securities.find(s => s.id === id) : null;
   const m = sec ? sec.market : (presetMarket || 'US');
+  // 新規登録時の初期コード（銘柄カルテの「未登録→登録」ボタン等から。英字は大文字に補正）
+  const initTicker = !sec && presetTicker ? String(presetTicker).trim().toUpperCase() : '';
   const catOpts = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder)
     .map(c => `<option value="${esc(c.category)}" ${sec && sec.category === c.category ? 'selected' : ''}>${esc(c.category)}</option>`).join('');
   const invCatOpts = [...store.data.investCategories].sort((a, b) => a.sortOrder - b.sortOrder)
@@ -10450,7 +10452,7 @@ function openSecurityForm(id, presetMarket) {
           <select name="market" ${m === 'FUND' ? 'disabled' : ''}>${(m === 'FUND' ? ['FUND'] : ['US', 'JP']).map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${MARKET_LABEL[x]}</option>`).join('')}</select></div>
         <div class="field"><label>ティッカー / コード</label>
           <div style="display:flex;gap:6px;align-items:center">
-            <input name="ticker" value="${sec ? esc(sec.ticker) : ''}" placeholder="例: AAPL / 7203" required style="flex:1" onblur="autoFetchInfo(this)">
+            <input name="ticker" value="${sec ? esc(sec.ticker) : esc(initTicker)}" placeholder="例: AAPL / 7203" required style="flex:1;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="autoFetchInfo(this)">
             <span id="info-status" class="muted" style="font-size:11px;white-space:nowrap"></span>
           </div></div>
       </div>
@@ -10613,7 +10615,7 @@ function openSecurityForm(id, presetMarket) {
     const intOrNull = (v) => v === '' || v == null ? null : parseInt(v, 10);
     // 銘柄名・セクター・業種・時価総額・PER・EPS・配当はマスタ（meta）で自動管理。レコードには持たせない
     const patch = {
-      market, ticker: f.ticker.value.trim(),
+      market, ticker: f.ticker.value.trim().toUpperCase(), // コードは常に大文字で保存（表記ゆれ・重複判定ミス防止）
       category: f.category.value || null, ruleId: parseInt(f.ruleId.value, 10),
       investCategory: (f.investCategory && f.investCategory.value) || null,
       enabled: f.enabled.value === '1', watch: f.watch.value === '1',
@@ -11862,8 +11864,8 @@ function renderTradeEntry() {
   } else {
     body = `<div class="notice">「${esc(q)}」に一致する登録銘柄がありません。
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="openSecurityForm(null, 'JP')">＋ 日本株として登録</button>
-        <button class="btn btn-primary" onclick="openSecurityForm(null, 'US')">＋ 米国株として登録</button>
+        <button class="btn btn-primary" onclick="openSecurityForm(null, 'JP', karteCode)">＋ 日本株として登録</button>
+        <button class="btn btn-primary" onclick="openSecurityForm(null, 'US', karteCode)">＋ 米国株として登録</button>
       </div></div>`;
   }
   app.innerHTML = `<div class="kt">${searchBar}${body}</div>`;
