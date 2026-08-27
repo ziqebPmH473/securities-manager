@@ -380,6 +380,22 @@ button { font-family: inherit; }
   padding: 11px 26px;
 }
 .topbar h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .01em; }
+
+/* 決算日バックグラウンド取得の進捗バー（トップバー直下の細い帯。操作はブロックしない） */
+.earn-progress {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 26px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--muted);
+}
+.earn-progress-text { white-space: nowrap; font-weight: 600; }
+.earn-progress-track {
+  flex: 1; height: 5px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.earn-progress-fill { height: 100%; width: 0%; border-radius: 999px; background: var(--accent); transition: width .3s ease; }
+@media (max-width: 720px) { .earn-progress { padding: 4px 14px; } }
 .topbar-spacer { flex: 1; }
 .tickers { display: flex; align-items: center; gap: 18px; }
 .ticker { display: flex; align-items: baseline; gap: 7px; }

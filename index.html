@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Shippori+Mincho:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20260821-0011" />
+  <link rel="stylesheet" href="styles.css?v=20260827-1757" />
 </head>
 <body>
   <div class="shell">
@@ -33,6 +33,11 @@
         <div class="update-meta" id="update-meta">更新<br /><b>—</b></div>
         <button id="btn-refresh" class="btn btn-primary">価格更新</button>
       </header>
+      <!-- 決算日バックグラウンド取得の進捗バー（操作はブロックしない。app.js の earnProgress が表示/更新） -->
+      <div id="earn-progress" class="earn-progress" hidden>
+        <span id="earn-progress-text" class="earn-progress-text">決算日を取得中…</span>
+        <div class="earn-progress-track"><div id="earn-progress-fill" class="earn-progress-fill"></div></div>
+      </div>
       <main class="content"><div id="app"></div></main>
     </div>
   </div>
@@ -77,6 +82,6 @@
 
   <script src="sync-merge.js?v=20260825-1542"></script>
   <script src="analysis.js?v=20260729-2142"></script>
-  <script src="app.js?v=20260826-0101"></script>
+  <script src="app.js?v=20260827-1757"></script>
 </body>
 </html>

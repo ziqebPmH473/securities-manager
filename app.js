@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260826-0101';
+const APP_VERSION = 'v20260827-1757';
 
 'use strict';
 
@@ -2209,8 +2209,10 @@ const api = {
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
     if (need.length) await this.refreshMeta(need);
     // 決算日（前回/次回）を1日1回取得（銘柄ごとの成功日 earnings[k].at で判定＝高値と同方式）。
-    // 場中（日本株ザラ場・米国レギュラー）と各市場の寄り30分前は、株価を早く見たいのでスキップし場外の更新で取得する
-    try { if (!earnSkipNow()) await this.refreshEarnings(allSecs); } catch (_) {}
+    // 場中（日本株ザラ場・米国レギュラー）と各市場の寄り30分前は、株価を早く見たいのでスキップし場外の更新で取得する。
+    // ★await しない＝バックグラウンド実行。取得に時間がかかっても busy オーバーレイを閉じて操作可能にし、
+    //   進捗はトップバー下の細いバーに表示する（earnProgress）。完了時に表示へ反映。
+    if (!earnSkipNow()) this.refreshEarningsBg(allSecs);
     // ランキング順位バッジは「株価更新時だけ」取得（タブ表示のたびの取得をやめ、保有銘柄タブの引っかかりを解消）。
     // 1日1回のキャッシュを尊重（force無し）。取得後にバッジだけ反映するため再描画。
     busyMsg('ランキング順位を取得中…');
@@ -2218,7 +2220,20 @@ const api = {
     loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); });
   },
 
-  // 決算日（前回/次回）を /api/earnings で取得し store.data.earnings にキャッシュ。
+  // 決算日取得のバックグラウンド実行ラッパー。busy オーバーレイでは待たせず（＝操作可能なまま）、
+  // 進捗はトップバー下の細いバー（earnProgress）に表示する。多重起動は抑止（実行中なら何もしない）。
+  // 取得できた銘柄があれば完了時に一覧へ反映（インライン編集中はユーザーの編集内容を壊すため再描画しない）。
+  async refreshEarningsBg(allSecs) {
+    if (this._earnBgRunning) return;
+    this._earnBgRunning = true;
+    try {
+      const updated = await this.refreshEarnings(allSecs);
+      if (updated > 0 && !inlineEditOn) preserveTableScroll(render);
+    } catch (_) { /* 取得失敗は無視（次回の株価更新で再試行される） */ }
+    finally { this._earnBgRunning = false; earnProgressHide(); }
+  },
+
+  // 決算日（前回/次回）を /api/earnings で取得し store.data.earnings にキャッシュ。取得できた銘柄数を返す。
   // 銘柄ごとの取得成功日 at で「その日1回だけ」に抑制（高値の highsAt と同方式）。Yahoo形式(JP=code.T)で問い合わせ。
   async refreshEarnings(allSecs) {
     // ETF・投信は決算が無いので対象外（詳細種別の手動指定＋自動判定）。従来はETFにも毎回問い合わせ→
@@ -2236,12 +2251,13 @@ const api = {
       if (e.at) { const gap = _diffDays(e.at, td); if (gap !== null && gap < earnRefetchInterval(s)) return false; }
       return true;
     });
-    if (!stale.length) return;
+    if (!stale.length) return 0;
     const symOf = (s) => s.market === 'JP' ? `${s.ticker}.T` : String(s.ticker).toUpperCase();
     const keyBySym = new Map(stale.map(s => [symOf(s), priceKey(s)]));
+    let updatedCount = 0;
     // US=最大4サブリクエスト/銘柄。Cloudflareのサブリクエスト上限を避け8件ずつ
+    earnProgress(0, stale.length);
     for (let i = 0; i < stale.length; i += 8) {
-      busyMsg(`決算日を取得中… ${Math.min(i + 8, stale.length)}/${stale.length}件`);
       const batch = stale.slice(i, i + 8);
       const q = batch.map(symOf).join(',');
       let res = null;
@@ -2272,8 +2288,11 @@ const api = {
       // 取れなかった銘柄は試行時刻(tryAt)だけ記録し、60分間は再試行しない（既存値は保持）
       const nowIso = new Date().toISOString();
       for (const s of batch) { const k = priceKey(s); if (!gotAt.has(k)) store.data.earnings[k] = { ...(store.data.earnings[k] || {}), tryAt: nowIso }; }
+      updatedCount += gotAt.size;
+      earnProgress(Math.min(i + 8, stale.length), stale.length);
     }
     store.save();
+    return updatedCount;
   },
 
   // 米株のプレ/アフター価格を「時間外」列(prices.extPrice/extType)に保存。
@@ -15186,6 +15205,18 @@ function busyDone(msg, state = 'done') {
   _busyTimer = setTimeout(() => { ov.hidden = true; ov.classList.remove('done', 'error'); }, state === 'error' ? 3000 : 1100);
 }
 function busyHide() { const ov = document.getElementById('busy-overlay'); if (!ov) return; ov.hidden = true; ov.classList.remove('done', 'error'); clearTimeout(_busyTimer); }
+
+// 決算日バックグラウンド取得の進捗バー（トップバー直下の細い帯）。busy オーバーレイと違い操作をブロックしない。
+// done/total 件数のテキスト＋割合の塗りつぶしで進捗を表示し、完了時に earnProgressHide で消す。
+function earnProgress(done, total) {
+  const bar = document.getElementById('earn-progress'); if (!bar) return;
+  bar.hidden = false;
+  const t = document.getElementById('earn-progress-text');
+  if (t) t.textContent = `決算日を取得中… ${done}/${total}件`;
+  const f = document.getElementById('earn-progress-fill');
+  if (f) f.style.width = (total ? Math.round(done / total * 100) : 0) + '%';
+}
+function earnProgressHide() { const bar = document.getElementById('earn-progress'); if (bar) bar.hidden = true; }
 // 非同期処理をオーバーレイで包む: 押下→「msg（…中）」即時表示→成功「doneMsg」/失敗「エラー」。
 async function withBusy(msg, fn, doneMsg) {
   busyShow(msg);
