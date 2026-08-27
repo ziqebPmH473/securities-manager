@@ -712,6 +712,20 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - 設定配布: clientId/spreadsheetId はリポジトリに置かず **`/api/config`（CF env: GOOGLE_OAUTH_CLIENT_ID/GOOGLE_SHEET_ID）** から配る。`gsync.cfg()` がローカル空なら env で補完（新端末は入力不要）。
 - Sheets（`_appdata`）は**保険として残置**（手動保存/読込ボタンは従来どおり）。
 
+### 15.1.0 同期の全キー消失事故と「未提供＝情報なし」の全規則適用（2026-08-27 修正・最重要）
+**事故**: タブの並び順（settings.navOrder）・株価/銘柄名/決算日キャッシュ（prices/meta/earnings）が全端末から消えた。
+
+**発生機序**（2段階）:
+1. **発生源**: `dsync.syncNow` が Drive の `data.json` 読み込み失敗（通信の一時エラー等）を `catch` で握りつぶし **`remote = {}` のまま同期を続行**していた。
+2. **増幅**: 3-way マージで「local は base から未変更 → remote 側の状態（＝キーが無い）を採用」の規則が働き、**未変更キーが軒並み「remoteで削除された」と誤解釈**される。`records` 規則には 2026-06-11 の安全策（未提供＝情報なし・削除を伝播しない）があったため銘柄・保有は無事だったが、**`map`（prices/meta/earnings/techAnalysis 等）と `single`/`singleTs`/`keyedTs` フォールバック（settings 等）には同じ守りが無かった**。消えたバンドルが Drive へ書き戻され、他端末も「Driveで削除された」と追従して全端末へ伝播した。
+
+**修正**（v20260827-1820）:
+- **`syncNow`**: 既存ファイルの読み込み失敗は **throw して同期を中止**（次の自動同期25秒後にやり直し）。JSON 破損も中止してバックアップ復元を案内。「読めない＝空」とは二度と解釈しない。
+- **`sync-merge.js`**: 「未提供（undefined）＝情報なし・削除を伝播しない」を **全規則に適用**。`mergeMap3way` に records と同じ given 判定を追加。single系（`mergeSingle3way`/`mergeSingleTs3way`/`mergeSingleRefTs3way`/`mergeBulkTs3way`、`keyedTs` の非オブジェクトフォールバック含む）に共通ガード `givenOnly`（片側 undefined なら提供側を採用）を追加。**トップレベルキーを意図的に丸ごと消す機能は存在しない**ため削除伝播を失っても実害はない。オブジェクトとして提供されている中でのキー欠落（例: settings.navOrder の「既定に戻す」）は従来どおりキー単位で伝播する。
+- 回帰テスト（node）: remote={} で prices/meta/settings/listedMaster が保持されること、正当なキー単位削除・keyedTs マージ（8/6 修正）が壊れていないことを確認。
+
+**教訓**: 外部読み込みの失敗を「空データ」にフォールバックして書き込み系処理を続行しない。マージ規則を新設・変更する時は「未提供＝情報なし」の区別を必ず入れる（records の安全策コメント参照）。
+
 ### 15.1.1 同期規約：records を書き換えたら必ず `updatedAt` を打つ（2026-07-21・重要）
 - **鉄則**: `store.data` の **records 系レコード（securities/holdings/transactions/rules/categories/investCategories/labelDefs/amountHistory/amountSnapshots 等）を書き換えた／新規作成したら、必ず `store.touch(rec)`（＝`rec.updatedAt = _now()`）を呼ぶ**。3-wayマージは両在レコードを `updatedAt` の新しい方で採る（`c > a ? r : l`）ため、**編集したのに `updatedAt` を打たないと「古いまま」に見え、別端末の古いスナップショットに負けて巻き戻る（＝同期漏れ）**。
 - **過去に漏れていた箇所（本日一括修正）**:

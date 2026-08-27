@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260827-1809';
+const APP_VERSION = 'v20260827-1820';
 
 'use strict';
 
@@ -1385,7 +1385,16 @@ const dsync = {
       await this.ensureHistoryFile(folderId); // 資産推移の空ファイルをユーザー所有で用意（サーバーはこれをPATCH更新）
       const file = await this._findFile(folderId);
       let remote = {}, remoteRaw = null;
-      if (file) { try { remoteRaw = await this._readFile(file.id); remote = JSON.parse(remoteRaw); } catch (_) { remote = {}; remoteRaw = null; } }
+      if (file) {
+        // ★読み込み失敗を「Drive=空」と誤解して続行しない（2026-08-27 の事故の発生源）。
+        //   空扱いで3-wayマージすると、ローカル未変更のキーが軒並み「remoteで削除された」と誤解釈され、
+        //   設定（タブの並び等）・株価/銘柄名/決算日キャッシュが消えたバンドルが Drive に書き戻されて
+        //   全端末へ伝播した。中止しても次の自動同期（25秒間隔）でやり直されるだけで実害はない。
+        remoteRaw = await this._readFile(file.id);   // 通信失敗は throw ＝この同期を中止
+        try { remote = JSON.parse(remoteRaw); } catch (_) {
+          throw new Error('Driveの同期データが読めません（ファイル破損の可能性）。マスタ画面のバックアップ復元を検討してください');
+        }
+      }
       // その日最初の同期で、上書き前のDrive内容を1世代バックアップ（最大5世代・best-effort）
       if (remoteRaw) await this.backupDailyOnce(remoteRaw);
       // techAnalysis の IndexedDB 読み込み完了を待つ（§16.7.5）。未ロード＝空のまま bundle を作ると

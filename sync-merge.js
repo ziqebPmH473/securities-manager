@@ -141,6 +141,11 @@
   }
 
   function mergeMap3way(base, local, remote, newerFn) {
+    // mergeRecords3way と同じ守り: 「オブジェクトとして提供されている中でキーが欠けている（=削除の意思表示）」と
+    // 「map 自体が未提供（undefined＝情報なし）」を区別し、**未提供側からは削除を伝播しない**。
+    // 実害（2026-08-27）: Drive 読み込みが一時失敗して remote={} のまま同期が続行され、prices/meta/earnings 等の
+    // キャッシュ map 全キーが「remoteで削除された」と誤解釈→株価・銘柄名・決算日が全端末から消えた。
+    const localGiven = !!local && typeof local === 'object', remoteGiven = !!remote && typeof remote === 'object';
     base = base || {}; local = local || {}; remote = remote || {};
     const out = {};
     for (const k of new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)])) {
@@ -149,15 +154,26 @@
       if (lP && rP) {
         out[k] = (newerFn && newerFn(l, r)) ? r : l;
       } else if (lP && !rP) {
-        if (bP && same(l, b)) { /* remoteで削除＆local未変更→削除反映 */ } else out[k] = l;
+        if (remoteGiven && bP && same(l, b)) { /* remoteで削除＆local未変更→削除反映（remote未提供なら保持） */ } else out[k] = l;
       } else if (!lP && rP) {
-        if (bP && same(r, b)) { /* localで削除＆remote未変更→削除反映 */ } else out[k] = r;
+        if (localGiven && bP && same(r, b)) { /* localで削除＆remote未変更→削除反映（local未提供なら保持） */ } else out[k] = r;
       }
     }
     return out;
   }
 
+  // single系共通の守り: 片側が undefined（キー自体が未提供）は「情報なし」であり削除の意思表示ではない。
+  // 提供されている側をそのまま採る（トップレベルキーを意図的に丸ごと消す機能は存在しないため安全）。
+  // これが無いと「local未変更→remote採用」の規則が remote=undefined を採用し、settings 等がまるごと消える
+  // （2026-08-27 実害: Drive読み込み一時失敗→remote={}→settings削除が全端末へ伝播し、タブの並び等が初期化）。
+  function givenOnly(local, remote) {
+    if (local === undefined) return { done: true, v: remote };
+    if (remote === undefined) return { done: true, v: local };
+    return { done: false };
+  }
+
   function mergeSingle3way(base, local, remote) {
+    const g = givenOnly(local, remote); if (g.done) return g.v;
     const bj = JSON.stringify(base), lj = JSON.stringify(local), rj = JSON.stringify(remote);
     if (lj === bj) return remote;   // localが未変更→remoteを採用
     if (rj === bj) return local;    // remoteが未変更→localを採用
@@ -165,6 +181,7 @@
   }
   // single だが、両方変わった時は _updatedAt の新しい方を採る（無ければ local）。設定(settings)用。
   function mergeSingleTs3way(base, local, remote) {
+    const g = givenOnly(local, remote); if (g.done) return g.v;
     const bj = JSON.stringify(base), lj = JSON.stringify(local), rj = JSON.stringify(remote);
     if (lj === bj) return remote;
     if (rj === bj) return local;
@@ -203,6 +220,7 @@
   // singleTs と同じだが、タイブレークの _updatedAt を「別キーの値(lref/rref)」から読む。
   // 配列など _updatedAt を自身に持てない値を、一括編集される相方(matrixSettings)の時刻で判定する用途。
   function mergeSingleRefTs3way(base, local, remote, lref, rref) {
+    const g = givenOnly(local, remote); if (g.done) return g.v;
     const bj = JSON.stringify(base), lj = JSON.stringify(local), rj = JSON.stringify(remote);
     if (lj === bj) return remote;
     if (rj === bj) return local;
@@ -212,6 +230,7 @@
   // 一括取込マスタ（listedMaster）用: 相方メタ(lref/rref)の _updatedAt の新しい方。時刻が無い/同じ場合は
   // 「空でない側」を採用（配列・コンパクト文字列の両形式に対応）。両方に実データがあれば local。
   function mergeBulkTs3way(base, local, remote, lref, rref) {
+    const g = givenOnly(local, remote); if (g.done) return g.v;
     const bj = JSON.stringify(base), lj = JSON.stringify(local), rj = JSON.stringify(remote);
     if (lj === bj) return remote;
     if (rj === bj) return local;
