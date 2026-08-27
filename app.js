@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-0110';
+const APP_VERSION = 'v20260828-0117';
 
 'use strict';
 
@@ -5145,8 +5145,9 @@ function aiDiagPayload() {
     }
   } catch (_) {}
   // サイン銘柄（到達・もうすぐ）。バリュエーション系は「今の値から計算できる客観値」だけを送る。
-  // ★評価（starValuation等）は分析時点の主観値で株価が動けば古くなるため送らない（2026-08-28 すみぽん指示）。
-  // 格付・総合評価は利用者自身の判断として送るが、評価日(analysisAsOf)を付けてAIに鮮度を判断させる。
+  // ★評価（starValuation等）・買い時評価(buyGrade)・総合評価(overallGrade)は「分析時点の株価で買い時か」まで
+  // 加味した判断のため、株価が動けば古くなりAIを誤誘導する→送らない（2026-08-28 すみぽん指示）。
+  // 買い時の妥当性はAIが現在のPER等から評価する。送る評価は格付(rating)のみ（企業の質）＋評価日(analysisAsOf)で鮮度判断。
   const brief = (sec) => {
     const ev = calc.evaluate(sec);
     const meta = store.data.meta[priceKey(sec)] || {};
@@ -5172,8 +5173,8 @@ function aiDiagPayload() {
       ticker: sec.ticker, name: _aiSecName(sec), market: sec.market,
       sector: meta.sector || sec.sectorOverride || null,
       profile: (meta.summary || '').slice(0, 120) || null,             // 会社概要（株探）
-      rating: sec.rating || null, grade: sec.overallGrade || null, buyGrade: sec.buyGrade || null,
-      analysisAsOf: sec.analysisDate || null,                          // 格付・評価を付けた分析日（鮮度判断用）
+      rating: sec.rating || null,
+      analysisAsOf: sec.analysisDate || null,                          // 格付を付けた分析日（鮮度判断用）
       priority: sec.priority ?? null,
       price,
       per: r1(calc.per(sec)), pbr: r1(calc.pbr(sec)), divYieldPct: r1(calc.divYield(sec)),
