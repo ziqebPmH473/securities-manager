@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-0104';
+const APP_VERSION = 'v20260828-0110';
 
 'use strict';
 
@@ -5128,26 +5128,68 @@ function aiDiagPayload() {
     .map(s => ({ ticker: s.ticker, name: _aiSecName(s), pct: pct(s) }))
     .filter(x => x.pct != null && x.pct > 0)
     .sort((a, b) => b.pct - a.pct).slice(0, 10);
-  // サイン銘柄（到達・もうすぐ）
+  const { reached, near } = signalRows();
+  // サイン銘柄ごとの関連ニュース見出し（ニュースタブの銘柄マッチ newsSecHit を流用。最大3件/銘柄）
+  const sigSecs = [...reached, ...near].slice(0, 40);
+  const newsBySec = {};
+  try {
+    const items = ((newsPoolCache() || {}).items || []).slice(0, 120);
+    for (const sec of sigSecs) {
+      const hits = [];
+      for (const it of items) {
+        if (!newsSecHit(it, sec)) continue;
+        hits.push((it.title || '').slice(0, 80));
+        if (hits.length >= 3) break;
+      }
+      if (hits.length) newsBySec[sec.market + ':' + sec.ticker] = hits;
+    }
+  } catch (_) {}
+  // サイン銘柄（到達・もうすぐ）。バリュエーション系は「今の値から計算できる客観値」だけを送る。
+  // ★評価（starValuation等）は分析時点の主観値で株価が動けば古くなるため送らない（2026-08-28 すみぽん指示）。
+  // 格付・総合評価は利用者自身の判断として送るが、評価日(analysisAsOf)を付けてAIに鮮度を判断させる。
   const brief = (sec) => {
     const ev = calc.evaluate(sec);
     const meta = store.data.meta[priceKey(sec)] || {};
     const st = scPosition(sec, 'st'), mt = scPosition(sec, 'mt');
     const scen = (st || mt) ? `短期:${st ? st.label : '-'} 中期:${mt ? mt.label : '-'}` : null;
+    const price = calc.price(sec);
+    // 目標指標から逆算した株価（EPS・配当連動で自動更新される派生値。現在値との乖離%も添える）
+    const tgt = {};
+    for (const [k, fn, t] of [['per', 'targetPerPrice', sec.targetPer], ['pbr', 'targetPbrPrice', sec.targetPbr], ['divYield', 'targetYieldPrice', sec.targetYield]]) {
+      const tp = calc[fn](sec);
+      if (tp != null && price) tgt[k] = { target: t, fairPrice: tp, gapPct: r1((price / tp - 1) * 100) }; // gapPct>0=目標換算より割高
+    }
+    // テクニカル分析（分析実行日 asof 付き。古ければAI側で割り引く）
+    const ta = techOf(sec);
+    const tech = ta ? clean({
+      asof: ta.lastAnalyzed || null, rsi: ta.rsi != null ? Math.round(ta.rsi) : null,
+      dev52w: ta.dev52w != null ? Math.round(ta.dev52w) : null,
+      ma200: ta.ma200Pos ? (ta.ma200Pos === 'above' ? '上' : '下') + (ta.ma200Slope === 'up' ? '↗' : ta.ma200Slope === 'down' ? '↘' : '') : null,
+      macd: ta.macdCross || null,
+      patternStatus: ta.best ? ((typeof TA !== 'undefined' && TA.STATUS_LABEL && TA.STATUS_LABEL[ta.best.status]) || String(ta.best.status)) : null,
+    }) : null;
     return clean({
       ticker: sec.ticker, name: _aiSecName(sec), market: sec.market,
       sector: meta.sector || sec.sectorOverride || null,
+      profile: (meta.summary || '').slice(0, 120) || null,             // 会社概要（株探）
       rating: sec.rating || null, grade: sec.overallGrade || null, buyGrade: sec.buyGrade || null,
+      analysisAsOf: sec.analysisDate || null,                          // 格付・評価を付けた分析日（鮮度判断用）
       priority: sec.priority ?? null,
+      price,
+      per: r1(calc.per(sec)), pbr: r1(calc.pbr(sec)), divYieldPct: r1(calc.divYield(sec)),
+      marketCapMln: calc.marketCap(sec) != null ? Math.round(calc.marketCap(sec)) : null, // 時価総額(百万・公開情報)
+      targets: Object.keys(tgt).length ? tgt : null,
+      tech,
       dropFrom5y: r1(calc.dropFrom5y(sec)),
+      dropFromPrevBuy: r1(calc.dropFromPrev ? calc.dropFromPrev(sec) : null), // 前回購入からの下落率
       remainToTrigger: ev ? r1(ev.remainingDropPct) : null,
       portfolioPct: pct(sec),
       scenario: scen,
       earnDays: earnNextDays(sec),
+      relatedNews: newsBySec[sec.market + ':' + sec.ticker] || null,   // この銘柄に一致した直近見出し
       note: (sec.analysisNote || '').slice(0, 200) || null,
     });
   };
-  const { reached, near } = signalRows();
   // ニュース見出し（直近を新しい順に25件。本文は送らない）
   const nc = newsPoolCache();
   const news = ((nc && nc.items) || []).slice(0, 25).map(it => clean({ t: (it.title || '').slice(0, 80), cat: it.cat || null }));

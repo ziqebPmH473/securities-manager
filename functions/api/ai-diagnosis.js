@@ -16,29 +16,40 @@ const PROMPT = `あなたは日本の個人投資家を補佐する投資分析�
 - portfolio: 保有の構成比（市場別・カテゴリ別・上位銘柄の比率%）
 - signals.reached: 利用者自身の買い増しルールに「到達」した銘柄(=ルール上は今が買い時)
 - signals.near: 到達まで残り5%以内の銘柄
-  各銘柄: ticker/name/market(JP=日本株,US=米国株)/sector/rating(格付)/grade(総合評価)/buyGrade(買い時評価)/
-  priority(購入優先順位・小さいほど優先)/dropFrom5y(5年高値からの下落率%)/remainToTrigger(到達まで残り下落%)/
-  portfolioPct(ポートフォリオ内比率%)/scenario(株価シナリオ上の現在位置)/earnDays(次回決算まで日数)/note(利用者の分析メモ)
+  各銘柄: ticker/name/market(JP=日本株,US=米国株)/sector/profile(会社概要)/
+  rating(格付)/grade(総合評価)/buyGrade(買い時評価)/analysisAsOf(それらを付けた分析日)/
+  priority(購入優先順位・小さいほど優先)/price(現在値)/per/pbr/divYieldPct(配当利回り%)/marketCapMln(時価総額・百万)/
+  targets(利用者の目標指標から逆算した適正株価。gapPct>0=目標換算より割高、<0=割安)/
+  tech(テクニカル: rsi/dev52w=52週高値乖離%/ma200=200日線の上下と向き/macd=golden・dead/patternStatus=チャートパターン。asof=分析実行日)/
+  dropFrom5y(5年高値からの下落率%)/dropFromPrevBuy(前回購入価格からの下落率%)/remainToTrigger(到達まで残り下落%)/
+  portfolioPct(ポートフォリオ内比率%)/scenario(株価シナリオ上の現在位置)/earnDays(次回決算まで日数)/
+  relatedNews(この銘柄に一致した直近ニュース見出し)/note(利用者の分析メモ)
 - news: 直近のニュース見出し（cat=カテゴリ）
 
-このデータ**のみ**を根拠に、次の4部構成で日本語の診断を書いてください。
+このデータを主な根拠に、次の4部構成で日本語の診断を書いてください。
 
 【相場環境】
 ・指数・マクロ・成立中の警告から、いまの相場全体の位置づけを3〜5行で。強気/中立/警戒のどれ寄りかを明示。
 
 【買い候補の優先順位】
 ・signals.reached（無ければ near）から最大5銘柄を優先順に。各行「1. ティッカー 銘柄名 — 理由」。
-・理由はデータ内の事実（下落率・格付・比率・シナリオ位置・ニュース）を引用。ポートフォリオ比率が高すぎる銘柄は集中リスクを指摘。
+・各銘柄について必ず「なぜ下がっているのか・割安か割高か」の見立てを述べる:
+  per/pbr/divYieldPct/targets の gapPct・tech(RSI・52週乖離)を引用し、単なる「ルール到達」以外の妥当性を評価する。
+  会社の事業内容・業界動向・株価下落の背景は、あなたの一般知識で補ってよい（その場合「一般知識では〜」と明示。
+  ただし学習時点までの知識であり最新でない可能性に留意し、断定しない）。
+・rating/grade は利用者自身の過去の分析。analysisAsOf が古い場合（目安3ヶ月超）は「分析が古い」と指摘して割り引く。
+・relatedNews に悪材料・好材料があれば必ず言及。ポートフォリオ比率が高すぎる銘柄は集中リスクを指摘。
 
 【見送り・注意】
-・今回は見送りが妥当な銘柄と理由（悪材料ニュース・決算直前(earnDays が 0〜7)・シナリオ弱気圏割れ・比率過大など）。該当なしなら「特になし」。
+・今回は見送りが妥当な銘柄と理由（悪材料ニュース・決算直前(earnDays が 0〜7)・目標指標換算で割高(gapPct が大きい)・
+  シナリオ弱気圏割れ・テクニカル悪化・比率過大など）。該当なしなら「特になし」。
 
 【全体への注意】
 ・マクロ・相場環境から見た、今買い増すこと自体へのリスクを1〜3行。
 
 ルール:
 - 将来の株価を断定しない（「上がる」ではなく「データ上は〜」の形）。
-- データに無いことを事実のように書かない。知識で補う場合は「一般に」と明示。
+- JSONに無い事実とあなたの一般知識を混同しない。一般知識で補う時は「一般知識では」と必ず前置きする。
 - 最終判断は利用者に委ねる一文で締める。
 - Markdownの見出し記号(#)や太字(**)は使わない。上の【】と「・」の箇条書きだけで構成する。
 
@@ -65,7 +76,7 @@ export async function onRequestPost(context) {
 
   const reqBody = {
     contents: [{ role: 'user', parts: [{ text: PROMPT + dataStr }] }],
-    generationConfig: { temperature: 0.4, maxOutputTokens: 3000 },
+    generationConfig: { temperature: 0.4, maxOutputTokens: 4000 }, // 銘柄ごとの割安/割高評価が増えた分、思考込みで途中切れしない余裕を持つ
   };
 
   let lastStatus = 0, lastRaw = '';
