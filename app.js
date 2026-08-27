@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-0055';
+const APP_VERSION = 'v20260828-0104';
 
 'use strict';
 
@@ -5081,6 +5081,12 @@ function renderSignals() {
 // まとめて /api/ai-diagnosis（Gemini）に渡し、相場環境と買い候補の優先順位を理由付きで返してもらう。
 // ★金額（評価額・取得額など円/ドルの絶対額）は送らない（2026-08-28 すみぽん決定。比率%のみ）。
 // 結果は store.data.aiDiag に保存して全端末で共有（ルール7。sync-merge SCHEMA: singleTs 登録済み）。
+// 使用モデルは固定1つ（自動降格しない）。動画要約など他機能と無料枠を分け合っているため、
+// 勝手に上位モデルへフォールバックして他機能の上限を食い潰さない（2026-08-28 すみぽん指示）。
+// 既定は 500回/日 の flash-lite（20回/日 モデルの枠を消費しない）。選択は settings で同期（ルール7）。
+const AI_DIAG_DEFAULT_MODEL = 'gemini-3.5-flash-lite';
+function aiDiagModelSetting() { return (store.data.settings && store.data.settings.aiDiagModel) || AI_DIAG_DEFAULT_MODEL; }
+function setAiDiagModel(v) { store.data.settings.aiDiagModel = v || AI_DIAG_DEFAULT_MODEL; store.data.settings._updatedAt = store._now(); store.save(); }
 function _aiSecName(sec) { return sec.nameOverride || sec.name || (store.data.meta[priceKey(sec)] || {}).name || ''; }
 function aiDiagPayload() {
   const r1 = (v) => (v == null || !isFinite(v)) ? null : Math.round(v * 10) / 10;
@@ -5160,6 +5166,8 @@ function openAiDiag() {
   const meta = d ? `<span class="muted" style="font-size:12px">診断日時: ${esc((d.at || '').slice(0, 16).replace('T', ' '))} ／ モデル: ${esc(d.model || '-')}</span>` : '';
   showModal('🤖 AI相場診断', `
     <p class="muted" style="margin:0 0 8px;font-size:12px">ツール内のデータ（サイン・保有比率・マクロ・指数・ニュース見出し）をGeminiに渡して診断します。<strong>金額は送信しません</strong>（比率のみ）。無料枠のため混雑時は少し待って再実行してください。</p>
+    <div class="field" style="margin:0 0 8px"><label>使用モデル（固定・他モデルへ自動で切り替えません）</label>
+      <select id="ai-diag-model" onchange="setAiDiagModel(this.value)">${YT_MODELS.map(([id, label]) => `<option value="${id}" ${aiDiagModelSetting() === id ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></div>
     <div id="ai-diag-meta" style="margin:0 0 6px">${meta}</div>
     <div id="ai-diag-body" style="white-space:pre-wrap;max-height:55vh;overflow-y:auto;line-height:1.7;font-size:13px;border:1px solid var(--border);border-radius:8px;padding:10px 12px">${d && d.text ? esc(d.text) : '<span class="muted">まだ診断がありません。「診断を実行」を押してください。</span>'}</div>
     <div class="form-actions">
@@ -5173,7 +5181,7 @@ async function runAiDiag() {
   try {
     const res = await fetch('/api/ai-diagnosis', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: aiDiagPayload() }),
+      body: JSON.stringify({ data: aiDiagPayload(), models: [aiDiagModelSetting()] }), // 固定1モデル＝他モデルの無料枠を消費しない
     });
     const d = await res.json().catch(() => ({}));
     if (!d || !d.text) throw new Error((d && d.error) || '診断に失敗しました');

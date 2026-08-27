@@ -103,7 +103,8 @@ export async function onRequestPost(context) {
     }
   }
   if (lastRaw === 'timeout') return json({ error: '診断がタイムアウトしました。少し待ってお試しください。' });
-  return json({ error: '全モデルが混雑/上限のようです。少し待ってお試しください。（最後のエラー: ' + jpError(lastStatus, lastRaw) + '）', detail: String(lastRaw).slice(0, 300) });
+  const who = chain.length === 1 ? `選択中のモデル（${chain[0]}）` : '全モデル';
+  return json({ error: who + 'が混雑/上限のようです。モデルを変えるか、少し待ってお試しください。（' + jpError(lastStatus, lastRaw) + '）', detail: String(lastRaw).slice(0, 300) });
 }
 
 // Geminiの英語エラーを日本語のわかりやすい文言に変換（youtube-summary.js と同種）
