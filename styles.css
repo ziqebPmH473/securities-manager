@@ -381,21 +381,18 @@ button { font-family: inherit; }
 }
 .topbar h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .01em; }
 
-/* 決算日バックグラウンド取得の進捗バー（トップバー直下の細い帯。操作はブロックしない） */
-.earn-progress {
-  display: flex; align-items: center; gap: 10px;
-  padding: 4px 26px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
-  border-bottom: 1px solid var(--border);
-  font-size: 11px; color: var(--muted);
+/* 決算日バックグラウンド取得の進捗表示。トップバー下端に重ねる3pxライン＋右端下に小さな件数ラベル。
+   absolute でトップバーに重ねるため、表示/非表示でレイアウトが一切動かない（すみぽん要望）。操作もブロックしない。 */
+.earn-progress { position: absolute; left: 0; right: 0; bottom: -1px; pointer-events: none; z-index: 21; }
+.earn-progress-track { height: 3px; background: color-mix(in srgb, var(--accent) 14%, transparent); overflow: hidden; }
+.earn-progress-fill { height: 100%; width: 0%; background: var(--accent); transition: width .3s ease; }
+.earn-progress-text {
+  position: absolute; top: 3px; right: 12px;
+  font-size: 10px; font-weight: 600; white-space: nowrap; color: var(--accent);
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px;
+  padding: 2px 9px;
 }
-.earn-progress-text { white-space: nowrap; font-weight: 600; }
-.earn-progress-track {
-  flex: 1; height: 5px; border-radius: 999px; overflow: hidden;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-.earn-progress-fill { height: 100%; width: 0%; border-radius: 999px; background: var(--accent); transition: width .3s ease; }
-@media (max-width: 720px) { .earn-progress { padding: 4px 14px; } }
 .topbar-spacer { flex: 1; }
 .tickers { display: flex; align-items: center; gap: 18px; }
 .ticker { display: flex; align-items: baseline; gap: 7px; }

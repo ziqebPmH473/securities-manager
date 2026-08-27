@@ -1181,7 +1181,7 @@ US は Nasdaq の Date Reported（earnings-surprise）が発表から**1〜2日�
 決算日取得は件数が多いと数十秒かかり、その間 busy オーバーレイが操作をブロックしていた。取得タイミング・抑制ロジック（1日1回 / tryAt 60分バックオフ / earnRefetchInterval / earnSkipNow）は従来どおりのまま、**実行だけをバックグラウンドに変更**した。
 
 - `refreshAll` は `refreshEarnings` を **await しない**（`refreshEarningsBg` を fire-and-forget で起動）。busy オーバーレイは決算日を待たずに閉じ、ユーザーは操作を継続できる。
-- 進捗は busy オーバーレイではなく、**トップバー直下の細い進捗バー**（`#earn-progress`、`earnProgress(done,total)` / `earnProgressHide()`）に「決算日を取得中… n/m件」＋塗りつぶしで表示。操作は一切ブロックしない。
+- 進捗は busy オーバーレイではなく、**トップバー下端に重ねた3pxの進捗ライン＋右端下の小さな件数ラベル**（`#earn-progress`、`earnProgress(done,total)` / `earnProgressHide()`）に「決算日を取得中… n/m件」で表示。`position:absolute` でトップバーに重ねるため**表示/非表示でレイアウトが動かず**（2026-08-27 すみぽん要望）、`pointer-events:none` で操作も一切ブロックしない。
 - `refreshEarningsBg` は多重起動を `_earnBgRunning` フラグで抑止。完了時、取得できた銘柄が1件以上あれば `preserveTableScroll(render)` で一覧に反映（**インライン編集中は編集内容を壊すため再描画しない**）。取得失敗は無視し、次回の株価更新で再試行。
 
 ## 21.4 会社概要（株探）の取得と表示（2026-07-29 追加）
