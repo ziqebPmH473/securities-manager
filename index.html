@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>險ｼ蛻ｸ邂｡逅・ヤ繝ｼ繝ｫ</title>
+  <title>証券管理ツール</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Shippori+Mincho:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -13,9 +13,9 @@
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">險ｼ</div>
+        <div class="brand-mark">証</div>
         <div>
-          <div class="brand-name">險ｼ蛻ｸ邂｡逅・/div>
+          <div class="brand-name">証券管理</div>
           <div class="brand-sub">PORTFOLIO</div>
         </div>
       </div>
@@ -25,44 +25,44 @@
 
     <div class="main">
       <header class="topbar">
-        <h1 id="page-title">繝繝・す繝･繝懊・繝・/h1>
+        <h1 id="page-title">ダッシュボード</h1>
         <div class="topbar-spacer"></div>
         <div class="tickers" id="tickers"></div>
         <div class="tdiv"></div>
         <div id="login-warn" hidden></div>
-        <div class="update-meta" id="update-meta">譖ｴ譁ｰ<br /><b>窶・/b></div>
-        <button id="btn-refresh" class="btn btn-primary">萓｡譬ｼ譖ｴ譁ｰ</button>
-        <!-- 豎ｺ邂玲律繝舌ャ繧ｯ繧ｰ繝ｩ繧ｦ繝ｳ繝牙叙蠕励・騾ｲ謐暦ｼ医ヨ繝・・繝舌・荳狗ｫｯ縺ｫ驥阪・繧・px繝ｩ繧､繝ｳ・倶ｻｶ謨ｰ繝ｩ繝吶Ν縲ゅΞ繧､繧｢繧ｦ繝医↓蜑ｲ繧願ｾｼ縺ｾ縺ｪ縺・ｼ・-->
+        <div class="update-meta" id="update-meta">更新<br /><b>—</b></div>
+        <button id="btn-refresh" class="btn btn-primary">価格更新</button>
+        <!-- 決算日バックグラウンド取得の進捗（トップバー下端に重ねる3pxライン＋件数ラベル。レイアウトに割り込まない） -->
         <div id="earn-progress" class="earn-progress" hidden>
           <div class="earn-progress-track"><div id="earn-progress-fill" class="earn-progress-fill"></div></div>
-          <span id="earn-progress-text" class="earn-progress-text">豎ｺ邂玲律繧貞叙蠕嶺ｸｭ窶ｦ</span>
+          <span id="earn-progress-text" class="earn-progress-text">決算日を取得中…</span>
         </div>
       </header>
       <main class="content"><div id="app"></div></main>
     </div>
   </div>
 
-  <!-- 豎守畑繝｢繝ｼ繝繝ｫ -->
+  <!-- 汎用モーダル -->
   <div id="modal-overlay" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal-header">
-        <h2 id="modal-title">繧ｿ繧､繝医Ν</h2>
+        <h2 id="modal-title">タイトル</h2>
         <button class="modal-close" id="modal-close">&times;</button>
       </div>
       <div class="modal-body" id="modal-body"></div>
     </div>
   </div>
 
-  <!-- 驫俶氛隧ｳ邏ｰ繝峨Ο繝ｯ繝ｼ・亥承縺九ｉ繧ｹ繝ｩ繧､繝会ｼ・-->
+  <!-- 銘柄詳細ドロワー（右からスライド） -->
   <div id="drawer-overlay" class="drawer-overlay" hidden>
     <aside class="drawer" id="detail-drawer" role="dialog" aria-modal="true">
       <div class="drawer-head">
         <div class="top">
           <div style="min-width:0;flex:1">
-            <h2 class="drawer-title" id="drawer-title">驫俶氛</h2>
+            <h2 class="drawer-title" id="drawer-title">銘柄</h2>
             <div id="drawer-subtitle" style="display:flex;gap:8px;align-items:center;margin-top:5px;flex-wrap:wrap"></div>
           </div>
-          <button class="x-btn x" id="drawer-close" title="髢峨§繧・>&times;</button>
+          <button class="x-btn x" id="drawer-close" title="閉じる">&times;</button>
         </div>
       </div>
       <div class="drawer-body" id="drawer-body"></div>
@@ -72,11 +72,11 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <!-- 蜃ｦ逅・ｸｭ・丞ｮ御ｺ・が繝ｼ繝舌・繝ｬ繧､・医・繧ｿ繝ｳ謫堺ｽ懊・繝輔ぅ繝ｼ繝峨ヰ繝・け・・-->
+  <!-- 処理中／完了オーバーレイ（ボタン操作のフィードバック） -->
   <div id="busy-overlay" class="busy-overlay" hidden>
     <div class="busy-card">
       <div class="busy-spinner" id="busy-spinner"></div>
-      <div class="busy-msg" id="busy-msg">蜃ｦ逅・ｸｭ窶ｦ</div>
+      <div class="busy-msg" id="busy-msg">処理中…</div>
     </div>
   </div>
 
