@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-0018';
+const APP_VERSION = 'v20260828-0055';
 
 'use strict';
 
@@ -520,6 +520,7 @@ const store = {
     this.data.ytSummaries ||= {};     // 動画要約キャッシュ（videoId→{summary,at}）。1動画1回だけ生成・同期
     this.data.listedMaster ||= [];    // 全上場銘柄マスタ（自動タグ用）[{code,name}]。JPX一覧を取込・同期
     this.data.listedMasterInfo ||= null; // 上場マスタの取込メタ {date:'YYYYMMDD',importedAt,count,fileName}（いつ時点のデータか）
+    this.data.aiDiag ||= null;        // AI相場診断の最新結果 {at,text,model,_updatedAt}。全端末で共有（SCHEMA: singleTs）
     // 共通ドル円換算レート（マスタ評価用＝背景色ルールのUS金額判定・マトリックス円換算で共用）。
     // 旧マトリックス設定(matrixSettings.usdJpy)があれば引き継ぐ。初期値は1ドル=100円。
     if (this.data.settings.masterUsdJpy == null) {
@@ -5055,6 +5056,7 @@ function renderSignals() {
         <div class="seg" role="tablist">${seg('all', '全市場')}${seg('JP', '日本株')}${seg('US', '米国株')}</div>
         <div style="flex:1"></div>
         ${ratioToolbarHtml()}
+        <button class="btn btn-sm" onclick="openAiDiag()" title="サイン・保有比率・マクロ・ニュースをAI(Gemini)に渡して、相場環境と買い候補の優先順位を診断（金額は送信しない）">🤖 AI相場診断</button>
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
       </div>
       <div class="section-body">
@@ -5072,6 +5074,120 @@ function renderSignals() {
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
   applyStickyCols(document.querySelector('#app table.fixed-cols'), 'SIGNAL'); // コード・銘柄名を左端固定（列設定の「列の固定」対応）
   scheduleFit(); // 市場フィルタ切替で renderSignals() を直接呼ばれた時も枠内スクロール化（render() を経由しないため自前で）
+}
+
+// ============ AI相場診断（Gemini） ============
+// サインタブの「AI相場診断」。ツール内のデータ（サイン・保有比率・マクロ・指数・ニュース見出し）を
+// まとめて /api/ai-diagnosis（Gemini）に渡し、相場環境と買い候補の優先順位を理由付きで返してもらう。
+// ★金額（評価額・取得額など円/ドルの絶対額）は送らない（2026-08-28 すみぽん決定。比率%のみ）。
+// 結果は store.data.aiDiag に保存して全端末で共有（ルール7。sync-merge SCHEMA: singleTs 登録済み）。
+function _aiSecName(sec) { return sec.nameOverride || sec.name || (store.data.meta[priceKey(sec)] || {}).name || ''; }
+function aiDiagPayload() {
+  const r1 = (v) => (v == null || !isFinite(v)) ? null : Math.round(v * 10) / 10;
+  // 保有比率の分母（円換算の評価額合計。金額そのものは送らず比率化にだけ使う）
+  const totalJpy = store.data.securities.reduce((a, s) => a + (ratioValJpy(s) || 0), 0);
+  const pct = (s) => totalJpy > 0 ? r1(ratioValJpy(s) / totalJpy * 100) : null;
+  // 指数
+  const indices = INDICES.map(ix => {
+    const q = (store.data.indices || {})[ix.key];
+    if (!q || q.price == null) return null;
+    const dayPct = (q.prevClose != null && q.prevClose) ? r1((q.price / q.prevClose - 1) * 100) : null;
+    return { label: ix.label, price: q.price, dayPct };
+  }).filter(Boolean);
+  // マクロ指標（主要どころだけ。macroPoints が tf(前年比等)適用済みの値を返す）
+  const MACRO_FOR_AI = ['CPIAUCSL', 'CPILFESL', 'PCEPILFE', 'DFF', 'DGS2', 'DGS10', 'T10Y2Y', 'UNRATE', 'ICSA',
+    'BAMLH0A0HYM2', 'NFCI', 'VIXCLS', 'JP_CPI', 'JP_CPI_CORE', 'IRLTLT01JPM156N', 'LRHUTTTTJPM156S'];
+  const macro = MACRO_FOR_AI.map(id => {
+    const pts = macroPoints(id);
+    if (!pts.length) return null;
+    const def = MACRO_SERIES[id] || {};
+    const last = pts[pts.length - 1], prev = pts.length > 1 ? pts[pts.length - 2] : null;
+    return { label: def.label || id, value: r1(last[1]), prev: prev ? r1(prev[1]) : null, unit: def.unit || '', date: last[0] };
+  }).filter(Boolean);
+  // 成立中のマクロ警告（利用者が設定した基準値超え）
+  const alerts = macroFiredAlerts().map(x => macroAlertText(x.a, x.st));
+  // 保有構成（市場別・カテゴリ別・上位銘柄。すべて比率%）
+  const byMarket = {}, byCategory = {};
+  for (const s of store.data.securities) {
+    const v = ratioValJpy(s) || 0;
+    if (v <= 0) continue;
+    byMarket[s.market] = (byMarket[s.market] || 0) + v;
+    const c = s.category || '未分類';
+    byCategory[c] = (byCategory[c] || 0) + v;
+  }
+  const pctMap = (m) => Object.fromEntries(Object.entries(m)
+    .sort((a, b) => b[1] - a[1]).slice(0, 10)
+    .map(([k, v]) => [k, totalJpy > 0 ? r1(v / totalJpy * 100) : null]));
+  const topHoldings = store.data.securities
+    .map(s => ({ ticker: s.ticker, name: _aiSecName(s), pct: pct(s) }))
+    .filter(x => x.pct != null && x.pct > 0)
+    .sort((a, b) => b.pct - a.pct).slice(0, 10);
+  // サイン銘柄（到達・もうすぐ）
+  const brief = (sec) => {
+    const ev = calc.evaluate(sec);
+    const meta = store.data.meta[priceKey(sec)] || {};
+    const st = scPosition(sec, 'st'), mt = scPosition(sec, 'mt');
+    const scen = (st || mt) ? `短期:${st ? st.label : '-'} 中期:${mt ? mt.label : '-'}` : null;
+    return clean({
+      ticker: sec.ticker, name: _aiSecName(sec), market: sec.market,
+      sector: meta.sector || sec.sectorOverride || null,
+      rating: sec.rating || null, grade: sec.overallGrade || null, buyGrade: sec.buyGrade || null,
+      priority: sec.priority ?? null,
+      dropFrom5y: r1(calc.dropFrom5y(sec)),
+      remainToTrigger: ev ? r1(ev.remainingDropPct) : null,
+      portfolioPct: pct(sec),
+      scenario: scen,
+      earnDays: earnNextDays(sec),
+      note: (sec.analysisNote || '').slice(0, 200) || null,
+    });
+  };
+  const { reached, near } = signalRows();
+  // ニュース見出し（直近を新しい順に25件。本文は送らない）
+  const nc = newsPoolCache();
+  const news = ((nc && nc.items) || []).slice(0, 25).map(it => clean({ t: (it.title || '').slice(0, 80), cat: it.cat || null }));
+  return {
+    asof: new Date().toISOString(),
+    indices,
+    fx: { USDJPY: (store.data.fx || {}).USDJPY || null },
+    macro, macroAlerts: alerts,
+    portfolio: { count: store.data.securities.filter(s => (ratioValJpy(s) || 0) > 0).length, byMarketPct: pctMap(byMarket), byCategoryPct: pctMap(byCategory), topHoldings },
+    signals: { reached: reached.slice(0, 20).map(brief), near: near.slice(0, 20).map(brief) },
+    news,
+  };
+}
+function openAiDiag() {
+  const d = store.data.aiDiag;
+  const meta = d ? `<span class="muted" style="font-size:12px">診断日時: ${esc((d.at || '').slice(0, 16).replace('T', ' '))} ／ モデル: ${esc(d.model || '-')}</span>` : '';
+  showModal('🤖 AI相場診断', `
+    <p class="muted" style="margin:0 0 8px;font-size:12px">ツール内のデータ（サイン・保有比率・マクロ・指数・ニュース見出し）をGeminiに渡して診断します。<strong>金額は送信しません</strong>（比率のみ）。無料枠のため混雑時は少し待って再実行してください。</p>
+    <div id="ai-diag-meta" style="margin:0 0 6px">${meta}</div>
+    <div id="ai-diag-body" style="white-space:pre-wrap;max-height:55vh;overflow-y:auto;line-height:1.7;font-size:13px;border:1px solid var(--border);border-radius:8px;padding:10px 12px">${d && d.text ? esc(d.text) : '<span class="muted">まだ診断がありません。「診断を実行」を押してください。</span>'}</div>
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+      <button type="button" id="ai-diag-run" class="btn btn-primary" onclick="runAiDiag()">${d ? '再診断' : '診断を実行'}</button>
+    </div>`);
+}
+async function runAiDiag() {
+  const btn = document.getElementById('ai-diag-run'), body = document.getElementById('ai-diag-body');
+  if (btn) { btn.disabled = true; btn.textContent = '診断中…（10〜30秒）'; }
+  try {
+    const res = await fetch('/api/ai-diagnosis', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: aiDiagPayload() }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!d || !d.text) throw new Error((d && d.error) || '診断に失敗しました');
+    store.data.aiDiag = { at: new Date().toISOString(), text: d.text, model: d.model || null, _updatedAt: store._now() };
+    store.save();
+    if (body) body.textContent = d.text;
+    const m = document.getElementById('ai-diag-meta');
+    if (m) m.innerHTML = `<span class="muted" style="font-size:12px">診断日時: ${esc(store.data.aiDiag.at.slice(0, 16).replace('T', ' '))} ／ モデル: ${esc(d.model || '-')}${d.fellBack ? '（上位モデル混雑のため代替）' : ''}</span>`;
+    toast('AI相場診断が完了しました');
+  } catch (e) {
+    if (body) body.innerHTML = `<span class="neg">${esc((e && e.message) || String(e))}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '再診断'; }
+  }
 }
 
 // ダッシュボード用の簡易サイン表（本日「新規到達(新)」のみ。継続(続)は除外）

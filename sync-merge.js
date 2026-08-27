@@ -75,6 +75,7 @@
     newsTrans:       ['map', null],   // ニュース翻訳キャッシュ（記事リンク→{t,d,at}）。キー単位3-way・両在はlocal
     newsPrefs:       ['keyedTs'],     // ニュース表示設定（除外カテゴリ/開示種類）。キー単位3-way・同キー衝突時のみ _updatedAt の新しい方
     newsPool:        ['singleTs'],    // ニュース一覧の共有プール {items,at,prevAt,_updatedAt}。「更新」した端末の新しい方を採用
+    aiDiag:          ['singleTs'],    // AI相場診断の最新結果 {at,text,model,_updatedAt}。診断1回=1つの塊（スナップショット）なので singleTs＝実行した端末の新しい方を採用
     // 開示種別マスタ / YouTube購読チャンネル。以前は ['single'] だったが、既定値が自動シードされる
     // マスタなので「別端末で再シードされた既定値」が本物の登録内容を上書きして消える事故が起きた
     // （実際に登録済みのYouTubeチャンネルが消失）。行ごとの updatedAt ＋ 削除のトンボストン（deleted:true）で
