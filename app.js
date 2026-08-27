@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260827-1820';
+const APP_VERSION = 'v20260827-1826';
 
 'use strict';
 
@@ -1500,9 +1500,19 @@ const dsync = {
   },
   // 世代バックアップから復元（この端末を正本化＝基準点クリアで次回同期に反映）。
   // _lastSnap は敢えて更新しない＝復元後の状態が差分として検知され、次回同期でDriveへpushされる。
-  async restoreFromBackup(fileId) {
+  // scopeKeys（トップレベルキーの配列）を渡すと**部分復元**: 指定キーだけバックアップの内容に置き換え、
+  // それ以外は現在のまま残す。バックアップ時点に無かったキーは削除（＝その範囲を当時の状態に戻す。
+  // store.load() が既定値を再シードする）。省略時は従来どおり全体を置き換える。
+  async restoreFromBackup(fileId, scopeKeys) {
     const obj = JSON.parse(await this._readFile(fileId));
-    restoreBundle(obj);
+    if (!obj || typeof obj !== 'object') throw new Error('バックアップの形式が不正です');
+    if (!scopeKeys) { restoreBundle(obj); this._clearBase(); return; }
+    const merged = dataBundle(); // 現在の全データ（_colPrefs/_filterPresets 込みの浅いコピー）
+    for (const k of scopeKeys) {
+      if (k in obj) merged[k] = obj[k];
+      else delete merged[k];
+    }
+    restoreBundle(merged);
     this._clearBase();
   },
 };
@@ -1550,16 +1560,61 @@ async function openDriveBackups() {
     if (!files.length) { showModal('Driveのバックアップ', '<p class="muted">まだバックアップがありません。Drive自動同期がONなら、その日最初の同期時に自動作成されます。</p>'); return; }
     const rows = files.map((f) => `<div class="btn-row" style="justify-content:space-between;align-items:center;margin:8px 0;gap:12px">
         <span>🗂 ${esc(backupLabel(f))}</span>
-        <button class="btn" onclick="restoreDriveBackup('${esc(f.id)}','${esc(backupLabel(f))}')">この時点に復元</button>
+        <button class="btn" onclick="restoreDriveBackup('${esc(f.id)}','${esc(backupLabel(f))}')">この時点に復元…</button>
       </div>`).join('');
-    showModal('Driveのバックアップ（新しい順・最大5世代）', rows + '<p class="muted grp-note" style="margin-top:10px">復元すると現在のデータを選んだ世代で置き換えます（置き換え前に現データをJSONで自動ダウンロード）。</p>');
+    showModal('Driveのバックアップ（新しい順・最大5世代）', rows + '<p class="muted grp-note" style="margin-top:10px">世代を選ぶと、次の画面で復元する範囲（全部／設定だけ／銘柄だけ等）を選べます（実行前に現データをJSONで自動ダウンロード）。</p>');
   } catch (e) { showModal('Driveのバックアップ', '<p class="neg">読み込み失敗：' + esc(e && e.message || String(e)) + '</p>'); }
 }
-async function restoreDriveBackup(id, label) {
-  if (!confirm(`「${label}」の時点に復元します。現在のデータはこの世代で置き換わります。\n（置き換え前に現データをJSONで自動ダウンロードします）よろしいですか？`)) return;
+// ---------- バックアップの部分復元: 復元範囲の定義 ----------
+// dataBundle のトップレベルキーを利用者目線の6グループに分類。ここに無い新キーは部分復元では
+// 「現在のまま」残る（安全側）。新しいトップレベルキーを追加したら適切なグループへ登録すること。
+const RESTORE_SCOPES = [
+  { key: 'core',    label: '銘柄・保有・取引（本体データ）',
+    hint: '銘柄一覧・保有・取引履歴・取得円台帳・金額履歴・分析/シナリオ履歴',
+    keys: ['securities', 'holdings', 'transactions', 'acqLedger', 'amountHistory', 'amountSnapshots', 'analyses', 'priceScenarios', 'seq'] },
+  { key: 'masters', label: 'マスタ（ルール・カテゴリ・色・警告）',
+    hint: '買い増しルール・カテゴリ・投資カテゴリ・銘柄ラベル・背景色・格付け色・マトリックス設定・開示種別・YouTubeチャンネル・注目タグ・マクロ警告',
+    keys: ['rules', 'categories', 'investCategories', 'labelDefs', 'cfRules', 'grades', 'matrixBands', 'matrixSettings', 'discTypeDefs', 'ytChannels', 'newsTags', 'macroAlerts'] },
+  { key: 'settings', label: '設定（タブの並び・列設定・表示設定）',
+    hint: 'タブの並び順などの設定・表の列設定・フィルタ保存・ニュース/マクロの表示設定',
+    keys: ['settings', '_colPrefs', '_filterPresets', 'macroView', 'newsPrefs'] },
+  { key: 'cache',   label: '取得キャッシュ（株価・銘柄名・決算日）',
+    hint: '株価・銘柄情報・決算日・為替・指数・テクニカル分析・ランキング・マクロ系列（価格更新などで再取得できるもの）',
+    keys: ['prices', 'meta', 'earnings', 'fx', 'indices', 'techAnalysis', 'mktRanking', 'mktTopCap', 'macro', 'macroIdx',
+           'lastPriceUpdate', 'lastPriceSource', 'lastPriceSrcCounts', 'lastHighsDate', 'lastInfoDate', 'lastMacroDate', 'lastVideoCheck', 'lastPrevCloseAt', 'prevCloseVer'] },
+  { key: 'news',    label: 'ニュース・更新情報',
+    hint: '記事一覧のプール・既読・非表示・翻訳・更新情報フィード・動画要約',
+    keys: ['newsPool', 'newsRead', 'newsSeen', 'newsHidden', 'newsTrans', 'updates', 'updSeen', 'ytSummaries'] },
+  { key: 'imports', label: '取込関連（上場銘柄マスタ・取込設定）',
+    hint: 'JPX上場銘柄マスタ・列マッピング・変換マスタ・保存フォーマット・取込履歴',
+    keys: ['listedMaster', 'listedMasterInfo', 'importMappings', 'importAliases', 'importFormats', 'importHistory'] },
+];
+// 世代選択→復元範囲の選択モーダル（既定=全チェック。チェックした範囲だけバックアップの内容に置き換える）
+function restoreDriveBackup(id, label) {
+  const rows = RESTORE_SCOPES.map(s => `<label style="display:flex;gap:9px;align-items:flex-start;margin:8px 0;cursor:pointer">
+      <input type="checkbox" class="rs-scope" value="${s.key}" checked style="margin-top:3px">
+      <span><b>${esc(s.label)}</b><br><span class="muted" style="font-size:11px">${esc(s.hint)}</span></span>
+    </label>`).join('');
+  showModal('復元範囲の選択', `
+    <p>「${esc(label)}」の時点に戻す範囲を選んでください。<b>チェックした範囲だけ</b>がバックアップの内容に置き換わり、チェックしていない範囲は現在のまま残ります。</p>
+    ${rows}
+    <p class="muted grp-note">実行前に現在の全データをJSONで自動ダウンロードします。バックアップ時点に存在しなかった項目は、チェックした範囲内では初期状態に戻ります。</p>
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="openDriveBackups()">← 世代選択に戻る</button>
+      <button type="button" class="btn btn-primary" onclick="execRestoreDriveBackup('${esc(id)}','${esc(label)}')">この範囲で復元</button>
+    </div>`);
+}
+async function execRestoreDriveBackup(id, label) {
+  const sel = [...document.querySelectorAll('.rs-scope:checked')].map(el => el.value);
+  if (!sel.length) { toast('復元範囲を1つ以上選んでください'); return; }
+  const all = sel.length === RESTORE_SCOPES.length;
+  const scopes = RESTORE_SCOPES.filter(s => sel.includes(s.key));
+  const scopeNames = all ? 'すべて' : scopes.map(s => s.label.replace(/（.*/, '')).join('・');
+  if (!confirm(`「${label}」の時点に復元します。\n範囲: ${scopeNames}\n選んだ範囲の現在データはバックアップの内容で置き換わります。\n（実行前に現データをJSONで自動ダウンロードします）よろしいですか？`)) return;
   try { exportData(); } catch (_) { /* 失敗しても復元は続行 */ }
+  const keys = all ? null : scopes.flatMap(s => s.keys); // 全選択は従来の全体置換（未分類キーも含めて戻す）
   try {
-    await withBusy('バックアップから復元中…', () => dsync.restoreFromBackup(id), '復元しました');
+    await withBusy('バックアップから復元中…', () => dsync.restoreFromBackup(id, keys), '復元しました');
     closeModal(); render(); renderMaster();
   } catch (e) { toast('復元失敗: ' + (e && e.message || e), 5000); }
 }
@@ -15311,6 +15366,7 @@ window.importData = importData;
 window.resetData = resetData;
 window.openDriveBackups = openDriveBackups;
 window.restoreDriveBackup = restoreDriveBackup;
+window.execRestoreDriveBackup = execRestoreDriveBackup;
 window.resetTxnData = resetTxnData;
 window.excelExportGenerate = excelExportGenerate;
 window.excelExportCopy = excelExportCopy;
