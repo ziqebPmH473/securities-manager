@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-0121';
+const APP_VERSION = 'v20260828-0125';
 
 'use strict';
 
@@ -5150,6 +5150,8 @@ function aiDiagPayload() {
   //            株価が動くと古くなりAIを誤誘導する。買い時の妥当性はAIが現在のPER等から評価する。
   //   送る:    格付(rating)・★独自の強み(starStrength=Moat)・★リスク(starRisk)＝企業の質の評価（株価に連動しない）。
   //            評価日(analysisAsOf)を付けて鮮度を判断させる。分析メモ(note)も送る。
+  // ★リスクの向きに注意: このツールの★リスクは「★が多いほどリスクが低い（安全）」（2026-08-28 すみぽん明言）。
+  // 直感と逆なので、キー名を riskSafetyStars にしてプロンプトでも向きを明示している（AIが逆に読んで誤警告した実績あり）。
   const brief = (sec) => {
     const ev = calc.evaluate(sec);
     const meta = store.data.meta[priceKey(sec)] || {};
@@ -5176,8 +5178,8 @@ function aiDiagPayload() {
       sector: meta.sector || sec.sectorOverride || null,
       profile: (meta.summary || '').slice(0, 120) || null,             // 会社概要（株探）
       rating: sec.rating || null,
-      moatStars: sec.starStrength ?? null,                             // ★独自の強み（Moat・1〜5）
-      riskStars: sec.starRisk ?? null,                                 // ★リスク（1〜5）
+      moatStars: sec.starStrength ?? null,                             // ★独自の強み（Moat・1〜5。多いほど強い）
+      riskSafetyStars: sec.starRisk ?? null,                           // ★リスク（1〜5。★が多いほどリスクが「低い」＝安全。少ないほど危険）
       analysisAsOf: sec.analysisDate || null,                          // 格付・★を付けた分析日（鮮度判断用）
       priority: sec.priority ?? null,
       price,
