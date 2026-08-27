@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260827-1826';
+const APP_VERSION = 'v20260828-0018';
 
 'use strict';
 
@@ -458,6 +458,7 @@ const store = {
     this.data.analyses ||= [];        // 銘柄分析の履歴（securityId×評価日がキー。銘柄平置きは最新のミラー）
     this.data.priceScenarios ||= [];  // 株価シナリオ分析の履歴（securityId×分析日 scenarioDate がキー。平置きは最新のミラー）。同期対象（SCHEMA: records）
     this._migrateAnalyses();          // 後方互換: 平置きの分析を履歴へ1件起こす
+    this._normalizeDates();           // 日付項目の表記ゆれを YYYY-MM-DD へ正規化（並び替え崩れの自己修復）
     this.data.techAnalysis ||= {};    // テクニカル分析（チャートパターン）結果: priceKey→{lastAnalyzed,best,patterns,metrics,levels,history,_updatedAt}
     this.data.importHistory ||= [];   // 取込履歴
     this.data.lastPriceUpdate ||= null; // 価格更新日時
@@ -1022,6 +1023,42 @@ const store = {
       this.data.analyses.push(rec); added = true;
     }
     if (added) this.save();
+  },
+
+  // 日付項目の表記ゆれを YYYY-MM-DD へ正規化（起動時の自己修復。yyyy/m/d 等の混在で並び替えが崩れるため）。
+  // 履歴（analyses/priceScenarios）の日付は同期の自然キーなので、正規化先に同キー行があれば
+  // updatedAt の新しい方を残し、旧表記の行はトンボストン（deleted:true）で消す＝削除を他端末へ伝播。
+  _normalizeDates() {
+    const YMD = /^\d{4}-\d{2}-\d{2}$/;
+    const fix = (v) => { if (!v || typeof v !== 'string' || YMD.test(v)) return null; const n = normDate(v); return (n && n !== v) ? n : null; };
+    let changed = false;
+    for (const s of this.data.securities || []) {
+      let ch = false;
+      for (const k of ['prevBuyDate', 'analysisDate', 'scenarioDate']) { const n = fix(s[k]); if (n) { s[k] = n; ch = true; } }
+      if (ch) { s.updatedAt = this._now(); changed = true; }
+    }
+    const normHist = (arr, key) => {
+      for (const r of arr || []) {
+        if (r.deleted) continue;
+        const n = fix(r[key]);
+        if (!n) continue;
+        changed = true;
+        const other = arr.find(x => x !== r && !x.deleted && x.securityId === r.securityId && x[key] === n);
+        if (other) {
+          // 正規化後の日付に既存行あり: 新しい方の内容を残して旧表記の行を消す
+          if ((r.updatedAt || '') > (other.updatedAt || '')) {
+            const keep = { id: other.id, securityId: other.securityId, createdAt: other.createdAt };
+            Object.assign(other, r, keep, { [key]: n });
+          }
+          r.deleted = true; r.updatedAt = this._now();
+        } else {
+          r[key] = n; r.updatedAt = this._now();
+        }
+      }
+    };
+    normHist(this.data.analyses, 'analysisDate');
+    normHist(this.data.priceScenarios, 'scenarioDate');
+    if (changed) this.save();
   },
 
   // ===== 株価シナリオ分析の履歴（priceScenarios） =====
@@ -12897,9 +12934,10 @@ async function reportImport(touched, baseMsg) {
 
 function normDate(v) {
   if (!v) return null;
-  // "2026-01-27 00:00:00" → "2026-01-27"、"2026/1/27" → "2026-01-27"
-  const m = String(v).match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  // "2026-01-27 00:00:00" → "2026-01-27"、"2026/1/27"・"2026.1.27"・"2026年1月27日" → "2026-01-27"
+  const m = String(v).match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
   if (!m) return null;
+  if (+m[2] < 1 || +m[2] > 12 || +m[3] < 1 || +m[3] > 31) return null; // 不正な月日は日付として扱わない
   return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
 }
 
@@ -13230,7 +13268,7 @@ function parseGeneric(text) {
     // 銘柄属性（ヘッダにある列のみ）。分析結果は含めない
     const sec = {};
     if ('prevBuyPrice' in rec) sec.prevBuyPrice = numClean(rec.prevBuyPrice);
-    if ('prevBuyDate' in rec) sec.prevBuyDate = rec.prevBuyDate || null;
+    if ('prevBuyDate' in rec) sec.prevBuyDate = normDate(rec.prevBuyDate); // 日付は YYYY-MM-DD へ正規化（表記混在で並び替えが崩れるため）
     if ('detailType' in rec) sec.detailType = /ETF|ＥＴＦ/i.test(rec.detailType) ? 'ETF' : (rec.detailType || null);
     if ('fixedBuyPrice' in rec) sec.fixedBuyPrice = numClean(rec.fixedBuyPrice);
     if ('addonFromHigh' in rec) sec.addonFromHigh = /初回|^1$|true|yes|○|有/i.test(rec.addonFromHigh);
@@ -13899,7 +13937,8 @@ function giParseValue(field, raw) {
       return numClean(v);
     // 株価シナリオ: レンジは「1000~1500」へ正規化。分析日は日付正規化（履歴の自然キーになるため表記を揃える）
     case 'stBear': case 'stBase': case 'stBull': case 'mtBear': case 'mtBase': case 'mtBull': return scNormRange(v);
-    case 'scenarioDate': return normDate(v);
+    // 日付項目は取込時に YYYY-MM-DD へ正規化して保持（yyyy/m/d 等の混在で並び替えが崩れるのを防ぐ）
+    case 'scenarioDate': case 'prevBuyDate': case 'analysisDate': return normDate(v);
     case 'principalSold': return /売却|済|^1$|true|yes|○|有/i.test(v);
     case 'buyCount': case 'priority': { const n = parseInt(v, 10); return isNaN(n) ? null : n; }
     // ★評価は分析取込と同じ parseStars で「5」「★5」「★★★★★」いずれも数値化
