@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260829-0130';
+const APP_VERSION = 'v20260829-0136';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -1301,19 +1301,35 @@ const GUARDED_APIS = ['/api/price', '/api/news', '/api/macro', '/api/estat',
                       '/api/translate', '/api/ai-diagnosis', '/api/youtube-summary'];
 (() => {
   const orig = window.fetch.bind(window);
+  const guardedPath = (input) => {
+    const raw = typeof input === 'string' ? input : (input && input.url) || '';
+    let path = '';
+    if (raw.startsWith('/')) path = raw.split('?')[0];
+    else if (raw.startsWith(location.origin)) path = new URL(raw).pathname;
+    return (path && GUARDED_APIS.includes(path)) ? path : '';
+  };
+  const withAuth = (input, init) => {
+    if (!gsync._token) return init;
+    const h = new Headers((init && init.headers) || (typeof input === 'object' && input && input.headers) || {});
+    h.set('Authorization', 'Bearer ' + gsync._token);
+    return Object.assign({}, init, { headers: h });
+  };
   window.fetch = function (input, init) {
-    try {
-      const raw = typeof input === 'string' ? input : (input && input.url) || '';
-      let path = '';
-      if (raw.startsWith('/')) path = raw.split('?')[0];
-      else if (raw.startsWith(location.origin)) path = new URL(raw).pathname;
-      if (path && GUARDED_APIS.includes(path) && gsync._token) {
-        const h = new Headers((init && init.headers) || (typeof input === 'object' && input && input.headers) || {});
-        if (!h.has('authorization')) h.set('Authorization', 'Bearer ' + gsync._token);
-        init = Object.assign({}, init, { headers: h });
-      }
-    } catch (_) { /* 付与に失敗しても素の fetch は通す */ }
-    return orig(input, init);
+    let guarded = '';
+    try { guarded = guardedPath(input); } catch (_) { /* 判定に失敗しても素の fetch は通す */ }
+    if (!guarded) return orig(input, init);
+    const had = !!gsync._token;   // 送信時点でトークンを持っていたか
+    return orig(input, withAuth(input, init)).then(async (res) => {
+      // トークン失効（約1時間）で401になった場合だけ、取り直して1回だけやり直す。
+      // ★未ログイン（トークン無し）では refresh() を呼ばないこと。GISの無音更新は
+      //   セッションが切れているとGoogleのアカウント選択ポップアップを開いてしまい、
+      //   価格取得のたびにログイン画面が出る（localhost検証で実際に発生）。
+      if (res.status !== 401 || !had) return res;
+      let ok = false;
+      try { ok = await gsync.refresh(); } catch (_) { ok = false; }   // 同時多発でも内部で1本にまとまる
+      if (!ok) return res;
+      return await orig(input, withAuth(input, init));   // 再試行は orig 直呼び＝無限ループしない
+    });
   };
 })();
 
@@ -2628,11 +2644,18 @@ const api = {
   async dailyStartup() {
     if (store.data.securities.every(s => !s.ticker)) return;
     if (store.data.lastInfoDate === today()) return; // 本日実行済み
-    store.data.lastInfoDate = today(); store.save();
-    await this.refreshAll({ withHighs: true }); // 日次は高値（52週/5年）も取得。価格＋名前未取得分
-    await this.refreshMeta();             // 全銘柄の名前/セクター/業種/ファンダを日次更新（日本語名は維持）
+    // ★価格APIはログイン必須（api-guard）。保存トークンが失効していると復元が非同期になるため、
+    //   待たずに走らせると全件401になり、その日のファンダ（PER/PBR等）が丸ごと取れない。
+    try { await window._sessionReady; } catch (_) {}
+    try {
+      await this.refreshAll({ withHighs: true }); // 日次は高値（52週/5年）も取得。価格＋名前未取得分
+      await this.refreshMeta();             // 全銘柄の名前/セクター/業種/ファンダを日次更新（日本語名は維持）
+      // ★成功してから「本日実行済み」を立てる。先に立てると、一度失敗しただけでその日は
+      //   二度と取りに行かず、PER/PBRが空のまま1日固定される（実際に発生）。
+      store.data.lastInfoDate = today(); store.save();
+    } catch (_) { /* 失敗時は lastInfoDate を立てない＝次回の起動で再挑戦する */ }
     try { await this.refreshCompany(); } catch (_) {}  // 会社概要は未取得の銘柄だけ（既に持っていれば0リクエスト）
-    await this.checkSplits();             // 分割検知（承認待ちは「分割」タブのバッジで通知）
+    try { await this.checkSplits(); } catch (_) {}     // 分割検知（承認待ちは「分割」タブのバッジで通知）
     render();
   },
 
@@ -7087,6 +7110,7 @@ function updNoteVideos(items) {
 // ★マクロと動画は**並列**に走らせること。直列(await)にすると、マクロの取得が遅い時に
 //   動画の確認が始まらない（実測: ローカルでFREDに繋がらず90秒以上ブロックされ、動画が取れなかった）。
 async function updDailyCheck(manual) {
+  try { await window._sessionReady; } catch (_) {}   // /api/macro・/api/estat はログイン必須
   const done = () => { if (currentView === 'dashboard') render(); else renderNav(); };  // NEWバッジだけは即反映
   const jobs = [];
   // マクロは日付ガードのまま（月次・四半期・週次の指標が1日に何度も変わることはない）。
@@ -15894,7 +15918,10 @@ try { const v = sessionStorage.getItem('sm_view'); if (v && PAGE_TITLE[v]) curre
 // ログイン復元は localStorage の保存トークンだけで完結し、サーバー設定への通信を必要としない。
 // loadServerConfig を待たず render の前に即実行＝最初の描画から「ログイン中」を反映し、
 // 「ログイン済みなのに未ログイン表示」を防ぐ（保存トークンがあれば path① が同期的に _token を確定）。
-gsync.restoreSession().catch(() => {});
+// ★保護APIを叩く起動処理は、この Promise を待ってから走らせること。
+//   保存トークンが失効している場合、復元は非同期（サイレント再取得）になるため、
+//   待たずに /api/price を叩くと未ログイン扱いで401になる。
+window._sessionReady = gsync.restoreSession().catch(() => false);
 render();
 // 1日1回（起動時）だけ銘柄名・セクター・業種・高値を更新
 api.dailyStartup();
