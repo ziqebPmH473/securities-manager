@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-2315';
+const APP_VERSION = 'v20260828-2324';
 
 'use strict';
 
@@ -2671,7 +2671,17 @@ let holdingsMarket = 'US';
 let dashMoverMarket = 'ALL';
 // renderDashboard を直に呼ぶ＝render() を通らないので scheduleFit() が走らない。
 // 付け忘れると再描画で max-height が消え、更新情報の枠が広がってページがスクロールする（実際に発生）。
-function setDashMoverMarket(m) { dashMoverMarket = m; renderDashboard(); scheduleFit(); }
+function setDashMoverMarket(m) {
+  // 更新情報は枠内スクロールなので、再描画で位置が先頭に戻ると読んでいた場所を見失う。
+  // 市場の切替は更新情報とは無関係なので、スクロール位置を持ち越す。
+  const prev = document.getElementById('upd-feed-list');
+  const top = prev ? prev.scrollTop : 0;
+  dashMoverMarket = m;
+  renderDashboard();
+  scheduleFit();   // max-height の付け直し（これが無いと枠が広がる）
+  const el = document.getElementById('upd-feed-list');
+  if (el && top) el.scrollTop = top;   // 高さ確定後に戻す（scheduleFit の後）
+}
 // 一覧のコード/銘柄名フリーワード検索
 let holdingsSearch = '';
 // IME変換中フラグ。変換確定前は再描画しない（変換が中断され文字が末尾にしか入らない問題の対策・SEC-112）
@@ -7012,12 +7022,20 @@ function updNoteVideos(items) {
   for (const v of items || []) {
     if (!v || !v.videoId) continue;
     const key = 'video:' + v.videoId;
-    if ((store.data.updates || []).some(r => r.key === key)) continue;   // 既に積んである
+    const exist = (store.data.updates || []).find(r => r.key === key);
+    if (exist) {
+      // 既に積んである。pubAt を持たない旧レコードだけ、実公開日時を後から補う（09:00表示の是正）
+      if (!exist.pubAt && v.pubDate) exist.pubAt = v.pubDate;
+      continue;
+    }
     updPush({
       kind: 'video', key,
       title: v.title || '(無題の動画)',
       sub: [v.source || 'YouTube', (v.pubDate || '').slice(0, 10)].filter(Boolean).join(' ・ '),
       date: (v.pubDate || '').slice(0, 10),
+      // 表示用の実公開日時。date は 'YYYY-MM-DD' で並び順のキー(updSortKey)に使うため形を変えられないが、
+      // それだけだと new Date('2026-08-28') が UTC 0時と解釈され、JSTでは**全件 09:00**になる（実際に発生）。
+      pubAt: v.pubDate || null,
       // ★並び順(at)は「気づいた時刻」で統一する。動画だけ公開日時にすると、経済指標(検知時刻)と
       //   時計が混ざって、新着動画が古い扱いで一覧の下に沈む（実測で先頭12件に出てこなかった）。
       link: v.link, videoId: v.videoId,
@@ -7095,10 +7113,14 @@ function updFeedHtml() {
 // 一覧の右に出す日付。並び順と揃えるため**出来事の日付(date)**を優先する
 // （at＝気づいた時刻を出すと、7月分のCPIが「13:05」と表示されて時系列に見えない）
 function updWhen(r) {
-  const t = r.date || r.at; if (!t) return '';
+  // pubAt（実公開日時）を最優先。無ければ date/at。
+  const t = r.pubAt || r.date || r.at; if (!t) return '';
+  // 'YYYY-MM-DD' は UTC 0時と解釈されるため、時刻として出すと JST で必ず 09:00 になる。
+  // 時刻が分からない値では時刻を出さない（過去に動画が全件 09:00 表示になった）。
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(t));
   try {
     const d = new Date(t), now = Date.now(), diff = (now - d.getTime()) / 86400000;
-    if (diff < 1) return d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    if (diff < 1) return dateOnly ? '今日' : d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     if (diff < 7) return Math.floor(diff) + '日前';
     return d.toLocaleDateString('ja-JP', { month: '2-digit', day: '2-digit' });
   } catch (_) { return ''; }
@@ -7128,7 +7150,7 @@ function updOpen(key) {
       // 直接パネルを開く。勝手に外部タブは開かない（ポップアップ扱いで塞がれるうえ不意に別サイトが開く）。
       // プールに無くても、更新情報の記録だけで動画パネルは開ける（起動時の裏取得はプールに入れないため）
       const it = ((typeof newsFindItem === 'function' && r.link) ? newsFindItem(r.link) : null)
-        || (r.videoId ? { title: r.title, link: r.link, videoId: r.videoId, source: (r.sub || '').split(' ・ ')[0] || 'YouTube', pubDate: r.date, cat: 'video' } : null);
+        || (r.videoId ? { title: r.title, link: r.link, videoId: r.videoId, source: (r.sub || '').split(' ・ ')[0] || 'YouTube', pubDate: r.pubAt || r.date, cat: 'video' } : null);
       if (it) {
         store.data.newsRead ||= {}; store.data.newsRead[r.link] = new Date().toISOString(); store.save();
         if (it.cat === 'video' && typeof openVideoPanel === 'function') openVideoPanel(it);
