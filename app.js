@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-2309';
+const APP_VERSION = 'v20260828-2315';
 
 'use strict';
 
@@ -2669,7 +2669,9 @@ let currentView = 'dashboard';
 let holdingsMarket = 'US';
 // ダッシュボードの値動きTopの市場フィルタ
 let dashMoverMarket = 'ALL';
-function setDashMoverMarket(m) { dashMoverMarket = m; renderDashboard(); }
+// renderDashboard を直に呼ぶ＝render() を通らないので scheduleFit() が走らない。
+// 付け忘れると再描画で max-height が消え、更新情報の枠が広がってページがスクロールする（実際に発生）。
+function setDashMoverMarket(m) { dashMoverMarket = m; renderDashboard(); scheduleFit(); }
 // 一覧のコード/銘柄名フリーワード検索
 let holdingsSearch = '';
 // IME変換中フラグ。変換確定前は再描画しない（変換が中断され文字が末尾にしか入らない問題の対策・SEC-112）
@@ -6118,6 +6120,39 @@ function newsPoolStore(items, at) {
   _newsCache = null; newsPoolCache(); // 表示用キャッシュを作り直し（動画のサムネ・要約を復元した状態で）
   store.save();
 }
+// 裏取得（updVideoCheck）で拾った購読YouTubeの新着を、ニュース一覧のプールにも足す。
+// （2026-08-28 すみぽん要望: 動画は毎回取っているのにニュースタブに増えないのを直す）
+// ★newsPoolStore と違い **at / prevAt は動かさない**。ここを更新すると○の色の基準がずれ、
+//   既存の記事が一斉に「新着」扱いに戻る。ニュース記事は取りに行かないので増えるのは動画だけ。
+// 戻り値: 実際に増えたら true。
+function newsPoolMergeVideos(vids) {
+  const list = (vids || []).filter(v => v && v.link);
+  if (!list.length) return false;
+  const prev = store.data.newsPool;
+  const at = (prev && prev.at) || new Date().toISOString();   // プールが空なら今回を初回バッチにする
+  const have = new Set(((prev && prev.items) || []).map(it => it.link));
+  const fresh = list.filter(v => !have.has(v.link));
+  if (!fresh.length) return false;
+  for (const v of fresh) v.batch = at;   // 最新バッチ扱い＝一覧で新着の色になる
+  // 保存形のスリム化は newsPoolStore と同じ（サムネ=IDから再構成 / 要約=ytSummaries から復元）
+  const slim = (it) => {
+    const o = { ...it };
+    delete o.thumb;
+    if (o.videoId) delete o.desc;
+    if (typeof o.desc === 'string' && o.desc.length > 800) o.desc = o.desc.slice(0, 800);
+    return o;
+  };
+  let keep = ((prev && prev.items) || []).concat(fresh.map(slim))
+    .sort((a, b) => (b.pubDate || '') < (a.pubDate || '') ? -1 : 1)
+    .slice(0, 200);
+  let json = JSON.stringify(keep);
+  while (json.length > 200000 && keep.length > 50) { keep = keep.slice(0, Math.floor(keep.length / 2)); json = JSON.stringify(keep); }
+  // _updatedAt は「今」。sync-merge の newsPool は singleTs（新しい方まるごと採用）なので、
+  // ここを更新しないと他端末のプールに上書きされて増分が消える。
+  store.data.newsPool = { items: keep, at, prevAt: (prev && prev.prevAt) || null, _updatedAt: store._now() };
+  _newsCache = null; newsPoolCache();
+  return true;
+}
 // 記事クリック時: 既読を記録（再描画はしない＝リンクを開く動作を妨げず、クラスだけ落とす）。
 // リンクは data-link 属性から読む（タブ一覧・銘柄詳細ドロワーの両方で共用）
 function newsReadLink(el) {
@@ -7027,8 +7062,13 @@ async function updVideoCheck(force) {
   }
   const vids = await _newsVideos();
   store.data.lastVideoCheck = store._now();
-  if (vids && vids.length) updNoteVideos(vids);
+  let added = false;
+  if (vids && vids.length) {
+    updNoteVideos(vids);                       // 更新情報フィード（NEWバッジ・ダッシュボード）
+    added = newsPoolMergeVideos(vids);         // ニュース一覧にも動画だけ追加
+  }
   store.save();
+  if (added && currentView === 'news') renderNews();   // ニュースタブを開いたまま増えた分を反映
 }
 
 // ---- ダッシュボードの「更新情報」 ----
