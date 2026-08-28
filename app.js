@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-2335';
+const APP_VERSION = 'v20260829-0130';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -6635,6 +6635,18 @@ function initNewsDragScroll() {
   if (_newsDragScrollInit) return; _newsDragScrollInit = true;
   const SEL = '.news-wrap, .sec-news-scroll';
   let ds = null;
+  // ドラッグ状態の後始末。drag-scrolling が残ると cursor:grabbing と user-select:none が
+  // 貼り付いたままになり「カーソルが矢印に戻らない」状態になる。
+  // 要素が再描画で差し替わっている場合もあるので、クラスは**画面全体から**外す。
+  const endDrag = (suppressClick) => {
+    const cur = ds; ds = null;
+    document.querySelectorAll('.drag-scrolling').forEach(el => el.classList.remove('drag-scrolling'));
+    if (!cur || !cur.moved || !suppressClick) return;
+    const w = cur.w;
+    const sup = ev => { ev.preventDefault(); ev.stopPropagation(); w.removeEventListener('click', sup, true); };
+    w.addEventListener('click', sup, true);            // ドラッグ直後のクリック（リンク遷移）を1回だけ抑止
+    setTimeout(() => w.removeEventListener('click', sup, true), 60);
+  };
   document.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
     const w = e.target.closest(SEL); if (!w) return;
@@ -6642,19 +6654,18 @@ function initNewsDragScroll() {
   });
   document.addEventListener('mousemove', e => {
     if (!ds) return;
+    // ★ウィンドウの外でボタンを離すと mouseup が document に来ない（実際に発生）。
+    //   戻ってきた最初の移動でボタンが押されていなければ、離されたものとして終了する。
+    if (e.buttons === 0) { endDrag(false); return; }
     const dy = e.pageY - ds.y;
     if (!ds.moved && Math.abs(dy) > 4) { ds.moved = true; ds.w.classList.add('drag-scrolling'); }
     if (ds.moved) { ds.w.scrollTop = ds.top - dy; e.preventDefault(); }
   });
-  document.addEventListener('mouseup', () => {
-    if (!ds) return;
-    const w = ds.w, moved = ds.moved; ds = null;
-    if (!moved) return;
-    w.classList.remove('drag-scrolling');
-    const sup = ev => { ev.preventDefault(); ev.stopPropagation(); w.removeEventListener('click', sup, true); };
-    w.addEventListener('click', sup, true);            // ドラッグ直後のクリック（リンク遷移）を1回だけ抑止
-    setTimeout(() => w.removeEventListener('click', sup, true), 60);
-  });
+  document.addEventListener('mouseup', () => endDrag(true));
+  // ウィンドウ外での離上・alt+tab・別タブへの切替でも確実に解除する
+  window.addEventListener('blur', () => endDrag(false));
+  document.addEventListener('pointercancel', () => endDrag(false));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(false); });
 }
 
 // 記事の判定対象テキスト＝見出し＋本文(要約)。本文が取れるフィード（NHK/東洋経済/ダイヤ/ブルームバーグ等）
