@@ -11,7 +11,28 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-2324';
+const APP_VERSION = 'v20260828-2335';
+
+// ===== 日時は全部「日本時間(JST)」でそろえる =====
+// 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
+// toISOString() は UTC で、どちらもJST以外の環境や 00:00〜09:00 JST の時間帯でズレる。
+// ※トップレベルの初期化（reportYear 等）からも呼ぶのでファイル先頭に置くこと。
+const JST_TZ = 'Asia/Tokyo';
+const _jstFmt = new Intl.DateTimeFormat('ja-JP', {
+  timeZone: JST_TZ, hourCycle: 'h23',
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+// 日本時間の年月日時分秒（数値）
+function jstParts(d = new Date()) {
+  const p = _jstFmt.formatToParts(d);
+  const g = (t) => +((p.find(x => x.type === t) || {}).value || 0);
+  return { y: g('year'), m: g('month'), d: g('day'), h: g('hour'), mi: g('minute'), s: g('second') };
+}
+// 日本時間の 'YYYY-MM-DD'
+function jstYmd(d = new Date()) {
+  const t = jstParts(d), z = (n) => String(n).padStart(2, '0');
+  return `${t.y}-${z(t.m)}-${z(t.d)}`;
+}
 
 'use strict';
 
@@ -1521,8 +1542,8 @@ const dsync = {
   _backupDay() { try { return localStorage.getItem('sm_backup_day'); } catch (_) { return null; } },
   _setBackupDay(d) { try { localStorage.setItem('sm_backup_day', d); } catch (_) {} },
   _backupFileName() {
-    const d = new Date(), p = (n) => String(n).padStart(2, '0');
-    return `backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.json`;
+    const t = jstParts(), p = (n) => String(n).padStart(2, '0');   // ファイル名もJST
+    return `backup-${t.y}${p(t.m)}${p(t.d)}-${p(t.h)}${p(t.mi)}${p(t.s)}.json`;
   },
   async _createBackupFile(folderId, name, content) {
     const boundary = 'smb' + Math.random().toString(36).slice(2);
@@ -2007,7 +2028,7 @@ function priceKey(sec) { return `${sec.market}:${sec.ticker}`; }
 function earnOf(sec) { return (store.data.earnings && store.data.earnings[priceKey(sec)]) || null; }
 function _ymd(d) { const y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate(); return `${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`; }
 function _parseYmd(s) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; }
-function _todayYmd() { const d = new Date(); return _ymd(d); }
+function _todayYmd() { return jstYmd(); }   // JSTの暦日
 function _addMonths(ymd, n) { const d = _parseYmd(ymd); if (!d) return null; d.setMonth(d.getMonth() + n); return _ymd(d); }
 function _diffDays(a, b) { const da = _parseYmd(a), db = _parseYmd(b); if (!da || !db) return null; return Math.round((db - da) / 86400000); }
 function fmtEarnMD(ymd) { const d = _parseYmd(ymd); return d ? `${d.getMonth() + 1}/${d.getDate()}` : ''; }   // 8/6
@@ -2046,8 +2067,8 @@ function earnInfo(sec) {
 // 銘柄名の横／上部に出すラベル。近い決算・直近発表のときだけ返す（無ければ null）。
 //   { text, cls, sub }  cls: earn-soon(予定) / earn-done(発表) / earn-est(ごろ)
 // 前営業日・翌営業日（土日をスキップ。祝日は考慮しない簡易版）
-function _prevBizYmd() { const d = new Date(); d.setDate(d.getDate() - 1); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1); return _ymd(d); }
-function _nextBizYmd() { const d = new Date(); d.setDate(d.getDate() + 1); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1); return _ymd(d); }
+function _prevBizYmd() { const d = _parseYmd(jstYmd()); d.setDate(d.getDate() - 1); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1); return _ymd(d); }
+function _nextBizYmd() { const d = _parseYmd(jstYmd()); d.setDate(d.getDate() + 1); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1); return _ymd(d); }
 function earnLabel(sec) {
   const info = earnInfo(sec); if (!info) return null;
   const today = _todayYmd();
@@ -5476,19 +5497,19 @@ function importStatusHtml() {
 // ---------- レポート（SEC-17） ----------
 // 取引サマリーの期間: 'all'=全期間 / 'year'=年別（年指定）/ 'month'=月別（年＋月指定）
 let reportPeriod = 'all';
-let reportYear = new Date().getFullYear();       // 年別・月別で対象の年
-let reportMonthNum = new Date().getMonth() + 1;  // 月別で対象の月(1-12)
+let reportYear = jstParts().y;        // 年別・月別で対象の年（JST）
+let reportMonthNum = jstParts().m;    // 月別で対象の月(1-12・JST）
 // 取引サマリーの絞り込み（汎用フィルタ）。市場・銘柄ラベルで金額/件数/一覧を絞る（他の扱いは不変）。
 let txnFilter = { market: 'ALL', labels: [], labelMode: 'exclude' }; // labelMode: 'exclude'=選択ラベルを除外 / 'include'=選択ラベルのみ
 function refreshTxnSection() { const el = document.getElementById('txn-section'); if (el) el.innerHTML = txnSummaryHtml(); else renderReport(); scheduleFit(); }
 function setReportPeriod(p) { reportPeriod = p; refreshTxnSection(); }
-function setReportYear(y) { reportYear = parseInt(y, 10) || new Date().getFullYear(); refreshTxnSection(); }
-function setReportMonthNum(m) { reportMonthNum = parseInt(m, 10) || (new Date().getMonth() + 1); refreshTxnSection(); }
+function setReportYear(y) { reportYear = parseInt(y, 10) || jstParts().y; refreshTxnSection(); }
+function setReportMonthNum(m) { reportMonthNum = parseInt(m, 10) || jstParts().m; refreshTxnSection(); }
 // 取引データに存在する年の一覧（降順）。無ければ今年のみ。年・月プルダウンの選択肢に使う。
 function txnYears() {
   const set = new Set();
   for (const t of store.data.transactions) { const y = (t.tradedAt || '').slice(0, 4); if (/^\d{4}$/.test(y)) set.add(+y); }
-  set.add(new Date().getFullYear());
+  set.add(jstParts().y);
   return [...set].sort((a, b) => b - a);
 }
 // レポート内タブ: 'assets'=資産集計 / 'txn'=取引サマリー / 'matrix'=分布マトリックス
@@ -5595,7 +5616,7 @@ function setMktSub(s) { mktState.sub = s; renderMarketTab(); }
 function setMktKind(k) { mktState.kind = k; renderMarketTab(); }
 function mktRefresh() { loadRanking(true); }
 function mktAbbr(n) { if (n == null) return '—'; const a = Math.abs(n); if (a >= 1e12) return (n / 1e12).toFixed(2) + '兆'; if (a >= 1e8) return (n / 1e8).toFixed(1) + '億'; if (a >= 1e6) return (n / 1e6).toFixed(0) + 'M'; return Number(n).toLocaleString('ja-JP'); }
-function mktFetchedAt(ts) { try { return new Date(ts).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } }
+function mktFetchedAt(ts) { try { return new Date(ts).toLocaleString('ja-JP', { timeZone: JST_TZ, hourCycle: 'h23', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } }
 function mktKabutan(code, market) { return market === 'US' ? `https://us.kabutan.jp/stocks/${encodeURIComponent(code)}/chart` : `https://kabutan.jp/stock/chart?code=${encodeURIComponent(code)}`; }
 function mktFindSec(code, market) { return store.data.securities.find(s => s.market === market && (s.ticker || '').toUpperCase() === String(code).toUpperCase()); }
 function mktClickName(code, market) { const s = mktFindSec(code, market); if (s) openSecurityDetail(s.id); else window.open(mktKabutan(code, market), '_blank'); }
@@ -6210,7 +6231,7 @@ function newsOpenArticle(ev, el) {
     : (descPending ? '<span class="muted">翻訳中…</span>' : '<span class="muted">この記事は要約が配信されていません。元記事でご確認ください。</span>');
   const body = `
     <div class="news-panel">
-      <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>${isEn ? `<span class="news-trans-badge">${hasTransTitle ? '自動翻訳' : 'EN'}</span>` : ''}</div>
+      <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { timeZone: JST_TZ, hourCycle: 'h23', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>${isEn ? `<span class="news-trans-badge">${hasTransTitle ? '自動翻訳' : 'EN'}</span>` : ''}</div>
       <h3 class="np-title">${esc(jaTitle)}</h3>
       ${hasTransTitle ? `<div class="np-orig muted">原題: ${esc(it.title)}</div>` : ''}
       ${chips ? `<div class="np-chips">${chips}</div>` : ''}
@@ -6243,7 +6264,7 @@ function openVideoPanel(it) {
   const headline = (has && cached.headline) ? cached.headline : it.title;
   const body = `
     <div class="news-panel">
-      <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span><span class="news-cat">動画</span></div>
+      <div class="np-meta"><span>${esc(it.source || '')}</span><span>${it.pubDate ? new Date(it.pubDate).toLocaleString('ja-JP', { timeZone: JST_TZ, hourCycle: 'h23', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span><span class="news-cat">動画</span></div>
       <h3 class="np-title" id="np-video-headline">${esc(headline)}</h3>
       <div class="np-orig muted">動画タイトル: ${esc(it.title)}</div>
       ${chips ? `<div class="np-chips">${chips}</div>` : ''}
@@ -6756,7 +6777,8 @@ function newsTime(iso) {
   const diff = Date.now() - d.getTime();
   if (diff < 3600 * 1000) return Math.max(1, Math.floor(diff / 60000)) + '分前';
   if (diff < 24 * 3600 * 1000) return Math.floor(diff / 3600000) + '時間前';
-  return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  const t = jstParts(d);
+  return t.m + '/' + t.d + ' ' + String(t.h).padStart(2, '0') + ':' + String(t.mi).padStart(2, '0');
 }
 // 記事1行のHTML。opts.mini=銘柄詳細ドロワー用（カテゴリ・銘柄チップなし）
 function newsItemHtml(it, read, matches, opts = {}) {
@@ -7120,9 +7142,9 @@ function updWhen(r) {
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(t));
   try {
     const d = new Date(t), now = Date.now(), diff = (now - d.getTime()) / 86400000;
-    if (diff < 1) return dateOnly ? '今日' : d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    if (diff < 1) return dateOnly ? '今日' : d.toLocaleTimeString('ja-JP', { timeZone: JST_TZ, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' });
     if (diff < 7) return Math.floor(diff) + '日前';
-    return d.toLocaleDateString('ja-JP', { month: '2-digit', day: '2-digit' });
+    return d.toLocaleDateString('ja-JP', { timeZone: JST_TZ, month: '2-digit', day: '2-digit' });
   } catch (_) { return ''; }
 }
 // クリック: その指標／その動画へ遷移し、その1件を既読にする
@@ -8650,8 +8672,8 @@ function periodComparison(ax) {
   let b = chosen[keyOf];
   if (ax === 'category' && (!b || !Object.keys(b).length) && chosen.byMarketType) { b = {}; for (const k in chosen.byMarketType) { const e = /ETF$/.test(k) ? 'ETF' : 'その他'; b[e] = (b[e] || 0) + chosen.byMarketType[k]; } }
   const nb = {}; for (const k in (b || {})) { const nk = k.replace(/・個別$/, '・個別株'); nb[nk] = (nb[nk] || 0) + b[k]; }
-  const dt = new Date(Date.parse(chosen.date));
-  return { label: `${dt.getFullYear()}/${dt.getMonth() + 1}比`, past: nb, total: chosen.totalJpy || 0 };
+  const dt = jstParts(new Date(Date.parse(chosen.date)));
+  return { label: `${dt.y}/${dt.m}比`, past: nb, total: chosen.totalJpy || 0 };
 }
 function renderAssetTable() {
   const el = document.getElementById('asset-table'); if (!el) return;
@@ -9359,7 +9381,7 @@ function openListedMaster() {
   const curCount = listedMasterCount();
   const info = store.data.listedMasterInfo || {};
   const dateStr = fmtListedDate(info.date);
-  const impStr = info.importedAt ? new Date(info.importedAt).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  const impStr = info.importedAt ? new Date(info.importedAt).toLocaleString('ja-JP', { timeZone: JST_TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
   const curLine = curCount
     ? `現在の登録: <b>${curCount.toLocaleString('ja-JP')} 銘柄</b>${dateStr ? ` ・ <b>${dateStr}</b> 時点のデータ` : ''}${impStr ? ` <span class="muted">（${impStr} 取込）</span>` : ''}`
     : '現在の登録: <b>未登録</b>';
@@ -10823,7 +10845,7 @@ function googleSyncSection() {
       <p class="muted" style="margin:0 0 8px">ONにすると、ログイン中は約25秒ごと＋タブ離脱時に自動マージ同期します。トークンが切れてもセッションが有効なら<strong>自動でログインを延長</strong>（ポップアップ無し）。初回はログイン直後に同期します。手動でのバックアップは「バックアップ・出力」のJSON書出し/読込をご利用ください。</p>
       <div class="form-actions" style="justify-content:flex-start">
         <button type="button" class="btn" onclick="dsyncNow()" ${configured ? '' : 'disabled'}>今すぐDrive同期</button>
-        <span id="dsync-status" class="muted" style="font-size:12px;align-self:center">${dsync.syncedAt() ? '最終同期: ' + new Date(dsync.syncedAt()).toLocaleString('ja-JP') : '未同期'}</span>
+        <span id="dsync-status" class="muted" style="font-size:12px;align-self:center">${dsync.syncedAt() ? '最終同期: ' + fmtDateTime(dsync.syncedAt()) : '未同期'}</span>
       </div>
     </div>
   </div>`;
@@ -11747,7 +11769,7 @@ const MEASURE_VER = 8; // 8: 確認文脈(above5/dev52w)を列表示するため
 const SCORE_VER = 1;
 const TECH_VER = MEASURE_VER; // 後方互換（保存結果の ver = MEASURE_VER）
 
-function anaToday() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function anaToday() { return jstYmd(); }   // JSTの暦日（端末TZに依存させない）
 function anaThresholds() { return TA.mergeThresholds(store.data.settings && store.data.settings.techThresholds); }
 
 // 分析対象（フィルタ適用後の銘柄）
@@ -15239,9 +15261,15 @@ function fmtQty(n, market) {
 function pctFromBase(price, base) { if (price == null || !base) return null; return (price - base) / base * 100; }
 function signed(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
 function cls(n) { return n == null ? '' : (n > 0 ? 'pos' : (n < 0 ? 'neg' : '')); }
-function today() { return new Date().toISOString().slice(0, 10); }
-// 前営業日の日付(YYYY-MM-DD)。前日終値が「いつの引けか」の表示用（祝日は考慮しない近似）。
-function prevBizDate() { const d = new Date(); do { d.setUTCDate(d.getUTCDate() - 1); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6); return d.toISOString().slice(0, 10); }
+// 「今日」は**日本時間の暦日**。UTC基準だと 00:00〜09:00 JST の間だけ前日を返し、
+// 約定日の初期値が1日前になる／1日1回のガードが朝9時に切り替わる、といったズレが出る。
+function today() { return todayJst(); }
+// 前営業日の日付(YYYY-MM-DD)。前日終値が「いつの引けか」の表示用（祝日は考慮しない近似）。JST基準。
+function prevBizDate() {
+  const d = new Date(Date.now() + 9 * 3600 * 1000);          // JSTの壁時計をUTCとして扱う
+  do { d.setUTCDate(d.getUTCDate() - 1); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  return d.toISOString().slice(0, 10);
+}
 // ===== 資産推移（積み上げ面グラフ） =====
 // サーバー日次（byCategory/byMarket/byMarketType付き）＋取込済み過去（byMarket/byMarketType）を /api/portfolio-history
 // から取得し、3軸（市場/市場+種別/カテゴリ）でスタック描画。取得原価の線を重ねる。
@@ -15255,7 +15283,7 @@ function setAssetAxis(a) {
   renderAssetTable();  // 先に表を確定（高さ固定）させてからグラフを残り高さに合わせる
   renderAssetChart();
 }
-function todayJst() { return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
+function todayJst() { return jstYmd(); }
 // 米国東部時刻(ET)の暦日(YYYY-MM-DD)。米株の「営業日」はこれで変わる。
 function todayEt() { const off = usDST(Date.now()) ? 4 : 5; return new Date(Date.now() - off * 3600 * 1000).toISOString().slice(0, 10); }
 // 前日終値の再取得キー: JSTの暦日＋米国ETの暦日。どちらかの市場の暦日が変わったら取り直す。
@@ -15553,8 +15581,8 @@ function fmtDateTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
   if (isNaN(d)) return esc(String(iso));
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  const t = jstParts(d), z = (n) => String(n).padStart(2, '0');
+  return `${t.y}-${z(t.m)}-${z(t.d)} ${z(t.h)}:${z(t.mi)}`;
 }
 let toastTimer;
 function toast(msg, ms = 2500) {

@@ -827,6 +827,18 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - 鍵を使わないAPI（info/company/disclosure/earnings/history/ranking/splits/youtube/config）は
   公開市場データ/公開設定のみのため非保護。
 
+### 15.3.1 日時の扱い（すべて日本時間・2026-08-28）
+画面に出す日時・「今日」の判定は**端末のタイムゾーンに依存させない**。app.js 先頭の `JST_TZ` / `jstParts()` / `jstYmd()` を使う。
+- **`new Date().getHours()` 等をそのまま表示に使わない**（端末TZ依存）。`fmtDateTime()` か `jstParts()` を通す。
+- **`new Date().toISOString().slice(0,10)` を「今日」に使わない**（UTC暦日）。00:00〜09:00 JST の間だけ前日になり、
+  約定日の初期値が1日ズレる／1日1回のガードが朝9時に切り替わる。`todayJst()`（=`jstYmd()`）を使う。
+- **`new Date('YYYY-MM-DD')` は UTC 0時**と解釈される。時刻として表示すると JST では**必ず 09:00**になる
+  （更新情報の動画が全件 09:00 になった実例）。日付だけの値は時刻を表示しない。
+- `toLocale*` で時刻を出す時は `{ timeZone: JST_TZ, hourCycle: 'h23' }` を必ず付ける（`h23` が無いと深夜0時が 24:00 になる）。
+- 例外（意図的にUTC/現地時刻のまま）: `todayEt()`（米国東部の暦日）、`analysis.js` の週足バケット（UTC固定）、
+  価格APIの取引所TZ換算（`functions/api/price.js`）。
+- サーバー側（Cloudflare Workers は TZ=UTC）は `Date.now() + 9h` で明示的にJST化している（`notify-run.js`）。
+
 ### 15.4 Cloudflare 環境変数（一覧）
 - 通知（SA）: `GOOGLE_SA_EMAIL` / `GOOGLE_SA_PRIVATE_KEY` / `GOOGLE_SHEET_ID`
 - メール: `RESEND_API_KEY` / `NOTIFY_EMAIL`（=Resend登録メール宛のみ可・onboarding@resend.dev）
