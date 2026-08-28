@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-2250';
+const APP_VERSION = 'v20260828-2254';
 
 'use strict';
 
@@ -2770,6 +2770,25 @@ function fitUpdList() {
   el.style.maxHeight = h + 'px';
 }
 
+// ダッシュボード最下段「買い増しサイン（本日 新規到達）」を残りスペースに合わせる。
+// fitUpdList() で更新情報を下限(84px)まで詰めてもまだ main.content があふれる場合、
+// 最後にこの表を枠内スクロールにして**ページ自体はスクロールさせない**（ルール6）。
+// 収まっている時は max-height を付けない（自然高さのまま。余白で引き伸ばさない）。
+function fitDashSignals() {
+  const el = document.getElementById('dash-sig-body');
+  if (!el) return;
+  const main = document.querySelector('main.content');
+  if (!main) return;
+  el.style.maxHeight = ''; el.style.overflowY = '';
+  const overflow = main.scrollHeight - main.clientHeight;   // ★document基準だと body:overflow:hidden で常に0になる
+  if (overflow <= 1) return;
+  const natural = el.scrollHeight;
+  // 下限は約2行ぶん(96px)。ただし自然高さは超えない（0件の時に空枠が膨らむのを防ぐ）
+  const h = Math.max(Math.min(96, natural), natural - overflow);
+  el.style.maxHeight = h + 'px';
+  el.style.overflowY = 'auto';
+}
+
 // 一覧のソート/フィルタ・カラム設定（市場ごと）。デフォルトはティッカー順
 const listState = {
   US:     { sortKey: 'ticker', sortDir: 1, broker: '', account: '', category: '', detailType: '' },
@@ -4044,6 +4063,7 @@ function fitListTables() {
   const main = document.querySelector('main.content');
   if (!main) return;
   fitUpdList();   // ダッシュボードの更新情報も残りスペースに合わせる（表より先に確定させる）
+  fitDashSignals(); // 更新情報を詰めても足りない分は「買い増しサイン」表を枠内スクロールにする
   // .macro-managed はマクロ指標タブが自前で高さを決める枠（macroFitTable）。ここで触ると
   // グラフ高さの計算と食い合って毎回ちらつくので対象外にする。
   const wraps = [...main.querySelectorAll('.section .table-wrap:not(.macro-managed)')];
@@ -4389,7 +4409,7 @@ function renderDashboard() {
       <div class="section-head head-sm"><h2>買い増しサイン（本日 新規到達）</h2>
         <span class="muted" style="margin-left:8px;font-size:12px">新 ${newReached.length} 件 / 到達計 ${reachedSecs.length} 件</span>
         <button class="btn btn-sm" style="margin-left:auto" onclick="go('signals')">一覧へ</button></div>
-      <div class="section-body">${dashSignalsTable()}</div>
+      <div class="section-body" id="dash-sig-body">${dashSignalsTable()}</div>
     </div>
     </div>`;
 }
