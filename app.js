@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-2242';
+const APP_VERSION = 'v20260828-2250';
 
 'use strict';
 
@@ -4323,14 +4323,11 @@ function renderDashboard() {
       <span class="delta ${cls(v)}">${v == null ? '—' : (v > 0 ? '▲' : v < 0 ? '▼' : '') + signed(v) + '%'}</span></div></div>`;
   };
   const mkColor = { JP: '#b23a36', US: '#2a5599' };
-  const fxNow = fx ? fx.toFixed(2) : '—';
-  const luStr = store.data.lastPriceUpdate ? fmtDateTime(store.data.lastPriceUpdate) : '未取得';
-
+  // 見出し「ダッシュボード」＋更新時刻/USDJPY の行は撤去（2026-08-28）。
+  // サイドバーのタブ名・ヘッダの update-meta・ティッカーのFXチップと三重に同じ情報で、
+  // その分だけ買い増しサインのカードが見切れてページスクロールが発生していたため。
   app.innerHTML = `
     <div class="dashboard-view">
-    <div class="page-intro">
-      <h2>ダッシュボード <span class="dash-meta">${esc(luStr)} 時点・USD/JPY ${fxNow}</span></h2>
-    </div>
     ${notes.map(n => `<div class="notice">${esc(n)}</div>`).join('')}
     ${macroAlertCardHtml()}
     ${updFeedHtml()}
