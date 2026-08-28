@@ -6,8 +6,11 @@
 //   US株/ETF: FINNHUB_API_KEY が設定されていれば Finnhub（ほぼリアルタイム）、なければ Yahoo
 //   JP株・投信: Yahoo Finance（15〜20分遅延。投信は日次基準価額）
 //   為替(USDJPY=X): Yahoo
+import { guardApi } from '../lib/api-guard.js';
 
 export async function onRequestGet(context) {
+  const denied = await guardApi(context);   // 鍵つきAPI: 本人のGoogleログイン or 内部トークンのみ
+  if (denied) return denied;
   const url = new URL(context.request.url);
   const symbols = (url.searchParams.get('symbols') || '')
     .split(',').map(s => s.trim()).filter(Boolean);

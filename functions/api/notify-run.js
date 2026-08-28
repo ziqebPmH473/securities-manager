@@ -25,7 +25,7 @@ export async function onRequestGet(context) {
     const market = (url.searchParams.get('market') || '').toUpperCase(); // ''|'JP'|'US'
 
     const bundle = await readAppDataBundle(context.env);
-    const fresh = await fetchFreshPrices(url.origin, bundle.securities || []);
+    const fresh = await fetchFreshPrices(url.origin, bundle.securities || [], context.env.NOTIFY_TRIGGER_TOKEN);
     mergeFreshPrices(bundle, fresh);
 
     let signals = computeSignals(bundle, { nearPct: isFinite(near) ? near : 5 });
@@ -53,7 +53,7 @@ export async function onRequestGet(context) {
     // マクロ指標の基準値警告（設定があるときだけ）。値はその場で取り直すので、端末が同期していなくても最新で判定できる。
     // 取得に失敗しても通知全体は止めない（best-effort）。
     let macro = { fired: [], checked: 0, skipped: 0 };
-    try { macro = await evaluateMacroAlerts(url.origin, bundle); } catch (e) { macro = { fired: [], checked: 0, skipped: 0, error: String(e && e.message || e) }; }
+    try { macro = await evaluateMacroAlerts(url.origin, bundle, context.env.NOTIFY_TRIGGER_TOKEN); } catch (e) { macro = { fired: [], checked: 0, skipped: 0, error: String(e && e.message || e) }; }
     const macroText = macroAlertSection(macro);
     if (macroText) {
       email.text += '\n' + macroText;

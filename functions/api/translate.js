@@ -13,7 +13,10 @@
 // 旧実装の問題: ①GETのみ＝大きいバッチでURLがCFの上限(16KB)を超えリクエスト自体が失敗
 // ②cacheEverything(24h)が上流の失敗レスポンスまで固定化＝直っても同じ記事が失敗し続ける（キャッシュ廃止。
 // 翻訳結果はクライアントが newsTrans にキャッシュ＆同期するのでサーバー側キャッシュは不要）
+import { guardApi } from '../lib/api-guard.js';
 export async function onRequestGet(context) {
+  const denied = await guardApi(context);   // 鍵つきAPI: 本人のGoogleログイン or 内部トークンのみ
+  if (denied) return denied;
   const url = new URL(context.request.url);
   let texts = url.searchParams.getAll('q');
   const single = url.searchParams.get('text');
@@ -21,6 +24,8 @@ export async function onRequestGet(context) {
   return run(context, texts, url.searchParams.get('sl') || 'auto', url.searchParams.get('tl') || 'ja');
 }
 export async function onRequestPost(context) {
+  const denied = await guardApi(context);   // 鍵つきAPI: 本人のGoogleログイン or 内部トークンのみ
+  if (denied) return denied;
   let body = null;
   try { body = await context.request.json(); } catch (_) {}
   const texts = body && Array.isArray(body.texts) ? body.texts : [];

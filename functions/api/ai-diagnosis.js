@@ -5,6 +5,7 @@
 // 動画と違いテキストのみなのでリクエスト形は単純（VARIANTS 相当は不要）。
 // ★プライバシー方針（2026-08-28 すみぽん決定）: 金額はクライアント側で送らない（銘柄・比率・サイン・マクロのみ）。
 //   このAPIは受け取った data をそのままプロンプトに埋めるだけで、内容の追加取得はしない。
+import { guardApi } from '../lib/api-guard.js';
 const DEFAULT_CHAIN = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
 
 const PROMPT = `あなたは日本の個人投資家を補佐する投資分析アシスタントです。
@@ -71,6 +72,8 @@ const isTransient = (status, raw) => status === 429 || status >= 500 || /quota|r
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function onRequestPost(context) {
+  const denied = await guardApi(context);   // 鍵つきAPI: 本人のGoogleログイン or 内部トークンのみ
+  if (denied) return denied;
   const key = context.env && context.env.GEMINI_API_KEY;
   if (!key || key === 'xxxxx') return json({ error: 'APIキーが未設定です（Cloudflareの環境変数 GEMINI_API_KEY を設定してください）' });
 

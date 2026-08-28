@@ -6,6 +6,7 @@
 // GET /api/estat?op=data&id=0003427113&cd=...    … 実データを [[YYYY-MM-DD, 値], ...] で返す
 //
 // 要 E_STAT_APP_ID（Cloudflare Pages の環境変数）。未設定なら 503 を返す（FRED と違い代替経路が無い）。
+import { guardApi } from '../lib/api-guard.js';
 
 const BASE = 'https://api.e-stat.go.jp/rest/3.0/app/json';
 const CACHE_TTL = 6 * 3600;
@@ -13,6 +14,8 @@ const SOURCE_NOTE = '出典: e-Stat（政府統計の総合窓口）';
 const THIN_MAX = 320, THIN_RECENT = 200;
 
 export async function onRequestGet(context) {
+  const denied = await guardApi(context);   // 鍵つきAPI: 本人のGoogleログイン or 内部トークンのみ
+  if (denied) return denied;
   const url = new URL(context.request.url);
   const op = url.searchParams.get('op') || 'data';
   const appId = context.env && context.env.E_STAT_APP_ID;

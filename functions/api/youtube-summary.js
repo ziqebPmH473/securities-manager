@@ -3,6 +3,7 @@
 // 「東証マーケット振り返り」ツール(stock-slide-generator/analyze.js)と同仕様:
 //   モデルは優先順の配列で受け取り、上限(429)・一時エラーはリトライ→次の下位モデルへ降格。全滅なら再試行を促す。
 // Gemini に YouTube URL を fileData で渡す。長尺対策で低解像度＋前半45分に制限。結果はクライアントが ytSummaries にキャッシュ&同期。
+import { guardApi } from '../lib/api-guard.js';
 const DEFAULT_CHAIN = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
 const PROMPT = `次のYouTube動画を視聴し、投資・株式・マーケットの観点で日本語のニュース記事風にまとめてください。
 
@@ -21,6 +22,8 @@ const isTransient = (status, raw) => status === 429 || status >= 500 || /quota|r
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function onRequestGet(context) {
+  const denied = await guardApi(context);   // 鍵つきAPI: 本人のGoogleログイン or 内部トークンのみ
+  if (denied) return denied;
   const url = new URL(context.request.url);
   const v = (url.searchParams.get('v') || '').trim();
   if (!/^[\w-]{6,20}$/.test(v)) return json({ error: 'invalid video id' }, 400);

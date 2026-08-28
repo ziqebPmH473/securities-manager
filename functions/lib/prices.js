@@ -10,7 +10,8 @@ function priceKey(sec) { return `${sec.market}:${sec.ticker}`; }
 
 // origin: 例 https://xxx.pages.dev 。securities: バンドルの securities 配列。
 // 返り値: { '<priceKey>': { price, prevClose, ... }, ... }
-export async function fetchFreshPrices(origin, securities) {
+// token: NOTIFY_TRIGGER_TOKEN。/api/price は鍵つきAPIとして保護されているので内部呼び出しでも必要。
+export async function fetchFreshPrices(origin, securities, token) {
   const secs = (securities || []).filter(s => s && s.ticker && s.market !== 'FUND');
   const symToKeys = {}; // yahooSymbol → [priceKey...]（同一シンボルに複数銘柄が紐づく場合の保険）
   for (const s of secs) {
@@ -23,7 +24,8 @@ export async function fetchFreshPrices(origin, securities) {
   for (let i = 0; i < symbols.length; i += CHUNK) {
     const part = symbols.slice(i, i + CHUNK);
     try {
-      const res = await fetch(`${origin}/api/price?mode=light&symbols=${encodeURIComponent(part.join(','))}`);
+      const res = await fetch(`${origin}/api/price?mode=light&symbols=${encodeURIComponent(part.join(','))}`,
+        token ? { headers: { authorization: 'Bearer ' + token } } : undefined);
       if (!res.ok) continue;
       const d = await res.json();
       for (const sym of part) {

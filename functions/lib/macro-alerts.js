@@ -83,14 +83,16 @@ function fmt(v, dec) {
 }
 
 // 有効な警告設定に必要な系列だけを取得する（不要な系列は引かない）
-async function fetchSeries(origin, ids) {
+// token: NOTIFY_TRIGGER_TOKEN。/api/macro・/api/estat は鍵つきAPIとして保護されている。
+async function fetchSeries(origin, ids, token) {
+  const authInit = token ? { headers: { authorization: 'Bearer ' + token } } : undefined;
   const out = {};
   const fred = ids.filter(id => SERIES[id] && !SERIES[id].estat);
   const estat = ids.filter(id => SERIES[id] && SERIES[id].estat);
   for (let i = 0; i < fred.length; i += 12) {
     const batch = fred.slice(i, i + 12);
     try {
-      const res = await fetch(`${origin}/api/macro?ids=${encodeURIComponent(batch.join(','))}`);
+      const res = await fetch(`${origin}/api/macro?ids=${encodeURIComponent(batch.join(','))}`, authInit);
       if (!res.ok) continue;
       const d = await res.json();
       for (const id of batch) {
@@ -104,7 +106,7 @@ async function fetchSeries(origin, ids) {
     const p = new URLSearchParams({ op: 'data', id: q.id });
     for (const [k, v] of Object.entries(q)) if (k !== 'id') p.set(k, v);
     try {
-      const res = await fetch(`${origin}/api/estat?${p.toString()}`);
+      const res = await fetch(`${origin}/api/estat?${p.toString()}`, authInit);
       if (!res.ok) return;
       const d = await res.json();
       if (Array.isArray(d.obs) && d.obs.length) out[id] = d.obs;
@@ -115,13 +117,13 @@ async function fetchSeries(origin, ids) {
 
 // 警告設定（bundle.macroAlerts）を評価して、条件成立している行の説明文を返す。
 // 戻り値: { fired:[{text}], checked:件数, skipped:件数 }
-export async function evaluateMacroAlerts(origin, bundle) {
+export async function evaluateMacroAlerts(origin, bundle, token) {
   const alerts = (bundle && Array.isArray(bundle.macroAlerts) ? bundle.macroAlerts : [])
     .filter(a => a && !a.deleted && a.enabled !== false && a.seriesId && isFinite(a.value) && SERIES[a.seriesId]);
   if (!alerts.length) return { fired: [], checked: 0, skipped: 0 };
 
   const ids = [...new Set(alerts.map(a => a.seriesId))];
-  const obsById = await fetchSeries(origin, ids);
+  const obsById = await fetchSeries(origin, ids, token);
 
   const fired = [];
   let skipped = 0;

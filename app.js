@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260828-2254';
+const APP_VERSION = 'v20260828-2309';
 
 'use strict';
 
@@ -1270,6 +1270,31 @@ const gsync = {
     return true;
   },
 };
+
+// ---------- 鍵つきAPIへアクセストークンを自動付与 ----------
+// サーバー側（functions/lib/api-guard.js）で、外部の鍵/課金を使うAPIは本人のGoogleログイン必須にした。
+// 該当APIの呼び出しはアプリ内に十数か所あり、将来の追加で付け忘れると静かに401になるため、
+// fetch を薄くラップして同一オリジンの該当パスにだけ Authorization を自動で足す。
+// 未ログイン時は何も足さない（サーバーが401を返し、各呼び出し元の既存のエラー処理に乗る）。
+const GUARDED_APIS = ['/api/price', '/api/news', '/api/macro', '/api/estat',
+                      '/api/translate', '/api/ai-diagnosis', '/api/youtube-summary'];
+(() => {
+  const orig = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      const raw = typeof input === 'string' ? input : (input && input.url) || '';
+      let path = '';
+      if (raw.startsWith('/')) path = raw.split('?')[0];
+      else if (raw.startsWith(location.origin)) path = new URL(raw).pathname;
+      if (path && GUARDED_APIS.includes(path) && gsync._token) {
+        const h = new Headers((init && init.headers) || (typeof input === 'object' && input && input.headers) || {});
+        if (!h.has('authorization')) h.set('Authorization', 'Bearer ' + gsync._token);
+        init = Object.assign({}, init, { headers: h });
+      }
+    } catch (_) { /* 付与に失敗しても素の fetch は通す */ }
+    return orig(input, init);
+  };
+})();
 
 // ---------- Drive 自動マージ同期（aoiro方式・SyncMerge を利用） ----------
 // Drive上の securities-manager/data.json を base/local/remote で3-wayマージし、両端末が収束。

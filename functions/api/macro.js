@@ -10,6 +10,7 @@
 // 返す観測値は「間引き済み」（THIN_MAX 点まで）。日次系列を10年ぶん生のまま返すと
 // クライアントのキャッシュ（store.data.macro＝Google同期対象）が肥大するため、
 // 直近 THIN_RECENT 点は生のまま・それ以前を等間隔サンプリングして解像度と容量を両立する。
+import { guardApi } from '../lib/api-guard.js';
 
 const THIN_MAX = 320;      // 1系列あたりの最大点数
 const THIN_RECENT = 200;   // 直近この点数は間引かない（最近の細かい動きを保つ）
@@ -18,6 +19,8 @@ const CACHE_TTL = 6 * 3600; // エッジキャッシュ6時間（FREDの更新�
 const SOURCE_NOTE = 'Source: FRED®, Federal Reserve Bank of St. Louis';
 
 export async function onRequestGet(context) {
+  const denied = await guardApi(context);   // 鍵つきAPI: 本人のGoogleログイン or 内部トークンのみ
+  if (denied) return denied;
   const url = new URL(context.request.url);
   const ids = (url.searchParams.get('ids') || '')
     .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);

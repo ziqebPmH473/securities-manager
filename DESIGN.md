@@ -811,7 +811,21 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 
 ### 15.3 セキュリティ
 - 内部API（notify-run/signals-check/sheet-check）と Worker手動fetch は **`NOTIFY_TRIGGER_TOKEN` 必須**（`functions/lib/auth.js` checkToken・fail-closed）。
-- 価格/情報API（price/info/config）は公開市場データ/公開設定のみで非保護。
+- **外部の鍵・課金を使うAPIは本人ログイン必須**（2026-08-28 追加。`functions/lib/api-guard.js` guardApi）。
+  対象7本: `ai-diagnosis` `youtube-summary`（GEMINI_API_KEY）/ `translate`（Workers AI＝従量課金）/
+  `price` `news`（FINNHUB_API_KEY）/ `macro`（FRED_API_KEY）/ `estat`（E_STAT_APP_ID）。
+  - 通す条件は (a) `NOTIFY_TRIGGER_TOKEN` 一致（Cron・サーバー内部呼び出し）または
+    (b) 本アプリのGoogleアクセストークン（`aud = GOOGLE_OAUTH_CLIENT_ID`）かつ `ALLOWED_EMAILS` に含まれるメール。
+  - `ALLOWED_EMAILS` 未設定だと「本アプリにログインできた人なら誰でも」まで緩む。**必ず設定する**。
+  - `GOOGLE_OAUTH_CLIENT_ID` 未設定（ローカル wrangler で .dev.vars 無し）なら検証不能として素通し。
+  - tokeninfo の結果は isolate 内で5分キャッシュ（`/api/price` は40銘柄ずつ分割で何度も呼ばれるため）。
+  - **内部呼び出しにトークンを通すこと**: `lib/prices.js fetchFreshPrices(origin, secs, token)` と
+    `lib/macro-alerts.js evaluateMacroAlerts(origin, bundle, token)` は `/api/price`・`/api/macro`・`/api/estat` を
+    自分で叩くので、notify-run から `NOTIFY_TRIGGER_TOKEN` を渡す。渡し忘れると**定時通知が無言で壊れる**。
+  - クライアント側は `app.js` の fetch ラッパ（`GUARDED_APIS`）が Authorization を自動付与する。
+    保護対象APIを増やしたら**この配列にも足す**。
+- 鍵を使わないAPI（info/company/disclosure/earnings/history/ranking/splits/youtube/config）は
+  公開市場データ/公開設定のみのため非保護。
 
 ### 15.4 Cloudflare 環境変数（一覧）
 - 通知（SA）: `GOOGLE_SA_EMAIL` / `GOOGLE_SA_PRIVATE_KEY` / `GOOGLE_SHEET_ID`
@@ -819,6 +833,7 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - 保護: `NOTIFY_TRIGGER_TOKEN`（Pages env＋Cron Worker secret 同値）
 - 公開設定配布: `GOOGLE_OAUTH_CLIENT_ID`（＋ GOOGLE_SHEET_ID 流用）
 - 米株時価総額: `FINNHUB_API_KEY`（外国ADRはprofile2の通貨がUSD以外なら時価総額/配当を非表示）
+- **鍵つきAPIの利用者制限: `ALLOWED_EMAILS`**（カンマ区切り。未設定＝アプリにログインできた人なら誰でも通る）
 
 ### 15.5 すみぽん側の前提設定（再構築時の参照）
 - Google Cloud: OAuthクライアント（project 381390060466。Sheets/Drive API 有効）＋ サービスアカウント（鍵JSON・Drive/Sheets API有効）。

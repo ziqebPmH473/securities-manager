@@ -2,6 +2,7 @@
 // GET /api/news → { items: [{ title, link, source, pubDate }], at }
 // 無料の公式RSS（見出し＋リンク＋時刻のみ）を複数まとめて返す。本文は取得しない（著作権上、
 // 見出し一覧→クリックで元記事へ飛ぶ構成）。カテゴリ分類はクライアント側（キーワードルール）で行う。
+import { guardApi } from '../lib/api-guard.js';
 
 // broad:true のフィードは総合ニュース（スポーツ・生活・車等が混ざる）なので MARKET_RE で経済関連だけ通す。
 // broad なしは経済・マーケット専門メディアのため全通し。
@@ -24,6 +25,8 @@ const FEEDS = [
 ];
 
 export async function onRequestGet(context) {
+  const denied = await guardApi(context);   // 鍵つきAPI: 本人のGoogleログイン or 内部トークンのみ
+  if (denied) return denied;
   const url = new URL(context.request.url);
   // 銘柄別ニュース（フェーズN2・米国株）: /api/news?symbol=AAPL → Finnhub company-news（無料枠・既存キー）
   const symbol = url.searchParams.get('symbol');
