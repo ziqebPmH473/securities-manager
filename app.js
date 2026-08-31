@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260829-0136';
+const APP_VERSION = 'v20260831-2244';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -2236,19 +2236,19 @@ function lastCloseUsMs() { const h = usDST(Date.now()) ? 20 : 21; const n = new 
 
 // ---------- 価格取得 ----------
 const api = {
-  // opts.withHighs=true で5年/52週高値も取得（日次/その日初回）。通常は価格のみ＝軽く・既存高値を保持。
+  // 前面（busyオーバーレイ）で取るのは株価のみ＝常に軽量。5年/52週高値・銘柄名・決算日・ランキングなど
+  // 時間のかかる更新は末尾のバックグラウンドキュー（bgTask）に回し、進捗はトップバー下の細いバーに出す。
   // 市場が閉場中で当日の終値を既に持っている銘柄はスキップ（再取得しない）。米株の時間外(プレ/アフター)は別取得。
+  // opts.withHighs は旧仕様（高値も前面で取得）の名残で現在は無視される（高値は常にバックグラウンド）。
   async refreshAll(opts = {}) {
-    const withHighs = opts.withHighs === true;
     // 投信(FUND)は自動価格が無く（評価額は手入力）、Yahooに無い協会コードへの無駄な問い合わせで
     // 更新が遅くなるため価格取得対象から除外する
     const allSecs = store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
     const lightSymbols = ['USDJPY=X', ...INDICES.map(ix => ix.sym)];
     if (allSecs.length === 0 && lightSymbols.length === 0) return;
-    // 取得対象を選別: withHighs(日次)は全件。通常は「開場中 or 価格未取得 or 当日終値を未取得」のみ取得（閉場中で終値済みはスキップ）。
+    // 取得対象を選別: 「開場中 or 価格未取得 or 当日終値を未取得」のみ取得（閉場中で終値済みはスキップ）。
     const lastJp = lastCloseJpMs(), lastUs = lastCloseUsMs();
     const needsFetch = (s) => {
-      if (withHighs) return true;
       const p = store.data.prices[priceKey(s)];
       const fetched = p && p.fetchedAt ? Date.parse(p.fetchedAt) : 0;
       if (s.market === 'JP') return jpRegularOpen() || !(p && p.price != null) || fetched < lastJp;
@@ -2261,19 +2261,18 @@ const api = {
     // ★重要: 米株はFinnhubが失敗/レート制限/非対応(c=0)だと1銘柄でFinnhub＋Yahooの【2サブリクエスト】を使う。
     //   旧BATCH=40だと全フォールバック時に最大80サブリクエスト→上限超過で後半銘柄の取得がまるごと失敗し、
     //   現在値が更新されず「前日終値のまま」固定される不具合があった。2倍を見込み20(=最大40)に下げて上限内に収める。
-    //   withHighsは5年日足も取るため小さめ(10)。
-    const BATCH = withHighs ? 10 : 20;
+    const BATCH = 20;
     const batches = [];
     for (let i = 0; i < holdSymbols.length; i += BATCH) batches.push(holdSymbols.slice(i, i + BATCH));
     let quotes = {}, lightQuotes = {};
     try {
       // バッチが終わるたびに件数を進める（並行取得なので完了順に加算）。初回/日次は重いので進捗が動くと安心。
       let doneSym = 0; const totalSym = holdSymbols.length;
-      if (totalSym) busyMsg(`${withHighs ? '株価・5年高値' : '株価'}を取得中… 0/${totalSym}件`);
+      if (totalSym) busyMsg(`株価を取得中… 0/${totalSym}件`);
       const reqs = batches.map(b =>
-        fetch(`/api/price?symbols=${encodeURIComponent(b.join(','))}${withHighs ? '&highs=1' : ''}`)
+        fetch(`/api/price?symbols=${encodeURIComponent(b.join(','))}`)
           .then(r => r.ok ? r.json() : {}).catch(() => ({}))
-          .then(res => { doneSym = Math.min(doneSym + b.length, totalSym); busyMsg(`${withHighs ? '株価・5年高値' : '株価'}を取得中… ${doneSym}/${totalSym}件`); return res; }));
+          .then(res => { doneSym = Math.min(doneSym + b.length, totalSym); busyMsg(`株価を取得中… ${doneSym}/${totalSym}件`); return res; }));
       const lightIdx = reqs.length;
       reqs.push(fetch(`/api/price?mode=light&symbols=${encodeURIComponent(lightSymbols.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({})));
       const results = await Promise.all(reqs);
@@ -2304,13 +2303,10 @@ const api = {
           // 全体フラグ(lastHighsDate)は失敗しても立つため「取得済みなのに古い高値のまま」が起きる。
           // 銘柄単位の成功日で「今日まだ取れていない銘柄」を下で取り直す（GLW 230.5固定バグ）。
           highsAt: q.high5y != null ? today() : (prev.highsAt ?? null),
-          // 高値の「取得を試みた日」（成否問わず）。withHighs=highs=1 の時だけ更新。
-          // Yahooが5年高値を返せない銘柄は highsAt が永久に古いまま→毎回の補完取得で毎回リトライされてしまう。
-          // 試行日＋連続失敗回数を記録し、下の補完取得を「失敗が浅いうちは毎回／恒久失敗は1日1回」に切替。
-          highsTriedAt: withHighs ? today() : (prev.highsTriedAt ?? null),
-          // 連続失敗回数（成功で0にリセット）。一時的失敗は数回で回復するので毎回リトライ、恒久失敗はこれが増える。
-          // highs を投げていない通常更新（withHighs=false）では判定材料が無いので据え置く。
-          highsFail: withHighs ? (q.high5y != null ? 0 : (prev.highsFail || 0) + 1) : (prev.highsFail ?? 0),
+          // 高値の「取得を試みた日」と連続失敗回数は、highs=1 を投げるバックグラウンド取得
+          // （refreshHighsBg→refreshPrice）でのみ更新する。ここは通常の価格取得なので据え置く。
+          highsTriedAt: prev.highsTriedAt ?? null,
+          highsFail: prev.highsFail ?? 0,
           low1y: q.low1y != null ? q.low1y : (prev.low1y ?? null),
           low3y: q.low3y != null ? q.low3y : (prev.low3y ?? null),
           low1yDate: q.low1yDate != null ? q.low1yDate : (prev.low1yDate ?? null),
@@ -2327,7 +2323,6 @@ const api = {
       store.data.lastPriceSource = usFinn >= usYah ? 'finnhub' : 'yahoo';
       store.data.lastPriceSrcCounts = { finnhub: usFinn, yahoo: usYah };
     }
-    if (withHighs) store.data.lastHighsDate = today(); // 高値はこの取得で最新化
     const fx = lightQuotes['USDJPY=X'];
     if (fx && fx.price != null) store.data.fx.USDJPY = fx.price;
     store.data.indices = store.data.indices || {};
@@ -2348,40 +2343,61 @@ const api = {
     }
     // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
     await this.refreshExtended(allSecs);
-    // 高値(5年/52週)が「今日まだ取得成功していない」銘柄を補完取得する（withHighs の成否に関わらず常時）。
-    // ・未取得の新規/取込銘柄（highsAt が無い＝欠け）
-    // ・その日の日次高値取得が失敗して古い高値のまま固定された銘柄（highsAt が過去日）
-    // どちらも highsAt !== today() で拾える。成功済み（highsAt===today）は skip＝毎回の再取得はしない。
-    // 全体フラグ(lastHighsDate)は失敗でも立つため使わず、銘柄ごとの成功日(prices[k].highsAt)で判定する。
-    // ※ secs ではなく allSecs で判定（現在値取得済みで今回対象外の銘柄も高値だけ古いことがあるため）。
-    // ★恒久的に高値を取れない銘柄（Yahooが5年チャートを返せないティッカー）は highsAt が永久に古いため、
-    //   従来は毎回の価格更新で毎回リトライされていた（「5年高値を取得中… 1/1件」が毎回）。連続失敗回数 highsFail で切替:
-    //   ・失敗が浅いうち（<HIGHS_FAIL_BACKOFF回）は毎回リトライ＝一時的失敗を当日中に素早く回復・新規銘柄も即取得
-    //   ・それを超えたら恒久失敗とみなし highsTriedAt を見て1日1回だけ試す（翌日再試行＝ティッカー復活で拾える）
-    const HIGHS_FAIL_BACKOFF = 3;
-    {
-      const staleHigh = allSecs.filter(s => {
-        const p = store.data.prices[priceKey(s)] || {};
-        if (p.highsAt === today()) return false;                    // 今日取得成功済みは対象外
-        if ((p.highsFail || 0) < HIGHS_FAIL_BACKOFF) return true;    // 失敗が浅い/新規＝毎回リトライ
-        return p.highsTriedAt !== today();                          // 恒久失敗は1日1回に抑制
-      });
-      // highs=1 は5年日足も取るためサブリクエストが重い。10件ずつに分割して上限内に収める
-      for (let i = 0; i < staleHigh.length; i += 10) { busyMsg(`5年高値を取得中… ${Math.min(i + 10, staleHigh.length)}/${staleHigh.length}件`); try { await this.refreshPrice(staleHigh.slice(i, i + 10)); } catch (_) {} }
-    }
-    // 名前未取得の銘柄だけ銘柄情報を取得（refreshMeta が「銘柄情報を取得中… n/m件」を表示）
+    // ---- ここから先は時間のかかる更新＝すべてバックグラウンド（決算日と同方式・2026-08-31 すみぽん指示） ----
+    // busy オーバーレイはここで閉じて操作可能に戻し、進捗はトップバー下の細いバー（bgProgress）に表示する。
+    // 直列キュー（bgTask）で1つずつ実行＝並行させない（Cloudflareサブリクエスト上限・進捗バーの取り合いを避ける）。
+    // 5年/52週高値: 「今日まだ取得成功していない」銘柄を highs=1 で補完取得（詳細は refreshHighsBg）。
+    this.bgTask(() => this.refreshHighsBg(allSecs));
+    // 名前未取得の銘柄だけ銘柄情報を取得（新規追加・取込直後のみ発生）
     const need = secs.filter(s => !(store.data.meta[priceKey(s)] && store.data.meta[priceKey(s)].name));
-    if (need.length) await this.refreshMeta(need);
+    if (need.length) this.bgTask(async () => {
+      bgProgress('銘柄情報を取得中', 0, need.length);
+      try { await this.refreshMeta(need); if (!inlineEditOn) preserveTableScroll(render); } finally { bgProgressHide(); }
+    });
     // 決算日（前回/次回）を1日1回取得（銘柄ごとの成功日 earnings[k].at で判定＝高値と同方式）。
     // 場中（日本株ザラ場・米国レギュラー）と各市場の寄り30分前は、株価を早く見たいのでスキップし場外の更新で取得する。
-    // ★await しない＝バックグラウンド実行。取得に時間がかかっても busy オーバーレイを閉じて操作可能にし、
-    //   進捗はトップバー下の細いバーに表示する（earnProgress）。完了時に表示へ反映。
-    if (!earnSkipNow()) this.refreshEarningsBg(allSecs);
+    if (!earnSkipNow()) this.bgTask(() => this.refreshEarningsBg(allSecs));
     // ランキング順位バッジは「株価更新時だけ」取得（タブ表示のたびの取得をやめ、保有銘柄タブの引っかかりを解消）。
     // 1日1回のキャッシュを尊重（force無し）。取得後にバッジだけ反映するため再描画。
-    busyMsg('ランキング順位を取得中…');
+    this.bgTask(() => loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); }));
     toast('価格を更新しました');
-    loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); });
+  },
+
+  // 価格更新後の重い取得（高値・銘柄情報・決算日・ランキング）を1つずつ順番に流す直列キュー。
+  // 失敗しても次のタスクへ進む。多重に価格更新されてもチェーンに積まれるだけで並行実行はしない。
+  _bgChain: null,
+  bgTask(fn) {
+    this._bgChain = (this._bgChain || Promise.resolve()).then(fn).catch(() => {});
+    return this._bgChain;
+  },
+
+  // 5年/52週高値のバックグラウンド取得。「今日まだ取得成功していない」銘柄を highs=1 で取り直す。
+  // ・未取得の新規/取込銘柄（highsAt が無い＝欠け）・当日の取得が失敗して古い高値のままの銘柄
+  //   → どちらも highsAt !== today() で拾える。成功済み（highsAt===today）は skip＝毎回の再取得はしない。
+  // ★恒久的に高値を取れない銘柄（Yahooが5年チャートを返せないティッカー）は highsAt が永久に古いため、
+  //   連続失敗回数 highsFail で切替: 失敗が浅いうち（<3回）は毎回リトライ＝一時的失敗を当日中に素早く回復、
+  //   それを超えたら恒久失敗とみなし highsTriedAt を見て1日1回だけ試す（翌日再試行＝ティッカー復活で拾える）。
+  async refreshHighsBg(allSecs) {
+    const HIGHS_FAIL_BACKOFF = 3;
+    const staleHigh = (allSecs || store.data.securities.filter(s => s.ticker && s.market !== 'FUND')).filter(s => {
+      const p = store.data.prices[priceKey(s)] || {};
+      if (p.highsAt === today()) return false;                    // 今日取得成功済みは対象外
+      if ((p.highsFail || 0) < HIGHS_FAIL_BACKOFF) return true;    // 失敗が浅い/新規＝毎回リトライ
+      return p.highsTriedAt !== today();                          // 恒久失敗は1日1回に抑制
+    });
+    try {
+      if (staleHigh.length) {
+        // highs=1 は5年日足も取るためサブリクエストが重い。10件ずつに分割して上限内に収める。
+        // 件数は「完了した分」を表示する（取得前に進めると最後のバッチで止まって見える）。
+        bgProgress('5年高値を取得中', 0, staleHigh.length);
+        for (let i = 0; i < staleHigh.length; i += 10) {
+          try { await this.refreshPrice(staleHigh.slice(i, i + 10)); } catch (_) {}
+          bgProgress('5年高値を取得中', Math.min(i + 10, staleHigh.length), staleHigh.length);
+        }
+        if (!inlineEditOn) preserveTableScroll(render);
+      }
+      store.data.lastHighsDate = today(); store.save(); // 高値の日次パス完了（表示・互換用の全体フラグ）
+    } finally { bgProgressHide(); }
   },
 
   // 決算日取得のバックグラウンド実行ラッパー。busy オーバーレイでは待たせず（＝操作可能なまま）、
@@ -2586,6 +2602,7 @@ const api = {
     for (let i = 0; i < symbols.length; i += CHUNK) {
       const part = symbols.slice(i, i + CHUNK);
       if (bm && ov && !ov.hidden) bm.textContent = `銘柄情報を更新中… ${Math.min(i + CHUNK, symbols.length)}/${symbols.length}`;
+      else bgProgress('銘柄情報を取得中', i, symbols.length); // バックグラウンド実行時は細い進捗バーに出す
       try {
         const res = await fetch(`/api/info?symbols=${encodeURIComponent(part.join(','))}`);
         if (res.ok) Object.assign(infos, await res.json());
@@ -2648,7 +2665,7 @@ const api = {
     //   待たずに走らせると全件401になり、その日のファンダ（PER/PBR等）が丸ごと取れない。
     try { await window._sessionReady; } catch (_) {}
     try {
-      await this.refreshAll({ withHighs: true }); // 日次は高値（52週/5年）も取得。価格＋名前未取得分
+      await this.refreshAll(); // 価格＋名前未取得分。高値（52週/5年）は refreshAll がバックグラウンドで取得
       await this.refreshMeta();             // 全銘柄の名前/セクター/業種/ファンダを日次更新（日本語名は維持）
       // ★成功してから「本日実行済み」を立てる。先に立てると、一度失敗しただけでその日は
       //   二度と取りに行かず、PER/PBRが空のまま1日固定される（実際に発生）。
@@ -13250,7 +13267,7 @@ async function reportImport(touched, baseMsg) {
   if (touched.length) {
     busyShow('取込・価格取得中…しばらくお待ちください'); // 全画面の処理中表示（完了モーダルで上書き）
     const needPrice = touched.some(s => !(store.data.prices[priceKey(s)] && store.data.prices[priceKey(s)].price != null));
-    try { await (needPrice ? api.refreshAll({ withHighs: store.data.lastHighsDate !== today() }) : api.refreshMeta(touched)); } catch (_) { /* 取得失敗は無視 */ }
+    try { await (needPrice ? api.refreshAll() : api.refreshMeta(touched)); } catch (_) { /* 取得失敗は無視 */ }
     busyHide();
   }
   render();
@@ -15649,17 +15666,20 @@ function busyDone(msg, state = 'done') {
 }
 function busyHide() { const ov = document.getElementById('busy-overlay'); if (!ov) return; ov.hidden = true; ov.classList.remove('done', 'error'); clearTimeout(_busyTimer); }
 
-// 決算日バックグラウンド取得の進捗バー（トップバー直下の細い帯）。busy オーバーレイと違い操作をブロックしない。
-// done/total 件数のテキスト＋割合の塗りつぶしで進捗を表示し、完了時に earnProgressHide で消す。
-function earnProgress(done, total) {
+// バックグラウンド取得の進捗バー（トップバー直下の細い帯）。busy オーバーレイと違い操作をブロックしない。
+// 決算日専用だったものを汎用化（5年高値・銘柄情報などの重い更新も同じバーに出す・2026-08-31）。
+// label＋done/total 件数のテキスト＋割合の塗りつぶしで進捗を表示し、完了時に bgProgressHide で消す。
+function bgProgress(label, done, total) {
   const bar = document.getElementById('earn-progress'); if (!bar) return;
   bar.hidden = false;
   const t = document.getElementById('earn-progress-text');
-  if (t) t.textContent = `決算日を取得中… ${done}/${total}件`;
+  if (t) t.textContent = `${label}… ${done}/${total}件`;
   const f = document.getElementById('earn-progress-fill');
   if (f) f.style.width = (total ? Math.round(done / total * 100) : 0) + '%';
 }
-function earnProgressHide() { const bar = document.getElementById('earn-progress'); if (bar) bar.hidden = true; }
+function bgProgressHide() { const bar = document.getElementById('earn-progress'); if (bar) bar.hidden = true; }
+function earnProgress(done, total) { bgProgress('決算日を取得中', done, total); }
+function earnProgressHide() { bgProgressHide(); }
 // 非同期処理をオーバーレイで包む: 押下→「msg（…中）」即時表示→成功「doneMsg」/失敗「エラー」。
 async function withBusy(msg, fn, doneMsg) {
   busyShow(msg);
@@ -15862,10 +15882,11 @@ document.addEventListener('keydown', (e) => {
   if (!document.getElementById('modal-overlay').hidden) closeModal();
   else if (!document.getElementById('drawer-overlay').hidden) closeDrawer();
 });
-// 「価格更新」: その日まだ高値を取得していなければ高値も取得（LDOS等の古い5年高値を修正）、以降は価格のみで軽量
+// 「価格更新」: 前面（オーバーレイ）は株価のみ＝軽量。5年高値・銘柄情報・決算日・ランキングなど
+// 時間のかかる更新は refreshAll がバックグラウンド（トップバー下の進捗バー）で順次取得する。
 // マーケットタブ表示中はランキングも更新（保有銘柄と同じ手動更新ルール）
 document.getElementById('btn-refresh').onclick = () => withBusy('価格を更新中…', async () => {
-  await api.refreshAll({ withHighs: store.data.lastHighsDate !== today() });
+  await api.refreshAll();
   if (currentView === 'market') mktRefresh();
   render();
   // 価格更新のついでに更新情報（経済指標・YouTube新着）も確認する。待たせないよう裏で走らせる
