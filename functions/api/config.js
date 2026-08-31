@@ -7,5 +7,7 @@ export async function onRequestGet(context) {
   return new Response(JSON.stringify({
     clientId: env.GOOGLE_OAUTH_CLIENT_ID || null,
     spreadsheetId: env.GOOGLE_SHEET_ID || null,
+    // リフレッシュトークン方式（/api/oauth）が使えるか。シークレットの有無だけ伝える（値は返さない）
+    oauthRefresh: !!(env.GOOGLE_OAUTH_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
   }), { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'max-age=300' } });
 }

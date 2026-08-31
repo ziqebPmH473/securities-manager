@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260831-2332';
+const APP_VERSION = 'v20260831-2339';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -1170,6 +1170,14 @@ const gsync = {
   // localStorageに保存し、失効(約1時間)まではGoogleへ通信せず即復帰する。drive.fileスコープ限定の
   // 短命トークン＆個人ツール前提。失効後はサイレント再取得→不可なら手動ログイン。
   _TOKEN_KEY: 'sm_gtoken',
+  // === リフレッシュトークン（長期の合鍵）の永続化 ===
+  // サーバーに GOOGLE_CLIENT_SECRET が設定されていると、初回ログイン（認可コード方式）で
+  // refresh_token をもらえる。以後の無音更新は /api/oauth 経由＝Cookie不要で確実（毎朝の
+  // ログイン画面を解消）。端末固有の認証情報なので localStorage 保存（ルール7の例外）。
+  _RT_KEY: 'sm_grt',
+  _writeRt(rt) { try { localStorage.setItem(this._RT_KEY, rt); } catch (_) {} },
+  _loadRt() { try { return localStorage.getItem(this._RT_KEY) || null; } catch (_) { return null; } },
+  _clearRt() { try { localStorage.removeItem(this._RT_KEY); } catch (_) {} },
   _writeToken(token, scope, email, expMs) {
     try { localStorage.setItem(this._TOKEN_KEY, JSON.stringify({ t: token, s: scope || '', e: email || '', x: expMs })); } catch (_) {}
   },
@@ -1204,7 +1212,7 @@ const gsync = {
       const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } }).then(x => x.json());
       const email = ((info && info.email) || '').toLowerCase();
       const allow = (this.cfg().allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
-      if (allow.length && !allow.includes(email)) { this._token = null; this._clearToken(); toast(`許可されていないアカウントです: ${email}`); return resolve(false); }
+      if (allow.length && !allow.includes(email)) { this._token = null; this._clearToken(); this._clearRt(); toast(`許可されていないアカウントです: ${email}`); return resolve(false); }
       this._token = token; this._email = email;
       this._writeToken(token, this._scope, email, this._expMs(r.expires_in)); // リロード後も保持
       toast(`ログイン: ${email || 'OK'}`);
@@ -1217,13 +1225,37 @@ const gsync = {
     } catch (e) { reject(e); }
   },
   // ★モバイル対応: タップ→ポップアップの間に await を挟まない。GIS が読込済みなら同期で
-  //   requestAccessToken を呼ぶ（スマホはタップ直後の同期呼び出しでないとポップアップを塞ぐ）。
+  //   requestAccessToken/requestCode を呼ぶ（スマホはタップ直後の同期呼び出しでないとポップアップを塞ぐ）。
+  // サーバーにシークレット設定済み（_serverConfig.oauthRefresh）なら認可コード方式＝長期の合鍵
+  // (refresh_token) をもらってこの端末に保存し、以後ログイン画面を出さない。未設定なら従来方式。
   signIn(force) {
     const cfg = this.cfg();
     return new Promise((resolve, reject) => {
       if (!cfg.clientId) { toast('クライアントIDを設定してください'); return resolve(false); }
       const launch = () => {
         try {
+          if (_serverConfig.oauthRefresh) {
+            const cc = google.accounts.oauth2.initCodeClient({
+              client_id: cfg.clientId,
+              scope: GSCOPE,
+              ux_mode: 'popup',
+              callback: (resp) => {
+                if (!resp || !resp.code) return reject(new Error('認可コード取得失敗'));
+                fetch('/api/oauth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'exchange', code: resp.code }) })
+                  .then(r => r.json().then(d => ({ ok: r.ok, d })).catch(() => ({ ok: false, d: {} })))
+                  .then(({ ok, d }) => {
+                    if (!ok || !d.access_token) return reject(new Error('トークン交換失敗' + (d && d.error ? `: ${d.error}` : '')));
+                    // 合鍵は初回同意時のみ返る。返らなかった時は既存の合鍵を保持（消さない）
+                    if (d.refresh_token) this._writeRt(d.refresh_token);
+                    this._onToken({ access_token: d.access_token, scope: d.scope, expires_in: d.expires_in }, resolve, reject);
+                  })
+                  .catch(reject);
+              },
+              error_callback: (e) => reject(new Error((e && e.type) || 'OAuthエラー')),
+            });
+            cc.requestCode();   // 同期で呼ぶ＝タップのユーザー操作を維持
+            return;
+          }
           const tc = google.accounts.oauth2.initTokenClient({
             client_id: cfg.clientId,
             scope: GSCOPE,
@@ -1245,18 +1277,41 @@ const gsync = {
     // など複数経路から同時に呼ばれると、各回 requestAccessToken でログイン画面が二重に開く不具合の対策。
     if (this._refreshing) return this._refreshing;
     const cfg = this.cfg();
-    this._refreshing = new Promise((resolve) => {
-      if (!cfg.clientId || !(window.google && google.accounts && google.accounts.oauth2)) return resolve(false);
-      try {
-        const tc = google.accounts.oauth2.initTokenClient({
-          client_id: cfg.clientId,
-          scope: GSCOPE,
-          callback: (r) => { if (r && r.access_token) { this._token = r.access_token; this._scope = r.scope || this._scope; this._refreshExpMs = this._expMs(r.expires_in); this._writeToken(this._token, this._scope, this._email, this._refreshExpMs); resolve(true); } else resolve(false); },
-          error_callback: () => resolve(false),
-        });
-        tc.requestAccessToken({ prompt: '' });   // 無音更新（同意画面を出さない）
-      } catch (_) { resolve(false); }
-    }).finally(() => { this._refreshing = null; });
+    this._refreshing = (async () => {
+      // ① リフレッシュトークン（長期の合鍵）があれば /api/oauth で無音更新。
+      //    Cookie も GIS スクリプトも不要＝毎朝・どのブラウザでも確実に成功する（本命ルート）。
+      const rt = this._loadRt();
+      if (rt) {
+        try {
+          const r = await fetch('/api/oauth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'refresh', refresh_token: rt }) });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.access_token) {
+            this._token = d.access_token;
+            if (d.scope) this._scope = d.scope;
+            this._refreshExpMs = this._expMs(d.expires_in);
+            this._writeToken(this._token, this._scope, this._email, this._refreshExpMs);
+            return true;
+          }
+          // 400=合鍵が無効化された（Googleアカウント側でアクセス取り消し等）→合鍵を破棄して②へ。
+          // 501=サーバー未設定→②へ。それ以外（一時的な障害）は合鍵を残して失敗（次回また試す）。
+          if (r.status === 400) this._clearRt();
+          else if (r.status !== 501) return false;
+        } catch (_) { return false; } // ネットワーク断: 合鍵は残して失敗
+      }
+      // ② 従来のGIS無音更新（prompt:''）。サードパーティCookieが生きていれば成功。
+      return await new Promise((resolve) => {
+        if (!cfg.clientId || !(window.google && google.accounts && google.accounts.oauth2)) return resolve(false);
+        try {
+          const tc = google.accounts.oauth2.initTokenClient({
+            client_id: cfg.clientId,
+            scope: GSCOPE,
+            callback: (r) => { if (r && r.access_token) { this._token = r.access_token; this._scope = r.scope || this._scope; this._refreshExpMs = this._expMs(r.expires_in); this._writeToken(this._token, this._scope, this._email, this._refreshExpMs); resolve(true); } else resolve(false); },
+            error_callback: () => resolve(false),
+          });
+          tc.requestAccessToken({ prompt: '' });   // 無音更新（同意画面を出さない）
+        } catch (_) { resolve(false); }
+      });
+    })().finally(() => { this._refreshing = null; });
     return this._refreshing;
   },
   // リロード後のログイン復元: ①保存済みトークンが生きていれば無通信で即復帰（サードパーティCookie
@@ -1277,15 +1332,18 @@ const gsync = {
       // 失効後は Drive アクセスの401時に必要に応じて再取得する。
       return true;
     }
-    // ② 保存が無い/失効 → サイレント再取得（セッション＆Cookieが生きていれば成功）
-    if (!cfg.clientId) return false;
-    try { await this.ensureGis(); } catch (_) { return false; }
+    // ② 保存が無い/失効 → サイレント再取得。リフレッシュトークン（長期の合鍵）があれば /api/oauth 経由で
+    //    確実に復帰（GIS不要）。無ければ従来のGIS無音再取得（Cookieが通れば成功）。
+    // clientId はローカル未設定でもサーバー側にあるため、合鍵があれば先へ進む（起動直後は
+    // loadServerConfig 前で cfg.clientId が空のことがあり、ここで返すと合鍵ルートまで潰れる）。
+    if (!cfg.clientId && !this._loadRt()) return false;
+    try { await this.ensureGis(); } catch (_) { if (!this._loadRt()) return false; } // 合鍵があればGIS読込失敗でも続行可
     if (!await this.refresh()) return false;                    // 無音取得不可（Cookieブロック等）は静かに諦める
     try {
       const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + this._token } }).then(x => x.json());
       const email = ((info && info.email) || '').toLowerCase();
       const allow = (cfg.allowedEmails || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
-      if (allow.length && !allow.includes(email)) { this._token = null; this._scope = ''; this._clearToken(); return false; } // 許可外は復元しない
+      if (allow.length && !allow.includes(email)) { this._token = null; this._scope = ''; this._clearToken(); this._clearRt(); return false; } // 許可外は復元しない
       this._email = email;
       this._writeToken(this._token, this._scope, email, this._refreshExpMs || this._expMs(3600)); // メール込みで保存し直す
     } catch (_) { /* userinfo取得失敗でもトークンは有効＝続行（メール表示だけ空になる） */ }

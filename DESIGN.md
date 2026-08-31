@@ -827,6 +827,17 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - 鍵を使わないAPI（info/company/disclosure/earnings/history/ranking/splits/youtube/config）は
   公開市場データ/公開設定のみのため非保護。
 
+### 15.3.2 ログイン持続化：リフレッシュトークン方式（2026-09-01 追加）
+毎朝Googleトークン（約1時間で失効）が切れてログイン画面が出る問題への対応。一般的なWebサービス同様、**初回ログイン時に長期の合鍵（refresh_token）をもらい、以後はサーバー経由で入場券（access_token）を無音再発行**する。
+
+- **サーバー**: `functions/api/oauth.js`（POST）。`action:'exchange'`（認可コード→access+refresh）/ `action:'refresh'`（refresh→access）。`GOOGLE_OAUTH_CLIENT_ID`＋**`GOOGLE_CLIENT_SECRET`**（新規env）を使い Google の token エンドポイントへ中継。**シークレット未設定なら501**＝フロントは従来方式のまま（段階導入。設定した瞬間から有効）。id_token等は返さない。
+- **フロント**（app.js gsync）:
+  - `/api/config` の `oauthRefresh` フラグで方式を自動切替。
+  - `signIn`: フラグONなら `initCodeClient`（ux_mode:'popup'、タップ同期で `requestCode`）→ `/api/oauth exchange`。返った refresh_token を `localStorage sm_grt` に保存（**端末固有の認証情報＝ルール7の例外**）。返らない時は既存合鍵を保持。
+  - `refresh()`: ①合鍵があれば `/api/oauth refresh`（Cookie/GIS不要＝確実）→ 400なら合鍵破棄・501なら従来へフォールバック・その他障害は合鍵を残して失敗 → ②従来のGIS無音更新。
+  - 許可外メール判定時は合鍵も破棄。`restoreSession` は合鍵があれば clientId 未読込・GIS読込失敗でも進む。
+- **セキュリティ**: refresh_token は drive.file（アプリ作成ファイルのみ）＋本人メール限定（ALLOWED_EMAILS）の範囲でのみ有効。無効化は Google アカウントの「サードパーティアクセス」から本アプリを削除（→ refresh が400になり自動で従来方式へ戻る）。
+
 ### 15.3.1 日時の扱い（すべて日本時間・2026-08-28）
 画面に出す日時・「今日」の判定は**端末のタイムゾーンに依存させない**。app.js 先頭の `JST_TZ` / `jstParts()` / `jstYmd()` を使う。
 - **`new Date().getHours()` 等をそのまま表示に使わない**（端末TZ依存）。`fmtDateTime()` か `jstParts()` を通す。
@@ -844,6 +855,7 @@ PATCH /api/masters/category/{category}  { amount_jpy: newAmount }
 - メール: `RESEND_API_KEY` / `NOTIFY_EMAIL`（=Resend登録メール宛のみ可・onboarding@resend.dev）
 - 保護: `NOTIFY_TRIGGER_TOKEN`（Pages env＋Cron Worker secret 同値）
 - 公開設定配布: `GOOGLE_OAUTH_CLIENT_ID`（＋ GOOGLE_SHEET_ID 流用）
+- ログイン持続化: `GOOGLE_CLIENT_SECRET`（OAuthクライアントのシークレット。§15.3.2。未設定なら従来方式のまま）
 - 米株時価総額: `FINNHUB_API_KEY`（外国ADRはprofile2の通貨がUSD以外なら時価総額/配当を非表示）
 - **鍵つきAPIの利用者制限: `ALLOWED_EMAILS`**（カンマ区切り。未設定＝アプリにログインできた人なら誰でも通る）
 

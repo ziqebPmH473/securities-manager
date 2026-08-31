@@ -9,6 +9,12 @@
 # 未設定の場合は Yahoo Finance（15〜20分遅延）にフォールバックします
 FINNHUB_API_KEY=your_finnhub_api_key_here
 
+# Googleログイン持続化（リフレッシュトークン方式・DESIGN.md 15.3.2）
+# Google Cloud Console > APIとサービス > 認証情報 > OAuthクライアント の「クライアントシークレット」
+# 未設定の場合は従来のブラウザ完結方式（1時間で失効・毎朝ログイン）のまま動きます
+# GOOGLE_OAUTH_CLIENT_ID=your_client_id_here
+# GOOGLE_CLIENT_SECRET=your_client_secret_here
+
 # FRED APIキー（マクロ指標タブ: インフレ・金利・SLOOS 等）
 # 取得方法: https://fredaccount.stlouisfed.org/apikeys で無料アカウント作成 → Request API Key
 # 未設定の場合は fredgraph.csv（キー不要の公開CSV）にフォールバックします
