@@ -1239,6 +1239,13 @@ US は Nasdaq の Date Reported（earnings-surprise）が発表から**1〜2日�
 - 進捗バーは汎用化: `bgProgress(label, done, total)` / `bgProgressHide()`（`earnProgress` は決算日ラベルの薄いラッパーとして残す）。件数は**バッチ完了後に加算**（取得前に進めると最後のバッチで止まって見える）。
 - 各タスク完了時はインライン編集中でなければ `preserveTableScroll(render)` で反映。
 
+### 20.7 価格取得が全滅した時は更新時刻を進めない＋ログイン成功で自動再取得（2026-08-31 バグ修正）
+朝はGoogleトークンが失効しており（約1時間で失効）、起動時の自動更新（`dailyStartup`→`refreshAll`）がログイン確定前に走ると、価格API（api-guardでログイン必須）が全件401で空振りする。従来は0件でも `lastPriceUpdate` を現在時刻にしていたため「更新時刻は今なのに株価は昨日のまま」に見えた。
+
+- `refreshAll`: 1件も価格を反映できず（`okCount===0`）取得対象があった場合は **`lastPriceUpdate` を進めず throw**（手動更新なら withBusy が「失敗しました…」表示）。`api._priceFetchFailed` フラグに記録。取得対象0件（閉場中で全銘柄スキップ）は正常＝時刻を進める。
+- `dailyStartup`: 価格全滅の日は `lastInfoDate`（本日実行済み）を立てない＝次の機会に再挑戦。
+- `gsync._onToken`（手動ログイン成功）: `_priceFetchFailed` が立っていれば `refreshAll` を自動で再実行＝朝イチの「ログインしたのに株価が昨日のまま」を自動回復。
+
 ## 21.4 会社概要（株探）の取得と表示（2026-07-29 追加）
 銘柄カルテ・詳細ドロワーに、株探の「基本情報 → 会社情報 → 概要」を表示する。
 

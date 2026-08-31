@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260831-2244';
+const APP_VERSION = 'v20260831-2332';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -1211,6 +1211,9 @@ const gsync = {
       try { render(); } catch (_) {}   // ログイン成功で即UI更新（未ログイン警告を消す・状態反映）。syncNow完了を待たない
       resolve(true);
       try { if (typeof dsync !== 'undefined') dsync.afterSignIn(); } catch (_) {}   // 自動同期ONなら初回マージ
+      // 起動時の自動株価更新が未ログイン401で全滅していた場合、手動ログイン成功をきっかけに取り直す
+      // （朝イチ: トークン失効→自動更新が空振り→ログイン→株価が昨日のまま、を自動回復。2026-08-31）
+      try { if (typeof api !== 'undefined' && api._priceFetchFailed) api.refreshAll().then(() => { try { render(); } catch (_) {} }).catch(() => {}); } catch (_) {}
     } catch (e) { reject(e); }
   },
   // ★モバイル対応: タップ→ポップアップの間に await を挟まない。GIS が読込済みなら同期で
@@ -2283,9 +2286,11 @@ const api = {
       return;
     }
     let usFinn = 0, usYah = 0; // 米株のソース内訳（finnhub=ほぼリアルタイム / yahoo=15〜20分遅延）
+    let okCount = 0; // 実際に価格を反映できた銘柄数（全滅＝401等の判定に使う）
     for (const sec of secs) {
       const q = quotes[yahooSymbol(sec)];
       if (q && !q.error && q.price != null) {
+        okCount++;
         const prev = store.data.prices[priceKey(sec)] || {}; // 高値は通常更新では返らない→既存値を保持
         store.data.prices[priceKey(sec)] = {
           ...prev,
@@ -2330,8 +2335,18 @@ const api = {
       const q = lightQuotes[ix.sym];
       if (q && !q.error && q.price != null) store.data.indices[ix.key] = { price: q.price, prevClose: q.prevClose, fetchedAt: q.fetchedAt };
     }
-    store.data.lastPriceUpdate = new Date().toISOString();
+    // ★更新時刻（ヘッダの「更新」）は**1件でも取れた時だけ**進める（2026-08-31 すみぽん指摘）。
+    //   朝はGoogleトークンが失効しており、起動時の自動更新がログイン確定前に走ると価格APIが全件401で
+    //   空振りする。従来は0件でも時刻を進めていたため「更新時刻は今なのに株価は昨日のまま」に見えた。
+    //   取得対象0件（閉場中で全銘柄スキップ）は正常なので時刻を進める。
+    this._priceFetchFailed = okCount === 0 && secs.length > 0;
+    if (!this._priceFetchFailed) store.data.lastPriceUpdate = new Date().toISOString();
     store.save();
+    if (this._priceFetchFailed) {
+      // 全滅＝ほぼ未ログイン(401)か障害。時刻を進めず、throw して呼び出し元に「失敗」を見せる
+      // （手動更新なら withBusy が「失敗しました：…」表示）。ログイン成功時に自動で取り直す（_onToken）。
+      throw new Error(gsync._token ? '価格を取得できませんでした（時間をおいて再度お試しください）' : '価格を取得できません（未ログイン）。ログインすると自動で取り直します');
+    }
     // 前日終値を取得（light=range=5d を取引所TZの今日基準で選別＝プレ前/休場/日中の市場日替わりでも常に正しい）。
     // ガードは「最後の取得から5分以上経過 or ロジック版更新」のみ＝時間スロットル。
     // 旧・日付キー方式(JST暦日/ET暦日)は端末時刻やセッション状態のエッジで再取得を取りこぼし、
@@ -2669,7 +2684,10 @@ const api = {
       await this.refreshMeta();             // 全銘柄の名前/セクター/業種/ファンダを日次更新（日本語名は維持）
       // ★成功してから「本日実行済み」を立てる。先に立てると、一度失敗しただけでその日は
       //   二度と取りに行かず、PER/PBRが空のまま1日固定される（実際に発生）。
-      store.data.lastInfoDate = today(); store.save();
+      // ★価格が全滅（未ログイン401等）の日も立てない。refreshAll は401では throw しないため
+      //   ここで明示チェックしないと、/api/info（ログイン不要）だけ成功してフラグが立ち、
+      //   ログイン後も株価が昨日のまま固定される（2026-08-31 すみぽん報告）。
+      if (!this._priceFetchFailed) { store.data.lastInfoDate = today(); store.save(); }
     } catch (_) { /* 失敗時は lastInfoDate を立てない＝次回の起動で再挑戦する */ }
     try { await this.refreshCompany(); } catch (_) {}  // 会社概要は未取得の銘柄だけ（既に持っていれば0リクエスト）
     try { await this.checkSplits(); } catch (_) {}     // 分割検知（承認待ちは「分割」タブのバッジで通知）
