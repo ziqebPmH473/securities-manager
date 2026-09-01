@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260831-2339';
+const APP_VERSION = 'v20260901-2221';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -1686,7 +1686,7 @@ function gsaveSettings(f) {
 function gsyncStatus(html) { const el = document.getElementById('gsync-status'); if (el) el.innerHTML = html; }
 async function gsyncSignIn() {
   gsyncStatus('<span class="muted">ログイン中…（ポップアップで承認してください）</span>');
-  try { const ok = await gsync.signIn(); gsyncStatus(ok ? `<span class="pos">✓ ログイン中：${esc(gsync._email || 'OK')}</span>` : '<span class="neg">ログインできませんでした（許可アカウント/テストユーザーを確認）</span>'); }
+  try { const ok = await gsync.signIn(); gsyncStatus(ok ? `<span class="pos">✓ ログイン中：${esc(gsync._email || 'OK')}</span><span class="muted" style="margin-left:8px">／ ログイン持続: ${gsync._loadRt() ? '<span class="pos">有効（この端末に合鍵あり）</span>' : 'なし（合鍵が発行されませんでした）'}</span>` : '<span class="neg">ログインできませんでした（許可アカウント/テストユーザーを確認）</span>'); }
   catch (e) { gsyncStatus('<span class="neg">ログイン失敗：' + esc(e.message || String(e)) + '</span>'); }
 }
 // Drive自動同期 トグル/手動
@@ -10948,7 +10948,8 @@ function googleSyncSection() {
       <span class="tag ${configured ? 'jp' : ''}">${configured ? '設定済み' : '未設定'}</span></div>
     <div class="section-body" style="padding:16px">
       <p class="muted" style="margin:0 0 10px">ブラウザ完結方式(GIS)。データは Google Drive の <code>${DSYNC_FOLDER}/${DSYNC_FILE}</code> に<strong>自動マージ同期</strong>（複数端末で両方の変更が残る）。権限は Drive（このアプリが作成したファイルのみ）で、シート権限は使いません。クライアントID未設定なら何も起きません。</p>
-      <div id="gsync-status" style="margin:0 0 12px;font-size:13px;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px">${gsync._token ? `<span class="pos">✓ ログイン中：${esc(gsync._email || '')}</span>` : '<span class="muted">未ログイン（「Googleでログイン」を押してください）</span>'}</div>
+      <div id="gsync-status" style="margin:0 0 12px;font-size:13px;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px">${gsync._token ? `<span class="pos">✓ ログイン中：${esc(gsync._email || '')}</span>` : '<span class="muted">未ログイン（「Googleでログイン」を押してください）</span>'}
+        <span class="muted" style="margin-left:8px" title="この端末に長期の合鍵（リフレッシュトークン）が保存されているか。「あり」なら毎朝のログイン画面は出ない。無ければ一度「Googleでログイン」する">／ ログイン持続: ${gsync._loadRt() ? '<span class="pos">有効（この端末に合鍵あり）</span>' : 'なし（要ログイン1回）'}</span></div>
       <div class="form-actions" style="justify-content:flex-start;margin:0 0 8px">
         <button type="button" class="btn btn-primary" onclick="gsyncSignIn()" ${configured ? '' : 'disabled'}>Googleでログイン</button>
       </div>
