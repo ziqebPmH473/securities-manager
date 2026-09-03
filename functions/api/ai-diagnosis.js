@@ -6,7 +6,7 @@
 // ★プライバシー方針（2026-08-28 すみぽん決定）: 金額はクライアント側で送らない（銘柄・比率・サイン・マクロのみ）。
 //   このAPIは受け取った data をそのままプロンプトに埋めるだけで、内容の追加取得はしない。
 import { guardApi } from '../lib/api-guard.js';
-const DEFAULT_CHAIN = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+const DEFAULT_CHAIN = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
 
 const PROMPT = `あなたは日本の個人投資家を補佐する投資分析アシスタントです。
 以下のJSONは、利用者の株式管理ツールが今この瞬間に持っているデータです（金額は含まれません。比率のみ）。

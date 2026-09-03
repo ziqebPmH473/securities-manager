@@ -6124,6 +6124,8 @@ const NEWS_CATS = [['all', 'すべて'], ['market', '市況'], ['earnings', '決
 const DEFAULT_YT_CHANNELS = [{ id: 'UCfJEDCUlzQl4-atLp6Z9DcQ', name: 'テスタ' }];
 // 要約に使えるGeminiモデル（東証マーケット振り返りツールと同一）。空=自動（優先順に試し上限時は次へ降格）
 const YT_MODELS = [
+  ['gemini-3.8-flash', 'Gemini 3.8 Flash（20回/日）'],
+  ['gemini-3.7-flash', 'Gemini 3.7 Flash（20回/日）'],
   ['gemini-3.6-flash', 'Gemini 3.6 Flash（20回/日）'],
   ['gemini-3.5-flash', 'Gemini 3.5 Flash（20回/日）'],
   ['gemini-3-flash-preview', 'Gemini 3 Flash（20回/日）'],
@@ -6133,7 +6135,7 @@ const YT_MODELS = [
   ['gemini-2.5-flash-lite', 'Gemini 2.5 Flash Lite（20回/日）'],
 ];
 // 品質優先の並び（自動時のチェーン／固定選択時の降格先の順序）。上ほど高精度、下ほど回数上限が大きい。
-const YT_QUALITY_ORDER = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
+const YT_QUALITY_ORDER = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
 function ytModelSetting() { return (store.data.settings && store.data.settings.ytModel) || ''; }
 // パネルの「モデル: … ・ 12,345 tok」表記
 function ytModelNote(model, tokens, fellBack) {

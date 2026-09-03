@@ -4,7 +4,7 @@
 //   モデルは優先順の配列で受け取り、上限(429)・一時エラーはリトライ→次の下位モデルへ降格。全滅なら再試行を促す。
 // Gemini に YouTube URL を fileData で渡す。長尺対策で低解像度＋前半45分に制限。結果はクライアントが ytSummaries にキャッシュ&同期。
 import { guardApi } from '../lib/api-guard.js';
-const DEFAULT_CHAIN = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
+const DEFAULT_CHAIN = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
 const PROMPT = `次のYouTube動画を視聴し、投資・株式・マーケットの観点で日本語のニュース記事風にまとめてください。
 
 出力形式（この形だけを出力し、ラベルや記号<>は絶対に書かない）:

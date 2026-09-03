@@ -1110,7 +1110,7 @@ N3(YouTube要約)より先に実施（すみぽん指示）。SEC(EDGAR)は英�
 
 ### 19.2 動画要約のモデル設定・降格チェーン（東証振り返りと同仕様・2026-07-19）
 - 参照: `C:\work\stock-slide-generator`（東証マーケット振り返りツール）の `functions/api/analyze.js` ＋ モデルセレクタ。
-- **モデル選択**: マスタ・設定＞YouTubeチャンネル・要約設定にモデル選択を追加。`store.data.settings.ytModel`（空=自動）。選択肢＝YT_MODELS（gemini-3.6-flash / gemini-3.5-flash / gemini-3-flash-preview / gemini-3.5-flash-lite / gemini-3.1-flash-lite / gemini-2.5-flash / gemini-2.5-flash-lite）。既定は gemini-3.5-flash-lite（500回/日）。※2026-07-24にGoogleのモデル更新に伴い gemini-3.6-flash・gemini-3.5-flash-lite を追加し、既定/チェーン先頭を後継へ更新。
+- **モデル選択**: マスタ・設定＞YouTubeチャンネル・要約設定にモデル選択を追加。`store.data.settings.ytModel`（空=自動）。選択肢＝YT_MODELS（gemini-3.8-flash / gemini-3.7-flash / gemini-3.6-flash / gemini-3.5-flash / gemini-3-flash-preview / gemini-3.5-flash-lite / gemini-3.1-flash-lite / gemini-2.5-flash / gemini-2.5-flash-lite）。既定は gemini-3.5-flash-lite（500回/日）。※2026-07-24にGoogleのモデル更新に伴い gemini-3.6-flash・gemini-3.5-flash-lite を追加し、既定/チェーン先頭を後継へ更新。※2026-09-04に gemini-3.8-flash / gemini-3.7-flash（各20回/日・RPDはモデル別枠）を追加し、品質優先チェーンの先頭へ。
 - **上限時の挙動（同仕様）**: `/api/youtube-summary?models=m1,m2,...` が優先順にモデルを試行。一時エラー（429/5xx/quota/rate/overload等 `isTransient`）は同モデルで1回リトライ（800ms）→次モデルへ**降格**。全滅なら「全モデルが混雑/上限のようです。少し待って…」。自動時の降格チェーン＝`YT_MODEL_CHAIN`（lite優先で無料枠に強い順）。使用モデル・降格有無はパネルに表示（`d.model`/`fellBack`）。
 
 ### 19.3 モデル固定でも上限時は降格（東証より一歩進めた挙動・2026-07-19）
