@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260901-2221';
+const APP_VERSION = 'v20260910-0119';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -5510,8 +5510,16 @@ function openAnalysisHistory(secId) {
     return parts.every(p => p === '—') ? dash : parts.join('/');
   };
   const ccy = MARKET_CCY[sec.market];
-  // 推奨投資額は円建て（分析シート由来）。市場に関わらず yen() で表示する（米株でも "$" を付けない）。
-  const amtTxt = (a) => a.recoAmount != null ? yen(a.recoAmount) : dash;
+  // 推奨額＝その回のカテゴリに対応するカテゴリマスタ金額（市場通貨。US=$/JP=¥）を都度算出する。
+  // 旧実装は取込専用フィールド a.recoAmount だけを見ていたため、「推奨投資額」列を持たず
+  // カテゴリだけ取り込んだ銘柄は常に空欄になっていた（詳細ドロワー・転記行は既に categoryAmountFor 方式）。
+  // 表示するのはカテゴリマスタの「現在」の金額。評価日当時の金額は「適用金額履歴」を参照。
+  const amtTxt = (a, isFirst) => {
+    const c = a.category || (isFirst ? sec.category : null);
+    const v = c ? store.categoryAmountFor(c, sec.market) : 0;
+    if (v) return ccy + num(v);
+    return a.recoAmount != null ? yen(a.recoAmount) : dash; // 旧「推奨投資額」列の取込値（円建て）はフォールバックで残す
+  };
   // カテゴリは分析レコードに保存されていれば各回の値、無ければ先頭(=現在)行のみ銘柄の現在カテゴリで補完
   const catTxt = (a, isFirst) => { const c = a.category || (isFirst ? sec.category : null); return c ? categoryTag(c) : dash; };
   // [見出し, 列幅px]。table-layout:fixed なので幅はこの colgroup で決まる。分析メモは width 未指定＝可変にし、
@@ -5528,7 +5536,7 @@ function openAnalysisHistory(secId) {
     <td>${g(a.buyGrade)}</td>
     <td style="white-space:nowrap">${starTxt(a)}</td>
     <td>${catTxt(a, i === 0)}</td>
-    <td style="white-space:nowrap;text-align:right">${amtTxt(a)}</td>
+    <td style="white-space:nowrap;text-align:right">${amtTxt(a, i === 0)}</td>
     <td>${a.priority != null ? a.priority : dash}</td>
     <td class="ah-memo">${a.analysisNote ? esc(a.analysisNote) : dash}</td>
   </tr>`).join('');
