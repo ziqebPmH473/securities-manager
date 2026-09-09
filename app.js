@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260910-0119';
+const APP_VERSION = 'v20260910-0128';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -1042,6 +1042,7 @@ const store = {
       if (this.data.analyses.some(a => a.securityId === s.id && a.analysisDate === s.analysisDate)) continue;
       const rec = { id: this.nextId(), securityId: s.id, analysisDate: s.analysisDate, createdAt: s.updatedAt || this._now(), updatedAt: s.updatedAt || this._now() };
       for (const k of ANALYSIS_FIELDS) if (s[k] != null) rec[k] = s[k];
+      if (s.category) rec.category = s.category; // カテゴリも履歴へ（無いと分析履歴の推奨額が出せない）
       this.data.analyses.push(rec); added = true;
     }
     if (added) this.save();
@@ -5514,14 +5515,22 @@ function openAnalysisHistory(secId) {
   // 旧実装は取込専用フィールド a.recoAmount だけを見ていたため、「推奨投資額」列を持たず
   // カテゴリだけ取り込んだ銘柄は常に空欄になっていた（詳細ドロワー・転記行は既に categoryAmountFor 方式）。
   // 表示するのはカテゴリマスタの「現在」の金額。評価日当時の金額は「適用金額履歴」を参照。
-  const amtTxt = (a, isFirst) => {
-    const c = a.category || (isFirst ? sec.category : null);
-    const v = c ? store.categoryAmountFor(c, sec.market) : 0;
-    if (v) return ccy + num(v);
+  // カテゴリは分析レコードに保存されていればその回の値。無い行（＝当時カテゴリが未登録だったのではなく、
+  // 汎用取込や旧移行で「履歴に記録されなかった」だけ）は銘柄の現在カテゴリで補完し、推測であることを薄字で示す。
+  const catOf = (a) => ({ cat: a.category || sec.category || null, inferred: !a.category });
+  const infer = (html, note) => `<span title="${esc(note)}" style="opacity:.55">${html}</span>`;
+  const INFER_NOTE = 'この回はカテゴリが履歴に記録されていません。銘柄の現在のカテゴリで表示しています。';
+  const amtTxt = (a) => {
+    const { cat, inferred } = catOf(a);
+    const v = cat ? store.categoryAmountFor(cat, sec.market) : 0;
+    if (v) { const t = ccy + num(v); return inferred ? infer(t, INFER_NOTE) : t; }
     return a.recoAmount != null ? yen(a.recoAmount) : dash; // 旧「推奨投資額」列の取込値（円建て）はフォールバックで残す
   };
-  // カテゴリは分析レコードに保存されていれば各回の値、無ければ先頭(=現在)行のみ銘柄の現在カテゴリで補完
-  const catTxt = (a, isFirst) => { const c = a.category || (isFirst ? sec.category : null); return c ? categoryTag(c) : dash; };
+  const catTxt = (a) => {
+    const { cat, inferred } = catOf(a);
+    if (!cat) return dash;
+    return inferred ? infer(categoryTag(cat), INFER_NOTE) : categoryTag(cat);
+  };
   // [見出し, 列幅px]。table-layout:fixed なので幅はこの colgroup で決まる。分析メモは width 未指定＝可変にし、
   // モーダルの余り幅を吸収させる（テーブルとモーダルの幅を一致＝右余白をなくす）。
   const cols = [['評価日', 92], ['総合', 50], ['格付', 50], ['買い時', 60], ['★ ﾊﾞﾘｭ/強/ﾘｽｸ', 122], ['カテゴリ', 96], ['推奨額', 84], ['優先順', 60], ['分析メモ', null]];
@@ -5529,14 +5538,14 @@ function openAnalysisHistory(secId) {
   const colgroup = `<colgroup>${cols.map(c => `<col${c[1] ? ` style="width:${c[1]}px"` : ''}>`).join('')}</colgroup>`;
   const minW = cols.reduce((a, c) => a + (c[1] || MEMO_MIN), 0);
   const head = `<tr>${cols.map(c => `<th>${esc(c[0])}</th>`).join('')}</tr>`;
-  const rows = list.map((a, i) => `<tr>
+  const rows = list.map((a) => `<tr>
     <td>${esc(a.analysisDate)}</td>
     <td>${g(a.overallGrade)}</td>
     <td>${g(a.rating)}</td>
     <td>${g(a.buyGrade)}</td>
     <td style="white-space:nowrap">${starTxt(a)}</td>
-    <td>${catTxt(a, i === 0)}</td>
-    <td style="white-space:nowrap;text-align:right">${amtTxt(a, i === 0)}</td>
+    <td>${catTxt(a)}</td>
+    <td style="white-space:nowrap;text-align:right">${amtTxt(a)}</td>
     <td>${a.priority != null ? a.priority : dash}</td>
     <td class="ah-memo">${a.analysisNote ? esc(a.analysisNote) : dash}</td>
   </tr>`).join('');
@@ -5556,7 +5565,7 @@ function openAnalysisHistory(secId) {
       <tbody>${scRows}</tbody>
     </table></div>` : '';
   showModal(`分析履歴 — ${esc(calc.displayName(sec))}`, `
-    <p class="muted">この銘柄の分析評価の履歴です（評価日の新しい順）。記録は銘柄編集フォームの「分析メタ」保存、または分析結果の取込でたまります。先頭が現在の表示値です。横にスクロールできます。</p>
+    <p class="muted">この銘柄の分析評価の履歴です（評価日の新しい順）。記録は銘柄編集フォームの「分析メタ」保存、分析結果の取込、汎用取込（評価日を割り当てた時）でたまります。先頭が現在の表示値です。薄い表示のカテゴリ・推奨額は、その回のカテゴリが履歴に記録されていないため現在のカテゴリで補完したものです。横にスクロールできます。</p>
     ${list.length ? `<div class="table-wrap"><table class="ah-table" style="width:100%;min-width:${minW}px">${colgroup}
       <thead>${head}</thead><tbody>${rows}</tbody>
     </table></div>` : '<div class="empty">分析履歴はまだありません。</div>'}
@@ -14504,6 +14513,18 @@ async function runGenericImport() {
       for (const k of SCENARIO_FIELDS) if (k in patch) scFields[k] = patch[k];
       store.upsertScenario(sec.id, patch.scenarioDate, scFields);
       store.syncLatestScenario(sec.id);
+    }
+    // 分析メタも評価日があれば履歴(analyses)へ upsert→最新をミラー（シナリオと同じ扱い）。
+    // 以前は平置きへ書くだけで履歴に積まなかったため、汎用取込を主に使っていると分析履歴が
+    // 「起動時の後方互換移行で起こされた1件」しか残らず、同一セッション内で評価日をまたぐと過去回が消えていた。
+    // カテゴリはこの回の取込値、無ければ銘柄の現在値を履歴にも残す（推奨額の算出に必要）。
+    if (patch.analysisDate) {
+      const aFields = {};
+      for (const k of ANALYSIS_FIELDS) if (k in patch) aFields[k] = patch[k];
+      const cat = patch.category || sec.category || null;
+      if (cat) aFields.category = cat;
+      store.upsertAnalysis(sec.id, patch.analysisDate, aFields);
+      store.syncLatestAnalysis(sec.id);
     }
     // 保有・取得円・売却前購入額
     const hasQty = ('quantity' in rec) && rec.quantity != null;
