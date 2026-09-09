@@ -14499,6 +14499,8 @@ async function runGenericImport() {
       created++;
     } else updated++;
     // 銘柄属性（割り当てた列だけ上書き）。マスタ管理項目は変換マスタで正規化／スキップ
+    // 空セルは null で上書き＝値をクリアできる仕様（2026-09-10 すみぽん判断。分析結果取込は「空なら維持」で
+    // 挙動が異なるが、維持に揃えると「汎用取込では値を空に戻せない」制約になるため現状のままとする）。
     const patch = {};
     for (const k of Object.keys(rec)) {
       if (k === 'ruleName') { const rn = convMaster('ruleName', rec.ruleName); if (rn === SKIP) continue; const r = store.data.rules.find(x => x.name === rn); if (r) patch.ruleId = r.id; continue; }
