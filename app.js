@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260910-0131';
+const APP_VERSION = 'v20260910-1510';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -5629,12 +5629,12 @@ function importStatusHtml() {
 
 // ---------- レポート（SEC-17） ----------
 // 取引サマリーの期間: 'all'=全期間 / 'year'=年別（年指定）/ 'month'=月別（年＋月指定）
-let reportPeriod = 'all';
+let reportPeriod = 'month'; // 初期表示は月別（2026-09-10 すみぽん指示）
 let reportYear = jstParts().y;        // 年別・月別で対象の年（JST）
 let reportMonthNum = jstParts().m;    // 月別で対象の月(1-12・JST）
 // 取引サマリーの絞り込み（汎用フィルタ）。市場・銘柄ラベルで金額/件数/一覧を絞る（他の扱いは不変）。
 let txnFilter = { market: 'ALL', labels: [], labelMode: 'exclude' }; // labelMode: 'exclude'=選択ラベルを除外 / 'include'=選択ラベルのみ
-function refreshTxnSection() { const el = document.getElementById('txn-section'); if (el) el.innerHTML = txnSummaryHtml(); else renderReport(); scheduleFit(); }
+function refreshTxnSection() { const el = document.getElementById('txn-section'); if (el) { el.innerHTML = txnSummaryHtml(); renderTxnChart(); } else renderReport(); scheduleFit(); }
 function setReportPeriod(p) { reportPeriod = p; refreshTxnSection(); }
 function setReportYear(y) { reportYear = parseInt(y, 10) || jstParts().y; refreshTxnSection(); }
 function setReportMonthNum(m) { reportMonthNum = parseInt(m, 10) || jstParts().m; refreshTxnSection(); }
@@ -8405,6 +8405,7 @@ function renderReport() {
     sizeMatrixChips();  // チップ文字を枠にぴったり収まる最大サイズに（先に文字を確定）
     fitMatrix();        // 表枠を画面下端まで伸ばす（高さいっぱい・下余白なし）
   } else {
+    if (reportTab === 'txn') renderTxnChart(); // 取引サマリーのグラフ（容器幅・残り高さで描く）
     scheduleFit();      // 取引サマリー等の表を枠内スクロール
   }
 }
@@ -8474,6 +8475,16 @@ function txnSummaryHtml() {
         <button class="btn btn-sm ${txnFilterActive() ? 'btn-primary' : ''}" onclick="openTxnFilter()" title="市場・銘柄ラベルで絞り込み">🔎 絞り込み</button>
       </div></div>
     ${filterChip}
+    <div class="txn-chart-wrap" style="padding:10px 16px 4px">
+      <div class="muted" style="font-size:11px;display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px">
+        <span>${txnChartRangeText()}</span>
+        <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TXN_CHART_COLORS.buy};vertical-align:middle"></span> 買い</span>
+        <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TXN_CHART_COLORS.sell};vertical-align:middle"></span> 売り</span>
+        <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TXN_CHART_COLORS.netPos};vertical-align:middle"></span>/<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TXN_CHART_COLORS.netNeg};vertical-align:middle"></span> ネット（買い−売り）</span>
+        <span>${reportPeriod === 'all' ? 'クリックでその月の月別へ' : 'クリックでその' + (reportPeriod === 'year' ? '年' : '月') + 'を選択'}</span>
+      </div>
+      <div id="txn-chart"></div>
+    </div>
     <div style="overflow-x:auto;max-width:100%"><table><thead><tr><th class="l">区分</th><th>件数</th><th>金額（円換算）</th></tr></thead>
       <tbody>
         ${row('buy', '買い', buyN, buyTot)}
@@ -8481,6 +8492,158 @@ function txnSummaryHtml() {
         <tr><td class="l"><strong>ネット投資額（買い−売り）</strong></td><td>—</td><td class="${cls(net)}"><strong>${yen(net)}</strong></td></tr>
       </tbody></table></div>
     <p class="muted" style="padding:0 16px 12px">※取引のある銘柄のみ。買い/売りの行をクリックすると明細一覧を表示。ロット単位の実現損益はロット管理が必要なため今後対応。</p>`;
+}
+// ---------- 取引サマリーのグラフ（買い/売り/ネットの推移） ----------
+// 期間トグルに応じて区切り（bucket）を作る（2026-09-10 すみぽん指示）:
+//  月別 … 選択中の年月を末尾とする直近12ヶ月（月単位）
+//  年別 … 最初の取引年〜今年を年単位（全期間・長くならない）
+//  全期間 … 最初の取引月〜今月を月単位（全期間）
+// 絞り込み（市場・ラベル）は表と同じく効く。期間トグルの年月選択は月別の「どの12ヶ月か」に使う。
+const TXN_CHART_COLORS = { buy: '#2563eb', sell: '#f59e0b', netPos: '#1f8a4c', netNeg: '#c2362f' };
+function txnMonthKey(y, m) { return `${y}-${String(m).padStart(2, '0')}`; }
+function txnChartBuckets() {
+  const now = jstParts();
+  const txs = store.data.transactions.filter(t => t.tradedAt && txnSecMatchesFilter(store.data.securities.find(s => s.id === t.securityId)));
+  const keys = [];
+  if (reportPeriod === 'month') {
+    for (let k = -11; k <= 0; k++) { const d = new Date(Date.UTC(reportYear, reportMonthNum - 1 + k, 1)); keys.push(txnMonthKey(d.getUTCFullYear(), d.getUTCMonth() + 1)); }
+  } else if (reportPeriod === 'year') {
+    const ys = txs.map(t => t.tradedAt.slice(0, 4)).filter(v => /^\d{4}$/.test(v)).map(Number);
+    const y0 = ys.length ? Math.min(...ys) : now.y, y1 = Math.max(now.y, ys.length ? Math.max(...ys) : now.y);
+    for (let y = y0; y <= y1; y++) keys.push(String(y));
+  } else {
+    const ms = txs.map(t => t.tradedAt.slice(0, 7)).filter(v => /^\d{4}-\d{2}$/.test(v)).sort();
+    const cur = txnMonthKey(now.y, now.m);
+    const first = ms.length ? ms[0] : cur, end = ms.length && ms[ms.length - 1] > cur ? ms[ms.length - 1] : cur;
+    let [y, m] = first.split('-').map(Number);
+    while (txnMonthKey(y, m) <= end && keys.length < 600) { keys.push(txnMonthKey(y, m)); m++; if (m > 12) { m = 1; y++; } }
+  }
+  const map = {}; keys.forEach(k => { map[k] = { key: k, buy: 0, sell: 0, buyN: 0, sellN: 0 }; });
+  for (const t of txs) {
+    const b = map[reportPeriod === 'year' ? t.tradedAt.slice(0, 4) : t.tradedAt.slice(0, 7)]; if (!b) continue;
+    const sec = store.data.securities.find(s => s.id === t.securityId); if (!sec) continue;
+    const amt = calc.toJpy(sec.market, (t.price || 0) * (t.quantity || 0)); if (amt == null) continue;
+    if (t.type === 'buy') { b.buy += amt; b.buyN++; } else if (t.type === 'sell') { b.sell += amt; b.sellN++; }
+  }
+  return keys.map(k => map[k]);
+}
+// 凡例左のレンジ説明文（例: 「2025年10月〜2026年9月（月単位）」）
+function txnChartRangeText() {
+  const bs = txnChartBuckets(); if (!bs.length) return '';
+  const lab = k => (k.length === 4 ? `${k}年` : `${+k.slice(0, 4)}年${+k.slice(5, 7)}月`);
+  return `${lab(bs[0].key)}〜${lab(bs[bs.length - 1].key)}（${reportPeriod === 'year' ? '年' : '月'}単位）`;
+}
+// 円の軸ラベルを短く（¥12,000,000 → 1,200万）
+function fmtYenShort(v) {
+  const a = Math.abs(v), sg = v < 0 ? '-' : '';
+  if (a >= 1e8) return sg + num(Math.round(a / 1e7) / 10) + '億';
+  if (a >= 1e4) return sg + num(Math.round(a / 1e4)) + '万';
+  return sg + num(Math.round(a));
+}
+let _txnChartGeom = null; // ホバー/クリックで使うジオメトリ
+// 月別/年別のグラフ本体（バニラSVG）。買い/売り＝棒（並列）、ネット＝折れ線＋点（正=緑/負=赤）。選択中の区切りは帯で強調。
+function txnChartSvg(buckets, W, H) {
+  const nets = buckets.map(b => b.buy - b.sell);
+  let dmax = Math.max(0, ...buckets.map(b => Math.max(b.buy, b.sell)), ...nets), dmin = Math.min(0, ...nets);
+  if (dmax === dmin) dmax = dmin + 1;
+  const step = niceStep((dmax - dmin) || 1, 4);
+  const ymin = Math.floor(dmin / step) * step, ymax = Math.ceil(dmax / step) * step;
+  // 左余白はY軸ラベルの最長文字数に合わせる（スマホの狭い幅で無駄な余白を作らない）
+  let yLabMax = 0; for (let v = ymin; v <= ymax + step * 1e-6; v += step) yLabMax = Math.max(yLabMax, fmtYenShort(v).length);
+  const pad = { l: 10 + yLabMax * 6.2, r: 12, t: 12, b: 28 };
+  const n = buckets.length, plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b, slot = plotW / n;
+  const py = v => pad.t + (1 - (v - ymin) / (ymax - ymin)) * plotH;
+  const y0 = py(0);
+  const selKey = reportPeriod === 'year' ? String(reportYear) : reportPeriod === 'month' ? txnMonthKey(reportYear, reportMonthNum) : null;
+  let grid = '';
+  for (let v = ymin; v <= ymax + step * 1e-6; v += step) {
+    const y = py(v).toFixed(1);
+    grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="var(--border)" stroke-width="1"/>`;
+    grid += `<text x="${pad.l - 6}" y="${(+y + 3).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${fmtYenShort(v)}</text>`;
+  }
+  // X ラベル: 区切り数が多い時は間引く（月別12本は全部・全期間は最大約12個＋各年の1月）
+  const labStep = Math.max(1, Math.ceil(n / Math.max(2, Math.min(12, Math.floor(plotW / 34))))); // 1ラベル約34px を確保
+  const labOf = k => (k.length === 4 ? k : `${k.slice(2, 4)}/${+k.slice(5, 7)}`);
+  let xlab = '', band = '', bars = '', line = '', dots = '';
+  const gap = Math.min(6, slot * 0.14), barW = Math.max(1, (slot - gap * 2) / 2);
+  const pts = [];
+  buckets.forEach((b, i) => {
+    const x0 = pad.l + i * slot;
+    if (b.key === selKey) band += `<rect x="${x0.toFixed(1)}" y="${pad.t}" width="${slot.toFixed(1)}" height="${plotH.toFixed(1)}" fill="var(--accent)" opacity="0.10"/>`;
+    if (i % labStep === 0) xlab += `<text x="${(x0 + slot / 2).toFixed(1)}" y="${H - pad.b + 14}" fill="var(--muted)" font-size="10" text-anchor="middle">${labOf(b.key)}</text>`;
+    if (b.buy > 0) bars += `<rect x="${(x0 + gap).toFixed(1)}" y="${py(b.buy).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(1, y0 - py(b.buy)).toFixed(1)}" fill="${TXN_CHART_COLORS.buy}" rx="1"/>`;
+    if (b.sell > 0) bars += `<rect x="${(x0 + gap + barW).toFixed(1)}" y="${py(b.sell).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(1, y0 - py(b.sell)).toFixed(1)}" fill="${TXN_CHART_COLORS.sell}" rx="1"/>`;
+    const net = b.buy - b.sell, cx = x0 + slot / 2, cy = py(net);
+    pts.push([cx, cy]);
+    if (b.buyN || b.sellN) dots += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${n > 40 ? 2 : 3.2}" fill="${net >= 0 ? TXN_CHART_COLORS.netPos : TXN_CHART_COLORS.netNeg}" stroke="var(--panel)" stroke-width="1"/>`;
+  });
+  if (pts.length > 1) line = `<path d="${pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ')}" fill="none" stroke="var(--ink)" stroke-width="1.2" opacity="0.55"/>`;
+  const zero = `<line x1="${pad.l}" y1="${y0.toFixed(1)}" x2="${W - pad.r}" y2="${y0.toFixed(1)}" stroke="var(--muted)" stroke-width="1"/>`;
+  const guide = `<rect id="txn-chart-guide" x="0" y="${pad.t}" width="${slot.toFixed(1)}" height="${plotH.toFixed(1)}" fill="var(--ink)" opacity="0.06" style="display:none"/>`;
+  _txnChartGeom = { W, pad, slot, n, buckets };
+  return `<div style="position:relative">
+    <svg id="txn-chart-svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--panel);border:1px solid var(--border);border-radius:8px;cursor:pointer">${band}${grid}${zero}${xlab}${bars}${line}${dots}${guide}</svg>
+    <div id="txn-chart-tip" style="position:absolute;display:none;pointer-events:none;z-index:5;top:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:11px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.18);white-space:nowrap"></div>
+  </div>`;
+}
+// グラフを #txn-chart に描画。幅は容器幅、高さは「表＋注記が窓に収まる残り」（160〜340px）。
+function renderTxnChart(retry = 0) {
+  const el = document.getElementById('txn-chart'); if (!el) return;
+  // ビュー切替直後などレイアウト未確定で幅0の時は次フレームで描く（幅0だと 600px 想定で描かれ、高さが実幅比で膨らみ窓からはみ出す）
+  if (!(el.clientWidth > 0)) { if (retry < 5) requestAnimationFrame(() => renderTxnChart(retry + 1)); return; }
+  const buckets = txnChartBuckets();
+  if (!buckets.some(b => b.buyN || b.sellN)) { el.innerHTML = '<div class="notice" style="margin:0">この範囲に取引がありません。</div>'; return; }
+  let h = 240;
+  const main = el.closest('.content');
+  if (main) {
+    const bottom = main.getBoundingClientRect().bottom, top = el.getBoundingClientRect().top;
+    let belowH = 0; let sib = el.closest('.txn-chart-wrap');
+    while (sib && (sib = sib.nextElementSibling)) belowH += sib.getBoundingClientRect().height;
+    h = Math.max(160, Math.min(340, Math.round(bottom - top - belowH - 24)));
+  }
+  const w = Math.max(240, el.clientWidth || 600);
+  el.innerHTML = txnChartSvg(buckets, w, h);
+  attachTxnChartHover(el);
+  // 収まり補正（ルール6）: 見積りが甘く main.content がはみ出す分だけグラフを縮めて再描画（160px を切る時はスクロール許容）
+  if (main) {
+    const overflow = main.scrollHeight - main.clientHeight;
+    if (overflow > 2 && h - overflow >= 160) { el.innerHTML = txnChartSvg(buckets, w, h - overflow); attachTxnChartHover(el); }
+  }
+}
+// ホバーで区切りごとの買い/売り/ネット・件数を表示。クリックでその区切りを選択（全期間→その月の月別へ）。
+function attachTxnChartHover(el) {
+  const g = _txnChartGeom; if (!g) return;
+  const svg = el.querySelector('#txn-chart-svg'), tip = el.querySelector('#txn-chart-tip'), guide = el.querySelector('#txn-chart-guide');
+  if (!svg || !tip || !guide) return;
+  const idxAt = (clientX) => {
+    const rect = svg.getBoundingClientRect(); if (!(rect.width > 0)) return { i: -1, rect };
+    const sx = (clientX - rect.left) * (g.W / rect.width);
+    return { i: Math.floor((sx - g.pad.l) / g.slot), rect };
+  };
+  const hide = () => { tip.style.display = 'none'; guide.style.display = 'none'; };
+  const move = (clientX) => {
+    const { i, rect } = idxAt(clientX);
+    if (i < 0 || i >= g.n) { hide(); return; }
+    const b = g.buckets[i], net = b.buy - b.sell;
+    const lab = b.key.length === 4 ? `${b.key}年` : `${+b.key.slice(0, 4)}年${+b.key.slice(5, 7)}月`;
+    const numStyle = "margin-left:12px;text-align:right;font-family:'SFMono-Regular',Consolas,'Roboto Mono',Menlo,monospace";
+    const row = (l, v, c, n2) => `<div style="display:flex;gap:6px;align-items:center"><span style="width:9px;height:9px;flex:0 0 9px;border-radius:2px;background:${c}"></span><span style="flex:1">${l}${n2 != null ? ` <span class="muted">${n2}件</span>` : ''}</span><span style="font-weight:600;${numStyle}">${yen(v)}</span></div>`;
+    tip.innerHTML = `<div style="font-weight:700;margin-bottom:3px">${lab}</div>${row('買い', b.buy, TXN_CHART_COLORS.buy, b.buyN)}${row('売り', b.sell, TXN_CHART_COLORS.sell, b.sellN)}<div style="border-top:1px solid var(--border);margin-top:3px;padding-top:3px">${row('ネット', net, net >= 0 ? TXN_CHART_COLORS.netPos : TXN_CHART_COLORS.netNeg)}</div>`;
+    const gx = g.pad.l + i * g.slot;
+    guide.setAttribute('x', gx.toFixed(1)); guide.style.display = '';
+    tip.style.display = 'block';
+    const gxPx = ((gx + g.slot) / g.W) * rect.width, tipW = tip.offsetWidth;
+    let left = gxPx + 8; if (left + tipW > rect.width) left = (gx / g.W) * rect.width - tipW - 8;
+    tip.style.left = Math.max(0, left) + 'px';
+  };
+  svg.addEventListener('mousemove', e => move(e.clientX));
+  svg.addEventListener('mouseleave', hide);
+  svg.addEventListener('click', e => { const { i } = idxAt(e.clientX); if (i >= 0 && i < g.n) txnChartPick(g.buckets[i].key); });
+}
+function txnChartPick(key) {
+  if (key.length === 4) reportYear = +key;
+  else { reportYear = +key.slice(0, 4); reportMonthNum = +key.slice(5, 7); if (reportPeriod === 'all') reportPeriod = 'month'; }
+  refreshTxnSection();
 }
 // 取引サマリーの絞り込み設定モーダル（市場・銘柄ラベル）。汎用フィルタ。
 function openTxnFilter() {
