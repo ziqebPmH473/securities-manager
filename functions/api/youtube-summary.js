@@ -31,7 +31,8 @@ export async function onRequestGet(context) {
   if (!key || key === 'xxxxx') return json({ error: 'APIキーが未設定です（Cloudflareの環境変数 GEMINI_API_KEY を設定してください）' });
 
   const models = (url.searchParams.get('models') || '').split(',').map(s => s.trim()).filter(Boolean);
-  const chain = models.length ? models.slice(0, 6) : DEFAULT_CHAIN;
+  // 上限は画面側の全モデル数（YT_QUALITY_ORDER＝9）より多めに取る。少ないと末尾の Lite(500回/日)まで降格できない
+  const chain = models.length ? models.slice(0, 12) : DEFAULT_CHAIN;
 
   const debug = url.searchParams.get('debug') === '1';   // どの組み合わせで通ったかを返す（切り分け用）
 
