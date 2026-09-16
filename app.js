@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260911-1508';
+const APP_VERSION = 'v20260916-1329';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -3070,6 +3070,7 @@ function fltSelectSpec(key) {
     case 'reachKind': return { opts: [['新', '新規到達'], ['続', '継続中'], ['－', '未到達']], val: s => calc.reachKind(s) || '－' };
     case 'principalSold': return { opts: [['1', '売却済み'], ['0', '未売却']], val: s => s.principalSold ? '1' : '0' };
     case 'held': return { opts: [['1', '保有'], ['0', '未保有']], val: s => (calc.totalHolding(s.id).qty > 0 ? '1' : '0') };
+    case 'watch': return { opts: [['1', '注意'], ['0', '通常']], val: s => (s.watch ? '1' : '0') };
     case 'anaMACD': return { opts: [['golden', 'GC'], ['dead', 'DC'], ['none', '—']], val: s => { const r = techOf(s); return r ? (r.macdCross || 'none') : ''; } };
     case 'anaStatus': return { opts: [['1', '形成中'], ['2', '完成間近'], ['3', 'ブレイク済み'], ['4', '失敗']], val: s => { const r = techOf(s); return r && r.best ? String(r.best.status) : ''; } };
     case 'anaMa200': return { opts: [['above', '上'], ['below', '下']], val: s => { const r = techOf(s); return r ? (r.ma200Pos || '') : ''; } };
@@ -3079,7 +3080,9 @@ function fltSelectSpec(key) {
   }
 }
 // scope のフィルター対象列一覧（選択肢列＝sel / 数値列＝num）
-const SECMASTER_FILTER_KEYS = ['market', 'detailType', 'sector', 'industry', 'rating', 'overallGrade', 'buyGrade', 'priority', 'ruleName', 'category'];
+const SECMASTER_FILTER_KEYS = ['market', 'detailType', 'sector', 'industry', 'rating', 'overallGrade', 'buyGrade', 'priority', 'ruleName', 'category', 'watch'];
+// MASTER_COLS に列が無い独自フィルタ項目のラベル（held/watch は銘柄の状態から直接判定する）
+const FILTER_EXTRA_LABELS = { held: '保有状況（保有/未保有）', watch: '注意銘柄（注意/通常）' };
 function filterScopeBase(scope) {
   if (scope === 'analysis') return 'ANALYSIS';
   return holdingsMarket === 'JP' ? 'JP' : holdingsMarket === 'FUND' ? 'FUND' : 'US';
@@ -3087,12 +3090,12 @@ function filterScopeBase(scope) {
 function filterableCols(scope) {
   let keys;
   if (scope === 'secmaster') {
-    keys = SECMASTER_FILTER_KEYS.map(k => { const mc = MASTER_COLS.find(c => c.key === k); return { key: k, label: mc ? mc.label : k }; });
+    keys = SECMASTER_FILTER_KEYS.map(k => { const mc = MASTER_COLS.find(c => c.key === k); return { key: k, label: mc ? mc.label : (FILTER_EXTRA_LABELS[k] || k) }; });
   } else {
     // holdings / analysis / news は同じ列セット（＝保有銘柄フィルタのパターンをニュースでもそのまま適用できる）。
-    // news は日米どちらの列も対象（横断）。全スコープ共通で「保有状況（保有/未保有）」も使える。
-    keys = [{ key: 'held', label: '保有状況（保有/未保有）' }];
-    const seen = new Set(['held']);
+    // news は日米どちらの列も対象（横断）。全スコープ共通で「保有状況（保有/未保有）」「注意銘柄（注意/通常）」も使える。
+    keys = [{ key: 'held', label: FILTER_EXTRA_LABELS.held }, { key: 'watch', label: FILTER_EXTRA_LABELS.watch }];
+    const seen = new Set(['held', 'watch']);
     for (const c of MASTER_COLS) {
       if (c.key === 'ticker' || c.key === 'name' || seen.has(c.key)) continue;
       if (scope === 'news') { if (!(c.markets.includes('JP') || c.markets.includes('US'))) continue; }
