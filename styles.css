@@ -1256,6 +1256,21 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .macro-card .value { font-size: 17px; margin-top: 1px; }
 .macro-card .sub { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
 
+/* マクロ指標: 新着（未読の更新）の表示。タブのNEWバッジだけでは「開いてもどれが新しいか分からない」ため、
+   上部のバー（クリックでその指標へ）＋グループ/カード/表の行の印で場所を示す。
+   縦の余白はグラフ高さの自動補正（macroChartFitH）が実測で吸収するので、行が増えても溢れない。 */
+.macro-newbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px;
+  margin: 8px 16px 0; padding: 4px 8px; border: 1px solid var(--hair); border-radius: 6px; background: var(--panel-2); }
+.macro-newchips { display: flex; gap: 5px; flex-wrap: wrap; }
+.macro-newchip { display: inline-flex; align-items: baseline; gap: 5px; cursor: pointer; font: inherit; font-size: 11px;
+  padding: 2px 8px; border: 1px solid var(--hair); border-radius: 999px; background: var(--panel); color: inherit; }
+.macro-newchip:hover { border-color: var(--brass); }
+.macro-newchip .muted { font-size: 10px; }
+/* グループのセグメント・カード・表の行に付く小さな NEW */
+.macro-newdot { display: inline-block; margin-left: 5px; padding: 0 4px; border-radius: 3px; background: var(--red); color: #fff;
+  font-size: 9px; font-weight: 700; letter-spacing: .04em; vertical-align: 1px; }
+.list tr.macro-row-new > td { background: rgba(245, 158, 11, .10); }
+
 /* マクロ指標: 「望ましい向き」の印（↓良/↑良）。変化の色が指標ごとに反転する理由を読み取れるようにする */
 .macro-good { display: inline-block; margin-left: 5px; padding: 0 4px; border: 1px solid var(--hair); border-radius: 4px;
   font-size: 10px; font-weight: 600; color: var(--muted); background: var(--panel-2); vertical-align: 1px; white-space: nowrap; cursor: help; }

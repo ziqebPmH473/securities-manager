@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260916-1329';
+const APP_VERSION = 'v20260918-0050';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -7151,6 +7151,34 @@ function updMarkSeen(kind, key) {
   return changed;
 }
 
+// ---- マクロ指標タブ側の「どれが更新されたか」 ----
+// タブに NEW が付いても、中を開くとどの指標が新しいのか分からなかった（すみぽん指摘 2026-09-18）。
+// 未読のマクロ更新を 系列ID→レコード に引けるようにして、マクロ指標タブの
+//   ・上部の新着バー（クリックでその指標へ）
+//   ・グループのセグメント／カード／表の行
+// に印を出す。既読の扱いはダッシュボードと同じ updSeen（端末間で同期）。
+function macroUnseenMap() {
+  const m = {};
+  for (const r of updList('macro')) {
+    if (!r.seriesId || !updIsUnseen(r)) continue;
+    // 同じ系列で複数期の更新が溜まっていたら、いちばん新しい観測日のものを代表にする
+    if (!m[r.seriesId] || (r.date || '') > (m[r.seriesId].date || '')) m[r.seriesId] = r;
+  }
+  return m;
+}
+function macroUnseenIds(ids, map) { return (ids || []).filter(id => map[id]); }
+function macroGroupIds(g) { return [...new Set(g.cards.flatMap(c => c.ids))]; }
+// 新着バーのクリック: その指標のグループ/カードへ切り替え、その1件だけ既読にする
+function macroOpenNew(seriesId) {
+  const map = macroUnseenMap();
+  const r = map[seriesId];
+  const w = macroWhereIs(seriesId);
+  macroSaveView({ macroGroup: w.group, macroCard: Object.assign({}, (store.data.macroView || {}).macroCard || {}, { [w.group]: w.card }) });
+  if (r) updMarkSeen('macro', r.key);
+  renderMacro(); renderNav();
+}
+function macroMarkNewSeen() { updMarkSeen('macro'); renderMacro(); renderNav(); }
+
 // ---- 検知: 経済指標の更新 ----
 // 取得前の最終観測日と比べ、新しい観測が入った時だけ積む（同じ日のデータ再取得では積まない）。
 // 指数・為替(src:'idx')は毎日動くので対象外。「指標が更新された」だけを拾う。
@@ -7722,7 +7750,18 @@ function renderMacro() {
   const stale = gotAny && store.data.lastMacroDate !== todayJst();
   if ((!gotAny || stale) && !macroBusy && !_macroTried) { _macroTried = true; macroRefresh(); }
 
-  const groupSeg = `<div class="seg">${MACRO_GROUPS.map(x => `<button class="${x.key === g.key ? 'active' : ''}" onclick="setMacroGroup('${x.key}')">${esc(x.label)}</button>`).join('')}</div>`;
+  // 新着（未読の更新）。グループ・カード・表の行に印を出し、上部にも一覧のバーを出す
+  const unseen = macroUnseenMap();
+  const unseenAll = Object.keys(unseen);
+  const newBar = unseenAll.length ? `<div class="macro-newbar">
+    <span class="upd-new">NEW</span><b>更新 ${unseenAll.length}件</b>
+    <span class="macro-newchips">${updList('macro').filter(r => r.seriesId && unseen[r.seriesId] === r).map(r =>
+      `<button class="macro-newchip" onclick="macroOpenNew('${jsq(r.seriesId)}')" title="${esc(r.sub || '')}（クリックでこの指標へ）">${esc(r.title)}<span class="muted">${esc(r.date || '')}</span></button>`).join('')}</span>
+    <button class="btn btn-sm" style="margin-left:auto" onclick="macroMarkNewSeen()" title="NEWの印を消します（タブのNEWバッジも消えます）">すべて既読</button>
+  </div>` : '';
+  const newMark = (ids) => macroUnseenIds(ids, unseen).length ? '<span class="macro-newdot" title="この中に更新された指標があります">NEW</span>' : '';
+
+  const groupSeg = `<div class="seg">${MACRO_GROUPS.map(x => `<button class="${x.key === g.key ? 'active' : ''}" onclick="setMacroGroup('${x.key}')">${esc(x.label)}${newMark(macroGroupIds(x))}</button>`).join('')}</div>`;
   const periodSeg = `<div class="seg">${MACRO_PERIODS.map(([v, l]) => `<button class="${period === v ? 'active' : ''}" onclick="setMacroPeriod('${v}')">${l}</button>`).join('')}</div>`;
   // 比較（ニュースの開示トグルと同じ見た目）。選択は指標（カード）ごとに保持される
   const cmp = macroCompare();
@@ -7739,7 +7778,7 @@ function renderMacro() {
     const d = (last && prev) ? last[1] - prev[1] : null;
     const dec = (MACRO_SERIES[id] || {}).dec ?? 2;
     return `<div class="card macro-card ${c.key === cardKey ? 'sel' : ''}" onclick="setMacroCard('${c.key}')" title="${esc(c.note || '')}">
-      <div class="label">${esc(c.label)}${macroGoodMark(id)}</div>
+      <div class="label">${esc(c.label)}${macroGoodMark(id)}${newMark(c.ids)}</div>
       <div class="value">${last ? macroFmt(last[1], id) : '—'}${macroUnit(id)}</div>
       <div class="sub"><span class="${macroDeltaCls(d, id)}" title="${esc(macroDeltaTitle(d, id))}">${d == null ? '—' : (d > 0 ? '+' : '') + Number(d).toFixed(dec)}</span>
         <span class="muted">前回比 ・ ${last ? esc(last[0]) : '—'}</span></div>
@@ -7756,8 +7795,8 @@ function renderMacro() {
     const y1 = last ? macroAtBefore(pts, last[0], 365, 60) : null;
     const dy = (last && y1) ? last[1] - y1[1] : null;
     const freq = ((store.data.macro || {})[id] || {}).freq || '';
-    return `<tr>
-      <td class="l">${esc(def.label)}<span class="muted" style="font-size:11px"> ${esc(def.unit || '')}</span>${macroGoodMark(id)}</td>
+    return `<tr class="${unseen[id] ? 'macro-row-new' : ''}">
+      <td class="l">${esc(def.label)}<span class="muted" style="font-size:11px"> ${esc(def.unit || '')}</span>${macroGoodMark(id)}${newMark([id])}</td>
       <td class="c muted" style="font-size:11px">${esc(freq)}</td>
       <td class="r"><b>${macroFmt(last && last[1], id)}</b></td>
       <td class="c muted" style="font-size:11px">${last ? esc(last[0]) : '—'}</td>
@@ -7778,6 +7817,7 @@ function renderMacro() {
           <button class="btn btn-sm" onclick="openMacroAlerts()" title="指標が基準値を抜けたら知らせる設定">基準値・警告${macroFiredAlerts().length ? `（${macroFiredAlerts().length}）` : ''}</button>
           <button class="btn btn-sm btn-primary" onclick="macroRefresh()" ${macroBusy ? 'disabled' : ''}>${macroBusy ? '取得中…' : '更新'}</button>
         </div></div>
+      ${newBar}
       <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${groupSeg}${periodSeg}${cmpSeg}</div>
       <div class="section-body" style="padding:12px 16px 16px">
         <div class="cards macro-cards">${cardsHtml}</div>
@@ -15537,9 +15577,13 @@ function timeBasedMarket() {
   return (day >= 1 && day <= 5 && hour >= 8 && hour < 18) ? 'JP' : 'US';
 }
 function go(view) {
-  // そのタブを開いたら NEW を解除する（マクロ＝経済指標 / ニュース＝動画）
-  const kind = view === 'macro' ? 'macro' : view === 'news' ? 'video' : null;
-  if (kind) updMarkSeen(kind);
+  // そのタブを開いたら NEW を解除する（ニュース＝動画）。
+  // ★マクロ（経済指標）だけは「開いた瞬間に既読」にしない。開いた途端に印が消え、
+  //   中のどれが更新されたのか分からなくなっていたため（すみぽん指摘 2026-09-18）。
+  //   マクロ指標タブを表示している間は NEW を出したままにして、**タブを離れる時に**既読へ移す
+  //   （タブ内の「すべて既読」ボタンで即座に消すこともできる）。
+  if (view === 'news') updMarkSeen('video');
+  if (currentView === 'macro' && view !== 'macro') updMarkSeen('macro');
   // ニュースの黄○はタブ移動→戻るでは消さない（消えるのはアプリ開き直し/リロード時と「更新」時のみ。
   // _newsSeenMark はセッション開始時の renderNews で一度だけ初期化される。すみぽん仕様 2026-07-23）
   currentView = view;
@@ -16139,6 +16183,8 @@ window.maAdd = maAdd;
 window.maDelete = maDelete;
 window.maToggle = maToggle;
 window.maOpenSeries = maOpenSeries;
+window.macroOpenNew = macroOpenNew;
+window.macroMarkNewSeen = macroMarkNewSeen;
 window.updOpen = updOpen;
 window.updMarkAllSeen = updMarkAllSeen;
 window.macroRefresh = macroRefresh;
