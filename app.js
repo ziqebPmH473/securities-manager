@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260918-1423';
+const APP_VERSION = 'v20260918-1426';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -3321,7 +3321,7 @@ function colDefaultWidth(key) {
   if (key === 'name') return 200;
   if (key === 'market' || key === 'detailType') return 72;
   if (key === 'trigBasis') return 64; // 1文字バッジ（初/増/高/固）
-  if (key === 'ruleDrop') return 124; // 「−20% 前回から」
+  if (key === 'ruleDrop') return 76;  // 「20%」
   if (key === 'addonFromHigh') return 84; // 「初回基準」タグ or —
   if (key === 'extPrice') return 92;  // 時間外価格＋種別タグ
   if (key === 'prevClose') return 96; // 前日終値＋引け日(MM-DD)
@@ -3723,7 +3723,7 @@ function cfCellValue(key, sec, ctx) {
     case 'buyCount': return ctx.buyCnt || null;
     case 'buyAmount': return ctx.buyAmt;
     case 'reco': return ctx.recoAmt;
-    case 'ruleDrop': { const r = ruleDropInfo(sec, ctx.ev); return r && !r.fixed ? -r.pct : null; } // 表示どおり負の％
+    case 'ruleDrop': { const r = ruleDropInfo(sec, ctx.ev); return r && !r.fixed ? r.pct : null; } // 表示どおりの％（20%→20）
     case 'capCoef': return ccView(sec)?.coef ?? null;
     case 'capAmount': return ccView(sec)?.amount ?? null;
     case 'fixedBuyPrice': return typeof sec.fixedBuyPrice === 'number' ? sec.fixedBuyPrice : null;
@@ -3831,7 +3831,7 @@ const COL_RENDERERS = {
     const r = ruleDropInfo(s, c.ev);
     if (!r) return `<td>${muted}</td>`;
     if (r.fixed) return `<td class="muted" title="${esc(r.tip)}">固定値</td>`;
-    return `<td title="${esc(r.tip)}">−${num(r.pct)}% <span class="muted" style="font-size:11px">${r.from}から</span></td>`;
+    return `<td title="${esc(r.tip)}">${num(r.pct)}%</td>`; // 数字だけ（基準・内訳はツールチップ）
   },
   // 適用区分: 次回購入・残り下落率がどのルール分岐で算出されたか（初=初回 / 増=買い増し / 高=高値更新 / 固=買増固定値 / —=判定外）
   trigBasis: (s,c) => {

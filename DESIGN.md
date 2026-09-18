@@ -1726,7 +1726,7 @@ S&P500・NASDAQ100・日経平均・TOPIX(1306.T)・ドル円を、いまのグ�
 本番では Yahoo quoteSummary が 401 のため米株の時価総額は実質 Finnhub のみ。Finnhub は外国ADR（SAP/ASML=EUR、TSM=TWD）の時価総額を**本国通貨**で返すため従来は捨てていた（＝D が出ない）。`profile2.currency` の対USDレートを Yahoo chart（`{CUR}USD=X`、無ければ `USD{CUR}=X` の逆数・`fetchFxToUsd`）で取り、**時価総額だけドル換算**して返す（会社全体の値なのでADR比率に左右されない）。レートが取れなければ従来どおり null。**EPS・配当は本国の1株あたりでADR比率（TSMは1ADR=5株）に依存するため出さない**（EPSを出すと `calc.per`＝株価÷EPS が誤る。PER は比率なので Finnhub の値をそのまま使う）。
 
 ## 27. 列「ルール下落率」（2026-09-18 追加）
-- 次回購入ラインの算出に**使ったルールの下落率と基準**だけを表示する列 `ruleDrop`（`ruleDropInfo(sec, ev)`）。残り下落率とは別。
+- 次回購入ラインの算出に**使ったルールの下落率**だけを「20%」のように表示する列 `ruleDrop`（`ruleDropInfo(sec, ev)`）。残り下落率とは別。基準（高値から／前回から）と内訳は tooltip のみ（2026-09-18 すみぽん指示で数字だけに変更）。
 - `calc.evaluate` の分岐（`baseSource`）とそろえる: 初回・高値更新後（`rule.highResetMode` ON のルールだけ＝適用区分「高」）・買い増しも初回基準 → 初回下落率「高値から」／買い増し → 買い増し下落率「前回から」（前回購入単価が無く高値基準なら「高値から」）／買増固定値 → 「固定値」／判定外 → 「—」。**初回ルール適用が OFF のルールは高値更新後も買い増し扱い**（evaluate がそう判定するため自動でそうなる）。
-- tooltip に「基準値 → −％ → 次回購入（ルール名）」。markets=US/JP/SIGNAL、既定表示（適用区分の隣）、`sortValue`（固定値・判定外は末尾）／`cfCellValue`（表示どおり負の％）＋`CF_NUMERIC_KEYS`／`colDefaultWidth`=124。ルール由来の派生値なのでフォーム・取込・一括変更は対象外。
+- tooltip に「基準値 → −％ → 次回購入（ルール名）」。markets=US/JP/SIGNAL、既定表示（適用区分の隣）、`sortValue`（固定値・判定外は末尾）／`cfCellValue`（表示どおりの％）＋`CF_NUMERIC_KEYS`／`colDefaultWidth`=76。ルール由来の派生値なのでフォーム・取込・一括変更は対象外。
 - **列設定の新列の挿入位置を変更**（`reconcileColPrefs`）: 保存済みの列設定に無い新列は、従来は末尾に追加していたが、`MASTER_COLS` 上で直前にある列の直後に挿入する（関連列の隣に出るように）。
