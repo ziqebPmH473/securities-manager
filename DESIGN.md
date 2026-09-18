@@ -1690,3 +1690,37 @@ S&P500・NASDAQ100・日経平均・TOPIX(1306.T)・ドル円を、いまのグ�
 - **モデルは固定1つ**（`settings.aiDiagModel`・既定 gemini-3.5-flash-lite=500回/日）。自動フォールバックはしない
   （動画要約など他機能と無料枠を分け合っており、勝手に上位モデルの枠を消費しないため。2026-08-28 すみぽん指示）。
   モーダル内のセレクタで変更でき、選択は settings 経由で全端末同期。
+
+## 26. 時価総額補正（補正係数・補正推奨額）（2026-09-18 追加）
+
+計画書: `CAPCOEF_PLAN.md`（すみぽんと合意した仕様の全文）。ここには実装の要点だけ書く。
+
+### 26.1 目的と計算
+- 安全性の補正ではない。**巨大企業は100倍が期待しにくいので元本を厚くする**（小型株＝倍率／大型株＝元本を働かせる）。企業の質は従来どおり格付・カテゴリで評価。
+- `D` = 既存の「時価1位まで」`calc.capToTop(sec)`（同じ市場の1位の時価総額 ÷ 自分）。
+- **係数** = 1 + (M−1)·log(T/D)/log(T)。D≧T→1.0、D≦1→M。**刻み（既定0.05）で切り捨て**（`ccCoefFromD`。浮動小数誤差で 1.15→1.10 に落ちないよう `floor(x/step + 1e-9)`）。
+- **基本額** = `calc.buyAmount(sec)`（手入力の1回購入額 優先→カテゴリ金額）。**補正推奨額** = 基本額×係数 を丸め単位（JP 5,000円／US $50）で四捨五入（`ccAmount`）。**係数1.00は丸めず基本額のまま**。
+- 適用条件（`ccEligible`）: 格付「〇以上」（`GRADE_RANK`）とカテゴリ「〇以上」（カテゴリマスタの `sortOrder`）を かつ/または。条件外・D 未取得は係数1.00。
+
+### 26.2 設定（`store.data.settings.capCoef`・keyedTs）
+`{ maxMult:2, startRatio:200, coefStep:0.05, gradeMin:'B', catMin:'準主力', join:'and', roundJpy:5000, roundUsd:50 }`（`CAPCOEF_DEFAULT`）。マスタ「時価総額補正」（`openCapCoefMaster`）で編集。カテゴリの改名・削除は `store.updateCategory`／`removeCategory` で `catMin` に追従（既定値のままでも既定カテゴリ名なら保存して追従）。
+
+### 26.3 固定（サイクル）と履歴 `store.data.capCoefHistory`
+- レコード: `{id, securityId, ord, state:'live'|'fixed', D, eligible, coef, base, amount, fixedAt, trigger:'buy'|'migrate'|'manual', txnId, cycle, reason, pending?, keepIneligible?, createdAt, updatedAt, deleted?}`。**最新レコード（`ord` 順）の state が現在の固定状態**。
+- **固定中は固定時の D と条件判定（eligible）を保持**し、係数はそれ＋現在のマスタで計算する（＝マスタの M・T・刻み・丸めや基本額が変われば洗い替え、1件追加）。株価・時価総額が動いても変わらない。
+- 固定する: ①変動中の銘柄で**買いを登録**（`store.addTransaction`→`capCoefOnBuy`。手入力・取込とも。**条件外でも1.00で固定**）②**導入時の移行**（履歴が無く買い取引がある銘柄。固定日＝最後の買い日。最後の買いより後に高値更新済みなら変動中。ID は決定的 `cc{secId}-0`＝別端末で同時に移行しても1件にマージ）③手動チェック。**D 未取得なら `pending` に積み、D が取れた最初の描画で固定**。
+- 外す: ①**基準高値の日付 ＞ 固定日**（`calc.baseHighDate`。買い増しルールと同じ基準高値。`rule.highResetMode` の ON/OFF は見ない）②手動で外す ③**固定のきっかけの買い取引が消えた**（同サイクルの fixed をトンボストン→1つ前に戻る。取引の日付を編集したら fixedAt も追従）④**条件から外れた**（固定中で eligible だった銘柄が今は条件外→一覧の確認画面 `ccIneligiblePrompt`。外さない選択は `keepIneligible`）。条件を満たすようになっても何もしない（次のサイクルで評価）。
+- **書き込みは係数か補正推奨額が変わった時だけ**。変動中＝最新1件を上書き、固定中＝1件追加。表示は常に `ccView` で都度計算。
+- **整合は描画のたびに `capCoefReconcileAll`**（`_render` 冒頭）。取込・編集・同期受信・価格更新など経路を問わず①取消→②移行→③高値解除→④条件外れ検出→⑤洗い替え→⑥保留の確定→⑦変動中の上書き を行い、変化があった時だけ `store.save()`。
+- 同期: sync SCHEMA `capCoefHistory: ['records', r => 'cc:'+r.id]`。`RESTORE_SCOPES` は①本体。`removeSecurity`・`resetTxnData` で一緒に消す。
+
+### 26.4 表示
+- 列 `capCoef`（補正係数。固定中は🔒、tooltip に内訳・根拠・固定状態）／`capAmount`（補正推奨額）。markets=US/JP/SIGNAL、既定表示は US/JP/SIGNAL。`sortValue`／`cfCellValue`／`CF_MONEY_KEYS`（capAmount）／`colDefaultWidth` 配線済み。
+- 銘柄詳細ドロワー「時価総額補正」ボックス（`capCoefDetailHtml`: 補正推奨額の内訳・係数の根拠・**係数固定チェック**・履歴表）。カルテの評価ボックスと銘柄編集フォームにも係数・補正推奨額・固定チェック。チェック操作は `ccToggleFromUi`→`ccToggleLock`（確認ダイアログで現在値と変更後の値を表示。D 未取得なら固定不可）。
+- **派生値なのでフォームの保存項目・取込（GI/汎用往復）・一括変更には通さない**（固定は履歴と連動し、外部から ON/OFF すると整合が崩れるため。すみぽん了承済み）。分割調整も不要（D は比率・基本額は分割で変わらない）。
+
+### 26.5 取引登録画面の情報帯（2026-09-18）
+`txnInfoBandHtml`: 「表示切替」と「種別」の間に 格付｜カテゴリ｜推奨額｜係数｜補正推奨額。新規の買いで係数が固定される場合は「※この買いを記録すると係数◯が固定されます」（売りを選ぶと隠す＝`.buy-only`）。
+
+### 26.6 外国ADRの時価総額（2026-09-18 修正）
+本番では Yahoo quoteSummary が 401 のため米株の時価総額は実質 Finnhub のみ。Finnhub は外国ADR（SAP/ASML=EUR、TSM=TWD）の時価総額を**本国通貨**で返すため従来は捨てていた（＝D が出ない）。`profile2.currency` の対USDレートを Yahoo chart（`{CUR}USD=X`、無ければ `USD{CUR}=X` の逆数・`fetchFxToUsd`）で取り、**時価総額だけドル換算**して返す（会社全体の値なのでADR比率に左右されない）。レートが取れなければ従来どおり null。**EPS・配当は本国の1株あたりでADR比率（TSMは1ADR=5株）に依存するため出さない**（EPSを出すと `calc.per`＝株価÷EPS が誤る。PER は比率なので Finnhub の値をそのまま使う）。

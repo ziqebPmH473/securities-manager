@@ -96,6 +96,7 @@ async function fetchInfoDebug(symbol, finnhubKey) {
     ]);
     const cur = prof?.currency || null;
     out.diag.finnhub = { marketCap: m?.marketCap ?? null, pbr: m?.pbr ?? null, currency: cur, industry: prof?.industry ?? null, foreign: !!(cur && cur !== 'USD') };
+    if (cur && cur !== 'USD') out.diag.finnhub.fxToUsd = await fetchFxToUsd(cur).catch(() => null);
   }
   return out;
 }
@@ -173,22 +174,27 @@ async function fetchUsInfo(symbol, finnhubKey) {
     ]);
   }
   const fhCur = fhProfile?.currency || null;
-  // 外国ADR（TSM等）はFinnhubの時価総額・配当が現地通貨建て（TWD等）でドルと食い違うため、
-  // 計上通貨がUSD以外なら時価総額・配当は出さない（誤った数値を表示しない）。為替換算は行わない。
+  // 外国ADR（SAP/ASML=EUR、TSM=TWD 等）はFinnhubの時価総額・配当・EPSが本国通貨建てでドルと食い違う。
+  // 時価総額は会社全体の値なので為替でドル換算して出す（ADR比率に左右されない）。レートが取れなければ出さない。
+  // 配当・EPSは「本国の1株」あたりでADR比率（TSMは1ADR=5株）に依存し換算だけでは合わないため出さない
+  // （EPSを出すと calc.per が 株価÷EPS で誤ったPERになる。PER自体は比率なので Finnhub の値をそのまま使う）。
   const foreign = !!(fhCur && fhCur !== 'USD');
+  const fxUsd = (foreign && fh?.marketCap != null && summary?.marketCap == null) ? await fetchFxToUsd(fhCur).catch(() => null) : null;
   return {
     name:      cleanName(jpName) || cleanName(chart?.name) || null,
     sector:    summary?.sector || null,
     industry:  summary?.industry || fhProfile?.industry || null, // FinnhubのfinnhubIndustryで補完
-    marketCap: summary?.marketCap ?? (foreign ? null : fh?.marketCap) ?? null,
+    marketCap: summary?.marketCap ?? (foreign ? (fxUsd != null && fh?.marketCap != null ? Math.round(fh.marketCap * fxUsd) : null) : fh?.marketCap) ?? null,
     per:       summary?.per ?? fh?.per ?? null,
     pbr:       summary?.pbr ?? (foreign ? null : fh?.pbr) ?? null,
     psr:       summary?.psr ?? (foreign ? null : fh?.psr) ?? null, // PSR（米国株のみ）
-    eps:       summary?.eps ?? fh?.eps ?? null,
+    eps:       summary?.eps ?? (foreign ? null : fh?.eps) ?? null,
     dividend:  summary?.dividend ?? (foreign ? null : fh?.dividend) ?? null,
     sharesOut: summary?.sharesOut ?? null,
     volume:    chart?.volume ?? null,   // 当日出来高（売買代金算出用・Finnhub利用時もYahoo chartから取得）
     currency:  chart?.currency || 'USD',
+    // 決算通貨（外国ADRのみ。例 EUR/TWD）。クライアントは過去にキャッシュした本国通貨建ての EPS・配当を消す
+    reportCcy: foreign ? fhCur : null,
     quoteType: chart?.instrumentType || null, // EQUITY/ETF/MUTUALFUND（詳細種別の判定に使用）
   };
 }
@@ -414,6 +420,23 @@ async function fetchFinnhubProfile(symbol, token) {
   const d = await res.json().catch(() => null);
   if (!d) return null;
   return { currency: d.currency || null, industry: d.finnhubIndustry || null };
+}
+
+// 通貨 cur の 1単位 = 何USD か（Yahoo chart の為替）。{cur}USD=X を優先、無ければ USD{cur}=X の逆数。
+// 取れなければ null（呼び出し側は換算値を出さない）。為替は日中ほぼ不変なのでエッジキャッシュ1h。
+async function fetchFxToUsd(cur) {
+  if (!cur || !/^[A-Z]{3}$/.test(cur)) return null;
+  if (cur === 'USD') return 1;
+  const rate = async (sym) => {
+    const res = await fetchWithTimeout(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?range=1d&interval=1d`, { headers: { 'User-Agent': 'securities-manager/1.0' }, cf: { cacheTtl: 3600, cacheEverything: true } });
+    if (!res.ok) return null;
+    const p = num((await res.json().catch(() => null))?.chart?.result?.[0]?.meta?.regularMarketPrice);
+    return p && p > 0 ? p : null;
+  };
+  const direct = await rate(`${cur}USD=X`).catch(() => null);
+  if (direct) return direct;
+  const inv = await rate(`USD${cur}=X`).catch(() => null);
+  return inv ? 1 / inv : null;
 }
 
 function n(obj) { return obj && typeof obj.raw === 'number' && isFinite(obj.raw); }

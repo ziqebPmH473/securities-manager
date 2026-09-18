@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260918-0050';
+const APP_VERSION = 'v20260918-0827';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -252,6 +252,9 @@ const MASTER_COLS = [
   { key: 'buyCount',    label: '購入回数',         left: false, markets: ALLM, noSort: false },
   { key: 'buyAmount',   label: '買い増し予定額',    left: false, markets: ALLM, noSort: false },
   { key: 'reco',        label: '推奨購入額',       left: false, markets: ALLM, noSort: false },
+  // 時価総額補正（派生値。フォーム・取込・一括変更は対象外＝計算値で、固定は履歴と連動するため。CAPCOEF_PLAN.md）
+  { key: 'capCoef',     label: '補正係数',         left: false, markets: ['US', 'JP', 'SIGNAL'], noSort: false },
+  { key: 'capAmount',   label: '補正推奨額',       left: false, markets: ['US', 'JP', 'SIGNAL'], noSort: false },
   { key: 'category',    label: 'カテゴリ',         left: true,  markets: ALLM, noSort: false },
   { key: 'investCategory', label: '投資カテゴリ',  left: true,  markets: ALLM, noSort: false },
   { key: 'labels',      label: '銘柄ラベル',       left: true,  markets: ALLM, noSort: false },
@@ -330,10 +333,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
-  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','ruleName','fixedBuyPrice','rating'],
+  SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','capCoef','capAmount','ruleName','fixedBuyPrice','rating'],
   ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
   ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
   // マーケットランキングタブ（既定＝現状維持）。順位/コード/名称は先頭固定列で、ここには含めない。
@@ -520,6 +523,7 @@ const store = {
     this.data.earnings ||= {};        // 決算日キャッシュ priceKey→{prev,next,nextEstimate,exDiv,at}。1日1回取得・同期
     this.data.settings ||= {};        // 非機密の運用設定（Google連携の clientId 等）
     this.data.mktTopCap ||= {};       // 市場の時価総額1位（US/JP→{code,name,cap,at}）。「時価1位まで」列の分子・自動取得キャッシュ
+    this.data.capCoefHistory ||= [];  // 時価総額補正の係数履歴（銘柄ごと。最新が現在の固定状態）。同期対象（SCHEMA: records）
     // v20260806-0128 以前は settings 配下に置いていた。settings は同期が singleTs（まるごと後勝ち）で、
     // 端末が自動で書くと相手端末の設定変更を巻き戻すため、トップレベルへ移設（1回だけ引っ越し）
     if (this.data.settings.mktTopCap) {
@@ -684,6 +688,7 @@ const store = {
     this.data.transactions = this.data.transactions.filter(t => t.securityId !== id);
     this.data.analyses = (this.data.analyses || []).filter(a => a.securityId !== id);
     this.data.priceScenarios = (this.data.priceScenarios || []).filter(a => a.securityId !== id);
+    this.data.capCoefHistory = (this.data.capCoefHistory || []).filter(a => a.securityId !== id);
     this.save();
   },
   findSecurity(market, ticker) {
@@ -722,6 +727,7 @@ const store = {
     t.updatedAt = this._now();   // 取引の編集を端末間で伝播させる（sync-merge は records を updatedAt で3-way）
     this.data.transactions.push(t);
     this.applyTransaction(t);
+    if (t.type === 'buy') capCoefOnBuy(t); // 時価総額補正: 変動中なら この買いで係数を固定（手入力・取込とも）
     this.save();
   },
   applyTransaction(t) {
@@ -947,12 +953,18 @@ const store = {
     // カテゴリ名を変えたら、参照している銘柄も追従（銘柄側の変更も伝播）
     if (newName && newName !== oldName) {
       for (const s of this.data.securities) if (s.category === oldName) { s.category = newName; this.touch(s); }
+      // 時価総額補正の適用条件（カテゴリ「〇以上」）も名前で持っているので追従
+      // （未保存＝既定値のままでも、既定のカテゴリ名を改名したら設定として保存して追従させる）
+      const cc = this.data.settings.capCoef || (CAPCOEF_DEFAULT.catMin === oldName ? (this.data.settings.capCoef = { ...CAPCOEF_DEFAULT }) : null);
+      if (cc && cc.catMin === oldName) { cc.catMin = newName; this.data.settings._updatedAt = this._now(); }
     }
     this.save();
   },
   removeCategory(name) {
     this.data.categories = this.data.categories.filter(c => c.category !== name);
     for (const s of this.data.securities) if (s.category === name) { s.category = null; this.touch(s); }
+    const cc = this.data.settings.capCoef || (CAPCOEF_DEFAULT.catMin === name ? (this.data.settings.capCoef = { ...CAPCOEF_DEFAULT }) : null);
+    if (cc && cc.catMin === name) { cc.catMin = null; this.data.settings._updatedAt = this._now(); } // 条件から外す（未設定扱い）
     this.save();
   },
   // 投資カテゴリ（分析枠ラベル）マスタ。金額は持たない（名前・色・並び順のみ）。
@@ -1733,7 +1745,7 @@ async function openDriveBackups() {
 const RESTORE_SCOPES = [
   { key: 'core',    label: '銘柄・保有・取引（本体データ）',
     hint: '銘柄一覧・保有・取引履歴・取得円台帳・金額履歴・分析/シナリオ履歴',
-    keys: ['securities', 'holdings', 'transactions', 'acqLedger', 'amountHistory', 'amountSnapshots', 'analyses', 'priceScenarios', 'seq'] },
+    keys: ['securities', 'holdings', 'transactions', 'acqLedger', 'amountHistory', 'amountSnapshots', 'analyses', 'priceScenarios', 'capCoefHistory', 'seq'] },
   { key: 'masters', label: 'マスタ（ルール・カテゴリ・色・警告）',
     hint: '買い増しルール・カテゴリ・投資カテゴリ・銘柄ラベル・背景色・格付け色・マトリックス設定・開示種別・YouTubeチャンネル・注目タグ・マクロ警告',
     keys: ['rules', 'categories', 'investCategories', 'labelDefs', 'cfRules', 'grades', 'matrixBands', 'matrixSettings', 'discTypeDefs', 'ytChannels', 'newsTags', 'macroAlerts'] },
@@ -2695,7 +2707,11 @@ const api = {
           // マルチ端末同期（meta は updatedAt の新しい方が勝つ）で「空の新しいエントリ」が
           // 別端末の正しい名称を上書きしてしまう（＝銘柄名が証券コードに戻る）ため。
           if (!Object.keys(inc).length) continue;
-          store.data.meta[key] = { ...ex, ...inc, updatedAt: store._now() };
+          // 外国ADR（決算通貨がドル以外）は EPS・配当が本国通貨建て＋ADR比率依存でドル株価と合わないため
+          // API は返さなくなった（2026-09-18）。以前キャッシュした誤った値も消す（残すと PER＝株価÷EPS が狂う）
+          const exClean = { ...ex };
+          if (inc.reportCcy && inc.reportCcy !== 'USD') { delete exClean.eps; delete exClean.dividend; }
+          store.data.meta[key] = { ...exClean, ...inc, updatedAt: store._now() };
         }
       }
       store.save();
@@ -3319,6 +3335,8 @@ function colDefaultWidth(key) {
   if (key === 'labels') return 150; // 複数タグ
   if (key === 'origCost') return 96; // 金額（本来の購入額）
   if (key === 'capToTop') return 92; // 見出し「時価1位まで」＋「3.99倍」
+  if (key === 'capCoef') return 76;  // 🔒＋「1.35」
+  if (key === 'capAmount') return 92;
   if (key === 'ratioValue' || key === 'ratioCost') return 84; // 「12.34%」＋バー
   if (key === 'anaWarn' || key === 'anaWarnC') return 150; // パターン名＋スコア
   if (key === 'anaMa200') return 72;
@@ -3631,7 +3649,7 @@ function setRatioManual() {
 }
 // 背景色判定で「US（ドル建て）→円換算」する対象の列（ネイティブ通貨の金額・株価系）。
 // %・倍率・株数・スコア・既に円建ての取得円(acqJpy)は対象外。表示は$のまま、色だけ円換算で判定する。
-const CF_MONEY_KEYS = new Set(['price', 'dayAmt', 'trigger', 'base', 'high5y', 'high52w', 'low1y', 'low3y', 'prevBuyPrice', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'avgCost', 'buyAmount', 'reco', 'fixedBuyPrice', 'dividend', 'eps', 'principalSoldAmount', 'targetPerPrice', 'targetPbrPrice', 'targetYieldPrice']);
+const CF_MONEY_KEYS = new Set(['price', 'dayAmt', 'trigger', 'base', 'high5y', 'high52w', 'low1y', 'low3y', 'prevBuyPrice', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'avgCost', 'buyAmount', 'reco', 'capAmount', 'fixedBuyPrice', 'dividend', 'eps', 'principalSoldAmount', 'targetPerPrice', 'targetPbrPrice', 'targetYieldPrice']);
 // US の金額系の素の値を共通レートで円換算（背景色判定用）。それ以外はそのまま返す。
 function cfConvVal(key, market, v) {
   if (v == null || !isFinite(v)) return v;
@@ -3698,6 +3716,8 @@ function cfCellValue(key, sec, ctx) {
     case 'buyCount': return ctx.buyCnt || null;
     case 'buyAmount': return ctx.buyAmt;
     case 'reco': return ctx.recoAmt;
+    case 'capCoef': return ccView(sec)?.coef ?? null;
+    case 'capAmount': return ccView(sec)?.amount ?? null;
     case 'fixedBuyPrice': return typeof sec.fixedBuyPrice === 'number' ? sec.fixedBuyPrice : null;
     case 'per': return calc.per(sec);
     case 'pbr': return calc.pbr(sec);
@@ -3779,7 +3799,8 @@ function scenarioPosTd(s, term) {
 }
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
-  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}${earnLabelHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`; },
+  // 銘柄名クリック: 分析タブ＝分析詳細／ダッシュボード＝銘柄カルテ（2026-09-18 すみぽん指示）／それ以外＝詳細ドロワー
+  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : currentView === 'dashboard' ? `karteOpenSec(${s.id})` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}${earnLabelHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`; },
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
@@ -3863,6 +3884,8 @@ const COL_RENDERERS = {
   buyCount:  (s,c) => `<td>${c.buyCnt ? num(c.buyCnt) : muted}</td>`,
   buyAmount: (s,c) => `<td>${c.buyAmt != null ? fmtAmtInt(c.buyAmt) : muted}</td>`,
   reco:      (s,c) => `<td>${c.recoAmt ? fmtAmtInt(c.recoAmt) : muted}</td>`,
+  capCoef:   (s,c) => capCoefTd(s),
+  capAmount: (s,c) => capAmountTd(s),
   category:  (s,c) => `<td class="l">${categoryTag(s.category)}</td>`,
   investCategory: (s,c) => `<td class="l">${investCategoryTag(s.investCategory)}</td>`,
   labels:    (s,c) => `<td class="l">${labelsTag(s)}</td>`,
@@ -4192,6 +4215,9 @@ function render() {
 function _render() {
   updateHeader();
   ensureTopMarketCap();   // 「時価1位まで」列の分子（市場の時価総額1位）が未取得/前日なら裏で1回だけ取得
+  // 時価総額補正の状態を整える（移行・高値更新で解除・取引削除の取り消し・洗い替え・条件外れの確認）。
+  // 取込・編集・同期・価格更新など経路を問わず描画のたびに整合させる（係数か補正推奨額が変わった時だけ書く）
+  try { capCoefReconcileAll(); } catch (e) { console.error('capCoefReconcileAll', e); }
   // 比率列の分母（既定＝日米合計）。表を持つ画面は各 render 内で表示中の集合を渡して上書きする
   ratioCtx = buildRatioCtx(null);
   updateSignalBadge();
@@ -4510,7 +4536,7 @@ function renderDashboard() {
   const losers = moverData.slice(-5).reverse();
   const moverSeg = `<div class="seg" style="margin-left:auto">${[['ALL', '全株式'], ['US', '米国株'], ['JP', '日本株']].map(([m, l]) => `<button class="${dashMoverMarket === m ? 'active' : ''}" onclick="setDashMoverMarket('${m}')">${l}</button>`).join('')}</div>`;
   const tkChip = (s) => `<span class="tk ${s.market.toLowerCase()}">${esc(s.market === 'JP' ? s.ticker : (s.ticker || '').slice(0, 4))}</span>`;
-  const moverRow = (x) => `<div class="mover-row">${tkChip(x.s)}<span class="mv-name">${esc(calc.displayName(x.s))}</span><span class="${cls(x.dp)}">${signed(x.dp)}%</span></div>`;
+  const moverRow = (x) => `<div class="mover-row">${tkChip(x.s)}<span class="mv-name lnk-ext" style="cursor:pointer" title="銘柄カルテを開く" onclick="karteOpenSec(${x.s.id})">${esc(calc.displayName(x.s))}</span><span class="${cls(x.dp)}">${signed(x.dp)}%</span></div>`;
   const moverList = (title, list) => `<div class="mover-col"><div class="dr-section-t">${title}</div>${list.length ? list.map(moverRow).join('') : '<div class="muted" style="font-size:12px;padding:4px 0">—</div>'}</div>`;
 
   const idxCard = (k) => {
@@ -4684,6 +4710,8 @@ function sortValue(sec, key) {
     case 'buyCount': return calc.buyCount(sec) || 0;
     case 'buyAmount': return calc.buyAmount(sec) ?? -Infinity;
     case 'reco': return store.categoryAmountFor(sec.category, sec.market) || -Infinity;
+    case 'capCoef': return ccView(sec)?.coef ?? -Infinity;
+    case 'capAmount': return ccView(sec)?.amount ?? -Infinity;
     case 'price': return calc.price(sec) ?? -Infinity;
     case 'high5y': return calc.high5y(sec) ?? -Infinity;
     case 'high52w': return calc.high52w(sec) ?? -Infinity;
@@ -5715,6 +5743,343 @@ function capToTopTd(market, r) {
   const f = capToTopFmt(market, r);
   const body = f.label == null ? muted : (r > 1 ? esc(f.label) : `<span class="muted">${esc(f.label)}</span>`);
   return `<td title="${esc(f.tip)}">${body}</td>`;
+}
+
+// ---------- 時価総額補正（補正係数・補正推奨額） ----------
+// 目的: 巨大企業は100倍が期待しにくいので元本を厚くする（小型株＝倍率／大型株＝元本を働かせる）。
+// 係数 = 1 + (M−1)·log(T/D)/log(T)。D＝市場1位までの倍率（calc.capToTop）。D≧T→1.0、D≦1→M。刻みで切り捨て。
+// 補正推奨額 = 基本額(calc.buyAmount＝手入力の1回購入額 優先→カテゴリ金額) × 係数 を丸め単位で四捨五入（係数1.00は基本額のまま）。
+// 係数は買いサイクル単位で固定する（買い登録で固定→基準高値が固定日より後に更新されたら解除）。
+// 状態と履歴は store.data.capCoefHistory（sync SCHEMA: records）。最新レコードの state が現在の固定状態。
+// 書き込みは係数か補正推奨額が変わった時だけ（変動中＝最新1件を上書き／固定中＝1件追加）。詳細は CAPCOEF_PLAN.md。
+const CAPCOEF_DEFAULT = { maxMult: 2, startRatio: 200, coefStep: 0.05, gradeMin: 'B', catMin: '準主力', join: 'and', roundJpy: 5000, roundUsd: 50 };
+function capCoefCfg() { return Object.assign({}, CAPCOEF_DEFAULT, (store.data.settings || {}).capCoef || {}); }
+const CC_MARKETS = new Set(['US', 'JP']);
+// 適用条件（格付「〇以上」・カテゴリ「〇以上」を かつ/または）。未設定・マスタに無いカテゴリの条件は無視。
+function ccEligible(sec, cfg = capCoefCfg()) {
+  const parts = [];
+  if (cfg.gradeMin && GRADE_RANK[cfg.gradeMin] != null) {
+    const r = GRADE_RANK[String(sec.rating || '').toUpperCase()];
+    parts.push(r != null && r <= GRADE_RANK[cfg.gradeMin]);
+  }
+  const minCat = cfg.catMin ? store.data.categories.find(c => c.category === cfg.catMin) : null;
+  if (minCat) {
+    const c = sec.category ? store.data.categories.find(x => x.category === sec.category) : null;
+    parts.push(!!c && (c.sortOrder ?? 9999) <= (minCat.sortOrder ?? 9999));
+  }
+  if (!parts.length) return true;
+  return cfg.join === 'or' ? parts.some(Boolean) : parts.every(Boolean);
+}
+function ccStepDecimals(step) { const s = String(step); return s.includes('.') ? s.split('.')[1].length : 0; }
+// D から係数（刻みで切り捨て）。D が無ければ null
+function ccCoefFromD(D, cfg = capCoefCfg()) {
+  if (D == null || !(D > 0)) return null;
+  const M = Math.max(1, Number(cfg.maxMult) || 1), T = Math.max(1.0001, Number(cfg.startRatio) || 200);
+  let x = D >= T ? 1 : D <= 1 ? M : 1 + (M - 1) * Math.log(T / D) / Math.log(T);
+  const step = Number(cfg.coefStep) > 0 ? Number(cfg.coefStep) : 0.05;
+  x = Math.floor(x / step + 1e-9) * step;          // 浮動小数誤差で 1.10→1.05 に落ちないよう微小値を足す
+  return Math.max(1, +x.toFixed(ccStepDecimals(step)));
+}
+function ccAmount(base, coef, market, cfg = capCoefCfg()) {
+  if (base == null) return null;
+  if (!coef || coef === 1) return base;              // 係数1.00は基本額そのまま（丸めない）
+  const unit = Number(market === 'US' ? cfg.roundUsd : cfg.roundJpy) || 0;
+  return unit > 0 ? Math.round(base * coef / unit) * unit : base * coef;
+}
+function ccFmtCoef(v, cfg = capCoefCfg()) { return v == null ? '—' : Number(v).toFixed(Math.max(2, ccStepDecimals(cfg.coefStep))); }
+// 銘柄の履歴（削除済み除く・古い順）
+function ccRecs(secId, idx) {
+  const arr = idx ? (idx.get(secId) || []) : (store.data.capCoefHistory || []).filter(r => r.securityId === secId && !r.deleted);
+  return arr.slice().sort((a, b) => (a.ord || 0) - (b.ord || 0) || (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+}
+function ccIndex() {
+  const m = new Map();
+  for (const r of store.data.capCoefHistory || []) { if (r.deleted) continue; (m.get(r.securityId) || m.set(r.securityId, []).get(r.securityId)).push(r); }
+  return m;
+}
+function ccCur(secId, idx) { const a = ccRecs(secId, idx); return a.length ? a[a.length - 1] : null; }
+// 表示用の現在値。固定中＝固定時の D・条件判定＋現在のマスタ・基本額／変動中＝最新の D・条件
+function ccView(sec, cur = ccCur(sec.id)) {
+  if (!CC_MARKETS.has(sec.market)) return null;
+  const cfg = capCoefCfg();
+  const fixed = !!(cur && cur.state === 'fixed');
+  const D = fixed ? cur.D : calc.capToTop(sec);
+  const eligible = fixed ? !!cur.eligible : ccEligible(sec, cfg);
+  const raw = eligible ? ccCoefFromD(D, cfg) : 1;
+  const coef = raw == null ? 1 : raw;
+  const base = calc.buyAmount(sec);
+  return { fixed, D, eligible, coef, noD: eligible && raw == null, base, amount: ccAmount(base, coef, sec.market, cfg), cur, pending: !!(cur && cur.pending) };
+}
+function ccPush(sec, fields, prev) {
+  const now = store._now();
+  const ord = Math.max(Date.now(), ((prev && prev.ord) || 0) + 1);
+  const r = Object.assign({ id: `cc${sec.id}-${ord.toString(36)}${Math.random().toString(36).slice(2, 5)}`, securityId: sec.id, ord, createdAt: now, updatedAt: now }, fields);
+  if (r.state === 'live' && !r.cycle) r.cycle = r.id;
+  (store.data.capCoefHistory ||= []).push(r);
+  return r;
+}
+function ccVals(v) { return { D: v.D ?? null, eligible: v.eligible, coef: v.coef, base: v.base ?? null, amount: v.amount ?? null }; }
+// 固定レコードを作る（買い・移行・手動）。D が無ければ null を返す（呼び出し側で保留）
+function ccMakeFixed(sec, prev, { trigger, txnId = null, fixedAt, reason, id }) {
+  const cfg = capCoefCfg();
+  const D = calc.capToTop(sec); if (D == null) return null;
+  const eligible = ccEligible(sec, cfg);
+  const coef = eligible ? ccCoefFromD(D, cfg) : 1;
+  const base = calc.buyAmount(sec);
+  const r = ccPush(sec, { state: 'fixed', D, eligible, coef, base, amount: ccAmount(base, coef, sec.market, cfg), fixedAt, trigger, txnId, reason, ...(id ? { id } : {}) }, prev);
+  r.cycle = r.id;
+  return r;
+}
+function ccLive(sec, prev, reason, extra = {}) {
+  return ccPush(sec, { state: 'live', ...ccVals(ccView(sec, null)), reason, ...extra }, prev);
+}
+// 1銘柄の状態を整える（取引削除の取り消し・移行・高値更新で解除・保留中の固定・洗い替え）。
+// 変更があれば true。条件外れ（固定中・確認未了）は prompts に積む。
+function ccReconcileSec(sec, idx, prompts) {
+  if (!CC_MARKETS.has(sec.market)) return false;
+  let changed = false;
+  let recs = ccRecs(sec.id, idx);
+  const txns = store.data.transactions;
+  // ① 固定のきっかけの買い取引が消えていたら、そのサイクルの固定レコードを取り消して1つ前に戻す
+  for (;;) {
+    const cur = recs[recs.length - 1];
+    if (!cur || cur.state !== 'fixed' || cur.trigger !== 'buy' || cur.txnId == null) break;
+    const t = txns.find(x => x.id === cur.txnId);
+    if (t) {
+      if (t.tradedAt && t.tradedAt !== cur.fixedAt) { for (const r of recs) if (r.cycle === cur.cycle && r.state === 'fixed') { r.fixedAt = t.tradedAt; store.touch(r); } changed = true; }
+      break;
+    }
+    for (const r of recs) if (r.cycle === cur.cycle && r.state === 'fixed') { r.deleted = true; store.touch(r); }
+    recs = recs.filter(r => !r.deleted); changed = true;
+  }
+  let cur = recs[recs.length - 1] || null;
+  // ② 履歴が無い＝導入時の移行（買い取引があれば導入時点の D で固定。最後の買いより後に高値更新済みなら変動中）
+  if (!cur) {
+    const buys = txns.filter(t => t.securityId === sec.id && t.type === 'buy' && t.tradedAt);
+    const lastDate = buys.reduce((a, t) => (t.tradedAt > a ? t.tradedAt : a), '');
+    const bh = calc.baseHighDate(sec);
+    const id = `cc${sec.id}-0`;             // 決定的ID（別端末で同時に移行しても同じレコードとしてマージされる）
+    if (lastDate && !(bh && bh > lastDate)) {
+      cur = ccMakeFixed(sec, null, { trigger: 'migrate', fixedAt: lastDate, reason: '導入時に固定', id })
+        || ccLive(sec, null, '導入（時価総額未取得のため固定保留）', { id, cycle: id, pending: { trigger: 'migrate', fixedAt: lastDate } });
+    } else cur = ccLive(sec, null, '導入', { id, cycle: id });
+    return true;
+  }
+  const cfg = capCoefCfg();
+  if (cur.state === 'fixed') {
+    // ③ 高値更新で解除（買い増しルールと同じ基準高値。固定日より後に高値が付いたら次のサイクル）
+    const bh = calc.baseHighDate(sec);
+    if (bh && cur.fixedAt && bh > cur.fixedAt) { ccLive(sec, cur, '高値更新で解除'); return true; }
+    // ④ 条件から外れた（確認画面で外すか選ぶ）／戻った
+    const elNow = ccEligible(sec, cfg);
+    if (cur.eligible && !elNow && !cur.keepIneligible && prompts) prompts.push(sec.id);
+    if (cur.keepIneligible && elNow) { delete cur.keepIneligible; store.touch(cur); changed = true; }
+    // ⑤ 洗い替え（マスタ・基本額の変更で係数か補正推奨額が変わったら1件追加）
+    const v = ccView(sec, cur);
+    if (v.coef !== cur.coef || v.amount !== cur.amount) {
+      const reason = (v.base ?? null) !== (cur.base ?? null) ? '基本額の変更' : '設定の変更';
+      ccPush(sec, { state: 'fixed', ...ccVals(v), D: cur.D, eligible: cur.eligible, fixedAt: cur.fixedAt, trigger: cur.trigger, txnId: cur.txnId ?? null, cycle: cur.cycle, keepIneligible: cur.keepIneligible || undefined, reason }, cur);
+      changed = true;
+    }
+    return changed;
+  }
+  // ⑥ 変動中: 保留中の固定を D が取れた時点で確定（保留のきっかけの買いが削除されていたら保留を取り消す）
+  if (cur.pending && cur.pending.txnId != null && !txns.some(x => x.id === cur.pending.txnId)) { delete cur.pending; store.touch(cur); changed = true; }
+  if (cur.pending && calc.capToTop(sec) != null) {
+    const p = cur.pending;
+    if (ccMakeFixed(sec, cur, { trigger: p.trigger, txnId: p.txnId ?? null, fixedAt: p.fixedAt, reason: p.trigger === 'migrate' ? '導入時に固定（時価総額取得後）' : '買いで固定（時価総額取得後）' })) return true;
+  }
+  // ⑦ 変動中: 係数か補正推奨額が変わった時だけ最新1件を上書き
+  const v = ccView(sec, cur);
+  if (v.coef !== cur.coef || v.amount !== cur.amount) { Object.assign(cur, ccVals(v)); store.touch(cur); changed = true; }
+  return changed;
+}
+let _ccPromptDismissed = new Set(); // 条件外れ確認で「このまま固定」以外で閉じた銘柄（この画面を開いている間は再表示しない）
+function capCoefReconcileAll() {
+  if (!store.data) return;
+  store.data.capCoefHistory ||= [];
+  const idx = ccIndex(), prompts = [];
+  let changed = false;
+  for (const sec of store.data.securities) if (ccReconcileSec(sec, idx, prompts)) changed = true;
+  if (changed) store.save();
+  const ask = prompts.filter(id => !_ccPromptDismissed.has(id));
+  if (ask.length && document.getElementById('modal-overlay')?.hidden !== false) setTimeout(() => ccIneligiblePrompt(ask), 0);
+}
+// 買いを登録した時（store.addTransaction から）。変動中なら固定（D 未取得なら保留）
+function capCoefOnBuy(t) {
+  const sec = store.data.securities.find(s => s.id === t.securityId);
+  if (!sec || !CC_MARKETS.has(sec.market)) return;
+  store.data.capCoefHistory ||= [];
+  const fixedAt = t.tradedAt || today();
+  let cur = ccCur(sec.id);
+  if (!cur) {                                   // 導入後に登録した銘柄の最初の買い
+    ccMakeFixed(sec, null, { trigger: 'buy', txnId: t.id, fixedAt, reason: '買いで固定', id: `cc${sec.id}-0` })
+      || ccLive(sec, null, '買い（時価総額未取得のため固定保留）', { id: `cc${sec.id}-0`, cycle: `cc${sec.id}-0`, pending: { trigger: 'buy', txnId: t.id, fixedAt } });
+    return;
+  }
+  if (ccReconcileSec(sec, null, null)) cur = ccCur(sec.id); // 高値更新による解除などを先に反映
+  if (cur.state === 'fixed') return;                        // 同じサイクルの買い増し＝係数はそのまま
+  if (cur.pending) return;                                  // 既にこのサイクルの最初の買いで固定保留中（D 取得後にその買いで固定）
+  if (!ccMakeFixed(sec, cur, { trigger: 'buy', txnId: t.id, fixedAt, reason: '買いで固定' })) {
+    cur.pending = { trigger: 'buy', txnId: t.id, fixedAt }; store.touch(cur);
+  }
+}
+// この買いで係数が固定されるか（取引登録画面の案内用）
+function ccWillFixOnBuy(sec) { const cur = ccCur(sec.id); return CC_MARKETS.has(sec.market) && (!cur || cur.state !== 'fixed'); }
+// 固定チェックの手動操作（確認ダイアログつき）。成功で true
+function ccToggleLock(secId, on) {
+  const sec = store.data.securities.find(s => s.id === secId); if (!sec) return false;
+  const cfg = capCoefCfg(), ccy = MARKET_CCY[sec.market];
+  const money = v => v == null ? '—' : ccy + num(v);
+  const cur = ccCur(sec.id), now = ccView(sec, cur);
+  if (on) {
+    if (now.fixed) return true;
+    const D = calc.capToTop(sec);
+    if (D == null) { alert('時価総額が未取得のため固定できません。価格・銘柄情報を更新してから操作してください。'); return false; }
+    const live = ccView(sec, null);
+    const msg = `推奨額 ${money(live.amount)}（基本${money(live.base)} × 係数${ccFmtCoef(live.coef, cfg)}、1位まで${D.toFixed(1)}倍${live.eligible ? '' : '・条件外'}）で固定します。\n次に高値を更新するまで係数は変わりません。`;
+    if (!confirm(msg)) return false;
+    ccMakeFixed(sec, cur, { trigger: 'manual', fixedAt: today(), reason: '手動で固定' });
+  } else {
+    if (!now.fixed) return true;
+    const live = ccView(sec, null);
+    const liveTxt = live.noD ? '時価総額が未取得のため現時点では係数1.00' : `現時点の値では 推奨額 ${money(live.amount)}（係数${ccFmtCoef(live.coef, cfg)}${live.eligible ? '' : '・条件外'}）`;
+    const msg = `現在は 推奨額 ${money(now.amount)}（基本${money(now.base)} × 係数${ccFmtCoef(now.coef, cfg)}）で固定されています。\n固定を外すと、係数は時価総額に合わせて自動で更新されるようになります。\n${liveTxt}です。\n\n次に買いを登録した時に、その時点の係数で再び固定されます。`;
+    if (!confirm(msg)) return false;
+    ccLive(sec, cur, '手動で解除');
+  }
+  store.save();
+  return true;
+}
+// 固定中の銘柄が条件から外れた時の確認（取込・銘柄編集・マスタ条件変更の後に一括）
+function ccIneligiblePrompt(ids) {
+  const secs = ids.map(id => store.data.securities.find(s => s.id === id)).filter(Boolean);
+  if (!secs.length) return;
+  const cfg = capCoefCfg();
+  const rows = secs.map(sec => {
+    const ccy = MARKET_CCY[sec.market], money = v => v == null ? '—' : ccy + num(v);
+    const now = ccView(sec), after = ccView(sec, null);
+    return `<tr><td class="l"><input type="checkbox" class="cc-unlock" data-id="${sec.id}" checked></td>
+      <td class="l">${esc(calc.displayName(sec))} <span class="muted">${esc(sec.ticker)}</span></td>
+      <td class="l">${esc(sec.rating || '—')} / ${esc(sec.category || '—')}</td>
+      <td>${money(now.amount)} <span class="muted">（係数${ccFmtCoef(now.coef, cfg)}で固定）</span></td>
+      <td>${money(after.amount)} <span class="muted">（係数${ccFmtCoef(after.coef, cfg)}・対象外）</span></td></tr>`;
+  }).join('');
+  showModal('時価総額補正: 条件から外れた銘柄', `
+    <p class="muted" style="margin:0 0 8px">格付・カテゴリが変わり、時価総額補正の適用条件（${esc(ccCondText(cfg))}）から外れた固定中の銘柄があります。<br>
+      チェックした銘柄は固定を外します（係数1.00・基本額に戻り、次の買いで再び固定）。チェックを外した銘柄は今の係数のまま固定を続けます。</p>
+    <div class="table-wrap"><table class="holdings dense"><thead><tr><th class="l">外す</th><th class="l">銘柄</th><th class="l">格付 / カテゴリ</th><th>現在</th><th>外した後</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="form-actions"><button type="button" class="btn" onclick="ccIneligibleLater([${secs.map(s => s.id).join(',')}])">あとで</button><button type="button" class="btn btn-primary" onclick="ccIneligibleApply()">決定</button></div>`, { wide: true });
+}
+function ccIneligibleLater(ids) { ids.forEach(id => _ccPromptDismissed.add(id)); closeModal(); }
+function ccIneligibleApply() {
+  for (const el of document.querySelectorAll('.cc-unlock')) {
+    const sec = store.data.securities.find(s => s.id === Number(el.dataset.id)); if (!sec) continue;
+    const cur = ccCur(sec.id); if (!cur || cur.state !== 'fixed') continue;
+    if (el.checked) ccLive(sec, cur, '条件から外れたため解除');
+    else { cur.keepIneligible = true; store.touch(cur); }
+  }
+  store.save(); closeModal(); render(); toast('時価総額補正の固定を更新しました');
+}
+function ccCondText(cfg = capCoefCfg()) {
+  const g = cfg.gradeMin ? `格付${cfg.gradeMin}以上` : '', c = cfg.catMin ? `カテゴリ「${cfg.catMin}」以上` : '';
+  return g && c ? `${g} ${cfg.join === 'or' ? 'または' : 'かつ'} ${c}` : (g || c || '条件なし（全銘柄）');
+}
+// 列のセル（補正係数／補正推奨額）
+function ccTip(sec, v, cfg = capCoefCfg()) {
+  const ccy = MARKET_CCY[sec.market], money = x => x == null ? '—' : ccy + num(x);
+  const st = v.fixed ? `固定中（${v.cur.fixedAt || '—'}〜・${CC_TRIGGER_LABEL[v.cur.trigger] || ''}）` : (v.pending ? '変動中（時価総額の取得後に固定）' : '変動中（次の買いで固定）');
+  const why = !v.eligible ? '条件外のため係数1.00' : v.noD ? '時価総額が未取得のため係数1.00' : `1位まで${v.D.toFixed(1)}倍`;
+  return `基本 ${money(v.base)} × 係数${ccFmtCoef(v.coef, cfg)} = ${money(v.amount)}\n${why}\n${st}`;
+}
+const CC_TRIGGER_LABEL = { buy: '買い', migrate: '導入時', manual: '手動' };
+function capCoefTd(sec) {
+  const v = ccView(sec); if (!v) return `<td>${muted}</td>`;
+  const cfg = capCoefCfg();
+  const lock = v.fixed ? '<span title="固定中" style="font-size:10px">🔒</span>' : '';
+  const body = v.coef === 1 ? `<span class="muted">${ccFmtCoef(1, cfg)}</span>` : ccFmtCoef(v.coef, cfg);
+  return `<td title="${esc(ccTip(sec, v, cfg))}">${lock}${body}</td>`;
+}
+function capAmountTd(sec) {
+  const v = ccView(sec); if (!v || v.amount == null) return `<td>${muted}</td>`;
+  return `<td title="${esc(ccTip(sec, v))}">${fmtAmtInt(v.amount)}</td>`;
+}
+// 銘柄詳細・カルテ用: 内訳＋固定チェック＋履歴
+function capCoefDetailHtml(sec) {
+  const v = ccView(sec); if (!v) return '';
+  const cfg = capCoefCfg(), ccy = MARKET_CCY[sec.market], money = x => x == null ? '—' : ccy + num(x);
+  const kv = (l, x) => `<div class="ai-row"><span class="muted">${l}</span><span>${x}</span></div>`;
+  const why = !v.eligible ? `条件外（${esc(ccCondText(cfg))}）` : v.noD ? '時価総額が未取得' : `1位まで ${v.D.toFixed(1)}倍${v.fixed ? '（固定時）' : ''}`;
+  const hist = ccRecs(sec.id).reverse();
+  const histRows = hist.map(r => `<tr><td class="l">${esc((r.createdAt || '').slice(0, 10))}</td>
+      <td class="l">${r.state === 'fixed' ? '🔒固定' : '変動中'}</td>
+      <td>${r.D != null ? Number(r.D).toFixed(1) + '倍' : '—'}</td><td>${ccFmtCoef(r.coef, cfg)}</td>
+      <td>${money(r.base)}</td><td>${money(r.amount)}</td>
+      <td class="l">${esc(r.reason || '')}${r.fixedAt && r.state === 'fixed' ? ` <span class="muted">（固定日 ${esc(r.fixedAt)}）</span>` : ''}</td></tr>`).join('');
+  // fieldset は既定で min-width:min-content＝履歴表の幅まで広がりドロワーからはみ出すので 0 にする（表は枠内で横スクロール）
+  return `<fieldset class="form-group" style="min-width:0"><legend>時価総額補正</legend><div class="auto-info">
+    ${kv('補正推奨額', `<strong>${money(v.amount)}</strong> <span class="muted">= 基本 ${money(v.base)} × 係数 ${ccFmtCoef(v.coef, cfg)}</span>`)}
+    ${kv('係数の根拠', why)}
+    ${kv('係数固定', `<label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" style="width:auto" ${v.fixed ? 'checked' : ''} onchange="ccToggleFromUi(${sec.id}, this)"> ${v.fixed ? `固定中（${esc(v.cur.fixedAt || '—')}〜・${CC_TRIGGER_LABEL[v.cur.trigger] || ''}）` : (v.pending ? '変動中（時価総額の取得後に固定）' : '変動中（次の買いで固定）')}</label>`)}
+    ${hist.length ? `<details style="margin-top:6px"><summary class="muted" style="cursor:pointer">補正係数の履歴（${hist.length}件）</summary>
+      <div style="margin-top:6px;overflow-x:auto;max-width:100%"><table class="holdings dense" style="font-size:11.5px"><thead><tr><th class="l">日付</th><th class="l">状態</th><th>1位まで</th><th>係数</th><th>基本額</th><th>補正推奨額</th><th class="l">理由</th></tr></thead><tbody>${histRows}</tbody></table></div></details>` : ''}
+  </div></fieldset>`;
+}
+// 詳細・カルテ・編集フォームのチェックボックスから。キャンセル時はチェックを元に戻し、確定したら画面を描き直す
+function ccToggleFromUi(secId, el) {
+  const ok = ccToggleLock(secId, el.checked);
+  if (!ok) { el.checked = !el.checked; return; }
+  const ov = document.getElementById('drawer-overlay');
+  const drawerOpen = !!(ov && !ov.hidden && ov.classList.contains('show'));
+  render();
+  if (drawerOpen && typeof openSecurityDetail === 'function') openSecurityDetail(secId);
+  toast(el.checked ? '係数を固定しました' : '係数の固定を外しました');
+}
+// マスタ: 時価総額補正の設定
+function openCapCoefMaster() {
+  const cfg = capCoefCfg();
+  const cats = [...store.data.categories].sort((a, b) => a.sortOrder - b.sortOrder);
+  const gradeOpts = ['', ...Object.keys(GRADE_RANK)].map(g => `<option value="${g}" ${cfg.gradeMin === g || (!g && !cfg.gradeMin) ? 'selected' : ''}>${g ? g + ' 以上' : '（条件にしない）'}</option>`).join('');
+  const catOpts = [`<option value="" ${!cfg.catMin ? 'selected' : ''}>（条件にしない）</option>`, ...cats.map(c => `<option value="${esc(c.category)}" ${cfg.catMin === c.category ? 'selected' : ''}>${esc(c.category)} 以上</option>`)].join('');
+  const ex = [200, 100, 50, 20, 10, 5, 2, 1].map(d => `<td>${ccFmtCoef(ccCoefFromD(d, cfg), cfg)}</td>`).join('');
+  showModal('時価総額補正（補正係数・補正推奨額）', `
+    <p class="muted" style="margin:0 0 10px">巨大企業ほど元本を厚くする補正です。<strong>係数 = 1 + (M−1) × log(T ÷ D) ÷ log(T)</strong>（D＝市場の時価総額1位までの倍率）。
+      補正推奨額＝1回の購入額 × 係数（丸め単位で四捨五入）。係数は買いを登録した時に固定され、高値更新で外れます。</p>
+    <div class="row">
+      <div class="field"><label>1位にかける倍数 M（上限）</label><input id="cc-max" type="number" step="0.05" min="1" value="${cfg.maxMult}"></div>
+      <div class="field"><label>係数をかけ始める1位までの倍率 T</label><input id="cc-start" type="number" step="1" min="2" value="${cfg.startRatio}"></div>
+      <div class="field"><label>係数の刻み（切り捨て）</label><input id="cc-step" type="number" step="0.01" min="0.01" value="${cfg.coefStep}"></div>
+    </div>
+    <div class="grp-label" style="margin-top:6px">適用条件</div>
+    <div class="row">
+      <div class="field"><label>銘柄格付</label><select id="cc-grade">${gradeOpts}</select></div>
+      <div class="field"><label>つなぎ</label><select id="cc-join"><option value="and" ${cfg.join !== 'or' ? 'selected' : ''}>かつ</option><option value="or" ${cfg.join === 'or' ? 'selected' : ''}>または</option></select></div>
+      <div class="field"><label>カテゴリ（並び順で上位ほど上）</label><select id="cc-cat">${catOpts}</select></div>
+    </div>
+    <div class="grp-label" style="margin-top:6px">補正推奨額の丸め（四捨五入）</div>
+    <div class="row">
+      <div class="field"><label>日本株（円）</label><input id="cc-rjpy" type="number" step="1" min="0" value="${cfg.roundJpy}"></div>
+      <div class="field"><label>米国株（$）</label><input id="cc-rusd" type="number" step="1" min="0" value="${cfg.roundUsd}"></div>
+    </div>
+    <div class="grp-label" style="margin-top:6px">現在の設定での係数の目安</div>
+    <div class="table-wrap"><table class="holdings dense"><thead><tr><th class="l">1位まで</th>${[200, 100, 50, 20, 10, 5, 2, 1].map(d => `<th>${d}倍</th>`).join('')}</tr></thead><tbody><tr><td class="l">係数</td>${ex}</tr></tbody></table></div>
+    <p class="muted" style="margin:8px 0 0">設定を変えると、固定中の銘柄も固定時の倍率で係数を計算し直し、履歴に1件追加します。条件から外れる固定中の銘柄があれば、固定を外すか確認します。</p>
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">キャンセル</button><button type="button" class="btn btn-primary" onclick="saveCapCoefMaster()">保存</button></div>`, { wide: true });
+}
+function saveCapCoefMaster() {
+  const g = id => document.getElementById(id);
+  const nv = {
+    maxMult: parseFloat(g('cc-max').value), startRatio: parseFloat(g('cc-start').value), coefStep: parseFloat(g('cc-step').value),
+    gradeMin: g('cc-grade').value || null, catMin: g('cc-cat').value || null, join: g('cc-join').value === 'or' ? 'or' : 'and',
+    roundJpy: parseFloat(g('cc-rjpy').value), roundUsd: parseFloat(g('cc-rusd').value),
+  };
+  if (!(nv.maxMult >= 1)) { toast('倍数Mは1以上にしてください'); return; }
+  if (!(nv.startRatio > 1)) { toast('倍率Tは1より大きくしてください'); return; }
+  if (!(nv.coefStep >= 0.01)) { toast('係数の刻みは0.01以上にしてください'); return; }
+  if (!(nv.roundJpy >= 0) || !(nv.roundUsd >= 0)) { toast('丸め単位は0以上にしてください'); return; }
+  store.data.settings.capCoef = nv;
+  store.data.settings._updatedAt = store._now();
+  store.save(); closeModal(); _ccPromptDismissed = new Set(); render(); toast('時価総額補正の設定を保存しました');
 }
 // 「時価1位まで」列の分子を自己補完する。未取得（or 前日以前）の市場だけ、時価総額ランキング1件を
 // 裏で取得して記録する。株価更新やマーケットタブを待たずに列が埋まるようにするための保険で、
@@ -9426,6 +9791,7 @@ const MASTER_LAUNCH = [
   { v: 'investcat', label: '投資カテゴリ マスタ', open: () => openInvestCategoryMaster(), note: '分析枠のラベル（高配当・テーマ株など）。金額とは無関係の別管理。' },
   { v: 'label',    label: '銘柄ラベル マスタ', open: () => openLabelMaster(), note: '1銘柄に複数付けられる投資テーマ/分類タグ（半導体・宇宙・防衛・高配当）。フィルタ＋一括で前提崩れ時の判断に。' },
   { v: 'rule',     label: '買い増しルールマスタ', open: () => openRuleMaster(),     note: '初回/買い増しの下落率・基準高値のルール。銘柄ごとの割当は各銘柄の編集から。' },
+  { v: 'capcoef',  label: '時価総額補正（補正係数・補正推奨額）', open: () => openCapCoefMaster(), note: '市場の時価総額1位までの倍率で1回の購入額を増やす補正。1位の倍数・かけ始める倍率・係数の刻み・適用条件（格付/カテゴリ）・丸め単位。' },
   { v: 'grade',    label: '銘柄格付けマスタ',     open: () => openGradeMaster(),    note: '銘柄格付け（S/A/B/C/D）の一覧・詳細での表示色を設定。' },
   { v: 'matrix',   label: 'マトリックス レンジ設定', open: () => openMatrixBandMaster(), note: 'レポートの分布マトリックスの取得額レンジ（色・しきい値）。米株円換算は共通レートを使用。' },
   { v: 'fxrate',   label: 'ドル円換算レート（マスタ評価用）', open: () => openFxRateMaster(), note: '米国株($)を円換算して評価する共通レート（初期100円）。背景色ルールのUS金額判定とマトリックスの取得額換算で共用。' },
@@ -11377,6 +11743,10 @@ function openSecurityForm(id, presetMarket, presetTicker) {
           <div class="field"><label>購入回数</label>
             <input name="buyCount" type="number" step="1" min="0" value="${buyCntVal}"></div>
         </div>
+        ${sec && ccView(sec) ? ((v) => `<div class="muted" style="font-size:12px;margin:-4px 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <span title="${esc(ccTip(sec, v))}">時価総額補正: 係数 ${v.fixed ? '🔒' : ''}${ccFmtCoef(v.coef)} → 補正推奨額 ${v.amount != null ? ccy + num(v.amount) : '—'}</span>
+          <label style="display:inline-flex;gap:4px;align-items:center;cursor:pointer" title="チェックの変更はこの場で確定します（保存ボタンとは別）"><input type="checkbox" style="width:auto" ${v.fixed ? 'checked' : ''} onchange="ccToggleFromUi(${sec.id}, this)">係数を固定</label>
+        </div>`)(ccView(sec)) : ''}
         <div class="row">
           <div class="field"><label title="分析枠のラベル（高配当/テーマ株 等）">投資カテゴリ</label>
             <select name="investCategory"><option value="">未設定</option>${invCatOpts}</select></div>
@@ -11989,6 +12359,7 @@ function openSecurityDetail(secId) {
     ${sectionBox('評価', evalBox)}
     ${scenarioBox ? sectionBox('株価シナリオ', scenarioBox) : ''}
     ${sectionBox('判定', judge)}
+    ${capCoefDetailHtml(sec)}
     ${sectionBox('保有', holdRows + (holdSummary || '') + (origCostRow || '') + (principalSoldRow || ''))}
     ${sec.memo ? sectionBox('メモ', `<div style="white-space:pre-wrap;word-break:break-word">${esc(sec.memo)}</div>`) : ''}
     ${txnHistoryHtml(sec.id, { title: '購入・取引履歴' })}
@@ -12815,6 +13186,11 @@ function karteCardHtml(sec) {
     row('銘柄ラベル', secLabels(sec).length ? labelsTag(sec) : '—'),
     // 推奨額＝カテゴリ別の推奨購入額（市場通貨）。都度 categoryAmountFor から算出（取込専用 recoAmount は参照しない）。
     row('推奨額', sec.category && store.categoryAmountFor(sec.category, sec.market) ? m(store.categoryAmountFor(sec.category, sec.market)) : '—'),
+    // 時価総額補正（係数＋固定チェック／補正推奨額）。内訳はツールチップ、履歴は詳細ドロワー
+    ...((v) => v ? [
+      row('補正係数', `<span title="${esc(ccTip(sec, v))}">${v.fixed ? '🔒' : ''}${ccFmtCoef(v.coef)}</span> <label class="muted" style="display:inline-flex;gap:4px;align-items:center;cursor:pointer;font-size:11.5px"><input type="checkbox" style="width:auto" ${v.fixed ? 'checked' : ''} onchange="ccToggleFromUi(${sec.id}, this)">固定</label>`),
+      row('補正推奨額', v.amount != null ? `<span title="${esc(ccTip(sec, v))}">${m(v.amount)}</span>` : '—'),
+    ] : [])(ccView(sec)),
     row('優先順位/評価日', `${sec.priority != null ? sec.priority : '—'} / ${esc(sec.analysisDate || '—')}`),
     sec.analysisNote ? row('分析メモ', esc(sec.analysisNote)) : '',
     // 株価シナリオ（データがある行だけ）。現在値がどのレンジにいるかをタグで併記
@@ -12913,6 +13289,24 @@ function karteCardHtml(sec) {
     </div>`;
 }
 
+// 取引登録画面の情報帯: 格付｜カテゴリ｜推奨額｜係数｜補正推奨額（買う金額をその場で確認するため）。
+// 新規の買いでこの買いが係数を固定する場合は、その旨を添える（売りを選んだら隠す＝buy-only）。
+function txnInfoBandHtml(sec, isNew, sellSelected) {
+  const ccy = MARKET_CCY[sec.market], money = v => v == null ? '—' : ccy + num(v);
+  const v = ccView(sec);
+  const reco = sec.category ? store.categoryAmountFor(sec.category, sec.market) : null;
+  const item = (k, val, tip) => `<span${tip ? ` title="${esc(tip)}"` : ''}><span class="muted">${k}</span> ${val}</span>`;
+  const items = [
+    item('格付', esc(sec.rating || '—')),
+    item('カテゴリ', sec.category ? esc(sec.category) : '—'),
+    item('推奨額', money(reco || null)),
+    ...(v ? [item('係数', `${v.fixed ? '🔒' : ''}${ccFmtCoef(v.coef)}`, ccTip(sec, v)), item('補正推奨額', `<strong>${money(v.amount)}</strong>`, ccTip(sec, v))] : []),
+  ].join('<span class="muted">｜</span>');
+  const willFix = isNew && v && ccWillFixOnBuy(sec);
+  const fixNote = willFix ? `<div class="buy-only muted" style="font-size:11.5px;margin-top:3px;${sellSelected ? 'display:none' : ''}">※この買いを記録すると係数${ccFmtCoef(ccView(sec, null).coef)}が固定されます${calc.capToTop(sec) == null ? '（時価総額が未取得のため、取得後に固定）' : ''}</div>` : '';
+  return `<div style="background:var(--surface-2,rgba(0,0,0,.03));border:1px solid var(--border);border-radius:8px;padding:6px 10px;margin:0 0 12px;font-size:12.5px">
+    <div style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center">${items}</div>${fixNote}</div>`;
+}
 function openTxnForm(secId, presetType, opts = {}) {
   const { ledgerOnly: presetLedgerOnly = false, onDone = null, editTxn = null } = opts;
   const sec = store.data.securities.find(s => s.id === secId);
@@ -12935,6 +13329,7 @@ function openTxnForm(secId, presetType, opts = {}) {
   showModal(`${editTxn ? '取引を編集' : '取引を記録'} — ${esc(sec.name || sec.ticker)}`, `
     <form id="txn-form">
       ${editTxn ? '' : secNavBar(secId, 'txn')}
+      ${txnInfoBandHtml(sec, !editTxn, typeSel === 'sell')}
       <div class="row">
         <div class="field"><label>種別</label>
           <select name="type" onchange="txnToggleBuyOnly(this)"><option value="buy" ${typeSel !== 'sell' ? 'selected' : ''}>買い</option><option value="sell" ${typeSel === 'sell' ? 'selected' : ''}>売り</option></select></div>
@@ -15092,6 +15487,7 @@ function resetTxnData() {
   try { exportData(); } catch (_) { /* バックアップ失敗でも続行 */ }
   store.data.holdings = [];
   store.data.transactions = [];
+  store.data.capCoefHistory = [];   // 係数の固定は買い取引に紐づくので取引と一緒に消す（次の描画で変動中から作り直す）
   store.data.importHistory = [];
   store.data.amountSnapshots = [];
   store.data.prices = {};

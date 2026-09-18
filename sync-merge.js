@@ -59,6 +59,9 @@
     amountSnapshots: ['records', (r) => `as:${r.id}`],
     analyses:        ['records', (r) => `an:${r.securityId}|${r.analysisDate}`],
     priceScenarios:  ['records', (r) => `ps:${r.securityId}|${r.scenarioDate}`], // 株価シナリオ分析の履歴（銘柄×分析日）。行単位3-way
+    // 時価総額補正の係数履歴。id は端末間で衝突しない文字列（導入時の移行レコードは決定的ID cc{secId}-0）。
+    // 行単位3-way（updatedAt の新しい方）。固定の取り消しはトンボストン（deleted:true）で伝播
+    capCoefHistory:  ['records', (r) => `cc:${r && r.id}`],
 
     importHistory:   ['records', (r) => `ih:${r.id}`],
     importFormats:   ['records', (f) => f && f.name != null ? `if:n:${f.name}` : `if:${JSON.stringify(f)}`],
