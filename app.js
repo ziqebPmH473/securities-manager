@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260925-1010';
+const APP_VERSION = 'v20260925-1026';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -332,6 +332,19 @@ const MASTER_COLS = [
   { key: 'anaBuy',      label: '買い候補',         left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaFail',     label: '失敗ライン',       left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaDate',     label: '分析日',           left: true,  markets: ['ANALYSIS'], noSort: false },
+  // 決算カレンダーの一覧（ECAL_US / ECAL_JP スコープ専用。値は銘柄ではなくカレンダーの行から描く＝ECAL_COL）
+  { key: 'ecMark',      label: '印',               left: false, markets: ['ECAL_US','ECAL_JP'], noSort: false },
+  { key: 'ecDate',      label: '発表日',           left: false, markets: ['ECAL_US','ECAL_JP'], noSort: false },
+  { key: 'ecTime',      label: '時刻',             left: false, markets: ['ECAL_US'], noSort: false },
+  { key: 'ecCode',      label: 'コード',           left: true,  markets: ['ECAL_US','ECAL_JP'], noSort: false, narrow: true },
+  { key: 'ecName',      label: '銘柄名',           left: true,  markets: ['ECAL_US','ECAL_JP'], noSort: false },
+  { key: 'ecKind',      label: '種別',             left: false, markets: ['ECAL_JP'], noSort: false },
+  { key: 'ecCap',       label: '時価総額',         left: false, markets: ['ECAL_US'], noSort: false },
+  { key: 'ecEps',       label: '予想EPS',          left: false, markets: ['ECAL_US'], noSort: false },
+  { key: 'ecFq',        label: '決算期',           left: false, markets: ['ECAL_US'], noSort: false },
+  { key: 'ecFy',        label: '決算期',           left: false, markets: ['ECAL_JP'], noSort: false },
+  { key: 'ecIndustry',  label: '業種',             left: true,  markets: ['ECAL_JP'], noSort: false },
+  { key: 'ecSegment',   label: '市場',             left: false, markets: ['ECAL_JP'], noSort: false },
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
@@ -343,6 +356,9 @@ const DEFAULT_VISIBLE = {
   ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
   // マーケットランキングタブ（既定＝現状維持）。順位/コード/名称は先頭固定列で、ここには含めない。
   MKTRANK: ['market','price','day','high5y','dropFrom5y','turnover','marketCap','capToTop'],
+  // 決算カレンダーの一覧（全列を既定表示。並び・幅・表示は「列」ボタンで変更）
+  ECAL_US: ['ecMark','ecDate','ecTime','ecCode','ecName','ecCap','ecEps','ecFq'],
+  ECAL_JP: ['ecMark','ecDate','ecCode','ecName','ecKind','ecFy','ecIndustry','ecSegment'],
 };
 // マーケットランキングで列設定に出せる項目（追加取得ゼロで出せる市場データ＋登録済み銘柄のツール内情報）。
 // MASTER_COLS に実在するkeyのみ（resetColPrefs 側で実在チェックして交差を取る）。表示順もこの順。
@@ -2994,6 +3010,8 @@ const listState = {
   ANALYSIS:   { sortKey: 'anaContra', sortDir: -1, broker: '', account: '', category: '', detailType: '' },
   ANALYSIS_T: { sortKey: 'anaTrend',  sortDir: -1, broker: '', account: '', category: '', detailType: '' },
   MKTRANK:    { sortKey: 'rank',      sortDir: 1,  broker: '', account: '', category: '', detailType: '' }, // マーケットランキングタブの列設定・ソート
+  ECAL_US:    { sortKey: 'ecDate',    sortDir: 1,  broker: '', account: '', category: '', detailType: '' }, // 決算カレンダーの一覧
+  ECAL_JP:    { sortKey: 'ecDate',    sortDir: 1,  broker: '', account: '', category: '', detailType: '' },
 };
 // カラム設定: 市場ごとに [{key, visible}] の配列
 let colPrefs = {};
@@ -3348,6 +3366,18 @@ function colDefaultWidth(key) {
   if (key === 'anaMa200') return 72;
   if (key === 'ana5d') return 58;
   if (key === 'anaDev52w') return 80;
+  // 決算カレンダー
+  if (key === 'ecMark') return 52;
+  if (key === 'ecDate') return 92;
+  if (key === 'ecTime') return 64;
+  if (key === 'ecCode') return 72;
+  if (key === 'ecName') return 220;
+  if (key === 'ecKind') return 92;
+  if (key === 'ecCap') return 96;
+  if (key === 'ecEps') return 80;
+  if (key === 'ecFq' || key === 'ecFy') return 80;
+  if (key === 'ecIndustry') return 110;
+  if (key === 'ecSegment') return 96;
   return mc.left ? 110 : 84; // 左寄せ(テキスト系)は広め・数値は狭め
 }
 function colWidthPx(item) { return Math.max(40, item.width || colDefaultWidth(item.key)); }
@@ -8521,15 +8551,23 @@ function attachMacroHover(host, series) {
 // 日本株・米国株の決算発表の予定日を2か月のカレンダーで見る。日付を押すとその日の一覧。
 // 取り先は /api/calendar：米国＝Nasdaq（月ごと）、日本＝JPX の決算発表予定日（全部）＋日経の決算発表スケジュール（月ごと）。
 // このツール独自：登録銘柄・保有銘柄に印を付け、それだけに絞れる。フィードに無い登録銘柄は
-// 既存の決算日キャッシュ（store.data.earnings の next）でおぎなう。
-// 取得結果はメモリだけ（サーバー側で6時間キャッシュ）。市場・絞り込みの選択は settings（同期対象・ルール7）。
+// 既存の決算日キャッシュ（store.data.earnings の next）でおぎなう。米国株の銘柄名は日本語（/api/calendar?names=）。
+// 一覧の列は保有銘柄と同じ列設定（colPrefs の ECAL_US / ECAL_JP スコープ・openColPicker）で並び・幅・表示を変えられる。
+// 取得結果はメモリだけ（サーバー側でキャッシュ）。市場・絞り込みの選択は settings（同期対象・ルール7）。
 // ============================================================
-const ECAL = { base: null, sel: '', q: '', jpx: null, mon: { JP: {}, US: {} }, busy: {} };
+// from/to＝選んだ期間（1日なら同じ日。'' は表示中の2か月ぶん全部）。anchor＝Shift+クリックの起点。
+// ja＝米国株の日本語名（ティッカー→名前|null）
+const ECAL = { base: null, from: '', to: '', anchor: '', drag: null, q: '', jpx: null, mon: { JP: {}, US: {} }, busy: {}, ja: {}, jaQueue: [], jaRunning: 0, cur: null };
 const ecalIso = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 const ecalMon = (d, n) => { const x = new Date(d.getFullYear(), d.getMonth() + n, 1); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0'); };
 const ecalMonths = () => [ecalMon(ECAL.base, 0), ecalMon(ECAL.base, 1)];
+const ecalScopeKey = () => 'ECAL_' + ecalMarket();
 function ecalMarket() { const v = (store.data.settings || {}).ecalMarket; return v === 'JP' ? 'JP' : 'US'; }
 function ecalScope() { const v = (store.data.settings || {}).ecalScope; return v === 'mine' || v === 'held' ? v : 'all'; }
+// 全日付を出す時に、今日より前も出すか（既定は出さない）
+function ecalShowPast() { return !!(store.data.settings || {}).ecalPast; }
+function setEcalPast(v) { ecalSaveSetting('ecalPast', !!v); ecalPaint(); }
+function ecalSetDay(d) { ECAL.from = ECAL.to = ECAL.anchor = d || ''; }
 function ecalSaveSetting(k, v) {
   store.data.settings = store.data.settings || {};
   store.data.settings[k] = v;
@@ -8537,10 +8575,72 @@ function ecalSaveSetting(k, v) {
   store.save();
 }
 function setEcalMarket(m) { ecalSaveSetting('ecalMarket', m); renderEcal(); }
-function setEcalScope(s) { ecalSaveSetting('ecalScope', s); ecalPaint(); }
+// 登録銘柄・保有中は2か月ぶん全部から始める（日付を押せばその日に絞る）。「すべて」は件数が多いので日付を選んだ状態に戻す
+function setEcalScope(s) {
+  ecalSaveSetting('ecalScope', s);
+  if (s === 'all' && !ECAL.from && !ECAL.q) ecalSetDay(ecalIso(new Date()));
+  else if (s !== 'all') ecalSetDay('');
+  renderEcal();
+}
 function ecalShift(n) { ECAL.base = new Date(ECAL.base.getFullYear(), ECAL.base.getMonth() + n, 1); ecalLoadShown(); ecalPaint(); }
-function ecalPick(d) { ECAL.sel = d; ecalPaint(); }
-function ecalSearch(v) { ECAL.q = String(v || '').trim().toLowerCase(); ecalPaint(); }
+// 日付を押す：その日だけ。Shift+クリック：前に押した日からの期間。選んでいる1日をもう一度押すと全日付に戻る
+function ecalPick(d, ev) {
+  if (ev && ev.shiftKey && ECAL.anchor) { const a = ECAL.anchor; ECAL.from = a < d ? a : d; ECAL.to = a < d ? d : a; }
+  else if (ECAL.from === d && ECAL.to === d) ecalSetDay('');
+  else ecalSetDay(d);
+  ecalPaint();
+}
+// なぞって期間を選ぶ（押した日→離した日）。なぞっている間はマス目の色だけ変える（一覧は離した時に描く）
+function ecalDragStart(d, ev) { if (ev.button !== 0 || ev.shiftKey) return; ECAL.drag = { a: d, b: d }; ev.preventDefault(); }
+function ecalDragOver(d) {
+  if (!ECAL.drag) return;
+  ECAL.drag.b = d;
+  const [lo, hi] = [ECAL.drag.a, d].sort();
+  document.querySelectorAll('.ecal-grid td[data-d]').forEach(td => td.classList.toggle('dragging', td.dataset.d >= lo && td.dataset.d <= hi));
+}
+document.addEventListener('mouseup', () => {
+  if (!ECAL.drag) return;
+  const { a, b } = ECAL.drag; ECAL.drag = null;
+  // 動かしていない＝ふつうのクリック（onclick に任せる）
+  if (a === b) { document.querySelectorAll('.ecal-grid td.dragging').forEach(td => td.classList.remove('dragging')); return; }
+  ECAL.from = a < b ? a : b; ECAL.to = a < b ? b : a; ECAL.anchor = a;
+  ecalPaint();
+});
+function ecalAllDays() { ecalSetDay(''); ecalPaint(); }
+// 期間の入力欄（スマホでも期間を選べるように）。表示中の2か月の外なら、始まりの月を表示する
+function ecalSetRange() {
+  let f = document.getElementById('ecal-from').value, t = document.getElementById('ecal-to').value;
+  if (!f && !t) { ecalSetDay(''); ecalPaint(); return; }
+  if (!f) f = t; if (!t) t = f; if (f > t) [f, t] = [t, f];
+  let ms = ecalMonths();
+  if (f.slice(0, 7) < ms[0] || f.slice(0, 7) > ms[1]) { ECAL.base = new Date(+f.slice(0, 4), +f.slice(5, 7) - 1, 1); ms = ecalMonths(); ecalLoadShown(); }
+  const end = ms[1] + '-' + String(new Date(+ms[1].slice(0, 4), +ms[1].slice(5, 7), 0).getDate()).padStart(2, '0');
+  if (t > end) { t = end; toast('読み込むのは表示中の2か月ぶんなので、' + (+end.slice(5, 7)) + '月' + (+end.slice(8)) + '日までにしました'); }
+  ECAL.from = f; ECAL.to = t; ECAL.anchor = f;
+  ecalPaint();
+}
+// 矢印キーで日付を送る（←→＝1日、↑↓＝1週）。表示中の2か月の外に出たら月も送る。入力中・モーダル表示中は何もしない
+document.addEventListener('keydown', (e) => {
+  if (currentView !== 'ecal' || !/^Arrow(Left|Right|Up|Down)$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return;
+  const ae = document.activeElement;
+  if (ae && (/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) || ae.closest('#detail-drawer'))) return;
+  const mo = document.getElementById('modal-overlay'); if (mo && !mo.hidden) return;
+  e.preventDefault();
+  const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+  const from = (step < 0 ? ECAL.from : ECAL.to) || ecalIso(new Date());
+  const [y, m, d] = from.split('-').map(Number), nd = new Date(y, m - 1, d + step), iso = ecalIso(nd);
+  ecalSetDay(iso);
+  const ms = ecalMonths(), nm = iso.slice(0, 7);
+  if (nm < ms[0]) { ECAL.base = new Date(nd.getFullYear(), nd.getMonth(), 1); ecalLoadShown(); }
+  else if (nm > ms[1]) { ECAL.base = new Date(nd.getFullYear(), nd.getMonth() - 1, 1); ecalLoadShown(); }
+  ecalPaint();
+});
+function ecalSearch(v) {
+  const q = String(v || '').trim().toLowerCase();
+  if (q && !ECAL.q) ecalSetDay('');                                          // 打ち始めたら2か月ぶんから探す
+  if (!q && ECAL.q && !ECAL.from && ecalScope() === 'all') ecalSetDay(ecalIso(new Date()));
+  ECAL.q = q; ecalPaint();
+}
 function ecalClearSearch() { const el = document.getElementById('ecal-q'); if (el) el.value = ''; ecalSearch(''); }
 // コードの突き合わせ用（BRK.B / BRK/B / BRK-B を同じに、JPX の5桁コード 72030 は 7203 に）
 function ecalKey(market, code) {
@@ -8584,6 +8684,26 @@ function ecalLoadShown() {
       .finally(() => { ECAL.busy[mk + m] = 0; ecalPaint(); });
   }
 }
+// 米国株の日本語名を、一覧に出ている分だけ取りに行く（12銘柄ずつ・同時3本。サーバー側で30日キャッシュ）。
+// 取れた分から一覧を描き直す。取れなかった（Yahoo!ファイナンスに日本語名が無い）銘柄は英語名のまま。
+function ecalQueueNames(syms) {
+  const want = syms.filter(s => s && !(s in ECAL.ja) && !ECAL.jaQueue.includes(s));
+  if (!want.length) return;
+  ECAL.jaQueue.push(...want);
+  const pump = () => {
+    while (ECAL.jaRunning < 3 && ECAL.jaQueue.length) {
+      const batch = ECAL.jaQueue.splice(0, 12);
+      ECAL.jaRunning++;
+      ecalGet('names=' + encodeURIComponent(batch.join(',')))
+        .then(j => { for (const s of batch) ECAL.ja[s] = (j.names && j.names[s]) || null; })
+        .catch(() => { for (const s of batch) ECAL.ja[s] = null; })
+        .finally(() => { ECAL.jaRunning--; ecalPaintSoon(); pump(); });
+    }
+  };
+  pump();
+}
+let _ecalPaintTimer = null;
+function ecalPaintSoon() { clearTimeout(_ecalPaintTimer); _ecalPaintTimer = setTimeout(() => { ECAL.keepScroll = true; ecalPaint(); }, 250); }
 // 表示中の2か月の行。日本は JPX を優先し、日経は JPX に載っていない会社だけ足す。
 // 登録銘柄でフィードに無いものは決算日キャッシュ（next）から足す。各行に mine（{sec,held}）を付ける。
 function ecalRows() {
@@ -8597,7 +8717,7 @@ function ecalRows() {
     out.push(...jr.filter(r => ms.includes(r.date.slice(0, 7))));
     for (const m of ms) if (ECAL.mon.JP[m]) out.push(...ECAL.mon.JP[m].rows.filter(r => !inJpx(r.code, r.date)));
   }
-  out = out.map(r => Object.assign({}, r, { mine: mine.get(ecalKey(mk, r.symbol || r.code)) || null }));
+  out = out.map(r => Object.assign({}, r, { code: r.code || r.symbol, mine: mine.get(ecalKey(mk, r.symbol || r.code)) || null }));
   // 決算日キャッシュからおぎなう（フィードで前後20日以内に同じ銘柄があれば足さない）
   const have = new Map();
   for (const r of out) if (r.mine) { const k = r.mine.sec.id; if (!have.has(k)) have.set(k, []); have.get(k).push(r.date); }
@@ -8605,10 +8725,11 @@ function ecalRows() {
     const e = earnOf(m.sec); const d = e && e.next;
     if (!d || !ms.includes(String(d).slice(0, 7))) continue;
     if ((have.get(m.sec.id) || []).some(x => Math.abs(new Date(x) - new Date(d)) < 20 * 864e5)) continue;
-    const base = { date: String(d).slice(0, 10), name: calc.displayName(m.sec), mine: m, own: true, estimate: !!e.nextEstimate };
-    out.push(mk === 'US' ? Object.assign(base, { symbol: m.sec.ticker, time: '', cap: 0, fq: '', eps: '' })
-                         : Object.assign(base, { code: m.sec.ticker, kind: '', fy: '', industry: '', segment: '' }));
+    out.push({ date: String(d).slice(0, 10), code: m.sec.ticker, symbol: m.sec.ticker, name: '', mine: m, own: true, estimate: !!e.nextEstimate,
+      time: '', cap: 0, fq: '', eps: '', kind: '', fy: '', industry: '', segment: '' });
   }
+  // 表示名：登録銘柄はツールの銘柄名、米国株の未登録は日本語名（取れていれば）、それ以外は取得元の名前
+  for (const r of out) r.nameJa = r.mine ? calc.displayName(r.mine.sec) : (mk === 'US' && ECAL.ja[r.code]) || r.name || r.code;
   return out;
 }
 // 絞り込み（登録・保有・検索語）
@@ -8616,18 +8737,47 @@ function ecalFilter(rows) {
   const scope = ecalScope();
   if (scope === 'mine') rows = rows.filter(r => r.mine);
   else if (scope === 'held') rows = rows.filter(r => r.mine && r.mine.held);
-  if (ECAL.q) rows = rows.filter(r => ((r.symbol || r.code || '') + ' ' + (r.name || '') + ' ' + (r.mine ? calc.displayName(r.mine.sec) : '')).toLowerCase().includes(ECAL.q));
+  if (ECAL.q) rows = rows.filter(r => (r.code + ' ' + (r.name || '') + ' ' + r.nameJa).toLowerCase().includes(ECAL.q));
   return rows;
 }
 // 時価総額（ドル）→ 「1.2兆ドル」「350億ドル」「80百万ドル」
 function ecalCap(n) { if (!n) return '—'; if (n >= 1e12) return (n / 1e12).toFixed(2).replace(/\.?0+$/, '') + '兆ドル'; if (n >= 1e8) return Math.round(n / 1e8).toLocaleString() + '億ドル'; return Math.round(n / 1e6) + '百万ドル'; }
-function ecalMark(r) {
-  if (!r.mine) return '';
-  return r.mine.held ? '<span class="ecal-tag held" title="保有中">保有</span>' : '<span class="ecal-tag" title="銘柄マスタに登録済み（未保有）">登録</span>';
+const ecalKabutan = (mk, code) => mk === 'US' ? 'https://us.kabutan.jp/stocks/' + encodeURIComponent(code) : 'https://kabutan.jp/stock/?code=' + encodeURIComponent(code);
+// 予想EPS「$1.23」「($0.12)」→ 数値（並べ替え用）
+const ecalEpsNum = (s) => { const m = String(s || '').match(/(\()?\$?(-?[\d.]+)/); if (!m) return -Infinity; const v = parseFloat(m[2]); return m[1] ? -v : v; };
+// 一覧の列（キー→{td, v=並べ替えの値}）
+const ECAL_COL = {
+  ecMark: { v: r => r.mine ? (r.mine.held ? 2 : 1) : 0,
+    td: r => `<td class="c">${!r.mine ? '' : r.mine.held ? '<span class="ecal-tag held" title="保有中">保有</span>' : '<span class="ecal-tag" title="銘柄マスタに登録済み（未保有）">登録</span>'}</td>` },
+  ecDate: { v: r => r.date, td: r => `<td class="c">${r.date.replace(/-/g, '/')}</td>` },
+  ecTime: { v: r => r.time || '', td: r => `<td class="c">${esc(r.time || '—')}</td>` },
+  // コード：登録銘柄は右の銘柄詳細（後ろの画面も操作できるまま）、未登録は株探
+  ecCode: { v: r => r.code,
+    td: (r, mk) => `<td class="l col-code">${r.mine
+      ? `<span class="tk ${mk.toLowerCase()} ecal-code" onclick="ecalOpenSec(${esc(JSON.stringify(r.mine.sec.id))})" title="銘柄詳細を右に表示">${esc(r.code)}</span>`
+      : `<a class="tk ${mk.toLowerCase()} ecal-code" href="${ecalKabutan(mk, r.code)}" target="_blank" rel="noopener" title="未登録の銘柄です。株探で開く">${esc(r.code)}</a>`}</td>` },
+  // 銘柄名：株探へのリンク。未登録の米国株で英語名しか無い時は、英語名をツールチップに
+  ecName: { v: r => r.nameJa,
+    td: (r, mk) => `<td class="l"><a class="nm-strong ecal-name" href="${ecalKabutan(mk, r.code)}" target="_blank" rel="noopener" title="${esc(r.name && r.name !== r.nameJa ? r.nameJa + '（' + r.name + '）' : r.nameJa)}\n株探で開く">${esc(r.nameJa)}</a>`
+      + (r.own ? `<span class="muted" title="決算カレンダーに載っていないため、このツールの決算日（${r.estimate ? '予想' : '確定'}）を表示">（${r.estimate ? '予想' : '決算日'}）</span>` : '') + '</td>' },
+  ecKind: { v: r => r.kind || '', td: r => `<td class="c">${esc(r.kind || '—')}</td>` },
+  ecCap: { v: r => r.cap || 0, td: r => `<td class="r">${ecalCap(r.cap)}</td>` },
+  ecEps: { v: r => ecalEpsNum(r.eps), td: r => `<td class="r">${esc(r.eps || '—')}</td>` },
+  ecFq: { v: r => r.fq || '', td: r => `<td class="c">${esc(r.fq || '')}</td>` },
+  ecFy: { v: r => r.fy || '', td: r => `<td class="c">${esc(/^\d{4}-\d{2}$/.test(r.fy) ? (+r.fy.slice(5)) + '月期' : r.fy || '')}</td>` },
+  ecIndustry: { v: r => r.industry || '', td: r => `<td class="l">${esc(r.industry || '')}</td>` },
+  ecSegment: { v: r => r.segment || '', td: r => `<td class="c">${esc(r.segment || '')}</td>` },
+};
+// 登録銘柄の詳細を右に出す。後ろの一覧は暗くせず、そのまま押せる（ドロワーを「重ねるだけ」にする）
+function ecalOpenSec(id) {
+  document.body.classList.add('drawer-modeless');
+  ECAL.cur = id;
+  openSecurityDetail(id);
+  ecalPaint();
 }
 function renderEcal() {
   if (currentView !== 'ecal') return;
-  if (!ECAL.base) { const t = new Date(); ECAL.base = new Date(t.getFullYear(), t.getMonth(), 1); ECAL.sel = ecalIso(t); }
+  if (!ECAL.base) { const t = new Date(); ECAL.base = new Date(t.getFullYear(), t.getMonth(), 1); ecalSetDay(ecalScope() === 'all' ? ecalIso(t) : ''); }
   const mk = ecalMarket(), scope = ecalScope();
   const mkSeg = `<div class="seg">${[['JP', '日本株'], ['US', '米国株']].map(([v, l]) => `<button class="${mk === v ? 'active' : ''}" onclick="setEcalMarket('${v}')">${l}</button>`).join('')}</div>`;
   const scSeg = `<div class="seg">${[['all', 'すべて'], ['mine', '登録銘柄'], ['held', '保有中']].map(([v, l]) => `<button class="${scope === v ? 'active' : ''}" onclick="setEcalScope('${v}')">${l}</button>`).join('')}</div>`;
@@ -8643,7 +8793,10 @@ function renderEcal() {
         <div class="ecal-months" id="ecal-months"></div>
         <button class="ecal-nav" onclick="ecalShift(1)" title="次の月">›</button>
       </div>
-      <div class="ecal-listhead"><b id="ecal-ltitle"></b><span class="muted" id="ecal-lcount"></span></div>
+      <div class="ecal-listhead"><b id="ecal-ltitle"></b><span class="muted" id="ecal-lcount"></span><span id="ecal-alldays"></span>
+        <span class="ecal-range" title="期間で絞る。カレンダーをなぞる・Shift+クリックでも選べます（←→で1日、↑↓で1週送り）">期間
+          <input type="date" id="ecal-from" onchange="ecalSetRange()">〜<input type="date" id="ecal-to" onchange="ecalSetRange()"></span>
+        <button class="btn btn-sm col-picker-btn" style="margin-left:auto" onclick="openColPicker('${ecalScopeKey()}')" title="列の表示・並び替え・幅の設定">${svgIcon('columns', '')} 列</button></div>
       <div class="table-wrap" id="ecal-list"></div>
     </div>`;
   ecalLoadShown();
@@ -8652,7 +8805,7 @@ function renderEcal() {
 // カレンダー・情報元・一覧だけを描き直す（検索欄は作り直さない＝打鍵・変換中のフォーカスを保つ）
 function ecalPaint() {
   if (currentView !== 'ecal' || !document.getElementById('ecal-months')) return;
-  const mk = ecalMarket(), scope = ecalScope(), ms = ecalMonths();
+  const mk = ecalMarket(), scope = ecalScope(), ms = ecalMonths(), sk = ecalScopeKey();
   const rows = ecalFilter(ecalRows()), cnt = {}, cntMine = {}, today = ecalIso(new Date());
   for (const r of rows) { cnt[r.date] = (cnt[r.date] || 0) + 1; if (r.mine) cntMine[r.date] = (cntMine[r.date] || 0) + 1; }
   const loading = ms.some(m => !ECAL.mon[mk][m]) || (mk === 'JP' && !ECAL.jpx);
@@ -8666,8 +8819,9 @@ function ecalPaint() {
     for (let d = 1; d <= days; d++, col++) {
       if (col && col % 7 === 0) h += '</tr><tr>';
       const iso = m + '-' + String(d).padStart(2, '0'), n = cnt[iso] || 0, nm = cntMine[iso] || 0, w = col % 7;
-      const cls = (n ? 'has ' : '') + (nm ? 'mine ' : '') + (iso === today ? 'today ' : '') + (iso === ECAL.sel && !ECAL.q ? 'sel' : '');
-      h += `<td class="${cls}" onclick="ecalPick('${iso}')"><div class="ecal-d ${w === 0 ? 'ecal-sun' : w === 6 ? 'ecal-sat' : ''}">${d}</div>`
+      const inR = ECAL.from && iso >= ECAL.from && iso <= ECAL.to;
+      const cls = (n ? 'has ' : '') + (nm ? 'mine ' : '') + (iso === today ? 'today ' : '') + (inR ? (iso === ECAL.from || iso === ECAL.to ? 'sel' : 'inrange') : '');
+      h += `<td class="${cls}" data-d="${iso}" onclick="ecalPick('${iso}',event)" onmousedown="ecalDragStart('${iso}',event)" onmouseenter="ecalDragOver('${iso}')"><div class="ecal-d ${w === 0 ? 'ecal-sun' : w === 6 ? 'ecal-sat' : ''}">${d}</div>`
         + (nm && scope === 'all' ? `<span class="ecal-nm" title="登録銘柄 ${nm}件">★${nm}</span>` : '')
         + (n ? `<div class="ecal-n">${n}件</div>` : '') + '</td>';
     }
@@ -8675,46 +8829,56 @@ function ecalPaint() {
     return h + '</tr></table></div>';
   }).join('');
   // 情報元と読み込みの様子
-  const src = mk === 'US' ? '情報元：Nasdaq。日付は米国の日付、時刻は寄り前（取引開始前）／引け後（取引終了後）'
+  const src = mk === 'US' ? '情報元：Nasdaq（銘柄名の日本語は Yahoo!ファイナンス）。日付は米国の日付、時刻は寄り前（取引開始前）／引け後（取引終了後）'
     : '情報元：東証（JPX）の決算発表予定日 ＋ 日経の決算発表スケジュール。3月期・9月期の会社は、会社が発表日を決めてから載ります';
   document.getElementById('ecal-src').innerHTML = esc(src) + '。★＝登録銘柄の件数'
     + (loading ? ' ／ <b>読み込み中…</b>' : '')
     + (errs.length ? ' ／ <span class="neg">読めませんでした（' + esc(errs.join('、')) + '）</span>' : '')
     + (failed.length ? ' ／ <span class="neg">読めなかった日：' + failed.map(d => +d.slice(5, 7) + '/' + +d.slice(8)).join('、') + '</span>' : '');
-  // 一覧（検索中は2か月ぶん全部、ふだんは選んだ日。登録銘柄のみ／保有中のときも2か月ぶん全部）
-  const whole = !!ECAL.q || scope !== 'all';
-  let list = whole ? rows : rows.filter(r => r.date === ECAL.sel);
-  list = list.slice().sort((a, b) => a.date.localeCompare(b.date) || ((b.mine ? 1 : 0) - (a.mine ? 1 : 0))
+  // 一覧：日付を選んでいればその日、選んでいなければ（登録銘柄・保有中・検索中）2か月ぶん全部
+  const hidePast = !ECAL.from && !ecalShowPast();
+  let list = ECAL.from ? rows.filter(r => r.date >= ECAL.from && r.date <= ECAL.to) : hidePast ? rows.filter(r => r.date >= today) : rows;
+  const st = listState[sk];
+  const def = ECAL_COL[st.sortKey] ? ECAL_COL[st.sortKey] : ECAL_COL.ecDate, dir = st.sortDir || 1;
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  // 同じ値の中は「登録銘柄が上 → 米国は時価総額の大きい順／日本はコード順」
+  list = list.slice().sort((a, b) => cmp(def.v(a), def.v(b)) * dir || ((b.mine ? 1 : 0) - (a.mine ? 1 : 0))
     || (mk === 'US' ? (b.cap - a.cap) : String(a.code).localeCompare(String(b.code))));
-  const [sy, sm, sd] = ECAL.sel.split('-').map(Number);
   const mlabel = ms.map(m => +m.slice(5) + '月').join('・');
-  document.getElementById('ecal-ltitle').textContent = ECAL.q ? '「' + ECAL.q + '」の検索結果（' + mlabel + '）'
-    : scope !== 'all' ? (scope === 'held' ? '保有中' : '登録銘柄') + 'の決算予定（' + mlabel + '）'
-    : sy + '年' + sm + '月' + sd + '日（' + '日月火水木金土'[new Date(sy, sm - 1, sd).getDay()] + '）';
-  document.getElementById('ecal-lcount').textContent = list.length + '件' + (mk === 'US' && list.length > 1 && !whole ? '（登録銘柄→時価総額の大きい順）' : '');
+  const what = (ECAL.q ? '「' + ECAL.q + '」' : '') + (scope === 'held' ? '保有中' : scope === 'mine' ? '登録銘柄' : '');
+  let title;
+  const dl = (iso, y) => { const [a, b, c] = iso.split('-').map(Number); return (y ? a + '年' : '') + b + '月' + c + '日（' + '日月火水木金土'[new Date(a, b - 1, c).getDay()] + '）'; };
+  if (ECAL.from) title = (ECAL.from === ECAL.to ? dl(ECAL.from, true) : dl(ECAL.from, true) + '〜' + dl(ECAL.to)) + (what ? '　' + what : '');
+  else title = (what || 'すべて') + 'の決算予定（' + mlabel + (hidePast ? '・今日以降' : '') + '）';
+  document.getElementById('ecal-ltitle').textContent = title;
+  document.getElementById('ecal-lcount').textContent = list.length + '件';
+  document.getElementById('ecal-alldays').innerHTML = ECAL.from
+    ? `<button class="btn btn-sm" onclick="ecalAllDays()" title="日付の選択を外して、${mlabel}の全部を出す">全日付を表示</button>`
+    : `<label class="ecal-past" title="全日付の一覧に、今日より前の決算も出す"><input type="checkbox" ${ecalShowPast() ? 'checked' : ''} onchange="setEcalPast(this.checked)"> 過去も表示</label>`;
+  const fEl = document.getElementById('ecal-from'), tEl = document.getElementById('ecal-to');
+  if (fEl && document.activeElement !== fEl) fEl.value = ECAL.from;
+  if (tEl && document.activeElement !== tEl) tEl.value = ECAL.to;
   const el = document.getElementById('ecal-list');
   if (!list.length) {
-    el.innerHTML = `<div class="empty empty-sm">${loading ? '読み込み中…' : ECAL.q || scope !== 'all' ? '該当する決算予定はありません' : 'この日の決算発表の予定はありません'}</div>`;
+    el.innerHTML = `<div class="empty empty-sm">${loading ? '読み込み中…' : ECAL.q || scope !== 'all' || ECAL.from !== ECAL.to ? '該当する決算予定はありません' : 'この日の決算発表の予定はありません'}</div>`;
     scheduleFit(); return;
   }
-  const nameCell = (r) => r.mine
-    ? `<a href="javascript:void(0)" onclick="openSecurityDetail('${jsq(r.mine.sec.id)}')" title="銘柄詳細を開く">${esc(r.name || calc.displayName(r.mine.sec))}</a>`
-    : esc(r.name);
-  const ownNote = (r) => r.own ? `<span class="muted" title="決算カレンダーに載っていないため、このツールの決算日（${r.estimate ? '予想' : '確定'}）を表示">（${r.estimate ? '予想' : '決算日'}）</span>` : '';
-  if (mk === 'US') {
-    el.innerHTML = `<table class="list ecal-tbl"><thead><tr><th class="c"></th><th class="c">発表日</th><th class="c">時刻</th><th class="c">ティッカー</th><th class="l">銘柄名</th><th class="r ecal-opt">時価総額</th><th class="r ecal-opt">予想EPS</th><th class="c ecal-opt">決算期</th></tr></thead><tbody>`
-      + list.map(r => `<tr class="${r.mine ? 'ecal-mine' : ''}"><td class="c">${ecalMark(r)}</td><td class="c">${r.date.replace(/-/g, '/')}</td><td class="c">${esc(r.time || '—')}</td>`
-        + `<td class="c"><a href="https://us.kabutan.jp/stocks/${encodeURIComponent(r.symbol)}" target="_blank" rel="noopener" title="株探で開く">${esc(r.symbol)}</a></td>`
-        + `<td class="l">${nameCell(r)}${ownNote(r)}</td><td class="r ecal-opt">${ecalCap(r.cap)}</td><td class="r ecal-opt">${esc(r.eps || '—')}</td><td class="c ecal-opt">${esc(r.fq || '')}</td></tr>`).join('')
-      + '</tbody></table>';
-  } else {
-    el.innerHTML = `<table class="list ecal-tbl"><thead><tr><th class="c"></th><th class="c">発表日</th><th class="c">コード</th><th class="l">銘柄名</th><th class="c">種別</th><th class="c ecal-opt">決算期</th><th class="l ecal-opt">業種</th><th class="c ecal-opt">市場</th></tr></thead><tbody>`
-      + list.map(r => `<tr class="${r.mine ? 'ecal-mine' : ''}"><td class="c">${ecalMark(r)}</td><td class="c">${r.date.replace(/-/g, '/')}</td>`
-        + `<td class="c"><a href="https://kabutan.jp/stock/?code=${encodeURIComponent(r.code)}" target="_blank" rel="noopener" title="株探で開く">${esc(r.code)}</a></td>`
-        + `<td class="l">${nameCell(r)}${ownNote(r)}</td><td class="c">${esc(r.kind || '—')}</td>`
-        + `<td class="c ecal-opt">${esc(/^\d{4}-\d{2}$/.test(r.fy) ? (+r.fy.slice(5)) + '月期' : r.fy)}</td><td class="l ecal-opt">${esc(r.industry)}</td><td class="c ecal-opt">${esc(r.segment)}</td></tr>`).join('')
-      + '</tbody></table>';
-  }
+  // 日本語名は上から200行ぶんだけ取りに行く（短い語で検索すると2か月で数千行になり、取りすぎるため）
+  if (mk === 'US') ecalQueueNames(list.slice(0, 200).filter(r => !r.mine).map(r => r.code));
+  // 列設定（保有銘柄と同じ getColOrder/colHeadHtml/colTag/openColPicker を ECAL_US/ECAL_JP スコープで再利用）
+  const visOrder = getColOrder(sk).filter(c => c.visible && ECAL_COL[c.key]);
+  const visibleCols = visOrder.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
+  const tableW = visOrder.reduce((a, c) => a + colWidthPx(c), 0);
+  const wrapPos = ECAL.keepScroll ? { l: el.scrollLeft, t: el.scrollTop } : { l: el.scrollLeft, t: 0 };
+  ECAL.keepScroll = false;
+  el.innerHTML = `<table class="fixed-cols holdings dense ecal-tbl" style="width:${tableW}px"><colgroup>${visOrder.map(c => colTag(c)).join('')}</colgroup>`
+    + `<thead><tr>${colHeadHtml(visibleCols, st, sk, null)}</tr></thead><tbody>`
+    + list.map(r => `<tr class="${r.mine ? 'ecal-mine' : ''} ${r.mine && r.mine.sec.id === ECAL.cur ? 'ecal-cur' : ''}">${visOrder.map(c => ECAL_COL[c.key].td(r, mk)).join('')}</tr>`).join('')
+    + '</tbody></table>';
+  el.scrollLeft = wrapPos.l; el.scrollTop = wrapPos.t;   // 日本語名の到着で描き直した時は縦位置も保つ（日付を変えた時は先頭へ）
+  const tbl = el.querySelector('table');
+  autoFitColumns(tbl);
+  applyStickyCols(tbl, sk);
   scheduleFit();
 }
 
@@ -11836,6 +12000,11 @@ function showDrawer(title, bodyHtml, footHtml, subHtml) {
 function closeDrawer() {
   const ov = document.getElementById('drawer-overlay'); const dr = document.getElementById('detail-drawer');
   if (!ov) return;
+  // 決算カレンダーから開いた「重ねるだけ」のドロワー（drawer-modeless）を閉じたら、行の強調も外す
+  if (document.body.classList.contains('drawer-modeless')) {
+    document.body.classList.remove('drawer-modeless');
+    if (typeof ECAL !== 'undefined' && ECAL.cur != null) { ECAL.cur = null; if (currentView === 'ecal') ecalPaint(); }
+  }
   ov.classList.remove('show'); if (dr) dr.classList.remove('show');
   setTimeout(() => { ov.hidden = true; }, 200);
 }
@@ -16218,6 +16387,7 @@ function go(view) {
   if (currentView === 'macro' && view !== 'macro') updMarkSeen('macro');
   // ニュースの黄○はタブ移動→戻るでは消さない（消えるのはアプリ開き直し/リロード時と「更新」時のみ。
   // _newsSeenMark はセッション開始時の renderNews で一度だけ初期化される。すみぽん仕様 2026-07-23）
+  if (document.body.classList.contains('drawer-modeless')) closeDrawer();   // 重ねるだけのドロワーは画面を移ったら閉じる
   currentView = view;
   try { sessionStorage.setItem('sm_view', view); } catch (_) {} // リロードで復元（開き直しはクリアされ dashboard）
   renderNav();
@@ -16820,7 +16990,7 @@ window.macroMarkNewSeen = macroMarkNewSeen;
 window.updOpen = updOpen;
 window.updMarkAllSeen = updMarkAllSeen;
 window.macroRefresh = macroRefresh;
-Object.assign(window, { renderEcal, setEcalMarket, setEcalScope, ecalShift, ecalPick, ecalSearch, ecalClearSearch });
+Object.assign(window, { renderEcal, setEcalMarket, setEcalScope, setEcalPast, ecalSetRange, ecalDragStart, ecalDragOver, ecalShift, ecalPick, ecalAllDays, ecalSearch, ecalClearSearch, ecalOpenSec });
 window.api = api;
 window.render = render;
 

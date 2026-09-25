@@ -5,6 +5,8 @@
 //                                        （JPX は 3月期・9月期の会社を「翌営業日の分」しか載せないので、日経でおぎなう）
 //   ?market=jp&month=YYYY-MM&hm=1      … 日本株。日経の決算発表スケジュールのその月（50件ずつのページを hm から最大40ページ。残りは next）
 //   ?market=us&month=YYYY-MM           … 米国株。Nasdaq の決算カレンダーを、その月の平日ぶん読んで返す
+//   ?names=AAPL,MSFT,...               … 米国株の日本語名（Yahoo!ファイナンス日本版。例 AAPL→アップル）。最大12銘柄。
+//                                        銘柄ごとに30日キャッシュ。日本語名が無い銘柄は null（証券管理ツールで追加）
 // どれも結果を Cloudflare のキャッシュに 6 時間置く（1実行 50 回の外部取得の上限に当たらないよう、日ごとではなく丸ごと1つで置く）。
 // ============================================================
 
@@ -185,8 +187,42 @@ async function loadUs(month) {
   return { ok: true, market: "us", source: "Nasdaq", month, failed, rows };
 }
 
+// ---- 米国株の日本語名（Yahoo!ファイナンス日本版の og:title。/api/info の names=1 と同じ取り方） ----
+// 1実行 50 回の外部取得の上限：1銘柄あたり キャッシュ確認＋取得＋キャッシュ保存 の3回なので12銘柄まで。
+const NAME_TTL = 30 * 86400;
+const JA_RE = /[぀-ヿ㐀-鿿]/;   // ひらがな・カタカナ・漢字
+function jaNameFromHtml(html) {
+  let m = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+  let t = m ? m[1] : ((html.match(/<title>([^<]+)<\/title>/i) || [])[1] || "");
+  t = unxml(t).split(/[【\[]/)[0].split(/[：:]/)[0].split(" - ")[0].trim();
+  t = t.replace(/(株式会社|\(株\)|（株）|㈱)/g, "").trim();
+  return JA_RE.test(t) ? t : null;
+}
+async function loadNames(syms, context) {
+  const cache = caches.default, out = {};
+  await Promise.all(syms.map(async (sym) => {
+    const key = new Request(`https://sm-cache.local/janame/v1/${encodeURIComponent(sym)}`);
+    const hit = await cache.match(key);
+    if (hit) { out[sym] = (await hit.json()).name; return; }
+    let name = null;
+    try {
+      const res = await fetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(sym.replace(/[/.]/g, "-"))}`, { headers: { "User-Agent": UA, "Accept-Language": "ja" } });
+      if (res.ok) name = jaNameFromHtml(await res.text());
+      else if (res.status !== 404) return;   // 一時的な失敗は覚えない（次に開いたとき取り直す）
+    } catch (e) { return; }
+    out[sym] = name;
+    context.waitUntil(cache.put(key, new Response(JSON.stringify({ name }), { headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${NAME_TTL}` } })));
+  }));
+  return out;
+}
+
 export async function onRequestGet(context) {
   const url = new URL(context.request.url);
+  const names = url.searchParams.get("names");
+  if (names != null) {
+    const syms = [...new Set(names.split(",").map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z0-9./-]{1,12}$/.test(s)))].slice(0, 12);
+    return json({ ok: true, names: await loadNames(syms, context) });
+  }
   const market = url.searchParams.get("market") || "";
   const month = url.searchParams.get("month") || "";
   if (market !== "jp" && market !== "us") return json({ ok: false, error: "market は jp か us" }, 400);

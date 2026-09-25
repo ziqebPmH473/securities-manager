@@ -1340,20 +1340,31 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 .ecal-grid td.mine { background: #fef3c7; }
 .ecal-grid td.today { outline: 2px solid #f59e0b; outline-offset: -2px; }
 .ecal-grid td.sel { background: #dbeafe; outline: 2px solid var(--navy-3); outline-offset: -2px; }
+.ecal-grid td.inrange { background: #dbeafe; }
+.ecal-grid td.dragging { background: #bfdbfe !important; }
+.ecal-grid { user-select: none; }
+.ecal-range { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.ecal-range input { font-size: 12px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 6px; width: auto; }
+.ecal-past { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; }
+.ecal-past input { width: auto; margin: 0; }
 .ecal-grid td:not(.x):not(.sel):hover { background: #fde68a; }
 .ecal-d { font-weight: 700; font-size: 12px; line-height: 1.2; }
 .ecal-n { text-align: right; font-size: 11px; color: var(--muted); line-height: 1.2; margin-top: 4px; }
 .ecal-nm { position: absolute; top: 2px; right: 3px; font-size: 10px; font-weight: 700; color: #b45309; }
 .ecal-sun { color: #dc2626 !important; }
 .ecal-sat { color: #2563eb !important; }
-.ecal-listhead { display: flex; align-items: baseline; gap: 10px; padding: 12px 18px 6px; flex-wrap: wrap; }
+.ecal-listhead { display: flex; align-items: center; gap: 10px; padding: 12px 18px 6px; flex-wrap: wrap; }
 .ecal-listhead b { font-size: 14px; }
 .ecal-listhead .muted { font-size: 12px; }
 .ecal .table-wrap { border-top: 1px solid var(--hair); }
 .ecal-tbl td, .ecal-tbl th { font-size: 12.5px; }
-.ecal-tbl a { color: var(--accent, #2563eb); text-decoration: none; }
-.ecal-tbl a:hover { text-decoration: underline; }
+.ecal-tbl td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ecal-tbl a.ecal-name { color: var(--ink); text-decoration: none; }
+.ecal-tbl a.ecal-name:hover { color: var(--accent, #2563eb); text-decoration: underline; }
+.ecal-tbl .ecal-code { cursor: pointer; text-decoration: none; }
+.ecal-tbl .ecal-code:hover { text-decoration: underline; }
 .ecal-tbl tr.ecal-mine td { background: #fffbeb; }
+.ecal-tbl tr.ecal-cur td { background: #dbeafe; }
 .ecal-tag { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: var(--panel-3); color: var(--navy-3); white-space: nowrap; }
 .ecal-tag.held { background: #fde68a; color: #92400e; }
 @media (max-width: 700px) {
@@ -1363,4 +1374,13 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
   .ecal-tools { margin-left: 0; }
   .ecal-search { min-width: 0; flex: 1; }
   .ecal-tbl .ecal-opt { display: none; }
+}
+
+/* 「重ねるだけ」のドロワー（決算カレンダーから銘柄詳細を開いた時）。後ろを暗くせず、後ろの画面もそのまま押せる。
+   広い画面では本文の右にドロワーぶんの余白を空け、一覧が隠れないようにする */
+body.drawer-modeless .drawer-overlay { background: transparent; pointer-events: none; }
+body.drawer-modeless .drawer { pointer-events: auto; box-shadow: -6px 0 24px rgba(15,24,40,.16); }
+@media (min-width: 900px) {
+  body.drawer-modeless .drawer { width: min(480px, 40vw); }
+  body.drawer-modeless main.content { padding-right: calc(min(480px, 40vw) + 16px); }
 }
