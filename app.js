@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260925-1026';
+const APP_VERSION = 'v20260925-1039';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -8619,7 +8619,8 @@ function ecalSetRange() {
   ECAL.from = f; ECAL.to = t; ECAL.anchor = f;
   ecalPaint();
 }
-// 矢印キーで日付を送る（←→＝1日、↑↓＝1週）。表示中の2か月の外に出たら月も送る。入力中・モーダル表示中は何もしない
+// 矢印キーで日付を送る（←→＝1日、↑↓＝1週）。0件の日（今の絞り込み・検索で）は飛ばして、同じ向きに次の決算日まで進む。
+// 表示中の2か月に無ければ1か月送り、読み込めてから探す（ECAL.jump。ecalPaint が解決する）。入力中・モーダル表示中は何もしない
 document.addEventListener('keydown', (e) => {
   if (currentView !== 'ecal' || !/^Arrow(Left|Right|Up|Down)$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return;
   const ae = document.activeElement;
@@ -8628,13 +8629,26 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
   const from = (step < 0 ? ECAL.from : ECAL.to) || ecalIso(new Date());
-  const [y, m, d] = from.split('-').map(Number), nd = new Date(y, m - 1, d + step), iso = ecalIso(nd);
-  ecalSetDay(iso);
-  const ms = ecalMonths(), nm = iso.slice(0, 7);
-  if (nm < ms[0]) { ECAL.base = new Date(nd.getFullYear(), nd.getMonth(), 1); ecalLoadShown(); }
-  else if (nm > ms[1]) { ECAL.base = new Date(nd.getFullYear(), nd.getMonth() - 1, 1); ecalLoadShown(); }
-  ecalPaint();
+  const cnt = {}; for (const r of ecalFilter(ecalRows())) cnt[r.date] = 1;
+  const nd = ecalNextDay(from, step, cnt);
+  if (nd) { ecalSetDay(nd); ecalPaint(); return; }
+  ECAL.jump = { from, step, base: ECAL.base };
+  ECAL.base = new Date(ECAL.base.getFullYear(), ECAL.base.getMonth() + (step > 0 ? 1 : -1), 1);
+  ecalLoadShown(); ecalPaint();
 });
+// from から step 動かした日、そこが0件なら同じ向きに1日ずつ進めて、件数のある日を返す（表示中の2か月の外に出たら ''）
+function ecalNextDay(from, step, cnt) {
+  const ms = ecalMonths(), lo = ms[0] + '-01', hi = ms[1] + '-31', dir = step > 0 ? 1 : -1;
+  const [y, m, d] = from.split('-').map(Number);
+  let dt = new Date(y, m - 1, d + step);
+  for (let i = 0; i < 70; i++) {
+    const iso = ecalIso(dt);
+    if (iso < lo || iso > hi) return '';
+    if (cnt[iso]) return iso;
+    dt = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + dir);
+  }
+  return '';
+}
 function ecalSearch(v) {
   const q = String(v || '').trim().toLowerCase();
   if (q && !ECAL.q) ecalSetDay('');                                          // 打ち始めたら2か月ぶんから探す
@@ -8811,6 +8825,14 @@ function ecalPaint() {
   const loading = ms.some(m => !ECAL.mon[mk][m]) || (mk === 'JP' && !ECAL.jpx);
   const errs = ms.map(m => ECAL.mon[mk][m] && ECAL.mon[mk][m].error).concat(mk === 'JP' && ECAL.jpx && ECAL.jpx.error).filter(Boolean);
   const failed = ms.flatMap(m => (ECAL.mon[mk][m] && ECAL.mon[mk][m].failed) || []);
+  // 矢印キーで月をまたいだ送り：読み込みが済んだら、送った先の2か月で次の決算日を選ぶ
+  if (ECAL.jump && !loading) {
+    const j = ECAL.jump; ECAL.jump = null;
+    const nd = ecalNextDay(j.from, j.step, cnt);
+    if (nd) { ecalSetDay(nd); return ecalPaint(); }
+    toast((j.step > 0 ? 'この先' : 'この前') + 'に決算予定がありません');
+    ECAL.base = j.base; return ecalPaint();   // 見つからなければ元の月に戻す
+  }
   // カレンダー（2か月。スマホ幅では1か月）
   document.getElementById('ecal-months').innerHTML = ms.map(m => {
     const [y, mo] = m.split('-').map(Number), first = new Date(y, mo - 1, 1), days = new Date(y, mo, 0).getDate();
