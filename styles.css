@@ -1319,3 +1319,48 @@ main.content { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scroll
 
 /* マクロ警告の一覧は件数が増えても場所を取りすぎないよう枠内スクロール（更新情報は fitUpdList が可変で決める） */
 .upd-list.ma-list { max-height: 132px; }
+
+/* ===== 決算カレンダー（kessan-tool から移植） ===== */
+.ecal .section-head { flex-wrap: wrap; gap: 8px 12px; }
+.ecal-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.ecal .seg button { white-space: nowrap; }
+.ecal-search { min-width: 200px; max-width: 280px; padding: 0 10px; }
+.ecal-search input { padding: 6px 0; }
+.ecal-note { font-size: 11px; color: var(--muted); padding: 8px 18px 0; }
+.ecal-cals { display: flex; align-items: center; gap: 6px; padding: 6px 10px 0; }
+.ecal-nav { flex: none; width: 28px; height: 60px; border: none; background: none; font-size: 30px; color: var(--faint); cursor: pointer; }
+.ecal-nav:hover { color: var(--ink); }
+.ecal-months { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; min-width: 0; }
+.ecal-mt { text-align: center; font-weight: 700; color: var(--navy); margin-bottom: 4px; font-size: 13px; }
+.ecal-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.ecal-grid th { font-size: 11px; padding: 2px 0; font-weight: 600; color: var(--muted); }
+.ecal-grid td { border: 1px solid var(--border); height: 40px; vertical-align: top; padding: 2px 4px; cursor: pointer; background: var(--panel); position: relative; }
+.ecal-grid td.x { cursor: default; background: var(--panel-2); }
+.ecal-grid td.has { background: #fefce8; }
+.ecal-grid td.mine { background: #fef3c7; }
+.ecal-grid td.today { outline: 2px solid #f59e0b; outline-offset: -2px; }
+.ecal-grid td.sel { background: #dbeafe; outline: 2px solid var(--navy-3); outline-offset: -2px; }
+.ecal-grid td:not(.x):not(.sel):hover { background: #fde68a; }
+.ecal-d { font-weight: 700; font-size: 12px; line-height: 1.2; }
+.ecal-n { text-align: right; font-size: 11px; color: var(--muted); line-height: 1.2; margin-top: 4px; }
+.ecal-nm { position: absolute; top: 2px; right: 3px; font-size: 10px; font-weight: 700; color: #b45309; }
+.ecal-sun { color: #dc2626 !important; }
+.ecal-sat { color: #2563eb !important; }
+.ecal-listhead { display: flex; align-items: baseline; gap: 10px; padding: 12px 18px 6px; flex-wrap: wrap; }
+.ecal-listhead b { font-size: 14px; }
+.ecal-listhead .muted { font-size: 12px; }
+.ecal .table-wrap { border-top: 1px solid var(--hair); }
+.ecal-tbl td, .ecal-tbl th { font-size: 12.5px; }
+.ecal-tbl a { color: var(--accent, #2563eb); text-decoration: none; }
+.ecal-tbl a:hover { text-decoration: underline; }
+.ecal-tbl tr.ecal-mine td { background: #fffbeb; }
+.ecal-tag { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: var(--panel-3); color: var(--navy-3); white-space: nowrap; }
+.ecal-tag.held { background: #fde68a; color: #92400e; }
+@media (max-width: 700px) {
+  .ecal-months { grid-template-columns: 1fr; }
+  .ecal-month + .ecal-month { display: none; }   /* スマホ幅は1か月だけ（‹ › で送る） */
+  .ecal-nav { width: 18px; font-size: 24px; }
+  .ecal-tools { margin-left: 0; }
+  .ecal-search { min-width: 0; flex: 1; }
+  .ecal-tbl .ecal-opt { display: none; }
+}
