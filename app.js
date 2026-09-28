@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260925-1039';
+const APP_VERSION = 'v20260928-1332';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -2464,7 +2464,12 @@ const api = {
     // ランキング順位バッジは「株価更新時だけ」取得（タブ表示のたびの取得をやめ、保有銘柄タブの引っかかりを解消）。
     // 1日1回のキャッシュを尊重（force無し）。取得後にバッジだけ反映するため再描画。
     this.bgTask(() => loadRankBadges().then(() => { if (_rankTop) preserveTableScroll(render); }));
-    toast('価格を更新しました');
+    // 実際に取得した件数を出す。閉場中で当日終値を持っている銘柄はスキップ＝時刻だけ進むため、
+    // 「本当に取ったのか」が分かるよう件数を明示する（2026-09-28 すみぽん指摘）。
+    const skipped = allSecs.length - secs.length;
+    const msg = `価格を更新しました（取得 ${okCount}件${skipped ? `／終値取得済みで省略 ${skipped}件` : ''}）`;
+    toast(msg);
+    return msg;
   },
 
   // 価格更新後の重い取得（高値・銘柄情報・決算日・ランキング）を1つずつ順番に流す直列キュー。
@@ -2668,6 +2673,10 @@ const api = {
       if (q && !q.error && q.price != null) {
         const prev = store.data.prices[priceKey(sec)] || {};
         store.data.prices[priceKey(sec)] = {
+          // ★既存値を土台にする（時間外 extPrice/extType/extDate 等を保持）。以前は丸ごと作り直していたため、
+          //   価格更新後にバックグラウンドの5年高値取得(refreshHighsBg→ここ)が走ると、直前に取った時間外が消え、
+          //   「1回目の価格更新では時間外が空・2回目（高値取得済み）で埋まる」状態になっていた。
+          ...prev,
           price: q.price,
           // 前日終値は highs=1 の値(Finnhub pc/Yahoo長期配列)を使わず、下の refreshPrevCloses で確定する。
           prevClose: prev.prevClose ?? null, prevCloseDate: prev.prevCloseDate ?? null,
@@ -16829,7 +16838,7 @@ async function withBusy(msg, fn, doneMsg) {
   busyShow(msg);
   // 押下表示を一度描画させてから本処理へ（rAFはバックグラウンドタブで止まり得るため setTimeout を使用）
   await new Promise(r => setTimeout(r, 0));
-  try { const r = await fn(); busyDone(doneMsg, 'done'); return r; }
+  try { const r = await fn(); busyDone(typeof doneMsg === 'function' ? doneMsg(r) : doneMsg, 'done'); return r; }
   catch (e) { busyDone('失敗しました：' + (e && e.message ? e.message : String(e)), 'error'); throw e; }
 }
 
@@ -17033,12 +17042,13 @@ document.addEventListener('keydown', (e) => {
 // 時間のかかる更新は refreshAll がバックグラウンド（トップバー下の進捗バー）で順次取得する。
 // マーケットタブ表示中はランキングも更新（保有銘柄と同じ手動更新ルール）
 document.getElementById('btn-refresh').onclick = () => withBusy('価格を更新中…', async () => {
-  await api.refreshAll();
+  const msg = await api.refreshAll();
   if (currentView === 'market') mktRefresh();
   render();
   // 価格更新のついでに更新情報（経済指標・YouTube新着）も確認する。待たせないよう裏で走らせる
   updDailyCheck(true);
-}, '価格を更新しました').catch(() => {});
+  return msg;
+}, (msg) => msg || '価格を更新しました').catch(() => {});
 
 // IME変換中は検索の再描画を抑止（innerHTML生成の oncomposition* 属性はハンドラ登録されないため、
 // document に委譲リスナーを張る。これで全ての入力欄の変換中フラグを確実に拾える・SEC-112）
