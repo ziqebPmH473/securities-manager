@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260928-1332';
+const APP_VERSION = 'v20260929-1724';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -2446,7 +2446,7 @@ const api = {
       try { await this.refreshPrevCloses(allSecs); store.data.lastPrevCloseAt = new Date().toISOString(); store.data.prevCloseVer = PREVCLOSE_VER; store.save(); } catch (_) {}
     }
     // 米株の時間外(プレ/アフター)を別取得＝時間外列に表示。レギュラー/閉場中は時間外をクリア（当日レギュラー取得でNULL）。
-    await this.refreshExtended(allSecs);
+    const extCount = (await this.refreshExtended(allSecs)) || 0;
     // ---- ここから先は時間のかかる更新＝すべてバックグラウンド（決算日と同方式・2026-08-31 すみぽん指示） ----
     // busy オーバーレイはここで閉じて操作可能に戻し、進捗はトップバー下の細いバー（bgProgress）に表示する。
     // 直列キュー（bgTask）で1つずつ実行＝並行させない（Cloudflareサブリクエスト上限・進捗バーの取り合いを避ける）。
@@ -2467,7 +2467,8 @@ const api = {
     // 実際に取得した件数を出す。閉場中で当日終値を持っている銘柄はスキップ＝時刻だけ進むため、
     // 「本当に取ったのか」が分かるよう件数を明示する（2026-09-28 すみぽん指摘）。
     const skipped = allSecs.length - secs.length;
-    const msg = `価格を更新しました（取得 ${okCount}件${skipped ? `／終値取得済みで省略 ${skipped}件` : ''}）`;
+    // 米株の時間外（プレ/アフター）は株価とは別に取得するため別枠で数える（株価を省略した米株でも時間外は取る）。
+    const msg = `価格を更新しました（株価 ${okCount}件${extCount ? `・米株時間外 ${extCount}件` : ''}を取得${skipped ? `／終値取得済みで株価を省略 ${skipped}件` : ''}）`;
     toast(msg);
     return msg;
   },
@@ -2589,12 +2590,12 @@ const api = {
   // 取得は: プレ/アフター中はライブ更新、ギャップ(アフター後)は当日アフター終値が未取得の銘柄だけ（次プレまで再取得しない）。
   async refreshExtended(allSecs) {
     const usSecs = (allSecs || store.data.securities).filter(s => s.market === 'US' && s.ticker);
-    if (!usSecs.length) return;
+    if (!usSecs.length) return 0;
     if (usRegularOpen()) { // レギュラー中 → 時間外クリア
       let changed = false;
       for (const s of usSecs) { const p = store.data.prices[priceKey(s)]; if (p && (p.extPrice != null || p.extType)) { p.extPrice = null; p.extType = null; p.extDate = null; changed = true; } }
       if (changed) store.save();
-      return;
+      return 0;
     }
     const phase = usExtPhase(); // 'pre' | 'post' | null（=アフター後ギャップ）
     const need = usSecs.filter(s => {
@@ -2602,7 +2603,7 @@ const api = {
       const p = store.data.prices[priceKey(s)] || {}; // ギャップ: 当日アフター終値を未取得なら取りに行く
       return !(p.extDate === today() && p.extType === 'post');
     });
-    if (!need.length) return; // 既に当日アフター終値あり → 次のプレまで取得しない
+    if (!need.length) return 0; // 既に当日アフター終値あり → 次のプレまで取得しない
     const syms = need.map(yahooSymbol);
     const BATCH = 20;
     const batches = [];
@@ -2611,15 +2612,18 @@ const api = {
     try {
       const results = await Promise.all(batches.map(b => fetch(`/api/price?ext=1&symbols=${encodeURIComponent(b.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({}))));
       quotes = Object.assign({}, ...results);
-    } catch (_) { return; }
+    } catch (_) { return 0; }
+    let got = 0; // 時間外価格を実際に取得できた銘柄数（件数表示用）
     for (const s of need) {
       const q = quotes[yahooSymbol(s)]; const p = store.data.prices[priceKey(s)];
       if (!p || !q || q.error) continue;
+      if (q.extPrice != null) got++;
       p.extPrice = q.extPrice != null ? q.extPrice : null;
       p.extType = q.extType || null;
       p.extDate = q.extPrice != null ? today() : null; // 当日の時間外値を保持した印
     }
     store.save();
+    return got;
   },
 
   // 前日終値を信頼できる方法で取得してキャッシュ（1日1回でよい）。
