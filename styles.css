@@ -224,6 +224,7 @@ form label.check input { width: auto; }
 .sig-group td { background: var(--panel-2); font-weight: 700; text-align: left; padding: 8px 16px; font-size: 13px; }
 .sig-group.reached td { color: var(--red); }
 .sig-group.near td { color: var(--amber); }
+.sig-group.within10 td { color: var(--accent); }
 /* 市場フィルタのトグル */
 .seg-toggle { display: inline-flex; gap: 4px; }
 

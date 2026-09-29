@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260929-1724';
+const APP_VERSION = 'v20260930-0118';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -5298,29 +5298,31 @@ function cpSetSticky(v) {
 }
 
 // ---------- サイン一覧 ----------
-// 到達（reached）と もうすぐ（残り5%以内）の銘柄を分けて返す
+// 到達（reached）／もうすぐ（残り5%以内）／10%以内（残り5%超〜10%以内）の銘柄を分けて返す
 function signalRows() {
-  const reached = [], near = [];
+  const reached = [], near = [], within10 = [];
   for (const sec of store.data.securities) {
     const ev = calc.evaluate(sec);
     if (!ev) continue;
     if (ev.reached) reached.push(sec);
     else if (ev.remainingDropPct <= 5) near.push(sec);
+    else if (ev.remainingDropPct <= 10) within10.push(sec);
   }
-  return { reached, near };
+  return { reached, near, within10 };
 }
 
 let signalMarketFilter = 'all'; // 'all' | 'JP' | 'US'
 function setSignalMarket(m) { signalMarketFilter = m; renderSignals(); }
 function renderSignals() {
   const st = listState.SIGNAL;
-  let { reached, near } = signalRows();
+  let { reached, near, within10 } = signalRows();
   if (signalMarketFilter !== 'all') {
     reached = reached.filter(s => s.market === signalMarketFilter);
     near = near.filter(s => s.market === signalMarketFilter);
+    within10 = within10.filter(s => s.market === signalMarketFilter);
   }
-  // 比率列の分母。'表示中' は到達＋もうすぐの両グループ（この表に出ている行）が母数
-  ratioCtx = buildRatioCtx([...reached, ...near]);
+  // 比率列の分母。'表示中' は到達・もうすぐ・10%以内の全グループ（この表に出ている行）が母数
+  ratioCtx = buildRatioCtx([...reached, ...near, ...within10]);
   const visOrderS = getColOrder('SIGNAL').filter(c => c.visible);
   const visibleCols = visOrderS.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
   const colCount = visibleCols.length + 1; // +1 = アクション列
@@ -5353,6 +5355,8 @@ function renderSignals() {
             ${bodyRows(sortSecurities(reached, 'SIGNAL'))}
             ${groupRow('🟡 もうすぐ（残り 5% 以内）', 'near', near.length)}
             ${bodyRows(sortSecurities(near, 'SIGNAL'))}
+            ${groupRow('🔵 10% 以内（残り 5〜10%）', 'within10', within10.length)}
+            ${bodyRows(sortSecurities(within10, 'SIGNAL'))}
           </tbody>
         </table></div>
       </div>
