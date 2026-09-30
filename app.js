@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261001-0023';
+const APP_VERSION = 'v20261001-0043';
 // 注意銘柄の区分（2026-09-30）: 通常=false / 注意=true（従来のまま） / パス='pass'（買い増しをパス） / 再調査='recheck'（到達時に再調査）。
 // 表示と絞り込みだけに使う印。買い増しサインの判定・通知は変えない。
 const WATCH_LABEL = { watch: '注意', pass: 'パス', recheck: '再調査' };
@@ -16239,8 +16239,17 @@ function detailTypeOf(sec) {
 }
 
 // 保有1件→出力1行（市場で評価/取得の入れ方を変える）。
-function excelExportRow(h, sec) {
+// 米国株の取得円が未設定(acqJpy=null)の保有は、空で出すと貼付先の集計が崩れるので
+// **取得額(ドル)=平均取得単価×数量 に現在のドル円レートを掛けた概算**で埋める（2026-10-01 すみぽん指示）。
+// 概算にした行は est に控え、出力の下に一覧を出す（保存はしない＝保有の取得円は未設定のまま）。
+function excelExportRow(h, sec, est) {
   const us = sec.market === 'US';
+  let acqJpy = us ? h.acqJpy : null;
+  if (us && acqJpy == null) {
+    const fx = calc.fx();
+    if (fx) acqJpy = (h.avgCost || 0) * h.quantity * fx;
+    if (est) est.push({ ticker: sec.ticker, broker: h.broker || '', ok: !!fx });
+  }
   const price = calc.price(sec);
   const valNative = (price != null ? price : h.avgCost) * h.quantity; // 価格未取得は取得原価で代替
   const r1 = (n) => n == null ? '' : Math.round(n);
@@ -16255,7 +16264,7 @@ function excelExportRow(h, sec) {
     us ? 'USD' : 'JPY',                    // 通貨
     us ? '' : r1(valNative),               // 評価円（日本株のみ）
     us ? r2(valNative) : '',               // 評価ドル（米国株のみ）
-    us ? (h.acqJpy != null ? r1(h.acqJpy) : '') : r1(h.avgCost * h.quantity), // 取得円
+    us ? (acqJpy != null ? r1(acqJpy) : '') : r1(h.avgCost * h.quantity), // 取得円（米株で未設定は概算）
     '',                                    // 取得ドル（現状の貼付に合わせ空欄）
     '',                                    // 積立（対象外）
   ];
@@ -16266,11 +16275,12 @@ function excelExportGenerate() {
   const includeManual = document.getElementById('xe-manual').checked;
   const includeHeader = document.getElementById('xe-header').checked;
   const sheets = { JP: [], US: [] };
+  const est = []; // 取得円を概算で埋めた米国株
   for (const h of excelExportHoldings()) {
     const sec = store.data.securities.find(s => s.id === h.securityId);
     if (!sec || !checked.includes(holdingImportUnit(h, sec))) continue;
     if (!includeManual && h.source !== 'import') continue;
-    sheets[sec.market].push(excelExportRow(h, sec));
+    sheets[sec.market].push(excelExportRow(h, sec, est));
   }
   // 安定ソート: 証券会社→コード
   for (const m of ['JP', 'US']) sheets[m].sort((a, b) => (a[4] + a[1]).localeCompare(b[4] + b[1], 'ja'));
@@ -16297,8 +16307,13 @@ function excelExportGenerate() {
       <textarea id="xe-ta-${label}" rows="${Math.min(12, Math.max(3, rows.length + (includeHeader ? 1 : 0)))}"
         style="width:100%;font-family:monospace;white-space:pre" readonly>${esc(text)}</textarea></div>`;
   };
+  const fx = calc.fx();
+  const tk = (list) => list.map(e => `${e.ticker}(${e.broker})`).join(', ');
+  const estOk = est.filter(e => e.ok), estNg = est.filter(e => !e.ok);
+  const estNote = (estOk.length ? `<div class="notice" style="margin-top:8px">米国株 ${estOk.length}件は取得円が未設定のため、<strong>取得額(ドル)×現在のドル円 ${num(fx)}円 の概算</strong>で出力しています: ${esc(tk(estOk))}</div>` : '')
+    + (estNg.length ? `<div class="notice" style="margin-top:8px">ドル円レートが未取得のため、米国株 ${estNg.length}件は取得円が空のままです（「価格更新」を押してから生成し直してください）: ${esc(tk(estNg))}</div>` : '');
   document.getElementById('xe-out').innerHTML =
-    block('日本株', sheets.JP) + block('米国株', sheets.US) + (fundRows.length ? block('投資信託', fundRows) : '');
+    block('日本株', sheets.JP) + block('米国株', sheets.US) + estNote + (fundRows.length ? block('投資信託', fundRows) : '');
 }
 
 function excelExportCopy(id) {
