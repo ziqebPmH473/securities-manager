@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261001-0000';
+const APP_VERSION = 'v20261001-0012';
 // 注意銘柄の区分（2026-09-30）: 通常=false / 注意=true（従来のまま） / パス='pass'（買い増しをパス） / 再調査='recheck'（到達時に再調査）。
 // 表示と絞り込みだけに使う印。買い増しサインの判定・通知は変えない。
 const WATCH_LABEL = { watch: '注意', pass: 'パス', recheck: '再調査' };
@@ -11224,13 +11224,14 @@ const IMPORT_SOURCES = [
   { key: 'sbi-us',     name: 'SBI証券 米国株',   logo: 'SBI', color: '#0a8f3c' },
   { key: 'rakuten',    name: '楽天証券',         logo: '楽',  color: '#bf0000' },
   { key: 'moomoo',     name: 'moomoo証券',       logo: 'mo',  color: '#ff7a00' },
+  { key: 'webull',     name: 'Webull証券 米国株', logo: 'W',   color: '#1e5eff' },
   { key: 'monex-fund', name: 'マネックス 投資信託', logo: 'MO', color: '#005bac' },
   { key: 'monex-jp',   name: 'マネックス 日本株', logo: 'MO', color: '#005bac' },
   { key: 'smbc',       name: 'SMBC日興証券',     logo: '日',  color: '#00529b' },
 ];
 function importSourceCard(s) {
   const p = IMPORT_PROFILES[s.key]; if (!p) return '';
-  const method = p.input === 'file' ? 'CSVファイル' : '画面コピーを貼付';
+  const method = p.method || (p.input === 'file' ? 'CSVファイル' : '画面コピーを貼付');
   const tags = (p.scope.markets || []).map(m => `<span class="tag ${m.toLowerCase()}">${MARKET_LABEL[m]}</span>`).join('')
     + `<span class="mini">${p.input === 'file' ? 'CSV' : '貼付'}</span>`;
   return `<button class="source-card" onclick="openBrokerImport('${s.key}')">
@@ -14639,6 +14640,34 @@ function parseSmbcScreen(text, map) {
   }
   return out;
 }
+// Webull 米国株: 保有一覧を表にしたもの（マークダウン表／Excel・スプレッドシートのタブ区切り／CSV）を解析。
+// 既定の列: 銘柄(ティッカー) | 銘柄名 | 評価額 | 約定代金 | 数量 | 平均取得価額。見出し行の列名で位置を決める
+// （列の順番が変わっても可）。見出しが無ければ上の並びとみなす。平均取得価額が空なら 約定代金÷数量。
+// 表に口座の列が無いので account は null で返し、取込側（runBrokerImport）が既存の保有の口座に合わせる。
+// 取込フィールド設定（MAPPING_FIELDS）には載せない＝列名の別表記はここの WEBULL_COLMAP に足す。
+const WEBULL_COLMAP = {
+  '銘柄': 'ticker', 'ティッカー': 'ticker', '銘柄コード': 'ticker', 'コード': 'ticker', 'シンボル': 'ticker',
+  '数量': 'quantity', '保有数量': 'quantity', '保有株数': 'quantity', '株数': 'quantity',
+  '平均取得価額': 'avgCost', '平均取得単価': 'avgCost', '取得単価': 'avgCost', '平均取得価格': 'avgCost',
+  '約定代金': 'cost', '取得金額': 'cost', '取得価額': 'cost',
+  '口座': 'account', '口座区分': 'account', '口座種別': 'account',
+};
+function parseWebullTable(text) {
+  const rows = parsePasted(text).map(r => r.map(c => String(c == null ? '' : c).trim()));
+  const hi = rows.findIndex(r => r.some(c => WEBULL_COLMAP[c] === 'ticker'));
+  const cols = hi >= 0 ? rows[hi].map(c => WEBULL_COLMAP[c] || null) : ['ticker', null, null, 'cost', 'quantity', 'avgCost'];
+  const out = [];
+  for (const r of rows.slice(hi + 1)) {
+    const rec = {}; r.forEach((c, j) => { if (cols[j]) rec[cols[j]] = c; });
+    const ticker = (rec.ticker || '').toUpperCase();
+    if (!validTicker(ticker, 'US')) continue; // 合計行・注記行などは飛ばす
+    const qty = numClean(rec.quantity); if (qty == null) continue;
+    let avg = numClean(rec.avgCost);
+    if (avg == null) { const cost = numClean(rec.cost); avg = (cost != null && qty > 0) ? cost / qty : 0; }
+    out.push({ market: 'US', ticker, broker: 'Webull', account: rec.account ? normAccount(rec.account) : null, quantity: qty, avgCost: avg });
+  }
+  return out;
+}
 // 汎用入出力の列（日本語ラベル↔内部キー）。分析結果（評価/格付/★/備考/優先順位/評価日）は対象外
 // ===== 取込：マスタ管理項目の変換（未登録値はモーダルで確認・変換マスタで次回自動）=====
 // ドメイン定義。fields=このドメインに属する銘柄フィールド。values=マスタの正規値一覧。canAdd=新規追加可。
@@ -14844,6 +14873,7 @@ const IMPORT_PROFILES = {
   'sbi-jp':  { label: 'SBI 日本株（CSVファイル）', input: 'file', parse: parseSbiJpCsv, fixed: true, scope: { broker: 'SBI', markets: ['JP'] } },
   'smbc':    { label: 'SMBC日興証券 日本株（画面コピーを貼り付け）', input: 'paste', parse: parseSmbcScreen, fixed: true, scope: { broker: 'SMBC日興', markets: ['JP'] } },
   'moomoo':  { label: 'moomoo（CSVファイル）', input: 'file', parse: parseMoomooCsv, fixed: true, scope: { broker: 'moomoo', markets: ['JP', 'US'] } },
+  'webull':  { label: 'Webull 米国株（表を貼り付け）', input: 'paste', method: '表を貼付', parse: parseWebullTable, fixed: true, scope: { broker: 'Webull', markets: ['US'] } },
   'rakuten': { label: '楽天証券（保有商品一覧CSV）', input: 'file', parse: parseRakutenCsv, fixed: true, scope: { broker: '楽天', markets: ['JP', 'US'] } },
   'monex-jp': { label: 'マネックス 日本株（CSVファイル）', input: 'file', parse: parseMonexJpCsv, fixed: true, scope: { broker: 'マネックス', markets: ['JP'] } },
   'monex-fund': { label: 'マネックス 投資信託（CSVファイル・別ファイル）', input: 'file', parse: () => [], fixed: true, scope: { broker: 'マネックス', markets: ['FUND'] } },
@@ -14925,7 +14955,7 @@ function setImportPreview() {
   const el = document.getElementById('bimport-preview'); if (!el) return;
   if (!_importRows.length) { el.textContent = '（データ未検出）'; return; }
   const bd = extractBaseDate(_importText);
-  const sample = _importRows.slice(0, 4).map(r => `${MARKET_LABEL[r.market]} ${r.ticker} ×${r.quantity} @${r.avgCost}（${r.broker || '—'}/${r.account}）`).join('<br>');
+  const sample = _importRows.slice(0, 4).map(r => `${MARKET_LABEL[r.market]} ${r.ticker} ×${r.quantity} @${r.avgCost}（${r.broker || '—'}/${r.account || '口座=既存に合わせる'}）`).join('<br>');
   el.innerHTML = `<strong>${_importRows.length} 件</strong>を検出${bd ? `（基準日: ${bd}）` : ''}:<br>${sample}${_importRows.length > 4 ? '<br>…' : ''}`;
 }
 async function runBrokerImport() {
@@ -14960,6 +14990,12 @@ async function runBrokerImport() {
   // 洗い替えの内訳（追加/更新/据置/削除）を出すため、削除前にスコープ内保有を退避
   const beforeHoldings = {};
   if (mode === 'replace') for (const h of store.data.holdings) if (inReplaceScope(h)) beforeHoldings[holdKey(h)] = { quantity: h.quantity, avgCost: h.avgCost };
+
+  // 取込データに口座が無い形式（Webullの表）用: 取込前にその証券会社で持っていた口座を銘柄ごとに控える。
+  // 1口座だけならその口座へ入れる（洗い替えで口座が「特定」に変わり、取得円などの引き継ぎが外れるのを防ぐ）。
+  const prevAccounts = {};
+  for (const h of store.data.holdings) if (h.broker === scope.broker) (prevAccounts[h.securityId] ||= new Set()).add(h.accountType);
+  const keptAccount = (secId) => { const a = prevAccounts[secId]; return a && a.size === 1 ? [...a][0] : null; };
 
   // replace: スコープ内の既存保有を削除
   // 洗い替えで消える取得円・投信評価額・売却前購入額は退避し、取込後に同一キーへ復元（削除前に退避）
@@ -15004,7 +15040,7 @@ async function runBrokerImport() {
     }
     // 数量がある行のみ保有を作成/更新
     if (row.quantity != null) {
-      const broker = row.broker || defBroker, account = row.account || '特定';
+      const broker = row.broker || defBroker, account = row.account || keptAccount(sec.id) || '特定';
       const exists = store.data.holdings.some(h => h.securityId === sec.id && h.broker === broker && h.accountType === account);
       if (mode === 'append' && exists) { /* 既存はそのまま（上書きしない） */ }
       else {
