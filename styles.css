@@ -164,6 +164,8 @@ form .row > .field > label:first-child { flex: 1 0 auto; }
 .notice { background: var(--panel-2); border: 1px solid var(--amber); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; color: var(--text); }
 
 .tag.watch { color: var(--amber); border-color: var(--amber); }
+.tag.watch-pass { color: var(--muted); border-color: var(--muted); }
+.tag.watch-recheck { color: var(--accent); border-color: var(--accent); }
 .nowrap { white-space: nowrap; }
 
 /* マスタ・設定のグループ化UI */
@@ -627,6 +629,9 @@ table.holdings tbody tr.sig-reached:hover { background: rgba(194,54,47,.075); }
 .tag.fund { color: #6a4ca8; background: #f1edf8; border-color: #e3d9f1; }
 .tag.cat { background: var(--brass-soft); color: var(--brass-d); border-color: #e8dcc2; }
 .tag.watch { color: var(--warn); background: var(--warn-soft); border-color: #ecd9b3; }
+/* 注意銘柄の区分: パス＝灰（見送り）／再調査＝青（到達したら調べ直す） */
+.tag.watch.watch-pass { color: #5b6472; background: #eef0f3; border-color: #d8dce2; }
+.tag.watch.watch-recheck { color: #2a5599; background: #eef3fb; border-color: #dbe5f4; }
 .tag.etf { color: #0e7490; border-color: #bfe3ea; background: #eafafc; }
 
 /* 格付バッジ */

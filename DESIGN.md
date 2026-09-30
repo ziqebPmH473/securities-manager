@@ -136,7 +136,7 @@ CREATE TABLE securities (
   star_valuation INTEGER, star_strength INTEGER, star_risk INTEGER, -- ★評価
   priority      INTEGER,                  -- 購入優先順位
   note          TEXT,                     -- 備考
-  watch         INTEGER NOT NULL DEFAULT 0, -- 注意銘柄(ウォッチ)フラグ
+  watch         INTEGER NOT NULL DEFAULT 0, -- 注意銘柄(ウォッチ)の区分。通常=false / 注意=true / パス='pass'（買い増しをパス） / 再調査='recheck'（到達時に再調査）。2026-10-01 追加。表示・絞り込み専用で、買い増しサインの判定・通知には使わない（app.js の watchKind / watchTag / watchParse）
   -- 買い増し設定
   rule_id       INTEGER REFERENCES rule_master(id),
   base_high_mode TEXT DEFAULT NULL,       -- 個別上書き(任意): '5y'|'52w'|'all'|'manual'

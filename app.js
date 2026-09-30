@@ -11,7 +11,15 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260930-1735';
+const APP_VERSION = 'v20261001-0000';
+// 注意銘柄の区分（2026-09-30）: 通常=false / 注意=true（従来のまま） / パス='pass'（買い増しをパス） / 再調査='recheck'（到達時に再調査）。
+// 表示と絞り込みだけに使う印。買い増しサインの判定・通知は変えない。
+const WATCH_LABEL = { watch: '注意', pass: 'パス', recheck: '再調査' };
+function watchKind(s) { const w = s && s.watch; return (w === 'pass' || w === 'recheck') ? w : (w ? 'watch' : ''); }
+function watchLabel(s) { return WATCH_LABEL[watchKind(s)] || '通常'; }
+function watchTag(s, lead) { const k = watchKind(s); return k ? `${lead || ''}<span class="tag watch${k === 'watch' ? '' : ' watch-' + k}">${WATCH_LABEL[k]}</span>` : ''; }
+// 画面・CSVの値 → 保存する値
+function watchParse(v) { v = String(v == null ? '' : v).trim(); if (/パス|^pass$/i.test(v)) return 'pass'; if (/再調査|^recheck$/i.test(v)) return 'recheck'; return /注意|^1$|true|yes|○/i.test(v); }
 { const el = document.getElementById('app-version'); if (el) el.textContent = APP_VERSION; }
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
@@ -3123,7 +3131,7 @@ function fltSelectSpec(key) {
     case 'reachKind': return { opts: [['新', '新規到達'], ['続', '継続中'], ['－', '未到達']], val: s => calc.reachKind(s) || '－' };
     case 'principalSold': return { opts: [['1', '売却済み'], ['0', '未売却']], val: s => s.principalSold ? '1' : '0' };
     case 'held': return { opts: [['1', '保有'], ['0', '未保有']], val: s => (calc.totalHolding(s.id).qty > 0 ? '1' : '0') };
-    case 'watch': return { opts: [['1', '注意'], ['0', '通常']], val: s => (s.watch ? '1' : '0') };
+    case 'watch': return { opts: [['1', '注意'], ['pass', 'パス'], ['recheck', '再調査'], ['0', '通常']], val: s => { const k = watchKind(s); return k === 'watch' ? '1' : (k || '0'); } };
     case 'anaMACD': return { opts: [['golden', 'GC'], ['dead', 'DC'], ['none', '—']], val: s => { const r = techOf(s); return r ? (r.macdCross || 'none') : ''; } };
     case 'anaStatus': return { opts: [['1', '形成中'], ['2', '完成間近'], ['3', 'ブレイク済み'], ['4', '失敗']], val: s => { const r = techOf(s); return r && r.best ? String(r.best.status) : ''; } };
     case 'anaMa200': return { opts: [['above', '上'], ['below', '下']], val: s => { const r = techOf(s); return r ? (r.ma200Pos || '') : ''; } };
@@ -3135,7 +3143,7 @@ function fltSelectSpec(key) {
 // scope のフィルター対象列一覧（選択肢列＝sel / 数値列＝num）
 const SECMASTER_FILTER_KEYS = ['market', 'detailType', 'sector', 'industry', 'rating', 'overallGrade', 'buyGrade', 'priority', 'ruleName', 'category', 'watch'];
 // MASTER_COLS に列が無い独自フィルタ項目のラベル（held/watch は銘柄の状態から直接判定する）
-const FILTER_EXTRA_LABELS = { held: '保有状況（保有/未保有）', watch: '注意銘柄（注意/通常）' };
+const FILTER_EXTRA_LABELS = { held: '保有状況（保有/未保有）', watch: '注意銘柄（注意/パス/再調査/通常）' };
 function filterScopeBase(scope) {
   if (scope === 'analysis') return 'ANALYSIS';
   return holdingsMarket === 'JP' ? 'JP' : holdingsMarket === 'FUND' ? 'FUND' : 'US';
@@ -3855,7 +3863,7 @@ function scenarioPosTd(s, term) {
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
   // 銘柄名クリック: 分析タブ＝分析詳細／ダッシュボード＝銘柄カルテ（2026-09-18 すみぽん指示）／それ以外＝詳細ドロワー
-  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : currentView === 'dashboard' ? `karteOpenSec(${s.id})` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}${earnLabelHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${s.watch ? ` <span class="tag watch">注意</span>` : ''}</td>`; },
+  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : currentView === 'dashboard' ? `karteOpenSec(${s.id})` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}${earnLabelHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${watchTag(s, ' ')}</td>`; },
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
@@ -9998,7 +10006,7 @@ function bulkValueHtml(field, id) {
   switch (field) {
     case 'detailType': return `<select id="${id}"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
     case 'enabled': return `<select id="${id}"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
-    case 'watch': return `<select id="${id}"><option value="true">付ける</option><option value="false">外す</option></select>`;
+    case 'watch': return `<select id="${id}"><option value="true">注意</option><option value="pass">パス</option><option value="recheck">再調査</option><option value="false">通常（外す）</option></select>`;
     case 'addonFromHigh': return `<select id="${id}"><option value="true">初回基準にする</option><option value="false">通常（前回購入単価基準）に戻す</option></select>`;
     case 'category': return `<select id="${id}">${catOpts}</select>`;
     case 'investCategory': return `<select id="${id}">${invCatOpts}</select>`;
@@ -10012,7 +10020,8 @@ function bulkValueHtml(field, id) {
   }
 }
 function bulkConvert(field, raw) {
-  if (field === 'enabled' || field === 'watch' || field === 'addonFromHigh') return raw === 'true';
+  if (field === 'watch') return (raw === 'pass' || raw === 'recheck') ? raw : raw === 'true';
+  if (field === 'enabled' || field === 'addonFromHigh') return raw === 'true';
   if (field === 'detailType') return raw === '__null' ? null : raw;
   if (field === 'ruleId') return parseInt(raw, 10);
   if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return raw || null;
@@ -12141,7 +12150,7 @@ function openSecurityForm(id, presetMarket, presetTicker) {
       </div>
       <div class="row">
         <div class="field"><label>注意銘柄(ウォッチ)</label>
-          <select name="watch"><option value="0" ${!sec || !sec.watch ? 'selected' : ''}>通常</option><option value="1" ${sec && sec.watch ? 'selected' : ''}>注意</option></select></div>
+          <select name="watch" title="注意＝気をつけて見る／パス＝買い増しをパス／再調査＝到達したら調べ直す（表示と絞り込みだけに使います）">${[['0', '通常'], ['1', '注意'], ['pass', 'パス'], ['recheck', '再調査']].map(([v, l]) => `<option value="${v}" ${(({ watch: '1' })[watchKind(sec)] || watchKind(sec) || '0') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="field"><label title="買い取引が無い場合の基準（任意）。取引履歴があればそちらを優先">前回購入価格 / 前回購入日</label>
           <div style="display:flex;gap:6px">
             <input name="prevBuyPrice" type="number" step="any" value="${sec && sec.prevBuyPrice != null ? sec.prevBuyPrice : ''}" placeholder="価格(原通貨)" style="flex:1">
@@ -12302,7 +12311,7 @@ function openSecurityForm(id, presetMarket, presetTicker) {
       market, ticker: f.ticker.value.trim().toUpperCase(), // コードは常に大文字で保存（表記ゆれ・重複判定ミス防止）
       category: f.category.value || null, ruleId: parseInt(f.ruleId.value, 10),
       investCategory: (f.investCategory && f.investCategory.value) || null,
-      enabled: f.enabled.value === '1', watch: f.watch.value === '1',
+      enabled: f.enabled.value === '1', watch: (f.watch.value === 'pass' || f.watch.value === 'recheck') ? f.watch.value : f.watch.value === '1',
       currency: market === 'US' ? 'USD' : 'JPY',
       assetClass: market === 'FUND' ? 'fund' : 'stock',
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
@@ -12776,7 +12785,7 @@ function openSecurityDetail(secId) {
   const gradeTag = g => { if (!g) return '<span class="muted">—</span>'; const gm = (store.data.grades || []).find(x => x.grade === String(g).toUpperCase()); const st = gm && gm.color ? labelColorStyle(gm.color) : ''; return `<span class="grade grade-${esc(String(g).toLowerCase())}"${st ? ` style="${st}"` : ''}>${esc(g)}</span>`; };
   const starsFmt = n => n == null ? '<span class="muted">—</span>' : `<span style="color:var(--brass);letter-spacing:1px">${'★'.repeat(n)}<span style="color:var(--border-strong)">${'☆'.repeat(Math.max(0, 5 - n))}</span></span>`;
   const earnHdr = earnTopHtml(sec); // 格付けの右に右寄せで決算日（株探風の日付テキスト。ラベルにはしない）
-  const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${detailTypeOf(sec) === 'ETF' ? '<span class="tag detail-etf">ETF</span>' : ''}${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}${earnHdr ? `<span style="margin-left:auto">${earnHdr}</span>` : ''}`;
+  const subHtml = `<span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted" style="font-size:13px">${esc(sec.ticker)}</span>${detailTypeOf(sec) === 'ETF' ? '<span class="tag detail-etf">ETF</span>' : ''}${gradeTag(sec.rating)}${watchTag(sec)}${earnHdr ? `<span style="margin-left:auto">${earnHdr}</span>` : ''}`;
   // 評価（格付＝銘柄格付のみ。総合/買い時は出さない）＋☆＋分析メモ
   const evalBox = [
     kv('銘柄格付', gradeTag(sec.rating)),
@@ -13715,7 +13724,7 @@ function karteCardHtml(sec) {
     <div class="kt-head">
       <div class="kt-id">
         <div class="kt-name">${esc(calc.displayName(sec))}</div>
-        <div class="kt-sub"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${sec.watch ? '<span class="tag watch">注意</span>' : ''}${buyStatus}</div>
+        <div class="kt-sub"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${watchTag(sec)}${buyStatus}</div>
       </div>
       <div class="kt-price-block">
         <div class="kt-price kt-kabu" onclick="window.open('${kabutanUrl(sec)}','_blank','noopener')" title="株探のチャートを開く">${m(price)}</div>
@@ -14808,7 +14817,7 @@ function parseGeneric(text) {
     if ('buyAmount' in rec) sec.buyAmount = numClean(rec.buyAmount);
     if ('buyCount' in rec) { const n = parseInt(rec.buyCount, 10); sec.buyCount = isNaN(n) ? null : n; }
     if ('enabled' in rec) sec.enabled = /有効|^1$|true|yes/i.test(rec.enabled);
-    if ('watch' in rec) sec.watch = /注意|^1$|true|yes/i.test(rec.watch);
+    if ('watch' in rec) sec.watch = watchParse(rec.watch);
     if ('principalSold' in rec) sec.principalSold = /売却|済|^1$|true|yes|○/i.test(rec.principalSold);
     if ('principalSoldAmount' in rec) sec.principalSoldAmount = numClean(rec.principalSoldAmount);
     if ('targetPer' in rec) sec.targetPer = numClean(rec.targetPer);
@@ -15209,7 +15218,7 @@ function genericFieldValue(key, s, h) {
     case 'buyAmount': return s.buyAmount ?? '';
     case 'buyCount': return s.buyCount ?? '';
     case 'enabled': return s.enabled === false ? '無効' : '有効';
-    case 'watch': return s.watch ? '注意' : '通常';
+    case 'watch': return watchLabel(s);
     case 'detailType': return detailTypeOf(s);
     case 'principalSold': return s.principalSold ? '売却済' : '';
     case 'principalSoldAmount': return s.principalSoldAmount ?? '';
@@ -15472,7 +15481,7 @@ function giParseValue(field, raw) {
     // ★評価は分析取込と同じ parseStars で「5」「★5」「★★★★★」いずれも数値化
     case 'starValuation': case 'starStrength': case 'starRisk': return parseStars(v);
     case 'enabled': return /有効|^1$|true|yes|○|有/i.test(v);
-    case 'watch': return /注意|^1$|true|yes|○/i.test(v);
+    case 'watch': return watchParse(v);
     case 'addonFromHigh': return /初回|^1$|true|yes|○|有/i.test(v);
     case 'baseHighMode': return normBaseHighMode(v);
     case 'account': return normAccount(v);
