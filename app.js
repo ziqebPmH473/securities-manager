@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261001-0012';
+const APP_VERSION = 'v20261001-0023';
 // 注意銘柄の区分（2026-09-30）: 通常=false / 注意=true（従来のまま） / パス='pass'（買い増しをパス） / 再調査='recheck'（到達時に再調査）。
 // 表示と絞り込みだけに使う印。買い増しサインの判定・通知は変えない。
 const WATCH_LABEL = { watch: '注意', pass: 'パス', recheck: '再調査' };
@@ -11571,13 +11571,38 @@ function acqLedgerSig(r) {
   return [String(r.ticker || '').toUpperCase(), r.broker || '', r.accountType || '', r.date || '', r.type || '', r.quantity ?? '', r.amountJpy ?? ''].join('|');
 }
 // 台帳をキーごとに日付順で再生し、取得円・株数を算出。買い=受渡金額(円)加算 / 売り=按分減算（全売却で0）
+// 残高行(type:'balance'。取引残高報告書の「数量・取得額(円)」)があるキーは、**最新の残高行を起点**にして、
+// それより後に受け渡された取引だけを上に積む（残高は受渡日基準なので、取引は 受渡日(settleDate)＞残高の基準日 で判定。
+// 受渡日が無い行は約定日で代用）。残高以前の取引は残高に含まれているので計算には使わない（行は残す）。
+function alKeyOf(r) { return `${String(r.ticker || '').toUpperCase()}|${r.broker}|${r.accountType}`; }
+function alEffDate(r) { return r.settleDate || r.date || ''; }
+// キー→最新の残高行（同日なら後から入れた方）
+function acqLedgerBaselines(ledger) {
+  const m = new Map();
+  for (const r of ledger || []) {
+    if (r.type !== 'balance') continue;
+    const k = alKeyOf(r), cur = m.get(k);
+    if (!cur || (r.date || '') > (cur.date || '') || ((r.date || '') === (cur.date || '') && (r.id || 0) > (cur.id || 0))) m.set(k, r);
+  }
+  return m;
+}
+// この取引行が残高行に含まれている（＝計算に使わない）か
+function alCoveredByBaseline(r, base) { return !!base && r.type !== 'balance' && alEffDate(r) <= (base.date || ''); }
 function acqLedgerCompute(ledger) {
   const rows = (ledger || []).slice().sort((a, b) => ((a.date || '') < (b.date || '')) ? -1 : ((a.date || '') > (b.date || '')) ? 1 : ((a.id || 0) - (b.id || 0)));
+  const bases = acqLedgerBaselines(rows);
   const byKey = new Map();
   for (const r of rows) {
-    const key = `${String(r.ticker || '').toUpperCase()}|${r.broker}|${r.accountType}`;
+    const key = alKeyOf(r);
     let st = byKey.get(key);
-    if (!st) { st = { acqJpy: 0, qty: 0, lastDate: null, count: 0 }; byKey.set(key, st); }
+    if (!st) {
+      const base = bases.get(key);
+      st = { acqJpy: base ? (base.amountJpy || 0) : 0, qty: base ? (base.quantity || 0) : 0, lastDate: null, count: 0, baseDate: base ? base.date : null };
+      byKey.set(key, st);
+    }
+    st.count++;
+    if (r.date && (!st.lastDate || r.date > st.lastDate)) st.lastDate = r.date;
+    if (r.type === 'balance' || alCoveredByBaseline(r, bases.get(key))) continue;
     const q = r.quantity || 0;
     if (r.type === 'buy') { st.acqJpy += (r.amountJpy || 0); st.qty += q; }
     else if (st.qty > 1e-12) {
@@ -11587,8 +11612,6 @@ function acqLedgerCompute(ledger) {
       if (Math.abs(st.acqJpy) < 1e-6) st.acqJpy = 0;
       if (st.qty < 1e-12) st.qty = 0;
     }
-    st.count++;
-    if (r.date && (!st.lastDate || r.date > st.lastDate)) st.lastDate = r.date;
   }
   return byKey;
 }
@@ -11681,6 +11704,7 @@ function openAcqLedger() {
     <div id="al-summary"></div>
     <div class="btn-row" style="margin:10px 0">
       <button class="btn btn-primary" onclick="openAcqLedgerImport()">報告書を取込…</button>
+      <button class="btn btn-primary" onclick="openWbStatementImport()" title="Webull の取引残高報告書（CSV）の「数量・取得額(円)」を残高として取り込む">Webull 残高報告書(CSV)…</button>
       <button class="btn btn-primary" onclick="openAcqLedgerApply()">保有へ反映…</button>
       <button class="btn" onclick="openAcqLedgerEdit()">行を追加</button>
       <button class="btn" onclick="alToggleManageCheck()">株数チェック</button>
@@ -11707,16 +11731,19 @@ function alRenderTable() {
   const brokers = [...new Set((store.data.acqLedger || []).map(r => r.broker || '—'))];
   // 不整合キー集合（台帳再生の株数 ≠ 保有の株数）。行の色付けと「不整合のみ」絞り込みに使う
   const badKeys = new Set(acqLedgerQtyCheck(acqLedgerCompute(store.data.acqLedger || [])).filter(c => !c.ok).map(c => c.key));
-  const keyOf = (r) => `${String(r.ticker || '').toUpperCase()}|${r.broker}|${r.accountType}`;
+  const keyOf = alKeyOf;
+  const bases = acqLedgerBaselines(store.data.acqLedger || []);
+  // 計算に使っていない行（残高に含まれる取引・古い残高）は薄く表示
+  const unused = (r) => { const b = bases.get(keyOf(r)); return !!b && (r.type === 'balance' ? b !== r : alCoveredByBaseline(r, b)); };
   let rows = (store.data.acqLedger || []).slice().sort((a, b) => ((a.date || '') < (b.date || '')) ? 1 : ((a.date || '') > (b.date || '')) ? -1 : ((b.id || 0) - (a.id || 0)));
   if (_alFilterBroker) rows = rows.filter(r => (r.broker || '—') === _alFilterBroker);
   if (_alFilterBad) rows = rows.filter(r => badKeys.has(keyOf(r)));
   const filterSel = brokers.length > 1 ? `<select onchange="alSetFilter(this.value)"><option value="">全証券会社</option>${brokers.map(b => `<option ${b === _alFilterBroker ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>` : '';
   const badBtn = `<button class="btn btn-sm ${_alFilterBad ? 'btn-primary' : ''}" onclick="alToggleBadFilter()" title="株数チェックが不一致のキーに属する行だけ表示">不整合のみ${badKeys.size ? ` (${badKeys.size}キー)` : ''}</button>`;
-  const body = rows.map(r => `<tr class="${badKeys.has(keyOf(r)) ? 'al-row-bad' : ''}">
+  const body = rows.map(r => `<tr class="${badKeys.has(keyOf(r)) ? 'al-row-bad' : ''}"${unused(r) ? ` style="opacity:.5" title="${r.type === 'balance' ? 'より新しい残高があるため計算に使っていません' : 'この日付以降の残高に含まれているため計算に使っていません'}"` : ''}>
     <td class="l"><input type="checkbox" class="al-del-chk" data-id="${r.id}"></td>
-    <td class="l">${esc(r.date || '—')}</td>
-    <td class="l">${r.type === 'buy' ? '買' : '売'}</td>
+    <td class="l">${esc(r.date || '—')}${r.settleDate ? `<div class="muted" style="font-size:10px">受渡 ${esc(r.settleDate)}</div>` : ''}</td>
+    <td class="l">${r.type === 'balance' ? '<strong>残高</strong>' : r.type === 'buy' ? '買' : '売'}</td>
     <td class="l">${esc(r.ticker || '')}</td>
     <td>${r.quantity != null ? esc(alFmtQty(r.quantity)) : '—'}</td>
     <td>${r.amountJpy != null ? '¥' + num(Math.round(r.amountJpy)) : '—'}</td>
@@ -11728,7 +11755,7 @@ function alRenderTable() {
       <button class="btn btn-sm btn-danger" onclick="alDeleteSelected()">選択を削除</button>${filterSel}</div>
     <div class="table-wrap" style="max-height:44vh"><table class="dense no-rowclick" style="width:100%"><thead><tr>
       <th class="l"><input type="checkbox" onchange="document.querySelectorAll('#al-table .al-del-chk').forEach(c=>c.checked=this.checked)" title="全選択"></th>
-      <th class="l">日付</th><th class="l">種別</th><th class="l">ティッカー</th><th>数量</th><th>受渡金額(円)</th><th class="l">会社/口座</th><th class="l">操作</th></tr></thead><tbody>${body || `<tr><td colspan="8" class="muted l">該当なし</td></tr>`}</tbody></table></div>`;
+      <th class="l">日付</th><th class="l">種別</th><th class="l">ティッカー</th><th>数量</th><th title="買/売=受渡金額(円)。残高=取得額(円)">金額(円)</th><th class="l">会社/口座</th><th class="l">操作</th></tr></thead><tbody>${body || `<tr><td colspan="8" class="muted l">該当なし</td></tr>`}</tbody></table></div>`;
 }
 function alSetFilter(v) { _alFilterBroker = v; alRenderTable(); }
 function alToggleBadFilter() { _alFilterBad = !_alFilterBad; alRenderTable(); }
@@ -11761,14 +11788,15 @@ function openAcqLedgerEdit(id) {
     <form id="al-edit-form">
       <div class="row">
         <div class="field"><label>日付（約定日）</label><input name="date" type="date" value="${r ? (r.date || '') : today()}" required></div>
-        <div class="field"><label>種別</label><select name="type"><option value="buy" ${!r || r.type === 'buy' ? 'selected' : ''}>買い</option><option value="sell" ${r && r.type === 'sell' ? 'selected' : ''}>売り</option></select></div>
+        <div class="field"><label>種別</label><select name="type"><option value="buy" ${!r || r.type === 'buy' ? 'selected' : ''}>買い</option><option value="sell" ${r && r.type === 'sell' ? 'selected' : ''}>売り</option><option value="balance" ${r && r.type === 'balance' ? 'selected' : ''}>残高（この日時点の数量・取得額）</option></select></div>
       </div>
       <div class="row">
         <div class="field"><label>ティッカー（米国株）</label><input name="ticker" value="${r ? esc(r.ticker || '') : ''}" style="text-transform:uppercase" required></div>
         <div class="field"><label>数量（端株可）</label><input name="quantity" type="number" step="any" value="${r ? (r.quantity ?? '') : ''}" required></div>
       </div>
       <div class="row">
-        <div class="field"><label>受渡金額(円)（買いは必須・売りは任意）</label><input name="amountJpy" type="number" step="any" value="${r ? (r.amountJpy ?? '') : ''}"></div>
+        <div class="field"><label>受渡金額(円)（買いは必須・売りは任意。残高は取得額(円)）</label><input name="amountJpy" type="number" step="any" value="${r ? (r.amountJpy ?? '') : ''}"></div>
+        <div class="field"><label>受渡日（任意・残高との前後判定に使用）</label><input name="settleDate" type="date" value="${r ? (r.settleDate || '') : ''}"></div>
       </div>
       <div class="row">
         <div class="field"><label>証券会社</label><select name="broker">${BROKERS.map(b => `<option ${r && r.broker === b ? 'selected' : ''}>${b}</option>`).join('')}</select></div>
@@ -11787,9 +11815,10 @@ function openAcqLedgerEdit(id) {
       date: f.date.value, type: f.type.value, ticker: f.ticker.value.trim().toUpperCase(),
       quantity: parseFloat(f.quantity.value) || 0, amountJpy: amt,
       broker: f.broker.value, accountType: f.accountType.value,
+      settleDate: f.type.value === 'balance' ? null : (f.settleDate.value || null),
     };
-    if (!patch.ticker || !patch.date || !patch.quantity) { toast('日付・ティッカー・数量は必須です'); return; }
-    if (patch.type === 'buy' && patch.amountJpy == null) { toast('買いは受渡金額(円)が必須です'); return; }
+    if (!patch.ticker || !patch.date || (!patch.quantity && patch.type !== 'balance')) { toast('日付・ティッカー・数量は必須です'); return; }
+    if (patch.type !== 'sell' && patch.amountJpy == null) { toast(patch.type === 'buy' ? '買いは受渡金額(円)が必須です' : '残高は取得額(円)が必須です'); return; }
     if (r) store.updateAcqLedgerRow(r.id, patch); else store.addAcqLedgerRows([patch]);
     openAcqLedger();
     toast(r ? '台帳行を更新しました' : '台帳行を追加しました');
@@ -11805,17 +11834,18 @@ const AL_FIELDS = [
   { key: 'amountJpy', label: '受渡金額(円)', req: true },
   { key: 'broker', label: '証券会社', req: true },
   { key: 'accountType', label: '口座', req: true },
+  { key: 'settleDate', label: '受渡日（任意）', req: false },
 ];
 const AL_FIXED_KEYS = ['type', 'broker', 'accountType'];
 const AL_AUTOMAP = {
-  '日付': 'date', '約定日': 'date', '取引日': 'date', '受渡日': 'date',
+  '日付': 'date', '約定日': 'date', '国内約定日': 'date', '取引日': 'date', '受渡日': 'settleDate', '国内受渡日': 'settleDate',
   '種別': 'type', '売買': 'type', '売買区分': 'type', '取引区分': 'type', '取引': 'type',
   'ティッカー': 'ticker', 'コード': 'ticker', '銘柄コード': 'ticker', 'シンボル': 'ticker', '銘柄': 'ticker',
   '数量': 'quantity', '株数': 'quantity', '約定数量': 'quantity', '約定株数': 'quantity',
   '受渡金額(円)': 'amountJpy', '受渡金額（円）': 'amountJpy', '受渡金額': 'amountJpy', '国内受渡金額': 'amountJpy', '受取金額(円)': 'amountJpy', '受取金額': 'amountJpy',
   '証券会社': 'broker', '口座': 'accountType', '口座種別': 'accountType',
 };
-const AL_GPT_PROMPT = '添付した外国株式等取引報告書PDF（複数可）の全取引を、1取引=1行のマークダウン表にしてください。\n列の順: 約定日 | 種別 | ティッカー | 数量 | 受渡金額(円) | 証券会社 | 口座\n・約定日は YYYY-MM-DD 形式\n・種別は「買」または「売」\n・数量は株数（小数はそのまま）\n・受渡金額(円)は円貨の受渡金額（カンマなしの数値）\n・証券会社は ' + BROKERS.join(' / ') + ' のいずれかの表記（例: ウィブル証券→Webull）\n・口座は 特定/一般/NISA のいずれか\n・1行目はヘッダ行。表以外の文章は出力しない';
+const AL_GPT_PROMPT = '添付した外国株式等取引報告書PDF（複数可）の全取引を、1取引=1行のマークダウン表にしてください。\n列の順: 約定日 | 受渡日 | 種別 | ティッカー | 数量 | 受渡金額(円) | 証券会社 | 口座\n・約定日・受渡日は国内約定日・国内受渡日を YYYY-MM-DD 形式で\n・種別は「買」または「売」\n・数量は株数（小数はそのまま）\n・受渡金額(円)は円貨の受渡金額（カンマなしの数値。外貨決済で受渡金額が外貨のみの場合は円貨の精算金額）\n・証券会社は ' + BROKERS.join(' / ') + ' のいずれかの表記（例: ウィブル証券→Webull）\n・口座は 特定/一般/NISA のいずれか\n・1行目はヘッダ行。表以外の文章は出力しない';
 let _alHeaders = [], _alRows = [], _alMapping = [], _alParsed = [];
 function openAcqLedgerImport() {
   _alHeaders = []; _alRows = []; _alMapping = []; _alParsed = [];
@@ -11888,7 +11918,8 @@ function alResolveRow(row, fixed) {
   const amountJpy = numClean(rec.amountJpy);
   const broker = (rec.broker || '').trim() || null;
   const accountType = normAccount(rec.accountType);
-  const info = { date, type, ticker, quantity, amountJpy: amountJpy != null ? amountJpy : null, broker, accountType, status: 'bad', reason: '' };
+  const settleDate = tsNormTradedAt(rec.settleDate) || null;
+  const info = { date, type, ticker, quantity, amountJpy: amountJpy != null ? amountJpy : null, broker, accountType, settleDate, status: 'bad', reason: '' };
   if (!date || !type || !ticker || quantity == null || !broker || !accountType) { info.reason = '必須項目が不足'; return info; }
   if (!validTicker(ticker, 'US')) { info.reason = 'ティッカー形式NG'; return info; }
   if (type === 'buy' && info.amountJpy == null) { info.reason = '買いの受渡金額(円)なし'; return info; }
@@ -11931,7 +11962,7 @@ function alCheckedRows() {
   document.querySelectorAll('#al-preview .al-chk').forEach(c => {
     if (!c.checked) return;
     const i = _alParsed[+c.dataset.idx];
-    if (i && i.status === 'ok') rows.push({ date: i.date, type: i.type, ticker: i.ticker, quantity: i.quantity, amountJpy: i.amountJpy, broker: i.broker, accountType: i.accountType });
+    if (i && i.status === 'ok') rows.push({ date: i.date, type: i.type, ticker: i.ticker, quantity: i.quantity, amountJpy: i.amountJpy, broker: i.broker, accountType: i.accountType, settleDate: i.settleDate || null });
   });
   return rows;
 }
@@ -11961,6 +11992,107 @@ function runAcqLedgerImport() {
   openAcqLedger();
 }
 
+// ----- Webull 取引残高報告書（CSV）の取込 -----
+// 月1回発行されるCSV（複数の表が縦に並ぶ）から「有価証券のお預り残高明細（現物口座）」だけを読み、
+// 銘柄ごとの 数量・取得額(円) を**残高行**として台帳へ入れる（基準日＝報告対象期間の末日・受渡日基準）。
+// お取引明細（米ドル）は円の金額を持たないので使わない（残高の取得額(円)が証券会社の公式値）。
+// 台帳にあるのに報告書に載っていない Webull の銘柄（＝その時点で全部売却済み）は数量0の残高行を入れる。
+function parseWebullStatementCsv(text) {
+  const rows = parseCsvText(String(text || '').replace(/^\uFEFF/, '')).map(r => r.map(c => String(c == null ? '' : c).trim()));
+  const blank = (r) => !r || r.every(c => c === '');
+  let asOf = null;
+  for (const r of rows) {
+    if (/^報告対象期間/.test(r[0] || '')) { const ds = (r.slice(1).join(' ').match(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}/g) || []); if (ds.length) asOf = tsNormTradedAt(ds[ds.length - 1]); }
+  }
+  const si = rows.findIndex(r => /^有価証券のお預り残高明細/.test(r[0] || '') && /現物口座/.test(r[0]));
+  const out = { asOf, items: [], skipped: [], found: si >= 0 };
+  if (si < 0) return out;
+  const head = rows[si + 1] || [];
+  const col = (re) => head.findIndex(h => re.test(h));
+  const cT = col(/^銘柄コード/), cA = col(/^口座区分/), cQ = col(/^数量/), cJ = col(/^取得額/);
+  if (cT < 0 || cQ < 0 || cJ < 0) { out.found = false; return out; }
+  for (let i = si + 2; i < rows.length && !blank(rows[i]); i++) {
+    const r = rows[i], ticker = (r[cT] || '').toUpperCase(), qty = numClean(r[cQ]), jpy = numClean(r[cJ]);
+    if (!validTicker(ticker, 'US') || qty == null || jpy == null) { out.skipped.push(r[cT] || '(空欄)'); continue; }
+    out.items.push({ ticker, accountType: normAccount(cA >= 0 ? r[cA] : ''), quantity: qty, amountJpy: jpy });
+  }
+  return out;
+}
+let _wbStmt = null;
+function openWbStatementImport() {
+  _wbStmt = null;
+  showModal('Webull 取引残高報告書（CSV）を取込', `
+    <p class="muted" style="margin:0 0 8px">Webull の<strong>取引残高報告書（CSV）</strong>を選ぶと、報告書の「数量・取得額(円)」を<strong>その月末時点の残高</strong>として台帳に入れます。残高より後の売買は、これまでどおり取引報告書から取り込んでください（残高の上に積み上げて計算します）。ここは台帳に入れるだけで、保有の取得円は「保有へ反映」まで変わりません。</p>
+    <div class="field"><label>CSVファイル</label><input type="file" onchange="wbStatementFile(this)"></div>
+    <div id="wb-preview"></div>
+    <div class="btn-row" style="margin-top:10px">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="openAcqLedger()">戻る</button>
+      <button class="btn btn-primary" id="wb-commit" onclick="runWbStatementImport()" disabled>残高として台帳へ取込</button>
+    </div>`, { wide: true });
+}
+function wbStatementFile(input) {
+  const file = input.files[0]; if (!file) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(rd.result); }
+    catch (_) { text = new TextDecoder('shift_jis').decode(rd.result); }
+    let p; try { p = parseWebullStatementCsv(text); } catch (_) { p = { found: false, items: [], skipped: [] }; }
+    wbStatementPreview(p);
+  };
+  rd.readAsArrayBuffer(file);
+}
+function wbStatementPreview(p) {
+  const pv = document.getElementById('wb-preview'), btn = document.getElementById('wb-commit');
+  _wbStmt = null; if (btn) btn.disabled = true;
+  if (!pv) return;
+  if (!p.found || !p.items.length) { pv.innerHTML = `<div class="notice">残高の表（有価証券のお預り残高明細（現物口座））を読み取れませんでした。Webull の取引残高報告書のCSVか確認してください。</div>`; return; }
+  if (!p.asOf) { pv.innerHTML = `<div class="notice">報告対象期間（基準日）を読み取れませんでした。</div>`; return; }
+  const ledger = store.data.acqLedger || [];
+  const comp = acqLedgerCompute(ledger);
+  const inFile = new Set(p.items.map(it => `${it.ticker}|Webull|${it.accountType}`));
+  // 報告書に無い Webull のキーで、基準日より前から台帳にあり株数が残っているもの＝売却済みとして0にする
+  const zeros = [];
+  for (const [key, st] of comp) {
+    const [tk, broker, account] = key.split('|');
+    if (broker !== 'Webull' || inFile.has(key) || !(st.qty > 1e-9)) continue;
+    const hasOlder = ledger.some(r => alKeyOf(r) === key && alEffDate(r) <= p.asOf);
+    const hasNewerBase = st.baseDate && st.baseDate > p.asOf;
+    if (hasOlder && !hasNewerBase) zeros.push({ ticker: tk, accountType: account, quantity: 0, amountJpy: 0, zero: true });
+  }
+  const all = p.items.concat(zeros);
+  _wbStmt = { asOf: p.asOf, items: all };
+  const rows = all.map(it => {
+    const st = comp.get(`${it.ticker}|Webull|${it.accountType}`);
+    const same = st && Math.abs(st.acqJpy - it.amountJpy) < 0.5 && Math.abs(st.qty - it.quantity) < 1e-6;
+    return `<tr>
+      <td class="l">${esc(it.ticker)}</td><td class="l">${esc(it.accountType)}</td>
+      <td>${esc(alFmtQty(it.quantity))}</td><td><strong>¥${num(Math.round(it.amountJpy))}</strong></td>
+      <td>${st ? `${esc(alFmtQty(st.qty))} ／ ¥${num(Math.round(st.acqJpy))}` : '<span class="muted">台帳なし</span>'}</td>
+      <td class="l muted" style="font-size:11px">${it.zero ? '報告書に無い＝売却済みとして0にする' : !st ? '新規' : same ? '台帳と一致' : '台帳と差あり（残高を優先）'}${store.findSecurity('US', it.ticker) ? '' : '・銘柄未登録'}</td></tr>`;
+  }).join('');
+  const newer = ledger.filter(r => r.broker === 'Webull' && r.type !== 'balance' && alEffDate(r) > p.asOf).length;
+  pv.innerHTML = `<div class="muted" style="margin:6px 0 4px">基準日 <strong>${esc(p.asOf)}</strong> ／ 残高 <strong>${p.items.length}銘柄</strong>${zeros.length ? ` ／ 売却済み扱い ${zeros.length}銘柄` : ''}${p.skipped.length ? ` ／ 読み飛ばし ${p.skipped.length}行（${esc(p.skipped.join(', '))}）` : ''} ／ 基準日より後の取引（台帳に登録済み・残高の上に積む）${newer}件</div>
+    <div class="table-wrap" style="max-height:46vh"><table class="dense no-rowclick" style="width:100%"><thead><tr><th class="l">ティッカー</th><th class="l">口座</th><th>数量</th><th>取得額(円)</th><th>いまの台帳（株数／取得円）</th><th class="l">備考</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  if (btn) btn.disabled = false;
+}
+function runWbStatementImport() {
+  if (!_wbStmt || !_wbStmt.items.length) return;
+  const { asOf, items } = _wbStmt;
+  // 同じ基準日の残高行が既にあれば上書き（同じ報告書を取り直しても行が増えない）
+  let added = 0, updated = 0; const add = [];
+  for (const it of items) {
+    const ex = (store.data.acqLedger || []).find(r => r.type === 'balance' && r.date === asOf && r.broker === 'Webull' && r.accountType === it.accountType && String(r.ticker || '').toUpperCase() === it.ticker);
+    if (ex) { store.updateAcqLedgerRow(ex.id, { quantity: it.quantity, amountJpy: it.amountJpy }); updated++; }
+    else { add.push({ date: asOf, type: 'balance', ticker: it.ticker, quantity: it.quantity, amountJpy: it.amountJpy, broker: 'Webull', accountType: it.accountType }); added++; }
+  }
+  if (add.length) store.addAcqLedgerRows(add);
+  _wbStmt = null;
+  openAcqLedger();
+  toast(`残高を取込みました（基準日 ${asOf}: 追加 ${added}件${updated ? `・更新 ${updated}件` : ''}）。「保有へ反映」で取得円に反映できます`, 6000);
+}
+
 // ----- 保有へ反映（差分の確認・選択上書き） -----
 let _alApplyItems = [];
 function openAcqLedgerApply() {
@@ -11972,7 +12104,7 @@ function openAcqLedgerApply() {
     const [tk, broker, account] = key.split('|');
     const sec = store.findSecurity('US', tk);
     const h = sec ? store.data.holdings.find(x => x.securityId === sec.id && x.broker === broker && x.accountType === account) : null;
-    const it = { key, tk, broker, account, sec, h, newVal: st.acqJpy, lastDate: st.lastDate, qc: qtyChecks.get(key) };
+    const it = { key, tk, broker, account, sec, h, newVal: st.acqJpy, lastDate: st.lastDate, baseDate: st.baseDate, qc: qtyChecks.get(key) };
     if (!sec) { it.reason = '銘柄未登録'; noTarget.push(it); }
     else if (!h) { it.reason = '保有レコードなし'; noTarget.push(it); }
     else if (h.acqJpy != null && Math.abs(h.acqJpy - st.acqJpy) < 0.5) same.push(it);
@@ -11986,7 +12118,7 @@ function openAcqLedgerApply() {
     <td>${it.h.acqJpy != null ? '¥' + num(Math.round(it.h.acqJpy)) : '<span class="muted">未設定</span>'}</td>
     <td><strong>¥${num(Math.round(it.newVal))}</strong></td>
     <td class="l">${it.qc ? (it.qc.ok ? '<span class="pos">○</span>' : `<span class="neg">× 台帳${alFmtQty(it.qc.ledgerQty)} / 保有${alFmtQty(it.qc.holdQty)}</span>`) : '—'}</td>
-    <td class="l muted" style="font-size:11px">台帳 〜${esc(it.lastDate || '—')}${it.qc && !it.qc.ok ? '・株数不一致のため既定OFF' : ''}</td>
+    <td class="l muted" style="font-size:11px">台帳 〜${esc(it.lastDate || '—')}${it.baseDate ? `（残高 ${esc(it.baseDate)} 起点）` : ''}${it.qc && !it.qc.ok ? '・株数不一致のため既定OFF' : ''}</td>
   </tr>`).join('');
   const ntRows = noTarget.map(it => `<tr><td class="l muted">対象外</td><td class="l">${esc(it.tk)}</td><td class="l">${esc(it.broker)}/${esc(it.account)}</td><td>¥${num(Math.round(it.newVal))}</td><td class="l muted" style="font-size:11px">${esc(it.reason)}</td></tr>`).join('');
   showModal('保有へ反映（差分の確認）', `
