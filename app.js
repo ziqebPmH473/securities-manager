@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260930-0118';
+const APP_VERSION = 'v20260930-1731';
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -5764,9 +5764,20 @@ let mktState = { market: 'US', sub: 'all', kind: 'turnover' };
 // ランキングキャッシュは store.data.mktRanking に永続化（localStorage保存＋Google同期）。key -> { items(5年高値込), at }
 function mktCacheMap() { return (store.data.mktRanking ||= {}); }
 let mktBusy = false;
+let mktProg = null; // 「更新」で全ランキングを取得中の進捗 { done, total }（1本だけ取得する時は null）
 const MKT_KINDS = [['turnover', '売買代金'], ['marketcap', '時価総額'], ['gainers', '値上がり'], ['losers', '値下がり']];
 const MKT_JP_SUBS = [['all', '全市場'], ['prime', 'プライム'], ['standard', 'スタンダード'], ['growth', 'グロース']];
-function mktKey() { return `${mktState.market}:${mktState.market === 'JP' ? mktState.sub : '-'}:${mktState.kind}`; }
+function mktKeyOf(t) { return `${t.market}:${t.market === 'JP' ? t.sub : '-'}:${t.kind}`; }
+function mktKey() { return mktKeyOf(mktState); }
+// 指定市場の全ランキング（US=種類4本 / JP=市場区分4×種類4=16本）。「更新」で一括取得する対象。
+// 表示中のランキング→同じ市場区分の他の種類→残り、の順に並べ、見ている表から先に新しくなるようにする。
+function mktAllTargets(market) {
+  const subs = market === 'JP' ? MKT_JP_SUBS.map(s => s[0]) : ['all'];
+  const out = [];
+  for (const sub of subs) for (const [kind] of MKT_KINDS) out.push({ market, sub, kind });
+  const cur = mktKey(), score = t => mktKeyOf(t) === cur ? 2 : t.sub === mktState.sub ? 1 : 0;
+  return out.sort((a, b) => score(b) - score(a));
+}
 // ---------- 市場の時価総額1位（日米別） ----------
 // 「時価1位まで」列の分子。時価総額ランキング(全市場)を取った時に1位を記録する。
 // 値は原通貨の実額（US=USD / JP=円）。**store.data.settings には置かない**——settings は同期が
@@ -6217,67 +6228,90 @@ async function addRankingWatch(code, market) {
   renderMarketTab();
   if (currentView === 'secMaster') renderSecMaster();
 }
+// force=false: 表示中のランキング1本だけ（キャッシュがあれば取得しない）。
+// force=true（「更新」ボタン／価格更新）: 表示中の市場（米国株 or 日本株）の全ランキングを取り直す（2026-09-30 すみぽん指示）。
+// 同じ銘柄が複数のランキングに出るので、5年高値・日本語名は memo で使い回し1銘柄1回だけ取得する。
 async function loadRanking(force) {
   const key = mktKey();
   if (mktBusy) return;
   // キャッシュ表示のときも、表示するランキングの1位を「時価1位まで」列の分子に反映する
   if (!force && mktCacheMap()[key]) { if (syncTopCapFromCache()) store.save(); renderMarketTab(); return; }
-  mktBusy = true; renderMarketTab();
-  try {
-    const { market, sub, kind } = mktState;
-    const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=${sub}&count=50`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
-    let items = (r && r.items) || [];
-    const symOf = (code) => market === 'JP' ? code + '.T' : code;
-    if (items.length) {
-      // 5年高値を一括取得（価格APIの highs=1）。日本株はこの呼び出しで現在値・前日比も得る（取得元HTMLに無いため）。
-      // 米株の現在値はランキング値を使用。サブリクエスト上限(~50)回避のため mktFetchHighs が15件ずつ分割取得する。
-      const hi = await mktFetchHighs(items.map(it => symOf(it.code)));
-      items = items.map(it => {
-        const q = hi[symOf(it.code)]; const ok = q && !q.error;
-        // highs=1 の1回取得で返る値を保持（追加取得ゼロで列を増やせる）。5年高値だけでなく
-        // 52週高値・1年/3年安値・前日終値・出来高も列設定で表示できるよう項目に載せる。
-        const next = {
-          ...it,
-          high5y:  ok && q.high5y  != null ? q.high5y  : null,
-          high52w: ok && q.high52w != null ? q.high52w : null,
-          low1y:   ok && q.low1y   != null ? q.low1y   : null,
-          low3y:   ok && q.low3y   != null ? q.low3y   : null,
-          volume:  ok && q.volume  != null ? q.volume  : (it.volume ?? null),
-        };
-        if (market === 'JP') {
-          // 日本株はランキング取得元HTMLに現在値・前日比が無いため highs 取得で補う。
-          const price = ok ? q.price : null;
-          next.price = price;
-          next.prevClose = ok && q.prevClose != null ? q.prevClose : null;
-          next.changePct = (price != null && ok && q.prevClose) ? (price - q.prevClose) / q.prevClose * 100 : null;
-        } else {
-          // 米株はランキングに現在値・前日比があるが、前日終値は無いので highs 取得の prevClose を保持。
-          next.prevClose = ok && q.prevClose != null ? q.prevClose : (it.prevClose ?? null);
-        }
-        return next;
-      });
-    }
-    // 米株は名称を日本語化（保有銘柄と同ルール。例 AAPL→アップル）。names=1 は1銘柄1リクエスト。
-    // 50件だとCloudflareのサブリクエスト上限(~50/req)に達するため20件ずつ分割取得する。
-    if (market === 'US' && items.length) {
-      const nm = {};
-      for (let i = 0; i < items.length; i += 20) {
-        const batch = items.slice(i, i + 20).map(it => it.code);
-        const part = await fetch(`/api/info?names=1&symbols=${encodeURIComponent(batch.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
-        Object.assign(nm, part);
-      }
-      items = items.map(it => { const n = nm[it.code]; return (n && n.name) ? { ...it, name: n.name } : it; });
-    }
-    mktCacheMap()[key] = { items, at: Date.now() };
+  const targets = force ? mktAllTargets(mktState.market) : [{ ...mktState }];
+  const memo = { hi: {}, nm: {} };
+  let failed = 0;
+  mktBusy = true; mktProg = targets.length > 1 ? { done: 0, total: targets.length } : null; renderMarketTab();
+  for (const t of targets) {
+    const k = mktKeyOf(t), prev = mktCacheMap()[k];
+    let items = [];
+    try { items = await fetchRankingItems(t, memo); } catch (_) { items = []; }
+    // 取得できなかった時、前回の内容があればそれを残す（一括更新の途中で1本落ちただけで表を空にしない）
+    if (items.length || !(prev && prev.items && prev.items.length)) mktCacheMap()[k] = { items, at: Date.now() };
+    if (!items.length) failed++;
     // 時価総額ランキング(全市場)の1位を「時価1位まで」列用に記録（今取ったばかりなので最優先）
-    if (kind === 'marketcap' && (market === 'US' || sub === 'all') && items[0]) setTopMarketCap(market, items[0], Date.now());
-  } catch (_) { mktCacheMap()[key] = { items: [], at: Date.now() }; }
+    if (t.kind === 'marketcap' && (t.market === 'US' || t.sub === 'all') && items[0]) setTopMarketCap(t.market, items[0], Date.now());
+    if (mktProg) mktProg.done++;
+    // 取得し終えたのが表示中のランキングなら表ごと描き直す。それ以外はボタンの進捗だけ更新（読んでいる表のスクロールを動かさない）
+    if (k === mktKey()) renderMarketTab();
+    else { const b = document.getElementById('mkt-refresh-btn'); if (b && currentView === 'market') b.textContent = mktBusyLabel(); }
+  }
   store.save(); // ランキングキャッシュ（5年高値・取得日時込）を永続化＝localStorage保存＋Google同期に載る
-  mktBusy = false; renderMarketTab();
+  mktBusy = false; mktProg = null; renderMarketTab();
+  if (force && failed && typeof toast === 'function') toast(`ランキング${targets.length}本中${failed}本は取得できませんでした（前回の内容のまま）`, 5000);
+}
+function mktBusyLabel() { return mktProg ? `取得中… ${mktProg.done}/${mktProg.total}` : '取得中…'; }
+// ランキング1本を取得して items（5年高値・日本語名込み）を返す。memo={hi,nm} は一括更新中の使い回し用。
+async function fetchRankingItems({ market, sub, kind }, memo) {
+  const r = await fetch(`/api/ranking?market=${market}&kind=${kind}&sub=${sub}&count=50`).then(x => x.ok ? x.json() : { items: [] }).catch(() => ({ items: [] }));
+  let items = (r && r.items) || [];
+  if (!items.length) return items;
+  const symOf = (code) => market === 'JP' ? code + '.T' : code;
+  // 5年高値を一括取得（価格APIの highs=1）。日本株はこの呼び出しで現在値・前日比も得る（取得元HTMLに無いため）。
+  // 米株の現在値はランキング値を使用。サブリクエスト上限(~50)回避のため mktFetchHighs が15件ずつ分割取得する。
+  const hi = await mktFetchHighs(items.map(it => symOf(it.code)), memo.hi);
+  items = items.map(it => {
+    const q = hi[symOf(it.code)]; const ok = q && !q.error;
+    // highs=1 の1回取得で返る値を保持（追加取得ゼロで列を増やせる）。5年高値だけでなく
+    // 52週高値・1年/3年安値・前日終値・出来高も列設定で表示できるよう項目に載せる。
+    const next = {
+      ...it,
+      high5y:  ok && q.high5y  != null ? q.high5y  : null,
+      high52w: ok && q.high52w != null ? q.high52w : null,
+      low1y:   ok && q.low1y   != null ? q.low1y   : null,
+      low3y:   ok && q.low3y   != null ? q.low3y   : null,
+      volume:  ok && q.volume  != null ? q.volume  : (it.volume ?? null),
+    };
+    if (market === 'JP') {
+      // 日本株はランキング取得元HTMLに現在値・前日比が無いため highs 取得で補う。
+      const price = ok ? q.price : null;
+      next.price = price;
+      next.prevClose = ok && q.prevClose != null ? q.prevClose : null;
+      next.changePct = (price != null && ok && q.prevClose) ? (price - q.prevClose) / q.prevClose * 100 : null;
+    } else {
+      // 米株はランキングに現在値・前日比があるが、前日終値は無いので highs 取得の prevClose を保持。
+      next.prevClose = ok && q.prevClose != null ? q.prevClose : (it.prevClose ?? null);
+    }
+    return next;
+  });
+  // 米株は名称を日本語化（保有銘柄と同ルール。例 AAPL→アップル）。names=1 は1銘柄1リクエスト。
+  // 50件だとCloudflareのサブリクエスト上限(~50/req)に達するため20件ずつ分割取得する。
+  if (market === 'US') {
+    const nm = memo.nm, need = items.map(it => it.code).filter(c => !(c in nm));
+    for (let i = 0; i < need.length; i += 20) {
+      const batch = need.slice(i, i + 20);
+      const part = await fetch(`/api/info?names=1&symbols=${encodeURIComponent(batch.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
+      Object.assign(nm, part);
+    }
+    items = items.map(it => { const n = nm[it.code]; return (n && n.name) ? { ...it, name: n.name } : it; });
+  }
+  return items;
 }
 // 5年高値を15件ずつ分割取得（Cloudflareの1リクエストあたりサブリクエスト上限~50を回避）。{sym:{high5y,price,prevClose,...}} を返す
-async function mktFetchHighs(syms) {
+// memo は一括更新中の取得済み分（sym→結果）。取得できている銘柄は再取得せず使い回す。
+async function mktFetchHighs(syms, memo = {}) {
+  const good = q => q && !q.error && q.price != null;
   const out = {};
+  for (const s of syms) if (good(memo[s])) out[s] = memo[s];
+  syms = syms.filter(s => !out[s]);
   for (let i = 0; i < syms.length; i += 15) {
     const batch = syms.slice(i, i + 15);
     const pr = await fetch(`/api/price?highs=1&symbols=${encodeURIComponent(batch.join(','))}`).then(x => x.ok ? x.json() : {}).catch(() => ({}));
@@ -6295,6 +6329,7 @@ async function mktFetchHighs(syms) {
       for (const [k, v] of Object.entries(pr)) if (v && !v.error && v.price != null) out[k] = v;
     }
   }
+  for (const s of syms) if (good(out[s])) memo[s] = out[s];
   return out;
 }
 
@@ -6502,7 +6537,7 @@ function renderMarketTab() {
         <div style="display:flex;align-items:center;gap:10px">
           <span class="muted" style="font-size:11px">${cache && cache.at ? '取得：' + mktFetchedAt(cache.at) : ''}</span>
           <button class="btn btn-sm col-picker-btn" onclick="openColPicker('MKTRANK')" title="列の表示・並び替え・幅の設定">${svgIcon('columns', '')} 列</button>
-          <button class="btn btn-sm btn-primary" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''}>${mktBusy ? '取得中…' : '更新'}</button></div></div>
+          <button class="btn btn-sm btn-primary" id="mkt-refresh-btn" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''} title="${market === 'US' ? '米国株' : '日本株'}の全ランキング（${market === 'US' ? '' : '全市場区分×'}売買代金・時価総額・値上がり・値下がり）を取り直します">${mktBusy ? mktBusyLabel() : '更新'}</button></div></div>
       <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${mseg}${subseg}</div>
       <div class="toolbar" style="border:none;padding:8px 16px 0;gap:8px;flex-wrap:wrap"><span class="muted">ランキング</span>${kseg}
         ${market === 'JP' ? '<span class="muted" style="font-size:11px">※日本株の現在値・前日比は価格APIから取得</span>' : ''}</div>
