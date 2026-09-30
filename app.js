@@ -10,8 +10,9 @@
  *  - 銘柄分析結果（評価・★・推奨カテゴリ等）を銘柄に紐づけ。Excel貼付けで一括取込
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
-// マスタ（設定）画面の最上部に表示。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20260930-1731';
+// 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
+const APP_VERSION = 'v20260930-1735';
+{ const el = document.getElementById('app-version'); if (el) el.textContent = APP_VERSION; }
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
 // 端末(PC/スマホ/ブラウザ)のタイムゾーン設定に表示を依存させない。getHours()/getFullYear() は端末TZ依存、
@@ -10996,7 +10997,7 @@ function openNotifyMaster() {
 function renderMaster() {
   app.innerHTML = `
     <div class="section">
-      <div class="section-head"><h2>マスタ</h2><span class="muted" style="margin-left:auto;font-size:12px" title="アプリのバージョン（更新日時 JST）">${esc(APP_VERSION)}</span></div>
+      <div class="section-head"><h2>マスタ</h2></div>
       <div class="section-body" style="padding:16px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <span class="muted">マスタを選択</span>

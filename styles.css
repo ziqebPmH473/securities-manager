@@ -932,8 +932,10 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 /* レスポンシブ */
 @media (max-width: 1080px) {
   :root { --sidebar-w: 72px; }
-  .brand-name, .brand-sub, .nav-label, .nav-item span.lbl, .nav-badge, .sidebar-foot { display: none; }
-  .brand { justify-content: center; padding: 18px 0; }
+  .brand-name, .nav-label, .nav-item span.lbl, .nav-badge, .sidebar-foot { display: none; }
+  .brand { flex-direction: column; justify-content: center; gap: 5px; padding: 18px 0 10px; }
+  /* バージョンは幅の狭いサイドバー（スマホ等）でも見えるよう、ロゴの下に小さく2行で出す */
+  .brand-sub { width: 64px; font-size: 9px; letter-spacing: 0; line-height: 1.25; text-align: center; overflow-wrap: anywhere; margin-top: 0; }
   .nav-item { justify-content: center; padding: 11px 0; }
   .nav-item.active::before { left: 0; }
 }
