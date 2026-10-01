@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261001-0043';
+const APP_VERSION = 'v20261001-2344';
 // 注意銘柄の区分（2026-09-30）: 通常=false / 注意=true（従来のまま） / パス='pass'（買い増しをパス） / 再調査='recheck'（到達時に再調査）。
 // 表示と絞り込みだけに使う印。買い増しサインの判定・通知は変えない。
 const WATCH_LABEL = { watch: '注意', pass: 'パス', recheck: '再調査' };
@@ -8669,6 +8669,12 @@ document.addEventListener('mouseup', () => {
 });
 function ecalAllDays() { ecalSetDay(''); ecalPaint(); }
 // 期間の入力欄（スマホでも期間を選べるように）。表示中の2か月の外なら、始まりの月を表示する
+// 期間入力はキー入力の途中でも日付が成立するたびに change が飛ぶ（月に「1」を打った瞬間に1月が成立する）。
+// その都度反映すると表示月が飛んで「11」と打てないので、入力が止まってから（0.9秒）・Enter・欄を離れた時に反映する。
+let _ecalRangeTimer = null;
+function ecalRangeChanged() { clearTimeout(_ecalRangeTimer); _ecalRangeTimer = setTimeout(ecalRangeFlush, 900); }
+function ecalRangeKey(e) { if (e.key === 'Enter') { _ecalRangeTimer = _ecalRangeTimer || 1; ecalRangeFlush(); } else if (_ecalRangeTimer) ecalRangeChanged(); }
+function ecalRangeFlush() { if (!_ecalRangeTimer) return; clearTimeout(_ecalRangeTimer); _ecalRangeTimer = null; ecalSetRange(); }
 function ecalSetRange() {
   let f = document.getElementById('ecal-from').value, t = document.getElementById('ecal-to').value;
   if (!f && !t) { ecalSetDay(''); ecalPaint(); return; }
@@ -8870,7 +8876,7 @@ function renderEcal() {
       </div>
       <div class="ecal-listhead"><b id="ecal-ltitle"></b><span class="muted" id="ecal-lcount"></span><span id="ecal-alldays"></span>
         <span class="ecal-range" title="期間で絞る。カレンダーをなぞる・Shift+クリックでも選べます（←→で1日、↑↓で1週送り）">期間
-          <input type="date" id="ecal-from" onchange="ecalSetRange()">〜<input type="date" id="ecal-to" onchange="ecalSetRange()"></span>
+          <input type="date" id="ecal-from" onchange="ecalRangeChanged()" onkeydown="ecalRangeKey(event)" onblur="ecalRangeFlush()">〜<input type="date" id="ecal-to" onchange="ecalRangeChanged()" onkeydown="ecalRangeKey(event)" onblur="ecalRangeFlush()"></span>
         <button class="btn btn-sm col-picker-btn" style="margin-left:auto" onclick="openColPicker('${ecalScopeKey()}')" title="列の表示・並び替え・幅の設定">${svgIcon('columns', '')} 列</button></div>
       <div class="table-wrap" id="ecal-list"></div>
     </div>`;
