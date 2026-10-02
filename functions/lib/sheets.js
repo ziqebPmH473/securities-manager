@@ -97,14 +97,20 @@ export async function readAppDataFromDrive(env) {
 
 // 推奨の読取: まず Drive（自動同期の正本）を試し、ダメなら Sheets にフォールバック。
 // 返り値に _source（'drive'|'sheets'）と _driveError（フォールバック時）を付与。
+// 削除済み行（deleted:true のトンボストン。銘柄・保有・取引は物理削除せず削除日時つきで残る）を集計から外す
+function stripDeleted(b) {
+  if (!b || typeof b !== 'object') return b;
+  for (const k of ['securities', 'holdings', 'transactions']) if (Array.isArray(b[k])) b[k] = b[k].filter(r => r && !r.deleted);
+  return b;
+}
 export async function readAppDataBundle(env) {
   try {
-    const b = await readAppDataFromDrive(env);
+    const b = stripDeleted(await readAppDataFromDrive(env));
     if (b && typeof b === 'object') b._source = 'drive';
     return b;
   } catch (driveErr) {
     try {
-      const b = await readAppData(env);
+      const b = stripDeleted(await readAppData(env));
       if (b && typeof b === 'object') { b._source = 'sheets'; b._driveError = String(driveErr && driveErr.message || driveErr); }
       return b;
     } catch (sheetsErr) {

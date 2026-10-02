@@ -26,9 +26,12 @@
   // mktRanking はキャッシュ map（key→{items,at}）。両在時は取得時刻 at の新しい方を採る。
   const byAt = (l, r) => ((r && r.at) || '') > ((l && l.at) || '');
   const SCHEMA = {
-    securities:      ['records', (s) => `${s.market}:${String(s.ticker || '').toUpperCase()}`],
-    holdings:        ['records', (h) => `${h.securityId}|${h.broker}|${h.accountType}`],
-    transactions:    ['records', (t) => `t:${t.id}`],
+    // 本体データ3種は recordsTomb: 削除を「base にはあるのに片側に無い」で推定しない。
+    // 削除は行に deleted:true＋updatedAt を残すトンボストンだけで表し、行ごとに updatedAt の新しい方を採る。
+    // （実害 2026-10-02: 取引登録後に古い状態のデータで同期が1回走っただけで取引・保有が「削除」と判定され消えた）
+    securities:      ['recordsTomb', (s) => `${s.market}:${String(s.ticker || '').toUpperCase()}`],
+    holdings:        ['recordsTomb', (h) => `${h.securityId}|${h.broker}|${h.accountType}`],
+    transactions:    ['recordsTomb', (t) => `t:${t.id}`],
     acqLedger:       ['records', (r) => `al:${r.id}`],  // 取得円台帳（報告書明細）。id キー＋updatedAt で3-way
     rules:           ['records', (r) => `r:${r.id}`],
     categories:      ['records', (c) => `c:${c.category}`],
@@ -140,6 +143,21 @@
         // local が配列として提供されている時だけ「localで削除」とみなす（未提供なら remote を保持）
         if (localGiven && bP && !changedFromBase(r, b)) { /* localで削除＆remote未変更→削除反映 */ } else out.push(r);
       }
+    }
+    return out;
+  }
+
+  // recordsTomb: 片側にしか無い行は常に残す（追加扱い）。両在は updatedAt の新しい方（トンボストンも普通の行として比較。
+  // 削除日時の方が新しければ削除が勝ち、再登録の方が新しければ復活する）。base は使わない＝古いメモリ/古い端末が
+  // 同期しても「削除した」とは解釈されない。
+  function mergeRecordsTomb(local, remote, keyFn) {
+    const idx = (arr) => { const m = new Map(); for (const it of arr || []) if (it) m.set(keyFn(it), it); return m; };
+    const L = idx(local), R = idx(remote);
+    const out = [];
+    for (const k of new Set([...L.keys(), ...R.keys()])) {
+      const l = L.get(k), r = R.get(k);
+      if (l !== undefined && r !== undefined) out.push(tsOf(r) > tsOf(l) ? r : l);
+      else out.push(l !== undefined ? l : r);
     }
     return out;
   }
@@ -283,6 +301,7 @@
     for (const key of keys) {
       const rule = SCHEMA[key] || ['single'];
       if (rule[0] === 'records') out[key] = mergeRecords3way(base[key], local[key], remote[key], rule[1]);
+      else if (rule[0] === 'recordsTomb') out[key] = mergeRecordsTomb(local[key], remote[key], rule[1]);
       else if (rule[0] === 'map') out[key] = mergeMap3way(base[key], local[key], remote[key], rule[1]);
       else if (rule[0] === 'max') out[key] = mergeMax(local[key], remote[key]);
       else if (rule[0] === 'maxNum') out[key] = mergeMaxNum(local[key], remote[key]);
@@ -296,6 +315,6 @@
     return out;
   }
 
-  const api = { mergeBundle, mergeRecords3way, mergeMap3way, mergeSingle3way, mergeSingleTs3way, mergeKeyedTs3way, mergeSingleRefTs3way, mergeColPrefs3way, mergeMax, mergeMaxNum, SCHEMA };
+  const api = { mergeBundle, mergeRecords3way, mergeRecordsTomb, mergeMap3way, mergeSingle3way, mergeSingleTs3way, mergeKeyedTs3way, mergeSingleRefTs3way, mergeColPrefs3way, mergeMax, mergeMaxNum, SCHEMA };
   if (typeof globalThis !== 'undefined') globalThis.SyncMerge = api;
 })();

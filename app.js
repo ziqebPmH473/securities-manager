@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261001-2344';
+const APP_VERSION = 'v20261002-1500';
 // 注意銘柄の区分（2026-09-30）: 通常=false / 注意=true（従来のまま） / パス='pass'（買い増しをパス） / 再調査='recheck'（到達時に再調査）。
 // 表示と絞り込みだけに使う印。買い増しサインの判定・通知は変えない。
 const WATCH_LABEL = { watch: '注意', pass: 'パス', recheck: '再調査' };
@@ -304,6 +304,7 @@ const MASTER_COLS = [
   // 元本売却（情報管理のみ・既定非表示）
   { key: 'principalSold',       label: '元本売却済み',   left: true,  markets: ALLM, noSort: false },
   { key: 'principalSoldAmount', label: '売却済み元本額', left: false, markets: ALLM, noSort: false },
+  { key: 'excluded',    label: '除外',             left: true,  markets: ALLM, noSort: false }, // 取得・表示を止める銘柄（既定非表示列）
   // テクニカル分析（分析タブ専用）。各シグナルの強さ(0-100)。総合は順張り/逆張りで別評価。
   { key: 'anaTotal',    label: '総合買いシグナル', left: false, markets: ['ANALYSIS'], noSort: false },
   { key: 'anaTrend',    label: '順張り総合',       left: false, markets: ['ANALYSIS'], noSort: false },
@@ -482,6 +483,7 @@ const store = {
     this.data.securities ||= [];
     this.data.holdings ||= [];
     this.data.transactions ||= [];
+    this._splitTombstones();          // 削除済み行（deleted:true）はメモリの配列から外して _tomb へ退避（画面は生存行だけ見る）
     this.data.acqLedger ||= [];       // 取得円台帳（米国株・外国株式等取引報告書の明細。取引履歴とは独立）
     // rules は空配列だと既定ルールを失い、後段の rules[0].isDefault で落ちる。
     // 同期マージの削除伝播で空配列が Drive に書かれた場合も含め、空/不正なら既定を再シード（自己修復）
@@ -600,9 +602,8 @@ const store = {
   // localStorage 向けの JSON。IndexedDB が使える環境では techAnalysis を除外する（IDB 側に保存・§16.7.5）。
   // メモリ(this.data)と同期バンドル(dataBundle)には残るので、端末間同期・画面表示は従来どおり。
   _lsJson() {
-    if (!idb.ok) return JSON.stringify(this.data);
-    const rest = Object.assign({}, this.data);
-    delete rest.techAnalysis;
+    const rest = Object.assign({}, this.data, this._withTombstones());  // 削除済み行も保存（同期・復元で削除を伝えるため）
+    if (idb.ok) delete rest.techAnalysis;
     return JSON.stringify(rest);
   },
   save() {
@@ -685,6 +686,66 @@ const store = {
     };
   },
   nextId() { return this.data.seq++; },
+  // ===== 削除のトンボストン（銘柄・保有・取引）=====
+  // レコードは物理削除しない。削除した行に deleted:true＋updatedAt（削除日時）を立てて残し、同期は行ごとに
+  // updatedAt の新しい方を採る（sync-merge の recordsTomb）。「base にはあるのに片側に無い＝削除」の推定をやめる
+  // ため、古い状態の端末・タブが同期しても登録済みの取引・保有が勝手に消えない（2026-10-02 事故の根本対策）。
+  // 画面・集計は従来どおり store.data.* の配列（生存行のみ）を読む。トンボストンは _tomb に退避し、
+  // 保存(localStorage)・同期バンドル・バックアップでは配列に合流させる。再登録で同じキーの生存行ができたら
+  // トンボストンは捨てる（保有＝銘柄×証券会社×口座 は同じ行が再利用される＝行数は増えない）。
+  _tomb: { securities: [], holdings: [], transactions: [] },
+  _tombKey(kind, r) {
+    if (kind === 'securities') return `${r.market}:${String(r.ticker || '').toUpperCase()}`;
+    if (kind === 'holdings') return `${r.securityId}|${r.broker}|${r.accountType}`;
+    return `t:${r.id}`;
+  },
+  _splitTombstones() {
+    this._tomb = { securities: [], holdings: [], transactions: [] };
+    for (const kind of ['securities', 'holdings', 'transactions']) {
+      const arr = Array.isArray(this.data[kind]) ? this.data[kind] : [];
+      const live = arr.filter(r => r && !r.deleted);
+      const liveKeys = new Set(live.map(r => this._tombKey(kind, r)));
+      const tomb = new Map();
+      for (const r of arr) {
+        if (!r || !r.deleted) continue;
+        const k = this._tombKey(kind, r);
+        if (liveKeys.has(k)) continue;                       // 再登録済み＝トンボストン不要
+        const prev = tomb.get(k);
+        if (!prev || (r.updatedAt || '') > (prev.updatedAt || '')) tomb.set(k, r);
+      }
+      this.data[kind] = live;
+      this._tomb[kind] = [...tomb.values()];
+    }
+  },
+  // 生存行＋トンボストンを合流させた配列（保存・同期・バックアップ用）。同キーの生存行があるトンボストンは落とす。
+  _withTombstones() {
+    const out = {};
+    for (const kind of ['securities', 'holdings', 'transactions']) {
+      const live = this.data[kind] || [];
+      const liveKeys = new Set(live.map(r => this._tombKey(kind, r)));
+      out[kind] = live.concat((this._tomb[kind] || []).filter(r => !liveKeys.has(this._tombKey(kind, r))));
+    }
+    return out;
+  },
+  // 行を削除扱いにする（配列から外し、deleted:true＋削除日時でトンボストンへ）。save は呼び出し側で。
+  _tombstone(kind, rows) {
+    if (!rows || !rows.length) return;
+    const ids = new Set(rows);
+    this.data[kind] = this.data[kind].filter(r => !ids.has(r));
+    const now = this._now();
+    for (const r of rows) {
+      r.deleted = true; r.updatedAt = now;
+      const k = this._tombKey(kind, r);
+      this._tomb[kind] = this._tomb[kind].filter(x => this._tombKey(kind, x) !== k);
+      this._tomb[kind].push(r);
+    }
+  },
+  // 条件に合う保有を削除扱いにする（洗い替え・空ロット掃除・投信統合などの一括削除用）。戻り値=削除件数
+  dropHoldings(pred) {
+    const rows = this.data.holdings.filter(pred);
+    this._tombstone('holdings', rows);
+    return rows.length;
+  },
   _now() { return new Date().toISOString(); },
   // レコードの編集時刻を打つ。sync-merge.js の 3-way マージは records を updatedAt の新しい方で採る（両在時）。
   // store.data の records 要素を「書き換えた／新規作成した」ら必ずこれを呼ぶ（呼ばないとマージで別端末の
@@ -710,9 +771,10 @@ const store = {
     return s;
   },
   removeSecurity(id) {
-    this.data.securities = this.data.securities.filter(s => s.id !== id);
-    this.data.holdings = this.data.holdings.filter(h => h.securityId !== id);
-    this.data.transactions = this.data.transactions.filter(t => t.securityId !== id);
+    // 銘柄・保有・取引は物理削除せずトンボストン化（同期で削除が正しく伝わり、古い端末からも復活しない）
+    this._tombstone('securities', this.data.securities.filter(s => s.id === id));
+    this._tombstone('holdings', this.data.holdings.filter(h => h.securityId === id));
+    this._tombstone('transactions', this.data.transactions.filter(t => t.securityId === id));
     this.data.analyses = (this.data.analyses || []).filter(a => a.securityId !== id);
     this.data.priceScenarios = (this.data.priceScenarios || []).filter(a => a.securityId !== id);
     this.data.capCoefHistory = (this.data.capCoefHistory || []).filter(a => a.securityId !== id);
@@ -731,7 +793,7 @@ const store = {
     else { h.id = this.nextId(); this.touch(h); this.data.holdings.push(h); }
     this.save();
   },
-  removeHolding(id) { this.data.holdings = this.data.holdings.filter(h => h.id !== id); this.save(); },
+  removeHolding(id) { this.dropHoldings(h => h.id === id); this.save(); },
   // 直接編集（取引を介さず数量・平均取得単価を上書き）。source: 'import'|'manual'（更新日も記録）
   setHolding(securityId, broker, accountType, quantity, avgCost, source = 'manual') {
     let h = this.data.holdings.find(x => x.securityId === securityId && x.broker === broker && x.accountType === accountType);
@@ -811,9 +873,9 @@ const store = {
   // 数量0・取得単価0・取得円なしの空ロットを除去（売買の打ち消しで残る0株ロットの掃除）。
   // 取込/手入力で作った保有は source で保護し、消さない。
   _pruneEmptyHoldings(securityId) {
-    this.data.holdings = this.data.holdings.filter(h =>
-      h.securityId !== securityId || h.quantity > 1e-9 || h.avgCost > 0
-      || (h.acqJpy != null && Math.abs(h.acqJpy) > 1e-6) || h.source === 'import' || h.source === 'manual');
+    this.dropHoldings(h =>
+      !(h.securityId !== securityId || h.quantity > 1e-9 || h.avgCost > 0
+      || (h.acqJpy != null && Math.abs(h.acqJpy) > 1e-6) || h.source === 'import' || h.source === 'manual'));
   },
   // applyTransaction の逆操作（取引の削除・編集時に保有への影響を取り消す）。
   // 買い=数量と取得原価を差し引き／売り=実際に減った数量(_dq)を戻す。ledgerOnly は買い回数のみ戻す。
@@ -848,7 +910,7 @@ const store = {
   removeTransaction(id) {
     const t = this.data.transactions.find(x => x.id === id); if (!t) return;
     this.reverseTransaction(t);
-    this.data.transactions = this.data.transactions.filter(x => x.id !== id);
+    this._tombstone('transactions', [t]);   // 物理削除せず削除日時つきで残す（同期で削除が伝わる・復活しない）
     this.save();
   },
   // 取引の編集（旧効果を取り消し→値を更新→新効果を適用）。patch は type/price/quantity/broker/accountType/tradedAt/settleJpy/ledgerOnly/skipPrevBuy
@@ -2004,7 +2066,7 @@ const calc = {
     return this._evaluate(sec);
   },
   _evaluate(sec) {
-    if (sec.market === 'FUND' || sec.enabled === false) return null;
+    if (sec.market === 'FUND' || sec.enabled === false || sec.excluded) return null; // 除外銘柄は判定しない
     const price = this.price(sec);
     if (price == null) return null;
     const rule = store.rule(sec.ruleId);
@@ -2344,7 +2406,7 @@ const api = {
   async refreshAll(opts = {}) {
     // 投信(FUND)は自動価格が無く（評価額は手入力）、Yahooに無い協会コードへの無駄な問い合わせで
     // 更新が遅くなるため価格取得対象から除外する
-    const allSecs = store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
+    const allSecs = fetchableSecs();
     const lightSymbols = ['USDJPY=X', ...INDICES.map(ix => ix.sym)];
     if (allSecs.length === 0 && lightSymbols.length === 0) return;
     // 取得対象を選別: 「開場中 or 価格未取得 or 当日終値を未取得」のみ取得（閉場中で終値済みはスキップ）。
@@ -2498,7 +2560,7 @@ const api = {
   //   それを超えたら恒久失敗とみなし highsTriedAt を見て1日1回だけ試す（翌日再試行＝ティッカー復活で拾える）。
   async refreshHighsBg(allSecs) {
     const HIGHS_FAIL_BACKOFF = 3;
-    const staleHigh = (allSecs || store.data.securities.filter(s => s.ticker && s.market !== 'FUND')).filter(s => {
+    const staleHigh = (allSecs || fetchableSecs()).filter(s => {
       const p = store.data.prices[priceKey(s)] || {};
       if (p.highsAt === today()) return false;                    // 今日取得成功済みは対象外
       if ((p.highsFail || 0) < HIGHS_FAIL_BACKOFF) return true;    // 失敗が浅い/新規＝毎回リトライ
@@ -2718,7 +2780,7 @@ const api = {
   // 取りこぼされる。→ 小分けバッチ(8銘柄)で順次取得する。
   async refreshMeta(secs) {
     // 引数なし（日次/全体更新）では投信を除外。投信名はコードマスタの「名称取得」で個別に取得する
-    secs = secs || store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
+    secs = secs || fetchableSecs();
     if (secs.length === 0) return;
     const symbols = [...new Set(secs.map(yahooSymbol))];
     const CHUNK = 8;
@@ -2811,7 +2873,7 @@ const api = {
 
   // 株式分割・併合を検知。過去（今日より前）の新規分割は履歴に記録のみ、当日以降は承認待ちで返す
   async checkSplits() {
-    const secs = store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
+    const secs = fetchableSecs();
     if (!secs.length) return [];
     const symbols = [...new Set(secs.map(yahooSymbol))];
     // splits.js は 1シンボル=1 Yahoo fetch のため、全銘柄を1リクエストにまとめると
@@ -3049,13 +3111,13 @@ function touchColPrefs(market) {
   saveColPrefs();
 }
 // バックアップ/同期用の“全状態”バンドル。store.data に加え列設定(colPrefs)も同梱（_colPrefs）
-function dataBundle() { return Object.assign({}, store.data, { _colPrefs: colPrefs, _filterPresets: fltPresets }); }
+function dataBundle() { return Object.assign({}, store.data, store._withTombstones(), { _colPrefs: colPrefs, _filterPresets: fltPresets }); }
 // バンドルを復元（store.data ＋ 列設定 ＋ フィルターパターン）。各 _xxx が無い旧バックアップとも互換
 function restoreBundle(obj) {
   if (!obj || typeof obj !== 'object') throw new Error('データ形式が不正です');
   const cp = obj._colPrefs; delete obj._colPrefs;
   const fp = obj._filterPresets; delete obj._filterPresets;
-  store.data = obj; store.save();
+  store.data = obj; store._splitTombstones(); store.save();   // 復元データ内の削除済み行を退避してから保存
   if (cp && typeof cp === 'object') { colPrefs = cp; saveColPrefs(); }
   if (Array.isArray(fp)) { fltPresets = fp; saveFilterPresets(); }
   store.load(); loadColPrefs(); loadFilterPresets();
@@ -3130,6 +3192,7 @@ function fltSelectSpec(key) {
     case 'buyGrade': return { opts: [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']], val: s => s.buyGrade || '' };
     case 'reachKind': return { opts: [['新', '新規到達'], ['続', '継続中'], ['－', '未到達']], val: s => calc.reachKind(s) || '－' };
     case 'principalSold': return { opts: [['1', '売却済み'], ['0', '未売却']], val: s => s.principalSold ? '1' : '0' };
+    case 'excluded': return { opts: [['1', '除外'], ['0', '通常']], val: s => s.excluded ? '1' : '0' };
     case 'held': return { opts: [['1', '保有'], ['0', '未保有']], val: s => (calc.totalHolding(s.id).qty > 0 ? '1' : '0') };
     case 'watch': return { opts: [['1', '注意'], ['pass', 'パス'], ['recheck', '再調査'], ['0', '通常']], val: s => { const k = watchKind(s); return k === 'watch' ? '1' : (k || '0'); } };
     case 'anaMACD': return { opts: [['golden', 'GC'], ['dead', 'DC'], ['none', '—']], val: s => { const r = techOf(s); return r ? (r.macdCross || 'none') : ''; } };
@@ -4004,6 +4067,7 @@ const COL_RENDERERS = {
   // 元本売却（情報管理のみ）。金額は銘柄の原通貨
   principalSold:       (s,c) => `<td class="l">${s.principalSold ? '<span class="tag">売却済</span>' : muted}</td>`,
   principalSoldAmount: (s,c) => `<td>${s.principalSoldAmount != null ? fmtAmt(s.principalSoldAmount, c.market) : muted}</td>`,
+  excluded:            (s,c) => `<td class="l">${s.excluded ? '<span class="tag">除外</span>' : muted}</td>`,
   // テクニカル分析（分析タブ）。スコアは0-100で色分け。値は techAnalysis から取得。
   anaTotal:    (s,c) => anaScoreCell(techComposite(s)),
   anaTrend:    (s,c) => anaScoreCell(techSideScore(s, 'trend')),
@@ -4816,6 +4880,7 @@ function sortValue(sec, key) {
     case 'priority': return sec.priority ?? Infinity;
     case 'principalSold': return sec.principalSold ? 0 : 1; // 売却済みを先頭に
     case 'principalSoldAmount': return sec.principalSoldAmount ?? -Infinity;
+    case 'excluded': return sec.excluded ? 0 : 1; // 除外を先頭に
     default: return '';
   }
 }
@@ -4830,6 +4895,16 @@ function sortSecurities(secs, market) {
   });
 }
 
+// 除外フラグ（sec.excluded）: 取得・表示を止めるが取引履歴は残す銘柄。「除外も表示」は端末をまたいで同じ状態にするため settings に持つ（ルール7）
+function showExcluded() { return !!((store.data && store.data.settings) || {}).showExcluded; }
+function toggleShowExcluded() {
+  store.data.settings ||= {};
+  store.data.settings.showExcluded = !showExcluded();
+  store.data.settings._updatedAt = store._now();
+  store.save(); render();
+}
+// 自動取得（株価・銘柄情報・高値・決算・分割）の対象銘柄。投信と除外銘柄は取りに行かない
+function fetchableSecs() { return store.data.securities.filter(s => s.ticker && s.market !== 'FUND' && !s.excluded); }
 function renderMarket(market) {
   // market は 'US' | 'JP' | 'ALL'。ALL は両市場を1表に表示（列・ソート・フィルタ状態は US 設定を流用）
   const isAll = market === 'ALL';
@@ -4837,6 +4912,7 @@ function renderMarket(market) {
   const st = listState[colMkt];
   const isStock = market !== 'FUND';
   let secs = store.data.securities.filter(s => isAll ? (s.market === 'US' || s.market === 'JP') : s.market === market);
+  if (!showExcluded()) secs = secs.filter(s => !s.excluded);   // 除外銘柄は既定で出さない（「除外も表示」で出せる）
   // 保有有無にかかわらず全銘柄を表示する（2026-06-30 すみぽん要望）。絞り込みは検索＋列フィルタで行う。
   // （旧仕様: 「保有あり(数量>0) または 注意銘柄」のみ表示。列フィルタ追加により撤廃）
   if (holdingsSearch.trim()) secs = secs.filter(s => secMatchesQuery(s, holdingsSearch));
@@ -4893,6 +4969,7 @@ function renderMarket(market) {
         ${ratioToolbarHtml()}
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${colMkt}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
+        <button class="btn btn-sm ${showExcluded() ? 'btn-primary' : ''}" onclick="toggleShowExcluded()" title="除外フラグの銘柄（取得・表示を止めた銘柄）も一覧に出す。保有銘柄と分析の一覧に効く">除外も表示${showExcluded() ? '：ON' : ''}</button>
         <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
       </div>
       <div id="flt-host-holdings">${fltState.holdings.open ? filterPanelHtml('holdings') : ''}</div>
@@ -7129,7 +7206,7 @@ function newsMatchMajorsRaw(it) {
   if (_majorsMemo.has(key)) return _majorsMemo.get(key);
   const norm = searchNorm(text);
   const textK = searchNormK(text); // カタカナ保持版（カタカナ社名の語境界判定用）
-  const held = new Set((store.data.securities || []).filter(s => s.enabled !== false).map(s => s.market + ':' + String(s.ticker || '').toUpperCase()));
+  const held = new Set((store.data.securities || []).filter(s => s.enabled !== false && !s.excluded).map(s => s.market + ':' + String(s.ticker || '').toUpperCase()));
   const codeSet = new Set((text.match(/(?<![0-9])[0-9]{4}(?![0-9円万億兆株])/g) || []));
   const out = [], seen = new Set();
   for (const e of list) {
@@ -7312,7 +7389,7 @@ function newsMatchSecs(it) {
   // 開示アイテムは it.code（証券コード）で確実に紐付け。通常記事は見出し＋本文マッチ
   const code = (it && typeof it === 'object' && it.code) ? String(it.code).toUpperCase() : null;
   return store.data.securities.filter(s => {
-    if (s.enabled === false || (s.market !== 'JP' && s.market !== 'US')) return false;
+    if (s.enabled === false || s.excluded || (s.market !== 'JP' && s.market !== 'US')) return false;
     if (code && String(s.ticker || '').toUpperCase() === code) return true;
     return code ? false : newsSecHit(it, s); // 開示アイテムはコード一致のみ（本文マッチは使わない）
   });
@@ -9063,7 +9140,7 @@ async function _newsVideos() {
 // 登録JP銘柄の適時開示（TDnet）をまとめて取得し、ニュース一覧アイテム化して返す。
 // 保有銘柄ごとに直近開示を引くので「直近全社120件に入っていない銘柄」も漏れなく出る。
 async function _newsDiscForHoldings() {
-  const secs = store.data.securities.filter(s => s.enabled !== false);
+  const secs = store.data.securities.filter(s => s.enabled !== false && !s.excluded);
   const jpCodes = [...new Set(secs.filter(s => s.market === 'JP').map(s => String(s.ticker || '').trim()).filter(c => /^[0-9A-Za-z]{4}$/.test(c)))].slice(0, 40);
   const usTickers = [...new Set(secs.filter(s => s.market === 'US').map(s => String(s.ticker || '').trim().toUpperCase()).filter(t => /^[A-Z.\-]{1,8}$/.test(t)))].slice(0, 12);
   const jobs = [];
@@ -9987,6 +10064,7 @@ function setSecMasterSearch(v) {
 const SM_BULK_FIELDS = [
   { key: 'detailType', label: '詳細種別' },
   { key: 'enabled', label: '判定対象' },
+  { key: 'excluded', label: '除外' },
   { key: 'watch', label: '注意銘柄' },
   { key: 'category', label: 'カテゴリ' },
   { key: 'investCategory', label: '投資カテゴリ' },
@@ -10012,6 +10090,7 @@ function bulkValueHtml(field, id) {
   switch (field) {
     case 'detailType': return `<select id="${id}"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
     case 'enabled': return `<select id="${id}"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
+    case 'excluded': return `<select id="${id}"><option value="true">除外する（取得・表示を止める）</option><option value="false">除外を解除</option></select>`;
     case 'watch': return `<select id="${id}"><option value="true">注意</option><option value="pass">パス</option><option value="recheck">再調査</option><option value="false">通常（外す）</option></select>`;
     case 'addonFromHigh': return `<select id="${id}"><option value="true">初回基準にする</option><option value="false">通常（前回購入単価基準）に戻す</option></select>`;
     case 'category': return `<select id="${id}">${catOpts}</select>`;
@@ -10027,7 +10106,7 @@ function bulkValueHtml(field, id) {
 }
 function bulkConvert(field, raw) {
   if (field === 'watch') return (raw === 'pass' || raw === 'recheck') ? raw : raw === 'true';
-  if (field === 'enabled' || field === 'addonFromHigh') return raw === 'true';
+  if (field === 'enabled' || field === 'excluded' || field === 'addonFromHigh') return raw === 'true';
   if (field === 'detailType') return raw === '__null' ? null : raw;
   if (field === 'ruleId') return parseInt(raw, 10);
   if (['rating', 'overallGrade', 'buyGrade'].includes(field)) return raw || null;
@@ -10116,7 +10195,7 @@ function renderSecMaster() {
     return `<tr>
       <td class="l"><input type="checkbox" class="sm-check" value="${s.id}"></td>
       <td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>
-      <td class="l"><strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}</td>
+      <td class="l"><strong class="lnk-ext nm-strong" onclick="openSecurityDetail(${s.id})">${esc(calc.displayName(s))}</strong>${ov('name')}${s.enabled === false ? ' <span class="tag" title="無効">無効</span>' : ''}${s.excluded ? ' <span class="tag" title="除外（取得・表示停止）">除外</span>' : ''}</td>
       <td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>
       ${inlineEditOn ? ieCellHtml(s, 'detailType', null) : `<td class="l">${dtTag}</td>`}
       <td class="l">${calc.field(s, 'sector') ? esc(jpInd(calc.field(s, 'sector'))) + ov('sector') : muted}</td>
@@ -10261,7 +10340,7 @@ function mergeFundInto(from, to) {
       h.securityId = to.id; h.updatedAt = store._now();
     }
   }
-  store.data.holdings = store.data.holdings.filter(h => !h._merged);
+  store.dropHoldings(h => !!h._merged);
   // 消す側の取込名（証券会社ごとの別表記）をエイリアスとして保持→次回取込でも同一ファンドに紐づく
   const toKey = normFundName(to.name);
   const names = [...(to.aliasNames || []), ...(from.aliasNames || []), from.name]
@@ -12286,6 +12365,8 @@ function openSecurityForm(id, presetMarket, presetTicker) {
         <div class="field"><label>適用ルール</label><select name="ruleId">${ruleOpts}</select></div>
         <div class="field"><label>判定対象</label>
           <select name="enabled"><option value="1" ${!sec || sec.enabled !== false ? 'selected' : ''}>有効</option><option value="0" ${sec && sec.enabled === false ? 'selected' : ''}>無効</option></select></div>
+        <div class="field"><label>除外</label>
+          <select name="excluded" title="除外＝株価・銘柄情報・高値・決算・ニュースを取得せず、保有銘柄/分析の一覧にも出さない（取引履歴・取引サマリー・分析履歴は残る）。売却済みで見なくてよい銘柄用。「無効」は判定だけ止めて見続ける銘柄用"><option value="0" ${!sec || !sec.excluded ? 'selected' : ''}>しない</option><option value="1" ${sec && sec.excluded ? 'selected' : ''}>除外する</option></select></div>
       </div>
       <div class="row">
         <div class="field"><label>注意銘柄(ウォッチ)</label>
@@ -12450,7 +12531,7 @@ function openSecurityForm(id, presetMarket, presetTicker) {
       market, ticker: f.ticker.value.trim().toUpperCase(), // コードは常に大文字で保存（表記ゆれ・重複判定ミス防止）
       category: f.category.value || null, ruleId: parseInt(f.ruleId.value, 10),
       investCategory: (f.investCategory && f.investCategory.value) || null,
-      enabled: f.enabled.value === '1', watch: (f.watch.value === 'pass' || f.watch.value === 'recheck') ? f.watch.value : f.watch.value === '1',
+      enabled: f.enabled.value === '1', excluded: f.excluded.value === '1', watch: (f.watch.value === 'pass' || f.watch.value === 'recheck') ? f.watch.value : f.watch.value === '1',
       currency: market === 'US' ? 'USD' : 'JPY',
       assetClass: market === 'FUND' ? 'fund' : 'stock',
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
@@ -12872,7 +12953,7 @@ function openSecurityDetail(secId) {
      ['目標利回り', sec.targetYield, num(sec.targetYield) + '%', calc.targetYieldPrice(sec)]]
       .filter(([, t]) => t > 0)
       .map(([lbl, , txt, p]) => kv(lbl, `${txt} / ${p != null ? m(p) : '—'}`)).join(''),
-  ].join('') : '<div class="muted">判定対象外（無効/価格未取得/投信）</div>');
+  ].join('') : '<div class="muted">判定対象外（無効/除外/価格未取得/投信）</div>');
   // 保有（口座別）。表示は保有株数がある口座だけ（0株のロットは出さない）
   const hs = store.data.holdings.filter(h => h.securityId === sec.id && h.quantity > 1e-9);
   const holdRows = hs.length ? hs.map(h => `<div class="ai-row"><span class="muted">${esc(h.broker || '—')} / ${esc(h.accountType || '—')}</span><span>${fmtQty(h.quantity, sec.market)} @ ${m(h.avgCost)}${h.origBuyAmount != null ? ` <span class="muted" title="売却前購入額（本来）">(本来 ${m(h.origBuyAmount)})</span>` : ''}</span></div>`).join('') : '<div class="muted">保有なし</div>';
@@ -13133,7 +13214,7 @@ function analysisTargets() {
     secs = anaTop50Secs.slice();
     if (anaMarket !== 'all') secs = secs.filter(s => s.market === anaMarket);
   } else {
-    secs = store.data.securities.filter(s => s.market === 'US' || s.market === 'JP');
+    secs = store.data.securities.filter(s => (s.market === 'US' || s.market === 'JP') && (showExcluded() || !s.excluded));
     if (anaMarket !== 'all') secs = secs.filter(s => s.market === anaMarket);
     if (anaHoldingOnly) {
       const held = new Set(store.data.holdings.filter(h => (h.quantity || 0) > 0).map(h => h.securityId));
@@ -13766,7 +13847,7 @@ function karteCardHtml(sec) {
     row('現在値', m(price)),
     row('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%${ev.reached ? ' 到達' : ''}</span>` : '—'),
     rule ? row('適用ルール', `${esc(rule.name)} <span class="muted">(−${rule.initialDropPct}/−${rule.addonDropPct}%・${esc(BASE_HIGH_LABEL[bhMode] || bhMode)})</span>`) : '',
-  ].join('') : '<div class="muted" style="font-size:12.5px">判定対象外（無効/価格未取得）</div>')
+  ].join('') : '<div class="muted" style="font-size:12.5px">判定対象外（無効/除外/価格未取得）</div>')
   // 目標指標の行は判定の成否と切り離す（判定対象外でもEPS等があれば逆算できるため）
   + targetRows;
   // 保有ボックス
@@ -13863,7 +13944,7 @@ function karteCardHtml(sec) {
     <div class="kt-head">
       <div class="kt-id">
         <div class="kt-name">${esc(calc.displayName(sec))}</div>
-        <div class="kt-sub"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${watchTag(sec)}${buyStatus}</div>
+        <div class="kt-sub"><span class="tag ${sec.market.toLowerCase()}">${MARKET_LABEL[sec.market]}</span><span class="muted">${esc(sec.ticker)}</span>${gradeTag(sec.rating)}${watchTag(sec)}${sec.excluded ? '<span class="tag" title="取得・表示を止めている銘柄">除外</span>' : ''}${buyStatus}</div>
       </div>
       <div class="kt-price-block">
         <div class="kt-price kt-kabu" onclick="window.open('${kabutanUrl(sec)}','_blank','noopener')" title="株探のチャートを開く">${m(price)}</div>
@@ -14935,7 +15016,7 @@ const GENERIC_MAP = {
   '買増を初回基準': 'addonFromHigh', '買い増し初回基準': 'addonFromHigh',
   'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category', '詳細種別': 'detailType',
   '投資カテゴリ': 'investCategory', '銘柄ラベル': 'labels', 'ラベル': 'labels',
-  '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', 'ウォッチ': 'watch',
+  '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', '除外': 'excluded', 'ウォッチ': 'watch',
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount',
   '売却前購入額': 'origBuyAmount', 'メモ': 'memo',
   '目標PER': 'targetPer', '目標PBR': 'targetPbr', '目標配当利回り': 'targetYield', '目標利回り': 'targetYield',
@@ -14945,7 +15026,7 @@ const GENERIC_MAP = {
   '中期弱気': 'mtBear', '中期ベース': 'mtBase', '中期強気': 'mtBull',
 };
 // 標準レイアウトの列。exportGeneric はこの列名→GENERIC_MAP でフィールドキーを引き、genericFieldValue で値を出す（位置合わせ不要）。列を足すなら GENERIC_MAP にも登録。
-const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', '買増を初回基準', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル', '目標PER', '目標PBR', '目標配当利回り', 'シナリオ分析日', '分析時株価', '短期弱気', '短期ベース', '短期強気', '中期弱気', '中期ベース', '中期強気'];
+const GENERIC_HEADER =['ティッカー', '市場', '証券会社', '口座', '数量', '取得単価', '前回購入価格', '前回購入日', '基準高値モード', '手動基準高値', '買増固定値', '買増を初回基準', 'ルール', 'カテゴリ', '1回購入額', '購入回数', '判定対象', '除外', 'ウォッチ', '詳細種別', '元本売却済み', '売却済み元本額', '売却前購入額', 'メモ', '投資カテゴリ', '銘柄ラベル', '目標PER', '目標PBR', '目標配当利回り', 'シナリオ分析日', '分析時株価', '短期弱気', '短期ベース', '短期強気', '中期弱気', '中期ベース', '中期強気'];
 function normBaseHighMode(s) {
   s = String(s || '').trim();
   if (!s) return null;
@@ -14984,6 +15065,7 @@ function parseGeneric(text) {
     if ('buyAmount' in rec) sec.buyAmount = numClean(rec.buyAmount);
     if ('buyCount' in rec) { const n = parseInt(rec.buyCount, 10); sec.buyCount = isNaN(n) ? null : n; }
     if ('enabled' in rec) sec.enabled = /有効|^1$|true|yes/i.test(rec.enabled);
+    if ('excluded' in rec) sec.excluded = /除外|^1$|true|yes|○/i.test(rec.excluded);
     if ('watch' in rec) sec.watch = watchParse(rec.watch);
     if ('principalSold' in rec) sec.principalSold = /売却|済|^1$|true|yes|○/i.test(rec.principalSold);
     if ('principalSoldAmount' in rec) sec.principalSoldAmount = numClean(rec.principalSoldAmount);
@@ -15140,13 +15222,10 @@ async function runBrokerImport() {
   const extras = mode === 'replace' ? snapshotHoldingExtras(store.data.holdings) : null;
   let removed = 0;
   if (mode === 'replace') {
-    const keep = [];
-    for (const h of store.data.holdings) {
+    removed += store.dropHoldings(h => {
       const s = store.data.securities.find(x => x.id === h.securityId);
-      if (s && h.broker === scope.broker && scope.markets.includes(s.market)) { removed++; continue; }
-      keep.push(h);
-    }
-    store.data.holdings = keep;
+      return !!(s && h.broker === scope.broker && scope.markets.includes(s.market));
+    });
   }
 
   let updated = 0, created = 0, skipped = 0, badFmt = 0;
@@ -15198,7 +15277,7 @@ async function runBrokerImport() {
   const pending = {}; // normName -> { name, items:[{broker,account,qty,acqJpy,evalJpy}] }
   if (fundItems.length) {
     if (mode === 'replace') {
-      store.data.holdings = store.data.holdings.filter(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !(s && s.market === 'FUND' && h.broker === scope.broker); });
+      store.dropHoldings(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !!(s && s.market === 'FUND' && h.broker === scope.broker); });
     }
     for (const it of fundItems) {
       const key = normFundName(it.name);
@@ -15392,6 +15471,7 @@ function genericFieldValue(key, s, h) {
     case 'buyAmount': return s.buyAmount ?? '';
     case 'buyCount': return s.buyCount ?? '';
     case 'enabled': return s.enabled === false ? '無効' : '有効';
+    case 'excluded': return s.excluded ? '除外' : '';
     case 'watch': return watchLabel(s);
     case 'detailType': return detailTypeOf(s);
     case 'principalSold': return s.principalSold ? '売却済' : '';
@@ -15473,6 +15553,7 @@ const GI_FIELDS = [
   { key: 'buyAmount',     label: '買い増し予定額' },
   { key: 'buyCount',      label: '購入回数' },
   { key: 'enabled',       label: '判定対象' },
+  { key: 'excluded',      label: '除外' },
   { key: 'watch',         label: 'ウォッチ' },
   { key: 'nameOverride',  label: '銘柄名(上書き)' },
   { key: 'sectorOverride', label: 'セクター(上書き)' },
@@ -15502,12 +15583,12 @@ const GI_FIELDS = [
   { key: 'origBuyAmount', label: '売却前購入額' },
   { key: 'memo',          label: 'メモ' },
 ];
-const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'category', 'investCategory', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo', 'targetPer', 'targetPbr', 'targetYield', 'scenarioDate', 'scenarioPrice', 'stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull']);
+const GI_SEC_FIELDS = new Set(['prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'category', 'investCategory', 'detailType', 'buyAmount', 'buyCount', 'enabled', 'excluded', 'watch', 'nameOverride', 'sectorOverride', 'industryOverride', 'overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk', 'principalSold', 'principalSoldAmount', 'memo', 'targetPer', 'targetPbr', 'targetYield', 'scenarioDate', 'scenarioPrice', 'stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull']);
 // 選択肢のグループ分け（必須/保有/属性/上書き/分析）。自動取得・派生（評価額/損益/価格/PER等）は候補に出さない。
 const GI_GROUPS = [
   { g: '★必須', keys: ['ticker', 'market'] },
   { g: '保有・金額', keys: ['broker', 'account', 'quantity', 'avgCost', 'acqValue', 'acqJpy', 'origBuyAmount'] },
-  { g: '判定・属性', keys: ['category', 'investCategory', 'labels', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'targetPer', 'targetPbr', 'targetYield', 'buyAmount', 'buyCount', 'enabled', 'watch', 'principalSold', 'principalSoldAmount'] },
+  { g: '判定・属性', keys: ['category', 'investCategory', 'labels', 'ruleName', 'detailType', 'prevBuyPrice', 'prevBuyDate', 'fixedBuyPrice', 'addonFromHigh', 'baseHighMode', 'baseHighManual', 'targetPer', 'targetPbr', 'targetYield', 'buyAmount', 'buyCount', 'enabled', 'excluded', 'watch', 'principalSold', 'principalSoldAmount'] },
   { g: '表示の上書き', keys: ['nameOverride', 'sectorOverride', 'industryOverride', 'memo'] },
   { g: '分析', keys: ['overallGrade', 'rating', 'buyGrade', 'priority', 'analysisDate', 'analysisNote', 'starValuation', 'starStrength', 'starRisk'] },
   { g: '株価シナリオ', keys: ['scenarioDate', 'scenarioPrice', 'stBear', 'stBase', 'stBull', 'mtBear', 'mtBase', 'mtBull'] },
@@ -15655,6 +15736,7 @@ function giParseValue(field, raw) {
     // ★評価は分析取込と同じ parseStars で「5」「★5」「★★★★★」いずれも数値化
     case 'starValuation': case 'starStrength': case 'starRisk': return parseStars(v);
     case 'enabled': return /有効|^1$|true|yes|○|有/i.test(v);
+    case 'excluded': return /除外|^1$|true|yes|○|有/i.test(v);
     case 'watch': return watchParse(v);
     case 'addonFromHigh': return /初回|^1$|true|yes|○|有/i.test(v);
     case 'baseHighMode': return normBaseHighMode(v);
@@ -15732,13 +15814,10 @@ async function runGenericImport() {
   if (mode === 'replace') {
     if (!fixed.broker || !fixed.market) { toast('洗い替えは「固定値」で証券会社と市場の指定が必要です'); return; }
     extras = snapshotHoldingExtras(store.data.holdings);
-    const keep = [];
-    for (const h of store.data.holdings) {
+    removed += store.dropHoldings(h => {
       const s = store.data.securities.find(x => x.id === h.securityId);
-      if (s && h.broker === fixed.broker && s.market === fixed.market) { removed++; continue; }
-      keep.push(h);
-    }
-    store.data.holdings = keep;
+      return !!(s && h.broker === fixed.broker && s.market === fixed.market);
+    });
   }
   let updated = 0, created = 0, skipped = 0, holdingSet = 0, badFmt = 0;
   const touched = [];
@@ -15880,7 +15959,7 @@ function giDeleteFormat() {
 
 // 銘柄情報マスタ（名前・セクター・ファンダ）を全銘柄ぶん再取得（任意タイミング）
 function refreshAllMeta() {
-  const secs = store.data.securities.filter(s => s.ticker);
+  const secs = store.data.securities.filter(s => s.ticker && !s.excluded);
   if (!secs.length) { toast('銘柄がありません'); return; }
   withBusy('銘柄情報を更新中…（名前・セクター・時価総額・売買代金）', async () => {
     await api.refreshMeta(secs); await api.refreshCompany(secs, { force: true }); await api.checkSplits(); render();
@@ -15888,7 +15967,7 @@ function refreshAllMeta() {
 }
 // 分割タブ専用: 名前・株価・ファンダ等は取得せず、株式分割・併合の情報だけを再取得する軽量リフレッシュ
 function refreshSplitsOnly() {
-  const secs = store.data.securities.filter(s => s.ticker && s.market !== 'FUND');
+  const secs = fetchableSecs();
   if (!secs.length) { toast('銘柄がありません'); return; }
   withBusy('分割情報を取得中…', async () => {
     await api.checkSplits(); render();
@@ -16530,7 +16609,7 @@ function runFundImport() {
   // 洗い替えで消える評価額(円)等は退避し、取込後に同一キーへ復元（取込データに評価額があればそちら優先）
   const extras = mode === 'replace' ? snapshotHoldingExtras(store.data.holdings) : null;
   if (mode === 'replace') {
-    store.data.holdings = store.data.holdings.filter(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !(s && s.market === 'FUND' && h.broker === broker); });
+    store.dropHoldings(h => { const s = store.data.securities.find(x => x.id === h.securityId); return !!(s && s.market === 'FUND' && h.broker === broker); });
   }
   let n = 0;
   for (const it of items) {

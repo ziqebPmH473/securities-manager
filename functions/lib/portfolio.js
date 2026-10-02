@@ -75,6 +75,7 @@ export function computeSignals(bundle, opts = {}) {
   const nearPct = opts.nearPct != null ? opts.nearPct : 5;
   const out = [];
   for (const sec of (bundle.securities || [])) {
+    if (sec.excluded || sec.deleted) continue;   // 除外フラグ・削除済み（トンボストン）は通知対象外
     const ev = evalSecurity(bundle, sec);
     if (!ev || ev.remainingDropPct == null) continue;
     const hit = ev.reached || ev.remainingDropPct <= nearPct;
