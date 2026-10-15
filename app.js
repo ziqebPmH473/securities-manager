@@ -11,15 +11,39 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261002-1500';
-// 注意銘柄の区分（2026-09-30）: 通常=false / 注意=true（従来のまま） / パス='pass'（買い増しをパス） / 再調査='recheck'（到達時に再調査）。
-// 表示と絞り込みだけに使う印。買い増しサインの判定・通知は変えない。
-const WATCH_LABEL = { watch: '注意', pass: 'パス', recheck: '再調査' };
-function watchKind(s) { const w = s && s.watch; return (w === 'pass' || w === 'recheck') ? w : (w ? 'watch' : ''); }
-function watchLabel(s) { return WATCH_LABEL[watchKind(s)] || '通常'; }
-function watchTag(s, lead) { const k = watchKind(s); return k ? `${lead || ''}<span class="tag watch${k === 'watch' ? '' : ' watch-' + k}">${WATCH_LABEL[k]}</span>` : ''; }
-// 画面・CSVの値 → 保存する値
-function watchParse(v) { v = String(v == null ? '' : v).trim(); if (/パス|^pass$/i.test(v)) return 'pass'; if (/再調査|^recheck$/i.test(v)) return 'recheck'; return /注意|^1$|true|yes|○/i.test(v); }
+const APP_VERSION = 'v20261015-2316';
+// 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
+// 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
+// （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
+// 区分の名前・色・並び順はマスタで管理し、表示と絞り込みだけに使う印。買い増しサインの判定・通知は変えない。
+const DEFAULT_WATCH_DEFS = [
+  { key: 'watch',   name: '注意',   color: 'orange', sortOrder: 1 },
+  { key: 'pass',    name: 'パス',   color: 'gray',   sortOrder: 2 },
+  { key: 'recheck', name: '再調査', color: 'blue',   sortOrder: 3 },
+];
+// マスタの有効行（削除トンボストン除外）を並び順で返す
+function watchDefs() { return ((store.data && store.data.watchDefs) || DEFAULT_WATCH_DEFS).filter(d => d && !d.deleted).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)); }
+function watchDef(key) { return key ? watchDefs().find(d => d.key === key) : null; }
+// 銘柄の区分 key（'' = 通常）。true/1/'watch' は「注意」
+function watchKind(s) { const w = s && s.watch; if (!w) return ''; return (w === true || w === 1 || w === 'watch') ? 'watch' : String(w); }
+function watchLabel(s) { const k = watchKind(s); if (!k) return '通常'; const d = watchDef(k); return d ? d.name : k; }
+function watchTag(s, lead) {
+  const k = watchKind(s); if (!k) return '';
+  const d = watchDef(k); const st = d && d.color ? labelColorStyle(d.color) : '';
+  return `${lead || ''}<span class="tag watch${k === 'watch' ? '' : ' watch-' + esc(k)}"${st ? ` style="${st}"` : ''}>${esc(d ? d.name : k)}</span>`;
+}
+// 画面・CSVの値 → 保存する値（マスタの名前/キー、従来表記を受け付ける。注意は true で保存＝従来互換）
+function watchParse(v) {
+  v = String(v == null ? '' : v).trim(); if (!v) return false;
+  const d = watchDefs().find(d => d.name === v || String(d.key).toLowerCase() === v.toLowerCase());
+  if (d) return d.key === 'watch' ? true : d.key;
+  if (/パス|^pass$/i.test(v)) return 'pass'; if (/再調査|^recheck$/i.test(v)) return 'recheck';
+  return /注意|^1$|true|yes|○/i.test(v);
+}
+// フォーム・一括変更の select 値（'0'/'false'=通常、'1'/'true'/'watch'=注意、他=マスタ key）→ 保存値
+function watchFromSelect(v) { v = String(v == null ? '' : v); if (!v || v === '0' || v === 'false') return false; if (v === '1' || v === 'true' || v === 'watch') return true; return v; }
+// 区分の select 選択肢 [[value,label]...]（マスタ順＋末尾に通常）
+function watchSelectOpts(normalLabel) { return [...watchDefs().map(d => [d.key, d.name]), ['0', normalLabel || '通常']]; }
 { const el = document.getElementById('app-version'); if (el) el.textContent = APP_VERSION; }
 
 // ===== 日時は全部「日本時間(JST)」でそろえる =====
@@ -491,6 +515,7 @@ const store = {
     this.data.categories ||= structuredClone(DEFAULT_CATEGORIES);
     this.data.investCategories ||= structuredClone(DEFAULT_INVEST_CATEGORIES); // 投資カテゴリ（分析枠ラベル）マスタ
     this.data.labelDefs ||= structuredClone(DEFAULT_LABELS); // 銘柄ラベル（複数タグ）マスタ
+    this.data.watchDefs ||= structuredClone(DEFAULT_WATCH_DEFS); // 留意銘柄マスタ（注意/パス/再調査＋ユーザー追加。名前・色・並び順）
     this.data.grades ||= structuredClone(DEFAULT_GRADES); // 格付け色マスタ（S/A/B/C/D の表示色）
     this.data.matrixBands ||= structuredClone(DEFAULT_MATRIX_BANDS); // 分布マトリックスの取得額レンジ（色・しきい値）
     this.data.matrixSettings ||= {};
@@ -680,6 +705,7 @@ const store = {
       categories: structuredClone(DEFAULT_CATEGORIES),
       investCategories: structuredClone(DEFAULT_INVEST_CATEGORIES),
       labelDefs: structuredClone(DEFAULT_LABELS),
+      watchDefs: structuredClone(DEFAULT_WATCH_DEFS),
       grades: structuredClone(DEFAULT_GRADES),
       prices: {}, fx: { USDJPY: null }, meta: {}, amountHistory: [], amountSnapshots: [], analyses: [], techAnalysis: {},
       importHistory: [], lastPriceUpdate: null, seq: 1,
@@ -1096,6 +1122,26 @@ const store = {
   removeLabelDef(name) {
     this.data.labelDefs = this.data.labelDefs.filter(c => c.name !== name);
     for (const s of this.data.securities) if (Array.isArray(s.labels) && s.labels.includes(name)) { s.labels = s.labels.filter(l => l !== name); this.touch(s); }
+    this.save();
+  },
+  // 留意銘柄マスタ（通常/注意/パス/再調査…の区分）。key は不変（銘柄側 sec.watch が参照）、名前・色・並び順を編集。
+  // 削除はトンボストン（deleted:true＋updatedAt）＝同期で他端末へ伝播（ルール5-8）。割当済み銘柄は通常に戻す。
+  addWatchDef(c) {
+    this.data.watchDefs ||= structuredClone(DEFAULT_WATCH_DEFS);
+    c.key = c.key || ('w' + Date.now().toString(36));
+    c.sortOrder = c.sortOrder || (Math.max(0, ...this.data.watchDefs.filter(x => !x.deleted).map(x => x.sortOrder || 0)) + 1);
+    this.touch(c); this.data.watchDefs.push(c); this.save(); return c;
+  },
+  updateWatchDef(key, patch) {
+    const c = (this.data.watchDefs || []).find(x => x.key === key && !x.deleted);
+    if (!c) return;
+    delete patch.key; Object.assign(c, patch); this.touch(c); this.save();
+  },
+  removeWatchDef(key) {
+    const c = (this.data.watchDefs || []).find(x => x.key === key && !x.deleted);
+    if (!c) return;
+    c.deleted = true; this.touch(c);
+    for (const s of this.data.securities) if (watchKind(s) === key) { s.watch = false; this.touch(s); }
     this.save();
   },
 
@@ -1836,8 +1882,8 @@ const RESTORE_SCOPES = [
     hint: '銘柄一覧・保有・取引履歴・取得円台帳・金額履歴・分析/シナリオ履歴',
     keys: ['securities', 'holdings', 'transactions', 'acqLedger', 'amountHistory', 'amountSnapshots', 'analyses', 'priceScenarios', 'capCoefHistory', 'seq'] },
   { key: 'masters', label: 'マスタ（ルール・カテゴリ・色・警告）',
-    hint: '買い増しルール・カテゴリ・投資カテゴリ・銘柄ラベル・背景色・格付け色・マトリックス設定・開示種別・YouTubeチャンネル・注目タグ・マクロ警告',
-    keys: ['rules', 'categories', 'investCategories', 'labelDefs', 'cfRules', 'grades', 'matrixBands', 'matrixSettings', 'discTypeDefs', 'ytChannels', 'newsTags', 'macroAlerts'] },
+    hint: '買い増しルール・カテゴリ・投資カテゴリ・銘柄ラベル・留意銘柄・背景色・格付け色・マトリックス設定・開示種別・YouTubeチャンネル・注目タグ・マクロ警告',
+    keys: ['rules', 'categories', 'investCategories', 'labelDefs', 'watchDefs', 'cfRules', 'grades', 'matrixBands', 'matrixSettings', 'discTypeDefs', 'ytChannels', 'newsTags', 'macroAlerts'] },
   { key: 'settings', label: '設定（タブの並び・列設定・表示設定）',
     hint: 'タブの並び順などの設定・表の列設定・フィルタ保存・ニュース/マクロの表示設定',
     keys: ['settings', '_colPrefs', '_filterPresets', 'macroView', 'newsPrefs'] },
@@ -3194,7 +3240,8 @@ function fltSelectSpec(key) {
     case 'principalSold': return { opts: [['1', '売却済み'], ['0', '未売却']], val: s => s.principalSold ? '1' : '0' };
     case 'excluded': return { opts: [['1', '除外'], ['0', '通常']], val: s => s.excluded ? '1' : '0' };
     case 'held': return { opts: [['1', '保有'], ['0', '未保有']], val: s => (calc.totalHolding(s.id).qty > 0 ? '1' : '0') };
-    case 'watch': return { opts: [['1', '注意'], ['pass', 'パス'], ['recheck', '再調査'], ['0', '通常']], val: s => { const k = watchKind(s); return k === 'watch' ? '1' : (k || '0'); } };
+    // 留意銘柄: 選択肢はマスタ順。「注意」の value は旧プリセット互換で '1'
+    case 'watch': return { opts: watchSelectOpts().map(([v, l]) => [v === 'watch' ? '1' : v, l]), val: s => { const k = watchKind(s); return k === 'watch' ? '1' : (k || '0'); } };
     case 'anaMACD': return { opts: [['golden', 'GC'], ['dead', 'DC'], ['none', '—']], val: s => { const r = techOf(s); return r ? (r.macdCross || 'none') : ''; } };
     case 'anaStatus': return { opts: [['1', '形成中'], ['2', '完成間近'], ['3', 'ブレイク済み'], ['4', '失敗']], val: s => { const r = techOf(s); return r && r.best ? String(r.best.status) : ''; } };
     case 'anaMa200': return { opts: [['above', '上'], ['below', '下']], val: s => { const r = techOf(s); return r ? (r.ma200Pos || '') : ''; } };
@@ -3206,7 +3253,7 @@ function fltSelectSpec(key) {
 // scope のフィルター対象列一覧（選択肢列＝sel / 数値列＝num）
 const SECMASTER_FILTER_KEYS = ['market', 'detailType', 'sector', 'industry', 'rating', 'overallGrade', 'buyGrade', 'priority', 'ruleName', 'category', 'watch'];
 // MASTER_COLS に列が無い独自フィルタ項目のラベル（held/watch は銘柄の状態から直接判定する）
-const FILTER_EXTRA_LABELS = { held: '保有状況（保有/未保有）', watch: '注意銘柄（注意/パス/再調査/通常）' };
+const FILTER_EXTRA_LABELS = { held: '保有状況（保有/未保有）', get watch() { return `留意銘柄（${watchDefs().map(d => d.name).join('/')}/通常）`; } };
 function filterScopeBase(scope) {
   if (scope === 'analysis') return 'ANALYSIS';
   return holdingsMarket === 'JP' ? 'JP' : holdingsMarket === 'FUND' ? 'FUND' : 'US';
@@ -3217,7 +3264,7 @@ function filterableCols(scope) {
     keys = SECMASTER_FILTER_KEYS.map(k => { const mc = MASTER_COLS.find(c => c.key === k); return { key: k, label: mc ? mc.label : (FILTER_EXTRA_LABELS[k] || k) }; });
   } else {
     // holdings / analysis / news は同じ列セット（＝保有銘柄フィルタのパターンをニュースでもそのまま適用できる）。
-    // news は日米どちらの列も対象（横断）。全スコープ共通で「保有状況（保有/未保有）」「注意銘柄（注意/通常）」も使える。
+    // news は日米どちらの列も対象（横断）。全スコープ共通で「保有状況（保有/未保有）」「留意銘柄（マスタの区分/通常）」も使える。
     keys = [{ key: 'held', label: FILTER_EXTRA_LABELS.held }, { key: 'watch', label: FILTER_EXTRA_LABELS.watch }];
     const seen = new Set(['held', 'watch']);
     for (const c of MASTER_COLS) {
@@ -10065,7 +10112,7 @@ const SM_BULK_FIELDS = [
   { key: 'detailType', label: '詳細種別' },
   { key: 'enabled', label: '判定対象' },
   { key: 'excluded', label: '除外' },
-  { key: 'watch', label: '注意銘柄' },
+  { key: 'watch', label: '留意銘柄' },
   { key: 'category', label: 'カテゴリ' },
   { key: 'investCategory', label: '投資カテゴリ' },
   { key: 'labelAdd', label: 'ラベルを付与' },
@@ -10091,7 +10138,7 @@ function bulkValueHtml(field, id) {
     case 'detailType': return `<select id="${id}"><option value="個別株">個別株</option><option value="ETF">ETF</option><option value="__null">（自動判定に戻す）</option></select>`;
     case 'enabled': return `<select id="${id}"><option value="true">対象にする</option><option value="false">対象外にする</option></select>`;
     case 'excluded': return `<select id="${id}"><option value="true">除外する（取得・表示を止める）</option><option value="false">除外を解除</option></select>`;
-    case 'watch': return `<select id="${id}"><option value="true">注意</option><option value="pass">パス</option><option value="recheck">再調査</option><option value="false">通常（外す）</option></select>`;
+    case 'watch': return `<select id="${id}">${watchSelectOpts('通常（外す）').map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>`;
     case 'addonFromHigh': return `<select id="${id}"><option value="true">初回基準にする</option><option value="false">通常（前回購入単価基準）に戻す</option></select>`;
     case 'category': return `<select id="${id}">${catOpts}</select>`;
     case 'investCategory': return `<select id="${id}">${invCatOpts}</select>`;
@@ -10105,7 +10152,7 @@ function bulkValueHtml(field, id) {
   }
 }
 function bulkConvert(field, raw) {
-  if (field === 'watch') return (raw === 'pass' || raw === 'recheck') ? raw : raw === 'true';
+  if (field === 'watch') return watchFromSelect(raw);
   if (field === 'enabled' || field === 'excluded' || field === 'addonFromHigh') return raw === 'true';
   if (field === 'detailType') return raw === '__null' ? null : raw;
   if (field === 'ruleId') return parseInt(raw, 10);
@@ -10359,6 +10406,7 @@ const MASTER_LAUNCH = [
   { v: 'category', label: 'カテゴリ別 金額マスタ', open: () => openCategoryMaster(), note: '銘柄カテゴリごとの1回購入額（日本株円・米国株$）と変更履歴。' },
   { v: 'investcat', label: '投資カテゴリ マスタ', open: () => openInvestCategoryMaster(), note: '分析枠のラベル（高配当・テーマ株など）。金額とは無関係の別管理。' },
   { v: 'label',    label: '銘柄ラベル マスタ', open: () => openLabelMaster(), note: '1銘柄に複数付けられる投資テーマ/分類タグ（半導体・宇宙・防衛・高配当）。フィルタ＋一括で前提崩れ時の判断に。' },
+  { v: 'watchdef', label: '留意銘柄マスタ', open: () => openWatchMaster(), note: '留意銘柄の区分（注意・パス・再調査…）の追加・名前・色・並び順。表示と絞り込みだけに使い、判定・通知は変えない。' },
   { v: 'rule',     label: '買い増しルールマスタ', open: () => openRuleMaster(),     note: '初回/買い増しの下落率・基準高値のルール。銘柄ごとの割当は各銘柄の編集から。' },
   { v: 'capcoef',  label: '時価総額補正（補正係数・補正推奨額）', open: () => openCapCoefMaster(), note: '市場の時価総額1位までの倍率で1回の購入額を増やす補正。1位の倍数・かけ始める倍率・係数の刻み・適用条件（格付/カテゴリ）・丸め単位。' },
   { v: 'grade',    label: '銘柄格付けマスタ',     open: () => openGradeMaster(),    note: '銘柄格付け（S/A/B/C/D）の一覧・詳細での表示色を設定。' },
@@ -12369,8 +12417,8 @@ function openSecurityForm(id, presetMarket, presetTicker) {
           <select name="excluded" title="除外＝株価・銘柄情報・高値・決算・ニュースを取得せず、保有銘柄/分析の一覧にも出さない（取引履歴・取引サマリー・分析履歴は残る）。売却済みで見なくてよい銘柄用。「無効」は判定だけ止めて見続ける銘柄用"><option value="0" ${!sec || !sec.excluded ? 'selected' : ''}>しない</option><option value="1" ${sec && sec.excluded ? 'selected' : ''}>除外する</option></select></div>
       </div>
       <div class="row">
-        <div class="field"><label>注意銘柄(ウォッチ)</label>
-          <select name="watch" title="注意＝気をつけて見る／パス＝買い増しをパス／再調査＝到達したら調べ直す（表示と絞り込みだけに使います）">${[['0', '通常'], ['1', '注意'], ['pass', 'パス'], ['recheck', '再調査']].map(([v, l]) => `<option value="${v}" ${(({ watch: '1' })[watchKind(sec)] || watchKind(sec) || '0') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="field"><label>留意銘柄</label>
+          <select name="watch" title="区分の追加・名前・色はマスタ・設定の「留意銘柄マスタ」で変更できます（表示と絞り込みだけに使います）">${[['0', '通常'], ...watchSelectOpts().slice(0, -1)].map(([v, l]) => `<option value="${esc(v)}" ${(watchKind(sec) || '0') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
         <div class="field"><label title="買い取引が無い場合の基準（任意）。取引履歴があればそちらを優先">前回購入価格 / 前回購入日</label>
           <div style="display:flex;gap:6px">
             <input name="prevBuyPrice" type="number" step="any" value="${sec && sec.prevBuyPrice != null ? sec.prevBuyPrice : ''}" placeholder="価格(原通貨)" style="flex:1">
@@ -12531,7 +12579,7 @@ function openSecurityForm(id, presetMarket, presetTicker) {
       market, ticker: f.ticker.value.trim().toUpperCase(), // コードは常に大文字で保存（表記ゆれ・重複判定ミス防止）
       category: f.category.value || null, ruleId: parseInt(f.ruleId.value, 10),
       investCategory: (f.investCategory && f.investCategory.value) || null,
-      enabled: f.enabled.value === '1', excluded: f.excluded.value === '1', watch: (f.watch.value === 'pass' || f.watch.value === 'recheck') ? f.watch.value : f.watch.value === '1',
+      enabled: f.enabled.value === '1', excluded: f.excluded.value === '1', watch: watchFromSelect(f.watch.value),
       currency: market === 'US' ? 'USD' : 'JPY',
       assetClass: market === 'FUND' ? 'fund' : 'stock',
       prevBuyPrice: numOrNull(f.prevBuyPrice.value),
@@ -14397,6 +14445,55 @@ function deleteLabelDef(name) {
   }
 }
 
+// 留意銘柄マスタ（区分: 注意/パス/再調査＋ユーザー追加）
+function openWatchMaster() {
+  const defs = watchDefs();
+  const cnt = (key) => store.data.securities.filter(s => watchKind(s) === key).length;
+  showModal('留意銘柄マスタ（区分の追加・名前・色）', `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-sm btn-primary" onclick="openWatchEdit(null)">＋ 区分を追加</button></div>
+    <div class="table-wrap"><table class="holdings dense">
+      <thead><tr><th class="l">区分</th><th>並び順</th><th>割当銘柄</th><th class="l"></th></tr></thead>
+      <tbody>${defs.map(d => `<tr>
+        <td class="l">${watchTag({ watch: d.key === 'watch' ? true : d.key })}</td><td>${d.sortOrder ?? ''}</td><td>${cnt(d.key)}件</td>
+        <td class="l nowrap"><button class="btn btn-sm" onclick="openWatchEdit('${esc(d.key)}')">編集</button>
+          ${d.key === 'watch' ? '' : `<button class="btn btn-sm btn-danger" onclick="deleteWatchDef('${esc(d.key)}')">削除</button>`}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <p class="muted" style="margin:8px 0 0">銘柄に1つ付ける「留意」の印（通常＝未設定）。銘柄名の横のタグ・列フィルタ「留意銘柄」・一括変更・CSV取込/出力で使います。<strong>買い増しサインの判定・通知には影響しません</strong>。「注意」は従来からの基本区分のため削除できません（名前・色は変更可）。</p>
+    <div class="form-actions"><button type="button" class="btn" onclick="closeModal()">閉じる</button></div>`, { wide: true });
+}
+function openWatchEdit(key) {
+  const c = key ? watchDef(key) : null;
+  showModal(c ? `区分を編集 — ${esc(c.name)}` : '区分を追加', `
+    <form id="watch-form">
+      <div class="field"><label>区分名</label><input name="name" value="${c ? esc(c.name) : ''}" placeholder="例: 様子見 / 売却検討" required></div>
+      <div class="field"><label>並び順</label><input name="sortOrder" type="number" step="1" value="${c ? (c.sortOrder ?? '') : ''}" placeholder="自動"></div>
+      <div class="field"><label>表示色（一覧のタグ色）</label>${colorSwatchPicker('color', c ? c.color : 'gray')}</div>
+      <div class="form-actions">
+        ${c && c.key !== 'watch' ? `<button type="button" class="btn btn-danger" onclick="deleteWatchDef('${esc(c.key)}')">削除</button>` : ''}
+        <button type="button" class="btn" onclick="openWatchMaster()">キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>`);
+  document.getElementById('watch-form').onsubmit = (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const patch = { name: f.name.value.trim(), sortOrder: f.sortOrder.value ? parseInt(f.sortOrder.value, 10) : undefined, color: f.color.value || undefined };
+    if (!patch.name) { toast('区分名を入力してください'); return; }
+    if (patch.name === '通常') { toast('「通常」は未設定の意味で予約されています'); return; }
+    if (watchDefs().some(x => x.name === patch.name && (!c || x.key !== c.key))) { toast('同名の区分が既にあります'); return; }
+    if (c) store.updateWatchDef(c.key, patch); else store.addWatchDef(patch);
+    render(); openWatchMaster();
+  };
+}
+function deleteWatchDef(key) {
+  const d = watchDef(key); if (!d) return;
+  const n = store.data.securities.filter(s => watchKind(s) === key).length;
+  if (confirm(`区分「${d.name}」を削除します。${n ? `割当済みの ${n} 銘柄は「通常」に戻ります。` : ''}よろしいですか？`)) {
+    store.removeWatchDef(key); render(); openWatchMaster();
+  }
+}
+
 // ルール: 追加 or 編集
 function openRuleEdit(id) {
   const r = id ? store.data.rules.find(x => x.id === id) : null;
@@ -15016,7 +15113,7 @@ const GENERIC_MAP = {
   '買増を初回基準': 'addonFromHigh', '買い増し初回基準': 'addonFromHigh',
   'ルール': 'ruleName', '買い増しルール': 'ruleName', 'カテゴリ': 'category', '詳細種別': 'detailType',
   '投資カテゴリ': 'investCategory', '銘柄ラベル': 'labels', 'ラベル': 'labels',
-  '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', '除外': 'excluded', 'ウォッチ': 'watch',
+  '1回購入額': 'buyAmount', '買い増し予定額': 'buyAmount', '購入回数': 'buyCount', '判定対象': 'enabled', '除外': 'excluded', 'ウォッチ': 'watch', '留意銘柄': 'watch', '注意銘柄': 'watch',
   '元本売却済み': 'principalSold', '売却済み元本額': 'principalSoldAmount',
   '売却前購入額': 'origBuyAmount', 'メモ': 'memo',
   '目標PER': 'targetPer', '目標PBR': 'targetPbr', '目標配当利回り': 'targetYield', '目標利回り': 'targetYield',
@@ -15554,7 +15651,7 @@ const GI_FIELDS = [
   { key: 'buyCount',      label: '購入回数' },
   { key: 'enabled',       label: '判定対象' },
   { key: 'excluded',      label: '除外' },
-  { key: 'watch',         label: 'ウォッチ' },
+  { key: 'watch',         label: '留意銘柄（注意/パス/再調査…）' },
   { key: 'nameOverride',  label: '銘柄名(上書き)' },
   { key: 'sectorOverride', label: 'セクター(上書き)' },
   { key: 'industryOverride', label: '業種(上書き)' },

@@ -37,6 +37,7 @@
     categories:      ['records', (c) => `c:${c.category}`],
     investCategories: ['records', (c) => `ic:${c.name}`], // 投資カテゴリ（分析枠ラベル）マスタ。名前キーで3-wayマージ（updatedAt タイブレーク）
     labelDefs:       ['records', (c) => `ld:${c.name}`],   // 銘柄ラベル（複数タグ）マスタ。名前キーで3-wayマージ
+    watchDefs:       ['records', (c) => `wd:${c && c.key}`], // 留意銘柄マスタ（注意/パス/再調査＋追加区分）。key で3-way、削除はトンボストン
     // マスタ系（背景色ルール/格付け色/フィルタプリセット）。id等で一致＋updatedAtの新しい方。
     // 削除は配列除去ではなくトンボストン（deleted:true＋新updatedAt）で表現するので、
     // 「新しい削除」が「古い設定」や「別端末の再シードした既定」に勝てる（＝削除も同期で保持される）。
