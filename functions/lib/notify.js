@@ -75,6 +75,7 @@ function signalVars(s) {
     kind: s.type === 'initial' ? '初回' : '買増',
     ticker: s.ticker ?? '', name: s.name ?? '', market: s.market ?? '',
     broker: txt(s.broker), category: txt(s.category), ruleName: txt(s.ruleName), rating: txt(s.rating),
+    watch: s.watch || '', // 留意銘柄（通常は空＝「{name}{watch}」のように後ろに付けても余計な記号が出ない）
     price: cur(s.price), priceRaw: n(s.price) ?? '—',
     dayChange: spct(s.dayChangePct), dayAmt: curS(s.dayAmt), prevClose: cur(s.prevClose),
     trigger: cur(s.trigger), trigBasis: txt(s.trigBasis), reachKind: txt(s.reachKind), base: cur(s.base),

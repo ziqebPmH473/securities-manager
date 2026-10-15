@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261015-2316';
+const APP_VERSION = 'v20261015-2340';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -10928,7 +10928,7 @@ const NOTIFY_DEFAULT_TPL = {
 // 明細行で使える差し込み項目（グループ別）。サイン一覧（表）に出せる項目をすべて網羅。
 // ★サーバー側 computeSignals の出力＋notify.js signalVars と対応。増やす時は3箇所そろえること。
 const NOTIFY_PH_LINE = [
-  { g: '基本', items: [['kind', '初回/買増'], ['ticker', 'コード'], ['name', '銘柄名'], ['market', '市場'], ['broker', '証券会社'], ['category', 'カテゴリ'], ['ruleName', '買い増しルール'], ['rating', '銘柄格付']] },
+  { g: '基本', items: [['kind', '初回/買増'], ['ticker', 'コード'], ['name', '銘柄名'], ['market', '市場'], ['broker', '証券会社'], ['category', 'カテゴリ'], ['ruleName', '買い増しルール'], ['rating', '銘柄格付'], ['watch', '留意銘柄']] },
   { g: '価格', items: [['price', '現在値'], ['dayChange', '前日比'], ['dayAmt', '前日比値幅'], ['prevClose', '前日終値']] },
   { g: '判定', items: [['trigger', '次回購入'], ['trigBasis', '適用区分'], ['reachKind', '到達区分(新/続)'], ['base', '基準値'], ['remaining', '残り下落率'], ['fixedBuyPrice', '買増固定値'], ['addonFromHigh', '買増を初回基準']] },
   { g: '前回購入', items: [['prevBuyPrice', '前回購入単価'], ['prevBuyDate', '前回購入日'], ['dropFromPrev', '前回からの下落率']] },
@@ -10991,6 +10991,7 @@ function notifyVars(s) {
     kind: s.type === 'initial' ? '初回' : '買増',
     ticker: s.ticker ?? '', name: s.name ?? '', market: s.market ?? '',
     broker: txt(s.broker), category: txt(s.category), ruleName: txt(s.ruleName), rating: txt(s.rating),
+    watch: s.watch || '', // 留意銘柄（通常は空＝「{name}{watch}」のように後ろに付けても余計な記号が出ない）
     price: cur(s.price), priceRaw: n(s.price) ?? '—',
     dayChange: spct(s.dayChangePct), dayAmt: curS(s.dayAmt), prevClose: cur(s.prevClose),
     trigger: cur(s.trigger), trigBasis: txt(s.trigBasis), reachKind: txt(s.reachKind), base: cur(s.base),
@@ -11017,7 +11018,7 @@ function notifySample(market) {
     prevBuyDate: '2026-04-10',
   }, over);
   return [
-    base({ reached: true, type: 'addon', reachKind: '新', ticker: us ? 'AAPL' : '7203', name: us ? 'アップル' : 'トヨタ自動車', price: us ? 188.4 : 2750, dayChangePct: -1.23, dayAmt: us ? -2.2 : -50, dropFromPrev: -5.2, prevBuyPrice: us ? 198 : 2900, trigger: us ? 185 : 2700, remainingDropPct: 0, fixedBuyPrice: null, buyAmount: us ? 500 : 50000 }),
+    base({ reached: true, type: 'addon', reachKind: '新', ticker: us ? 'AAPL' : '7203', name: us ? 'アップル' : 'トヨタ自動車', price: us ? 188.4 : 2750, dayChangePct: -1.23, dayAmt: us ? -2.2 : -50, dropFromPrev: -5.2, prevBuyPrice: us ? 198 : 2900, trigger: us ? 185 : 2700, remainingDropPct: 0, fixedBuyPrice: null, watch: '注意', buyAmount: us ? 500 : 50000 }),
     base({ reached: false, type: 'initial', reachKind: null, ticker: us ? 'MSFT' : '6758', name: us ? 'マイクロソフト' : 'ソニーG', price: us ? 410 : 13200, dayChangePct: 0.45, dayAmt: us ? 1.8 : 60, dropFromPrev: -2.1, prevBuyPrice: us ? 419 : 13480, trigger: us ? 400 : 12800, remainingDropPct: 2.4, fixedBuyPrice: null, buyAmount: us ? 500 : 50000 }),
   ];
 }

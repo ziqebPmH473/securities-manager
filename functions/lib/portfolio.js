@@ -44,6 +44,15 @@ export function evalSecurity(bundle, sec) {
   });
 }
 
+// 留意銘柄の区分名（通常=''）。app.js watchLabel と同じ解決: true/1/'watch'=注意、他は watchDefs の key。
+const DEFAULT_WATCH_NAMES = { watch: '注意', pass: 'パス', recheck: '再調査' };
+function watchName(bundle, sec) {
+  const w = sec && sec.watch; if (!w) return '';
+  const k = (w === true || w === 1 || w === 'watch') ? 'watch' : String(w);
+  const d = (bundle.watchDefs || []).find(x => x && !x.deleted && x.key === k);
+  return d ? d.name : (DEFAULT_WATCH_NAMES[k] || k);
+}
+
 function displayName(bundle, sec) {
   if (sec.nameOverride) return sec.nameOverride;
   const meta = (bundle.meta || {})[priceKey(sec)] || {};
@@ -124,6 +133,7 @@ export function computeSignals(bundle, opts = {}) {
       pnl: round1(pnl), buyCount: buyCount || null,
       category: sec.category || null, ruleName: rule.name || null,
       rating: sec.rating || sec.overallGrade || null,
+      watch: watchName(bundle, sec), // 留意銘柄の区分名（通常は空）
       fixedBuyPrice: typeof sec.fixedBuyPrice === 'number' ? sec.fixedBuyPrice : null,
       broker: lastBroker(bundle, sec),
       sector: meta.sector || null, industry: meta.industry || null,
