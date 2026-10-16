@@ -29,6 +29,9 @@ export async function onRequestGet(context) {
   const withHighs = url.searchParams.get('highs') === '1';
   // ext=1: 米株のプレ/アフター価格を取得（Yahoo includePrePost）。現在値とは別に extPrice/extType を返す。
   const ext = url.searchParams.get('ext') === '1';
+  // wk=1（mode=light のみ）: 前週終値 prevWeekClose も返す（ダッシュボードの指数「前週末比」用）。
+  //   light は range=1d で先週の日足を含まないため、1銘柄につき range=1mo を1回追加で取る。指数・為替の数件だけに使う。
+  const wk = url.searchParams.get('wk') === '1';
 
   const finnhubKey = context.env && context.env.FINNHUB_API_KEY;
   const out = {};
@@ -42,7 +45,7 @@ export async function onRequestGet(context) {
     while (next < symbols.length) {
       const sym = symbols[next++];
       try {
-        out[sym] = await fetchOne(sym, finnhubKey, { mode, range, withHighs, ext });
+        out[sym] = await fetchOne(sym, finnhubKey, { mode, range, withHighs, ext, wk });
       } catch (e) {
         out[sym] = { error: String(e && e.message || e) };
       }
@@ -88,7 +91,13 @@ async function fetchOne(symbol, finnhubKey, opts = {}) {
   // 米株のプレ/アフター取得（時間外列用）。Yahoo includePrePost で現在値＋時間外価格を返す
   if (opts.ext && type === 'us') return fetchUsExtended(symbol);
   // 軽量モード: 高値不要・短期間のみ。Finnhub経由(米株3往復)を避けYahooの短期間取得に統一して高速化
-  if (opts.mode === 'light') return fetchYahoo(symbol, type, opts.range || '1d', false);
+  if (opts.mode === 'light') {
+    const q = await fetchYahoo(symbol, type, opts.range || '1d', false);
+    if (opts.wk) {
+      try { const m = await fetchYahooChart(symbol, '1mo', '1d'); q.prevWeekClose = m.prevWeekClose; q.prevWeekCloseDate = m.prevWeekCloseDate; } catch (_) {}
+    }
+    return q;
+  }
   if (type === 'us' && finnhubKey) return fetchFinnhub(symbol, finnhubKey, opts.withHighs);
   return fetchYahoo(symbol, type, opts.range, opts.withHighs);
 }
@@ -262,6 +271,16 @@ async function fetchYahooChart(symbol, range, interval) {
     ? prevCloseArr
     : (sane(metaPrev) ? metaPrev : null); // metaの前日終値も異常値検証を通す
   const prevCloseDate = toDateTz(prevCloseTs); // 前日終値が付いた実際の引け日（休場を正しく反映）。配列から取れた時のみ
+  // 前週終値＝「現在値の営業日(curDay)が属する週(月曜始まり・取引所TZ)より前の、最後の有効終値」。
+  //   場中/平日=今週 vs 先週末、土日=直前の週(金) vs その前の週末。祝日で金曜休場なら木曜の終値になる。
+  //   日数(1970-01-01=木)を +3 して7で割ると月曜始まりの週番号になる。range=1d では先週の足が無く null。
+  const weekOf = (d) => Math.floor((d + 3) / 7);
+  let prevWeekClose = null, prevWeekTs = null;
+  for (let i = closeArr.length - 1; i >= 0; i--) {
+    if (typeof closeArr[i] !== 'number') continue;
+    const d = dayOf(ts[i]);
+    if (d != null && weekOf(d) < weekOf(curDay)) { prevWeekClose = closeArr[i]; prevWeekTs = ts[i]; break; }
+  }
 
   // 52週高値（直近52週の最大値）。高値が付いた日付も記録（高値更新判定で「前回購入後に高値更新したか」を見るため）
   const now = Date.now() / 1000;
@@ -295,6 +314,8 @@ async function fetchYahooChart(symbol, range, interval) {
     prevClose: num(prevClose),
     prevCloseDate,
     prevDayPct,
+    prevWeekClose: num(prevWeekClose),
+    prevWeekCloseDate: toDateTz(prevWeekTs),
     // metaへのフォールバックも異常値検証を通す（8303.TではfiftyTwoWeekHigh自体が553億に汚染されていた）
     high5y:   high5y || (sane(num(meta.fiftyTwoWeekHigh)) ? num(meta.fiftyTwoWeekHigh) : null),
     high52w:  high52w || (sane(num(meta.fiftyTwoWeekHigh)) ? num(meta.fiftyTwoWeekHigh) : null),

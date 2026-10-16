@@ -977,6 +977,7 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 .idx-card { background: var(--panel-2); border: 1px solid var(--hair); border-radius: 9px; padding: 9px 12px; }
 .idx-label { font-size: 11px; color: var(--muted); }
 .idx-row { display: flex; align-items: baseline; justify-content: space-between; margin-top: 2px; }
+.idx-wk { display: flex; align-items: baseline; justify-content: space-between; font-size: 11px; margin-top: 1px; }
 
 /* レポート内タブ */
 .report-tabs { margin: 4px 0 14px; width: fit-content; }

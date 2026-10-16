@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261015-2340';
+const APP_VERSION = 'v20261016-0010';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -2237,6 +2237,12 @@ const calc = {
     if (!ix || ix.price == null || !ix.prevClose) return null;
     return (ix.price - ix.prevClose) / ix.prevClose * 100;
   },
+  // 前週末比（前週の最終営業日の終値から）。ダッシュボードの指数カード用
+  indexWeekChangePct(key) {
+    const ix = (store.data.indices || {})[key];
+    if (!ix || ix.price == null || !ix.prevWeekClose) return null;
+    return (ix.price - ix.prevWeekClose) / ix.prevWeekClose * 100;
+  },
   // 原通貨→円換算（米株は為替、JP/FUNDはそのまま）。為替未取得の米株は null
   toJpy(market, nativeAmt) {
     if (nativeAmt == null) return null;
@@ -2483,7 +2489,7 @@ const api = {
           .then(r => r.ok ? r.json() : {}).catch(() => ({}))
           .then(res => { doneSym = Math.min(doneSym + b.length, totalSym); busyMsg(`株価を取得中… ${doneSym}/${totalSym}件`); return res; }));
       const lightIdx = reqs.length;
-      reqs.push(fetch(`/api/price?mode=light&symbols=${encodeURIComponent(lightSymbols.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({})));
+      reqs.push(fetch(`/api/price?mode=light&wk=1&symbols=${encodeURIComponent(lightSymbols.join(','))}`).then(r => r.ok ? r.json() : {}).catch(() => ({})));
       const results = await Promise.all(reqs);
       lightQuotes = results[lightIdx] || {};
       quotes = Object.assign({}, ...results.slice(0, lightIdx));
@@ -2539,7 +2545,13 @@ const api = {
     store.data.indices = store.data.indices || {};
     for (const ix of INDICES) {
       const q = lightQuotes[ix.sym];
-      if (q && !q.error && q.price != null) store.data.indices[ix.key] = { price: q.price, prevClose: q.prevClose, fetchedAt: q.fetchedAt };
+      if (q && !q.error && q.price != null) {
+        // 前週終値は取れなかった時（追加取得の失敗）に前回値を残す
+        const old = store.data.indices[ix.key] || {};
+        store.data.indices[ix.key] = { price: q.price, prevClose: q.prevClose, fetchedAt: q.fetchedAt,
+          prevWeekClose: q.prevWeekClose != null ? q.prevWeekClose : (old.prevWeekClose ?? null),
+          prevWeekCloseDate: q.prevWeekClose != null ? (q.prevWeekCloseDate || null) : (old.prevWeekCloseDate ?? null) };
+      }
     }
     // ★更新時刻（ヘッダの「更新」）は**1件でも取れた時だけ**進める（2026-08-31 すみぽん指摘）。
     //   朝はGoogleトークンが失効しており、起動時の自動更新がログイン確定前に走ると価格APIが全件401で
@@ -4723,10 +4735,13 @@ function renderDashboard() {
 
   const idxCard = (k) => {
     const ix = (store.data.indices || {})[k] || {};
-    const v = calc.indexChangePct(k);
+    const v = calc.indexChangePct(k), w = calc.indexWeekChangePct(k);
+    const pctTxt = (x) => x == null ? '—' : (x > 0 ? '▲' : x < 0 ? '▼' : '') + signed(x) + '%';
+    const wkTitle = ix.prevWeekClose ? `前週終値 ${Number(ix.prevWeekClose).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${ix.prevWeekCloseDate ? '（' + ix.prevWeekCloseDate + '）' : ''}` : '前週終値は次回の株価更新で取得します';
     return `<div class="idx-card"><div class="idx-label">${INDICES.find(i => i.key === k)?.label || k}</div>
       <div class="idx-row"><span class="num" style="font-weight:700">${ix.price != null ? Number(ix.price).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</span>
-      <span class="delta ${cls(v)}">${v == null ? '—' : (v > 0 ? '▲' : v < 0 ? '▼' : '') + signed(v) + '%'}</span></div></div>`;
+      <span class="delta ${cls(v)}" title="前日比">${pctTxt(v)}</span></div>
+      <div class="idx-wk" title="${esc(wkTitle)}"><span class="muted">前週末比</span><span class="delta ${cls(w)}">${pctTxt(w)}</span></div></div>`;
   };
   const mkColor = { JP: '#b23a36', US: '#2a5599' };
   // 見出し「ダッシュボード」＋更新時刻/USDJPY の行は撤去（2026-08-28）。
