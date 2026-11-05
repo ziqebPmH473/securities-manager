@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-1040';
+const APP_VERSION = 'v20261106-1140';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -8381,6 +8381,7 @@ function macroPerLevelsHtml(card) {
   const pxNow = pxPts[pxPts.length - 1];
   if (!(perLast[1] > 0) || !(px0[1] > 0)) return '';
   const eps0 = px0[1] / perLast[1];
+  const perDef = MACRO_SERIES[perId] || {};
   // 1年前: PER と株価をそれぞれ約1年前の点で
   const per1 = macroAtBefore(perPts, perLast[0], 365, 60);
   const px1 = per1 ? pxAt(per1[0]) : null;
@@ -8390,13 +8391,27 @@ function macroPerLevelsHtml(card) {
   const gDefault = eps1 ? Math.round((eps0 / eps1 - 1) * 1000) / 10 : 8;
   const g = (typeof gSaved === 'number' && isFinite(gSaved)) ? gSaved : gDefault;
   const eps2 = eps0 * (1 + g / 100);
-  // 行（PER水準）: 直近5年の範囲＋現在値を含む整数刻み。12行を超えるなら刻みを広げる
-  const recent = macroCut(perPts, '5y').map(p => p[1]).filter(v => v > 0);
-  let lo = Math.floor(Math.min(...recent, perLast[1])) - 1, hi = Math.ceil(Math.max(...recent, perLast[1])) + 1;
-  lo = Math.max(1, lo);
-  const step = (hi - lo) <= 12 ? 1 : (hi - lo) <= 24 ? 2 : 5;
-  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
-  const levels = []; for (let v = hi; v >= lo; v -= step) levels.push(v);
+  // 行（PER水準）: 日経は 11〜20倍 固定（2026-11-06 すみぽん指示。現在値が外なら範囲を広げて含める）。
+  // S&P500 等は水準が違う（25倍前後）ので、直近5年の範囲＋現在値を含む整数刻み（12行を超えるなら刻みを広げる）。
+  let levels = [];
+  if (perDef.per === 'nkcalc') {
+    const lo = Math.min(11, Math.floor(perLast[1])), hi = Math.max(20, Math.ceil(perLast[1]));
+    for (let v = hi; v >= lo; v--) levels.push(v);
+  } else {
+    const recent = macroCut(perPts, '5y').map(p => p[1]).filter(v => v > 0);
+    let lo = Math.floor(Math.min(...recent, perLast[1])) - 1, hi = Math.ceil(Math.max(...recent, perLast[1])) + 1;
+    lo = Math.max(1, lo);
+    const step = (hi - lo) <= 12 ? 1 : (hi - lo) <= 24 ? 2 : 5;
+    lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+    for (let v = hi; v >= lo; v -= step) levels.push(v);
+  }
+  // 過去3年のPERレンジ（最低・最高・平均）。表の上に出し、レンジ内の行に薄く色を付ける
+  const pts3 = macroCut(perPts, '3y').filter(p => p[1] > 0);
+  const r3 = pts3.length ? {
+    min: pts3.reduce((m, p) => p[1] < m[1] ? p : m), max: pts3.reduce((m, p) => p[1] > m[1] ? p : m),
+    avg: pts3.reduce((sum, p) => sum + p[1], 0) / pts3.length, n: pts3.length, from: pts3[0][0],
+  } : null;
+  const inRange = (v) => r3 && v >= Math.floor(r3.min[1]) && v <= Math.ceil(r3.max[1]);
   // 印: 現在値（最新株価÷現在EPS）と 1年安値（直近1年の最安値÷現在EPS）に最も近い水準
   const cutDate = new Date(Date.parse(pxNow[0]) - 365 * 86400000).toISOString().slice(0, 10);
   const yearPts = pxPts.filter(p => p[0] >= cutDate);
@@ -8405,22 +8420,27 @@ function macroPerLevelsHtml(card) {
   const markNow = nearest(pxNow[1]), markLow = low ? nearest(low[1]) : null;
   const fmtPx = (v) => macroFmt(v, pxId);
   const unit = (MACRO_SERIES[pxId] || {}).unit || '';
-  const perDef = MACRO_SERIES[perId] || {};
   // 日経（加重平均PER）の EPS は「日経平均÷加重平均PER」。日経公表の「指数ベースEPS」（日経平均÷指数ベースPER）とは水準が違う点に注意
   const epsKind = /実績/.test(perDef.label) ? '実績EPS' : (perDef.per === 'nkcalc' ? '予想EPS(加重平均ベース)' : '予想EPS');
   const cols = [];
   if (eps1) cols.push({ head: `1年前<br><span class="muted">${esc(per1[0])}</span><br>${epsKind} ${fmtPx(eps1)}`, eps: eps1 });
   cols.push({ head: `現在<br><span class="muted">${esc(perLast[0])}</span><br>${epsKind} <b>${fmtPx(eps0)}</b>`, eps: eps0, cur: true });
   cols.push({ head: `来期（成長率 <input type="number" step="1" value="${g}" style="width:52px;font-size:11px;padding:1px 3px" onchange="macroSetPerGrowth('${jsq(gKey)}', this.value)" title="来期EPSの想定成長率（%）。既定は1年間のEPS伸び率（履歴が無ければ+8%）。変更は保存されます">%）<br>${epsKind} ${fmtPx(eps2)}`, eps: eps2 });
-  const rows = levels.map(v => `<tr class="${v === markNow ? 'macro-row-new' : ''}"><th class="r" style="white-space:nowrap;padding:3px 8px">${v}倍</th>${cols.map(c => {
+  const rangeBg = (v) => inRange(v) ? 'background:rgba(37,99,235,.07);' : '';
+  const rows = levels.map(v => `<tr class="${v === markNow ? 'macro-row-new' : ''}"><th class="r" style="white-space:nowrap;padding:3px 8px;${rangeBg(v)}" title="${inRange(v) ? '過去3年のPERレンジ内' : ''}">${v}倍</th>${cols.map(c => {
     let mark = '';
     if (c.cur && v === markNow) mark = ` <span class="pos" title="現在値 ${fmtPx(pxNow[1])}（${esc(pxNow[0])}）＝PER ${(pxNow[1] / eps0).toFixed(1)}倍">★現在 ${fmtPx(pxNow[1])}</span>`;
     if (c.cur && low && v === markLow && v !== markNow) mark = ` <span class="neg" title="直近1年の安値 ${fmtPx(low[1])}（${esc(low[0])}）＝PER ${(low[1] / eps0).toFixed(1)}倍">☆1年安値 ${fmtPx(low[1])}</span>`;
-    return `<td class="r" style="white-space:nowrap;padding:3px 8px">${fmtPx(v * c.eps)}${mark}</td>`;
+    return `<td class="r" style="white-space:nowrap;padding:3px 8px;${rangeBg(v)}">${fmtPx(v * c.eps)}${mark}</td>`;
   }).join('')}</tr>`).join('');
-  return `<div class="table-wrap macro-managed" style="flex:0 1 auto;margin:0"><table class="list" style="font-size:12px">
+  const rangeLine = r3
+    ? `過去3年のPERレンジ: <b>${macroFmt(r3.min[1], perId)}</b>倍（${esc(r3.min[0])}）〜 <b>${macroFmt(r3.max[1], perId)}</b>倍（${esc(r3.max[0])}）・平均 ${macroFmt(r3.avg, perId)}倍`
+      + (pts3[0][0] > new Date(Date.now() - 3 * 365 * 86400000).toISOString().slice(0, 10) ? `<span class="muted">（履歴 ${esc(r3.from)}〜・${r3.n}点。毎日の算出で伸びていきます）</span>` : '')
+    : '過去3年のPERレンジ: データなし';
+  return `<div style="flex:0 1 auto;min-width:0"><div class="muted" style="font-size:11px;margin:0 2px 4px"><span style="display:inline-block;width:10px;height:10px;background:rgba(37,99,235,.25);border-radius:2px;vertical-align:middle;margin-right:4px"></span>${rangeLine}</div>
+  <div class="table-wrap macro-managed" style="margin:0"><table class="list" style="font-size:12px">
     <thead><tr><th class="l" title="PER別の株価＝EPS×PER。EPSは株価÷PERで逆算した指数1単位あたりの利益">PER別株価${unit ? `<span class="muted" style="font-weight:500">（${esc(unit)}）</span>` : ''}</th>${cols.map(c => `<th class="r" style="font-weight:500;line-height:1.35">${c.head}</th>`).join('')}</tr></thead>
-    <tbody>${rows}</tbody></table></div>`;
+    <tbody>${rows}</tbody></table></div></div>`;
 }
 function macroSetPerGrowth(key, v) {
   const m = Object.assign({}, (store.data.macroView || {}).perGrowth || {});
@@ -8767,7 +8787,7 @@ function renderMacroChart() {
     id, label: (MACRO_SERIES[id] || {}).label || id, color: MACRO_COLORS[i % MACRO_COLORS.length],
     axis: rightSet.has(id) ? 'r' : 'l',
     pts: macroCut(macroPoints(id), period),
-  })).filter(s => s.pts.length >= 2);
+  })).filter(s => s.pts.length >= 1);   // 1点だけの系列（算出を始めたばかりのPER）も点として描く
   // 比較指数は「指標（カード側）のデータがある期間」に切り詰める。指標が主役なので、
   // ハイイールドスプレッド等で指標の履歴が選択期間より短い時に、指数側の長い履歴へ
   // x軸を合わせると肝心の指標が右端の一部にしか描かれない（2026-08-25 すみぽん指摘）。
@@ -8776,7 +8796,7 @@ function renderMacroChart() {
     const lo = mains.map(s => s.pts[0][0]).sort()[0];
     const hi = mains.map(s => s.pts[s.pts.length - 1][0]).sort().pop();
     for (const s of series) if (!card.ids.includes(s.id)) s.pts = s.pts.filter(p => p[0] >= lo && p[0] <= hi);
-    series = series.filter(s => s.pts.length >= 2);
+    series = series.filter(s => s.pts.length >= 1);
   }
   if (!series.length) { bail('この指標のデータがまだありません。「更新」で取得してください。'); return; }
   // 左軸の系列が全部未取得だった時は、右軸の系列を左へ寄せて1軸で描く（右軸だけのグラフにしない）
@@ -8817,11 +8837,14 @@ function macroFitTable(el) {
   wraps.forEach(w => { w.style.maxHeight = ''; });
   const cont = el.closest('.content');
   if (!cont) return;
-  const overflow = cont.scrollHeight - cont.clientHeight;
-  if (overflow <= 1) return;
-  const h = Math.max(...wraps.map(w => w.getBoundingClientRect().height));
-  const mh = Math.max(88, Math.round(h - overflow)) + 'px';
-  wraps.forEach(w => { w.style.maxHeight = mh; });
+  // 2回まで詰める（PER別株価表の上のレンジ行など、表の外にある要素の分で1回では数px残ることがある）
+  for (let i = 0; i < 2; i++) {
+    const overflow = cont.scrollHeight - cont.clientHeight;
+    if (overflow <= 1) return;
+    const h = Math.max(...wraps.map(w => w.getBoundingClientRect().height));
+    const mh = Math.max(76, Math.round(h - overflow)) + 'px';
+    wraps.forEach(w => { w.style.maxHeight = mh; });
+  }
 }
 // 今のレイアウトから「グラフに使ってよい高さ」を実測で求める。
 // 収まり判定は main.content 基準（ルール6。document 基準は body:overflow:hidden で常に0になり誤判定する）。
@@ -8967,7 +8990,10 @@ function macroLineChart(series, W, H) {
   // 右軸の系列は破線にして、線だけでもどちらの軸か分かるようにする（色覚に依存させない）
   const lines = series.map(s => {
     const d = s.pts.map((p, i) => (i ? 'L' : 'M') + px(Date.parse(p[0]) / 1000).toFixed(1) + ' ' + py(p[1], s.axis).toFixed(1)).join(' ');
-    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6" stroke-linejoin="round"${(dual && s.axis === 'r') ? ' stroke-dasharray="5 3"' : ''}/>`;
+    // 点が1つ（算出を始めた初日のPER等）は線にならないので●で描く。2点以上でも最新点に小さな●を付けて線の終端を分かりやすくする
+    const lastP = s.pts[s.pts.length - 1];
+    const dot = `<circle cx="${px(Date.parse(lastP[0]) / 1000).toFixed(1)}" cy="${py(lastP[1], s.axis).toFixed(1)}" r="${s.pts.length === 1 ? 4 : 2.5}" fill="${s.color}"/>`;
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6" stroke-linejoin="round"${(dual && s.axis === 'r') ? ' stroke-dasharray="5 3"' : ''}/>${dot}`;
   }).join('');
   const legend = series.map((s, i) => {
     const src = s.raw || s.pts;                       // 右軸を指数化していても凡例は実値

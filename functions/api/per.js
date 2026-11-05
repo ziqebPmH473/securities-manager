@@ -17,7 +17,7 @@ const THIN_MAX = 320, THIN_RECENT = 200;   // /api/macro と同じ間引き規�
 const SOURCES = {
   nikkei: { url: 'https://indexes.nikkei.co.jp/nkave/archives/data?list=per', note: '出典: 日経平均プロフィル（日本経済新聞社）', freq: '日次' },
   sp500:  { url: 'https://www.multpl.com/s-p-500-pe-ratio/table/by-month',     note: '出典: multpl.com（S&P500 実績PER・月次）',   freq: '月次' },
-  ndx:    { url: 'https://query1.finance.yahoo.com/v10/finance/quoteSummary/QQQ?modules=summaryDetail,defaultKeyStatistics', note: '出典: Yahoo Finance（QQQ の実績PER）', freq: '日次' },
+  ndx:    { url: 'https://query1.finance.yahoo.com/v10/finance/quoteSummary/QQQ?modules=summaryDetail,defaultKeyStatistics', note: '出典: Yahoo Finance（QQQ の実績PER）', freq: '日次' },   // 失敗時は finance.yahoo.com/quote/QQQ/ のページ本文へフォールバック
 };
 
 export async function onRequestGet(context) {
@@ -116,7 +116,28 @@ export function parseMultpl(html) {
 }
 
 // ---- NASDAQ100 PER（QQQ の trailingPE。当日値だけ） ----
+// quoteSummary（JSON API）は本番の Cloudflare からブロックされることがある（2026-11-06 実機で「—」）ので、
+// 失敗したら Yahoo Finance（米国版）の QQQ ページ本文の「PE Ratio (TTM)」を読む（開発環境で 26.65 を確認）。
 async function fetchYahooPe(def) {
+  try { return await fetchYahooPeApi(def); }
+  catch (e1) {
+    try { return await fetchYahooPePage(); }
+    catch (e2) { throw new Error(`QQQ の PER が取れませんでした（API: ${String((e1 && e1.message) || e1)} / ページ: ${String((e2 && e2.message) || e2)}）`); }
+  }
+}
+async function fetchYahooPePage() {
+  const html = await getText('https://finance.yahoo.com/quote/QQQ/');
+  const pe = parseYahooPagePe(html);
+  if (pe == null) throw new Error('PE Ratio (TTM) が見つかりません');
+  return [[new Date().toISOString().slice(0, 10), pe]];
+}
+export function parseYahooPagePe(html) {
+  // 例: <span class="label ...">PE Ratio (TTM)</span> <span class="value ...">26.65</span>
+  const m = html.match(/PE Ratio \(TTM\)[\s\S]{0,400}?>\s*([\d.,]+)\s*</);
+  const v = m ? parseFloat(m[1].replace(/,/g, '')) : NaN;
+  return (isFinite(v) && v > 0) ? Math.round(v * 100) / 100 : null;
+}
+async function fetchYahooPeApi(def) {
   const text = await getText(def.url, { 'Accept': 'application/json' });
   let d = null;
   try { d = JSON.parse(text); } catch (_) { throw new Error('Yahoo の応答がJSONではありません'); }
