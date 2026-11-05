@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-0113';
+const APP_VERSION = 'v20261106-0730';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -8064,6 +8064,16 @@ const MACRO_SERIES = {
   XTEXVA01JPM667S: { label: '日本 輸出額(前年比)',    tf: 'yoy', unit: '%', dec: 1, good: 'up' },
   // 実質実効為替レート: 下落＝円安。輸出企業には追い風・輸入コストには逆風で良し悪しが一概に言えないため good なし＝色付けしない
   RBJPBIS:         { label: '円 実質実効為替レート',  tf: 'raw', unit: '', dec: 1 },
+  // 指数のPER（src:'per'）。/api/per から取得し store.data.macro に入れる（2026-11-06 すみぽん依頼）。
+  // 株価と重ねて「割高・割安の水準と株価の関係」を見るためのもの。good は付けない（PERが下がる＝割安化だが、
+  // 業績悪化で下がる場合もあり一概に追い風とは言えない。低いほど割安、という読み方はカードの note に書く）。
+  // ・日経平均: 日経 Indexes の「PER・PBR」ページ（予想PER・日次）。ボット認証で自動取得が通らない時は
+  //   ページの表をコピーして貼り付けで取り込む（macroPerPaste）。取得・貼り付けは既存データに日付で追記する。
+  // ・S&P500: multpl.com（実績PER・月次。1970年〜）
+  // ・NASDAQ100: 無料で履歴を配る所が無いため、Yahoo の QQQ（連動ETF）trailingPE を毎日1点ずつ積み上げる
+  NK_PER:  { label: '日経平均 PER(予想)',       tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'nikkei', srcName: '日経平均プロフィル（日本経済新聞社）' },
+  SPX_PER: { label: 'S&P500 PER(実績)',         tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'sp500',  srcName: 'multpl.com' },
+  NDX_PER: { label: 'NASDAQ100 PER(実績・QQQ)', tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'ndx',    srcName: 'Yahoo Finance（QQQ）' },
   // 指数・為替（src:'idx'）。FREDではなく Yahoo（/api/history）から取得し store.data.macroIdx に入れる。
   // 桁が指標とまったく違う（S&P500約6,000 / 日経約67,500 / ドル円約157）ため、重ねる時は起点=100で指数化する。
   '^GSPC':         { label: 'S&P500',      tf: 'raw', unit: '', dec: 0, good: 'up', src: 'idx' },
@@ -8117,6 +8127,13 @@ const MACRO_GROUPS = [
   // ドル円が横一線になる）。単独系列（ドル円）は実数のままで良い。
   // right: その系列を右軸に置く（桁が違う組み合わせを実値のまま両方読めるようにする）。
   // 例: 日経平均 66,970 と TOPIX連動ETF 431 を同じ軸に置くと ETF が横一線になる。
+  // PER × 株価（左軸=PER・右軸=株価）。期間を切り替えて「株価が上がってもPERは上がっていない＝業績が伸びている」
+  // 「株価が下がってPERも下がった＝割安化」などを読む。
+  { key: 'per', label: 'PER', cards: [
+    { key: 'nk',  label: '日経平均 PER × 株価',  ids: ['NK_PER', '^N225'],  right: ['^N225'], note: '左軸＝日経平均の予想PER（倍）・右軸＝日経平均株価。PERは低いほど割安（日経の公表値。自動取得が通らない時は下の「貼り付けで取込」）' },
+    { key: 'spx', label: 'S&P500 PER × 株価',   ids: ['SPX_PER', '^GSPC'], right: ['^GSPC'], note: '左軸＝S&P500の実績PER（倍・月次・multpl.com）・右軸＝S&P500。日経の「予想PER」とは定義が違う（過去12か月の実績利益ベース）ので水準の直接比較はしない' },
+    { key: 'ndx', label: 'NASDAQ100 PER × 株価', ids: ['NDX_PER', '^NDX'],  right: ['^NDX'],  note: '左軸＝NASDAQ100連動ETF（QQQ）の実績PER（倍）・右軸＝NASDAQ100。履歴の無料配信元が無いため、ツールが毎日1点ずつ積み上げる（取得を始めた日からの履歴になる）' },
+  ] },
   { key: 'idx', label: '指数・為替', cards: [
     { key: 'us',    label: '米国株指数',        ids: ['^GSPC', '^NDX'],    right: ['^NDX'],      note: 'S&P500（左）と NASDAQ100（右）' },
     { key: 'jp',    label: '日本株指数',        ids: ['^N225', '1306.T'],  right: ['1306.T'],    note: '日経平均（左）と TOPIX連動ETF（右）' },
@@ -8131,8 +8148,9 @@ const MACRO_COLORS = ['#2563eb', '#dc2626', '#0d9488', '#7c3aed', '#ca8a04'];
 // 出典表記は取得元ごとに必要（FREDもe-Statも出典明示が利用条件）。画面に出ている系列の取得元だけ並べる。
 const MACRO_SRC_LABEL = { fred: 'FRED®（セントルイス連邦準備銀行）', estat: 'e-Stat（政府統計の総合窓口）', idx: 'Yahoo Finance' };
 function macroSrcNote(ids) {
-  const srcs = [...new Set((ids || []).map(id => (MACRO_SERIES[id] || {}).src || 'fred'))];
-  const labels = srcs.map(s => MACRO_SRC_LABEL[s]).filter(Boolean);
+  // srcName を持つ系列（PER）は系列ごとに取得元が違うので個別に並べる
+  const srcs = [...new Set((ids || []).map(id => { const d = MACRO_SERIES[id] || {}; return d.srcName || (MACRO_SRC_LABEL[d.src || 'fred']); }))];
+  const labels = srcs.filter(Boolean);
   return '出典: ' + (labels.length ? labels.join(' / ') : MACRO_SRC_LABEL.fred);
 }
 let macroBusy = false;
@@ -8191,6 +8209,7 @@ async function macroRefresh(opts) {
   const fredIds = Object.keys(MACRO_SERIES).filter(id => srcOf(id) === 'fred');
   const idxIds = Object.keys(MACRO_SERIES).filter(id => srcOf(id) === 'idx');
   const estatIds = Object.keys(MACRO_SERIES).filter(id => srcOf(id) === 'estat');
+  const perIds = Object.keys(MACRO_SERIES).filter(id => srcOf(id) === 'per');
   const batches = [];
   for (let i = 0; i < fredIds.length; i += 12) batches.push(fredIds.slice(i, i + 12));
   let ok = 0, ng = 0, err = null;
@@ -8217,6 +8236,7 @@ async function macroRefresh(opts) {
   const others = await Promise.all([
     ...idxIds.map(sym => macroFetchIndex(sym).then(() => true).catch(() => false)),
     ...estatIds.map(id => macroFetchEstat(id).then(() => true).catch(() => false)),
+    ...perIds.map(id => macroFetchPer(id).then(() => true).catch(() => false)),
   ]);
   ok += others.filter(Boolean).length;
   ng += others.filter(v => !v).length;
@@ -8263,6 +8283,93 @@ async function macroFetchEstat(id) {
   const prevLast = (prev && prev.obs && prev.obs.length) ? prev.obs[prev.obs.length - 1][0] : null;
   updNoteMacro(id, prevLast, d.obs, d.freq);
   store.data.macro[id] = { obs: d.obs, freq: d.freq || '', at: new Date().toISOString() };
+}
+// 指数のPER1系列を /api/per から取得。★置き換えではなく既存データに日付で追記する（macroPerMerge）。
+// 日経は公表ページに出ている期間ぶんしか返らず、NASDAQ100 は当日1点しか返らないため、積み上げないと履歴が残らない。
+// 失敗理由は _macroPerErr に残し、PERグループの画面に出す（日経はボット認証で取れないことがあり、その時は貼り付け取込へ案内）。
+const _macroPerErr = {}, _macroPerOk = {};
+async function macroFetchPer(id) {
+  const def = MACRO_SERIES[id] || {};
+  if (!def.per) throw new Error('PER の取得元が未定義 (' + id + ')');
+  try {
+    const res = await fetch('/api/per?src=' + encodeURIComponent(def.per));
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok || d.error) throw new Error((d.blocked ? 'ボット認証でブロック: ' : '') + (d.error || ('HTTP ' + res.status)));
+    if (!Array.isArray(d.obs) || !d.obs.length) throw new Error('データなし (' + id + ')');
+    macroPerMerge(id, d.obs, d.freq);
+    delete _macroPerErr[id]; _macroPerOk[id] = true;
+  } catch (e) { _macroPerErr[id] = String((e && e.message) || e); throw e; }
+}
+// 既存の観測列に新しい観測を日付で混ぜる（同じ日付は新しい値で上書き）。戻り値＝追加・更新した点数。
+function macroPerMerge(id, obs, freq) {
+  store.data.macro ||= {};
+  const prev = store.data.macro[id];
+  const prevLast = (prev && prev.obs && prev.obs.length) ? prev.obs[prev.obs.length - 1][0] : null;
+  const m = new Map((prev && prev.obs) || []);
+  let n = 0;
+  for (const [d, v] of obs) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || typeof v !== 'number' || !isFinite(v)) continue;
+    if (m.get(d) !== v) n++;
+    m.set(d, v);
+  }
+  const merged = [...m.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1);
+  updNoteMacro(id, prevLast, merged, freq || (prev && prev.freq) || '');
+  store.data.macro[id] = { obs: macroThin(merged), freq: freq || (prev && prev.freq) || '日次', at: new Date().toISOString() };
+  return n;
+}
+// 日経PERの「貼り付けで取込」。日経 Indexes の PER ページ（https://indexes.nikkei.co.jp/nkave/archives/data?list=per）
+// の表を範囲選択してコピーし、ここに貼る。1行＝「日付 … PER …」で、日付は 2026.11.04 / 2026/11/04 / 2026年11月4日 のどれでも可。
+// PER は「日付の後ろにある 3〜200 の範囲の最初の数値」（株価は1万以上・PBRは3未満なので混ざらない）。
+function macroPerPaste(id) {
+  const def = MACRO_SERIES[id] || {};
+  const cur = ((store.data.macro || {})[id] || {}).obs || [];
+  showModal(`${def.label || id} を貼り付けで取り込む`, `
+    <div class="notice" style="margin-bottom:10px"><div>日経のPERページはサーバーからの自動取得が「ボット認証」で止められることがあります。その場合は、ページの表をコピーしてここに貼ってください。既存のデータに<b>日付で追記</b>します（同じ日付は上書き）。</div></div>
+    <ol style="margin:0 0 10px 18px;font-size:13px;line-height:1.7">
+      <li><a href="https://indexes.nikkei.co.jp/nkave/archives/data?list=per" target="_blank" rel="noopener">日経平均 PER・PBR のページ</a>を開く（年月を切り替えれば過去分も取れます）</li>
+      <li>表（日付・PER…の行）をドラッグで選択してコピー</li>
+      <li>下の欄に貼り付けて「取り込む」</li>
+    </ol>
+    <textarea id="per-paste" rows="10" style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:12px" placeholder="例:
+2026.11.04	52,345.67	17.85	1.92
+2026.11.05	52,000.00	17.50	1.90"></textarea>
+    <div class="muted" style="font-size:11px;margin:6px 0 10px">現在 ${cur.length} 点${cur.length ? `（${esc(cur[0][0])} 〜 ${esc(cur[cur.length - 1][0])}）` : ''}。日付は 2026.11.04 / 2026/11/04 / 2026年11月4日 のどれでも可。1行に複数の数値があっても、PER は「日付の後ろの 3〜200 の範囲の最初の数値」として拾います。</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="closeModal()">閉じる</button>
+      <button class="btn btn-primary" onclick="macroPerPasteApply('${jsq(id)}')">取り込む</button>
+    </div>`);
+}
+function macroPerPasteApply(id) {
+  const text = (document.getElementById('per-paste') || {}).value || '';
+  const obs = parsePerPasteText(text);
+  if (!obs.length) { toast('日付とPERの組が見つかりませんでした。表の行（日付 … PER）を貼ってください', 4000); return; }
+  const n = macroPerMerge(id, obs, '日次');
+  store.save();
+  closeModal();
+  toast(`${(MACRO_SERIES[id] || {}).label || id}: ${obs.length}行を読み取り、${n}点を追加・更新しました`);
+  if (currentView === 'macro') renderMacro();
+}
+// 貼り付けテキスト → [[YYYY-MM-DD, PER], ...]（functions/api/per.js の parsePerRow と同じ規則）
+function parsePerPasteText(text) {
+  const DATE_RE = /(\d{4})\s*[.\/\-年]\s*(\d{1,2})\s*[.\/\-月]\s*(\d{1,2})/;
+  const num = (t) => {
+    const u = String(t).replace(/[,，\s]/g, '').replace(/[０-９．]/g, ch => ch === '．' ? '.' : String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+    return /^[-+]?\d+(\.\d+)?$/.test(u) ? parseFloat(u) : null;
+  };
+  const m = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const dm = line.match(DATE_RE);
+    if (!dm) continue;
+    const date = `${dm[1]}-${dm[2].padStart(2, '0')}-${dm[3].padStart(2, '0')}`;
+    if (isNaN(Date.parse(date))) continue;
+    // 桁区切りのカンマ（52,345.67）は先に外す。区切りとして扱うカンマは「数字3桁が続かない」ものだけ
+    const rest = line.slice(dm.index + dm[0].length).replace(/日/g, ' ').replace(/(\d),(?=\d{3}(?!\d))/g, '$1');
+    const cells = rest.split(/[\t|,]|[\s\u3000]+/).map(c => c.trim()).filter(Boolean);
+    let v = null;
+    for (const c of cells) { const n = num(c); if (n != null && n >= 3 && n <= 200) { v = n; break; } }
+    if (v != null) m.set(date, v);
+  }
+  return [...m.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1);
 }
 // 直近200点はそのまま残し、それ以前を等間隔に間引いて全体を320点以内にする（functions/api/macro.js と同じ規則）
 function macroThin(obs) {
@@ -8464,6 +8571,7 @@ function renderMacro() {
         <div class="muted" style="font-size:11px;margin:6px 2px 0" id="macro-chart-note">${cmp.length
           ? `<b>比較中</b>: 指標は<b>左軸（実線）</b>、比較の指数は<b>右軸（破線）</b>で実際の値のまま重ねています。凡例の <b>r</b> は基準系列との相関係数。${cmp.length >= 2 ? '<span class="neg">指数を2つ以上選ぶと右軸は「起点=100」の指数表示に切り替わります（実値のままだと片方が潰れて読めないため。実値は凡例とカーソルで確認できます）。</span>' : ''}`
           : esc(card.note || '')}</div>
+        ${macroPerStatusHtml(card)}
         <div class="table-wrap macro-managed" style="margin-top:12px"><table class="list">
           <thead><tr><th class="l">指標</th><th class="c">頻度</th><th class="r">最新</th><th class="c">観測日</th>
             <th class="r">1期前</th><th class="r">2期前</th><th class="r">3期前</th><th class="r">1年前</th><th class="r">1年差</th></tr></thead>
@@ -8476,6 +8584,25 @@ function renderMacro() {
     </div>`;
   renderMacroChart();
   scheduleFit();
+}
+
+// PERカードの下に出す取得状況の1行（取得元・最終観測日・失敗理由・貼り付け取込ボタン）。PER以外のカードは空。
+function macroPerStatusHtml(card) {
+  const perIds = (card.ids || []).filter(id => (MACRO_SERIES[id] || {}).src === 'per');
+  if (!perIds.length) return '';
+  return perIds.map(id => {
+    const def = MACRO_SERIES[id] || {};
+    const rec = (store.data.macro || {})[id];
+    const n = (rec && rec.obs || []).length;
+    const last = n ? rec.obs[n - 1][0] : null;
+    const err = _macroPerErr[id];
+    const blocked = err && /ボット認証/.test(err);
+    const paste = def.per === 'nikkei' ? `<button class="btn btn-sm" onclick="macroPerPaste('${jsq(id)}')" title="日経のページの表をコピーして貼り付けで取り込みます">貼り付けで取込</button>` : '';
+    return `<div class="muted" style="font-size:11px;margin:4px 2px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span>${esc(def.label)}: ${n ? `${n}点（最新 ${esc(last)}）` : 'データなし'}</span>
+      ${err ? `<span class="neg" title="${esc(err)}">自動取得に失敗${blocked ? '（取得元のボット認証にブロックされました' + (paste ? '。下の貼り付けで取り込めます' : '') + '）' : ''}</span>` : (_macroPerOk[id] ? `<span>自動取得OK</span>` : '')}
+      ${paste}</div>`;
+  }).join('');
 }
 
 // グラフ本体。カードの ids ＋「比較」で選んだ指数を折れ線で描く。

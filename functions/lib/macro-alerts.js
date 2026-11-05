@@ -38,6 +38,10 @@ export const SERIES = {
   IRSTCI01JPM156N: { label: '日本 短期金利(コール)',    tf: 'raw',  unit: '%',   dec: 2 },
   LRHUTTTTJPM156S: { label: '日本 失業率',              tf: 'raw',  unit: '%',   dec: 1 },
   JPNRGDPEXP:      { label: '日本 実質GDP(前年比)',     tf: 'yoy',  unit: '%',   dec: 1 },
+  // 指数のPER（/api/per）。日経はボット認証で取れないことがある＝取れなければ判定対象外になるだけ
+  NK_PER:          { label: '日経平均 PER(予想)',        tf: 'raw',  unit: '倍',  dec: 2, per: 'nikkei' },
+  SPX_PER:         { label: 'S&P500 PER(実績)',          tf: 'raw',  unit: '倍',  dec: 2, per: 'sp500' },
+  NDX_PER:         { label: 'NASDAQ100 PER(実績・QQQ)',  tf: 'raw',  unit: '倍',  dec: 2, per: 'ndx' },
   XTEXVA01JPM667S: { label: '日本 輸出額(前年比)',      tf: 'yoy',  unit: '%',   dec: 1 },
   RBJPBIS:         { label: '円 実質実効為替レート',    tf: 'raw',  unit: '',    dec: 1 },
   JP_CPI:      { label: '日本CPI 総合',     tf: 'raw', unit: '%', dec: 1, estat: { id: '0004052037', cdTab: '3', cdCat01: '0001', cdArea: '00000' } },
@@ -87,8 +91,9 @@ function fmt(v, dec) {
 async function fetchSeries(origin, ids, token) {
   const authInit = token ? { headers: { authorization: 'Bearer ' + token } } : undefined;
   const out = {};
-  const fred = ids.filter(id => SERIES[id] && !SERIES[id].estat);
+  const fred = ids.filter(id => SERIES[id] && !SERIES[id].estat && !SERIES[id].per);
   const estat = ids.filter(id => SERIES[id] && SERIES[id].estat);
+  const per = ids.filter(id => SERIES[id] && SERIES[id].per);
   for (let i = 0; i < fred.length; i += 12) {
     const batch = fred.slice(i, i + 12);
     try {
@@ -107,6 +112,14 @@ async function fetchSeries(origin, ids, token) {
     for (const [k, v] of Object.entries(q)) if (k !== 'id') p.set(k, v);
     try {
       const res = await fetch(`${origin}/api/estat?${p.toString()}`, authInit);
+      if (!res.ok) return;
+      const d = await res.json();
+      if (Array.isArray(d.obs) && d.obs.length) out[id] = d.obs;
+    } catch (_) { /* 同上 */ }
+  }));
+  await Promise.all(per.map(async (id) => {
+    try {
+      const res = await fetch(`${origin}/api/per?src=${encodeURIComponent(SERIES[id].per)}`, authInit);
       if (!res.ok) return;
       const d = await res.json();
       if (Array.isArray(d.obs) && d.obs.length) out[id] = d.obs;
