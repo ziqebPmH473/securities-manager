@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261016-0010';
+const APP_VERSION = 'v20261106-0113';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -5473,17 +5473,17 @@ function renderSignals() {
   ratioCtx = buildRatioCtx([...reached, ...near, ...within10]);
   const visOrderS = getColOrder('SIGNAL').filter(c => c.visible);
   const visibleCols = visOrderS.map(c => MASTER_COLS.find(m => m.key === c.key)).filter(Boolean);
-  const colCount = visibleCols.length + 1; // +1 = アクション列
+  const colCount = visibleCols.length + 2; // +2 = 先頭の選択チェックボックス列 ＋ 末尾のアクション列
   const head = colHeadHtml(visibleCols, st, 'SIGNAL', null);
-  // 末尾=操作列（購入を記録ボタン）。狭いと切れるため十分な幅を確保
-  const SIG_ACTION_W = 116;
-  const sigColgroup = `<colgroup>${visOrderS.map(c => colTag(c)).join('')}<col style="width:${SIG_ACTION_W}px"></colgroup>`;
-  const sigTableW = SIG_ACTION_W + visOrderS.reduce((a, c) => a + colWidthPx(c), 0);
+  // 先頭=選択列（一括変更用チェックボックス）、末尾=操作列（購入を記録ボタン）。狭いと切れるため十分な幅を確保
+  const SIG_SEL_W = 36, SIG_ACTION_W = 116;
+  const sigColgroup = `<colgroup><col style="width:${SIG_SEL_W}px">${visOrderS.map(c => colTag(c)).join('')}<col style="width:${SIG_ACTION_W}px"></colgroup>`;
+  const sigTableW = SIG_SEL_W + SIG_ACTION_W + visOrderS.reduce((a, c) => a + colWidthPx(c), 0);
   // 到達／もうすぐ を1つの表にまとめ、グループ見出し行で区切る（列幅を揃えるため）
   // colspanセル自体への position:sticky はブラウザで効きにくいため、セル内のラベル(span)を sticky 化して左固定する。
   const groupRow = (label, cls2, n) => `<tr class="sig-group ${cls2}"><td class="l" colspan="${colCount}"><span class="sig-group-label">${label}　${n} 件</span></td></tr>`;
   const bodyRows = (secs) => secs.length
-    ? secs.map(sec => marketRow(sec, visibleCols, { actions: 'signal' })).join('')
+    ? secs.map(sec => marketRow(sec, visibleCols, { select: true, actions: 'signal' })).join('')
     : `<tr><td class="muted" colspan="${colCount}" style="padding:12px 16px">該当する銘柄はありません。</td></tr>`;
   const seg = (m, label) => `<button class="${signalMarketFilter === m ? 'active' : ''}" onclick="setSignalMarket('${m}')">${label}</button>`;
   app.innerHTML = `
@@ -5495,9 +5495,18 @@ function renderSignals() {
         <button class="btn btn-sm" onclick="openAiDiag()" title="サイン・保有比率・マクロ・ニュースをAI(Gemini)に渡して、相場環境と買い候補の優先順位を診断（金額は送信しない）">🤖 AI相場診断</button>
         <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
       </div>
+      <div class="bulkbar" style="flex-wrap:wrap">
+        <span class="muted" id="bulk-count">選択 0 件</span>
+        <span class="muted">を</span>
+        <select onchange="sigBulkFieldChange(this.value)">${SM_BULK_FIELDS.map(f => `<option value="${f.key}" ${sigBulkField === f.key ? 'selected' : ''}>${f.label}</option>`).join('')}</select>
+        <span class="muted">→</span>
+        <span id="sig-bulk-value-wrap">${bulkValueHtml(sigBulkField, 'sig-bulk-value')}</span>
+        <button class="btn btn-sm btn-primary" onclick="sigBulkApply()">一括変更</button>
+        <span class="muted">※ルール変更で到達判定が変わると、その銘柄はこの表から外れる・別グループに移ることがあります</span>
+      </div>
       <div class="section-body">
         <div class="table-wrap"><table class="fixed-cols holdings dense" style="width:${sigTableW}px">${sigColgroup}
-          <thead><tr>${head}<th class="l"></th></tr></thead>
+          <thead><tr><th class="l"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>${head}<th class="l"></th></tr></thead>
           <tbody>
             ${groupRow('🔴 到達（今が買い時）', 'reached', reached.length)}
             ${bodyRows(sortSecurities(reached, 'SIGNAL'))}
@@ -5509,8 +5518,9 @@ function renderSignals() {
         </table></div>
       </div>
     </div>`;
+  bindRowSelect(); // 選択件数表示（一括変更バー）
   autoFitColumns(document.querySelector('#app table.fixed-cols'));
-  applyStickyCols(document.querySelector('#app table.fixed-cols'), 'SIGNAL'); // コード・銘柄名を左端固定（列設定の「列の固定」対応）
+  applyStickyCols(document.querySelector('#app table.fixed-cols'), 'SIGNAL'); // 選択列＋コード・銘柄名を左端固定（列設定の「列の固定」対応）
   scheduleFit(); // 市場フィルタ切替で renderSignals() を直接呼ばれた時も枠内スクロール化（render() を経由しないため自前で）
 }
 
@@ -10206,6 +10216,19 @@ function holdBulkApply() {
   store.save(); preserveTableScroll(render); // 一括変更後もスクロール位置を維持
   const fl = SM_BULK_FIELDS.find(f => f.key === holdBulkField);
   toast(`${ids.length}件の「${fl ? fl.label : holdBulkField}」を${holdBulkField === 'clearOverrides' ? '削除' : '変更'}しました`, 4000);
+}
+// 買い増しサインタブの一括変更（選択した .row-select に対して）。項目は銘柄マスタ/保有と共通（SM_BULK_FIELDS）。
+// 既定は「買い増しルール」（サインを見ながらルールを付け替える用途が主）。
+let sigBulkField = 'ruleId';
+function sigBulkFieldChange(f) { sigBulkField = f; const c = document.getElementById('sig-bulk-value-wrap'); if (c) c.innerHTML = bulkValueHtml(f, 'sig-bulk-value'); }
+function sigBulkApply() {
+  const ids = [...document.querySelectorAll('.row-select:checked')].map(b => parseInt(b.dataset.id, 10));
+  if (!ids.length) { toast('銘柄を選択してください'); return; }
+  const val = bulkConvert(sigBulkField, (document.getElementById('sig-bulk-value') || {}).value);
+  for (const id of ids) store.updateSecurity(id, bulkPatch(sigBulkField, val, store.data.securities.find(s => s.id === id)));
+  store.save(); preserveTableScroll(renderSignals); // 判定し直して再描画（ルール変更で行が移動/消えることがある）
+  const fl = SM_BULK_FIELDS.find(f => f.key === sigBulkField);
+  toast(`${ids.length}件の「${fl ? fl.label : sigBulkField}」を${sigBulkField === 'clearOverrides' ? '削除' : '変更'}しました`, 4000);
 }
 function setSecMasterSort(key) {
   if (secMasterSort.key === key) secMasterSort.dir *= -1; else { secMasterSort.key = key; secMasterSort.dir = 1; }
@@ -17425,6 +17448,8 @@ window.smBulkFieldChange = smBulkFieldChange;
 window.smBulkApply = smBulkApply;
 window.holdBulkFieldChange = holdBulkFieldChange;
 window.holdBulkApply = holdBulkApply;
+window.sigBulkFieldChange = sigBulkFieldChange;
+window.sigBulkApply = sigBulkApply;
 window.bulkSetDetailType = bulkSetDetailType;
 window.bulkSetField = bulkSetField;
 window.bulkDeleteSecurities = bulkDeleteSecurities;
