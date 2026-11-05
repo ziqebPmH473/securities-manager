@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-0730';
+const APP_VERSION = 'v20261106-0830';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -8071,7 +8071,10 @@ const MACRO_SERIES = {
   //   ページの表をコピーして貼り付けで取り込む（macroPerPaste）。取得・貼り付けは既存データに日付で追記する。
   // ・S&P500: multpl.com（実績PER・月次。1970年〜）
   // ・NASDAQ100: 無料で履歴を配る所が無いため、Yahoo の QQQ（連動ETF）trailingPE を毎日1点ずつ積み上げる
-  NK_PER:  { label: '日経平均 PER(予想)',       tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'nikkei', srcName: '日経平均プロフィル（日本経済新聞社）' },
+  // ★日経は公表ページがボット認証で取れないため、日経公表の構成銘柄ウエートCSV（静的ファイル・認証なし）×
+  //   Yahoo!ファイナンス日本版の各銘柄 EPS(会社予想)・前日終値 から**同じ定義（加重平均）で算出**する（per:'nkcalc'、/api/nkper）。
+  //   会社予想EPSが未公表の銘柄（約1割）は除外して按分するので、公表値とは数%ずれ得る。
+  NK_PER:  { label: '日経平均 PER(予想・算出)', tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'nkcalc', srcName: '日経平均プロフィル（構成銘柄ウエート）＋Yahoo!ファイナンス（各銘柄のEPS）' },
   SPX_PER: { label: 'S&P500 PER(実績)',         tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'sp500',  srcName: 'multpl.com' },
   NDX_PER: { label: 'NASDAQ100 PER(実績・QQQ)', tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'ndx',    srcName: 'Yahoo Finance（QQQ）' },
   // 指数・為替（src:'idx'）。FREDではなく Yahoo（/api/history）から取得し store.data.macroIdx に入れる。
@@ -8130,7 +8133,7 @@ const MACRO_GROUPS = [
   // PER × 株価（左軸=PER・右軸=株価）。期間を切り替えて「株価が上がってもPERは上がっていない＝業績が伸びている」
   // 「株価が下がってPERも下がった＝割安化」などを読む。
   { key: 'per', label: 'PER', cards: [
-    { key: 'nk',  label: '日経平均 PER × 株価',  ids: ['NK_PER', '^N225'],  right: ['^N225'], note: '左軸＝日経平均の予想PER（倍）・右軸＝日経平均株価。PERは低いほど割安（日経の公表値。自動取得が通らない時は下の「貼り付けで取込」）' },
+    { key: 'nk',  label: '日経平均 PER × 株価',  ids: ['NK_PER', '^N225'],  right: ['^N225'], note: '左軸＝日経平均の予想PER（倍）・右軸＝日経平均株価。PERは低いほど割安。PERは構成225銘柄のEPS（会社予想）をウエート加重して毎日ツールが算出（日経公表値と同じ定義。未公表銘柄は除外して按分）' },
     { key: 'spx', label: 'S&P500 PER × 株価',   ids: ['SPX_PER', '^GSPC'], right: ['^GSPC'], note: '左軸＝S&P500の実績PER（倍・月次・multpl.com）・右軸＝S&P500。日経の「予想PER」とは定義が違う（過去12か月の実績利益ベース）ので水準の直接比較はしない' },
     { key: 'ndx', label: 'NASDAQ100 PER × 株価', ids: ['NDX_PER', '^NDX'],  right: ['^NDX'],  note: '左軸＝NASDAQ100連動ETF（QQQ）の実績PER（倍）・右軸＝NASDAQ100。履歴の無料配信元が無いため、ツールが毎日1点ずつ積み上げる（取得を始めた日からの履歴になる）' },
   ] },
@@ -8291,6 +8294,10 @@ const _macroPerErr = {}, _macroPerOk = {};
 async function macroFetchPer(id) {
   const def = MACRO_SERIES[id] || {};
   if (!def.per) throw new Error('PER の取得元が未定義 (' + id + ')');
+  if (def.per === 'nkcalc') {
+    try { await macroCalcNikkeiPer(id); delete _macroPerErr[id]; _macroPerOk[id] = true; return; }
+    catch (e) { _macroPerErr[id] = String((e && e.message) || e); throw e; }
+  }
   try {
     const res = await fetch('/api/per?src=' + encodeURIComponent(def.per));
     const d = await res.json().catch(() => ({}));
@@ -8299,6 +8306,105 @@ async function macroFetchPer(id) {
     macroPerMerge(id, d.obs, d.freq);
     delete _macroPerErr[id]; _macroPerOk[id] = true;
   } catch (e) { _macroPerErr[id] = String((e && e.message) || e); throw e; }
+}
+// 日経平均の加重平均PERを算出する。/api/nkper を 25銘柄ずつ（9回・3並列）呼び、
+//   PER = Σw_i / Σ(w_i × EPS_i / 株価_i)   （w=構成ウエート。日経公表値と同じ「株価合計÷EPS合計」型）
+// EPS(会社予想) が無い銘柄（無配当・未公表など約1割）は分子分母の両方から外す＝残りで按分。
+// 赤字（EPS<0）は益回りマイナスのまま合算する。カバー率（取れた銘柄のウエート合計）が7割未満なら失敗扱い。
+// 結果は当日1点 [[today, PER]] として追記。算出の内訳は store.data.macro[id].calc に残す（表示用）。
+async function macroCalcNikkeiPer(id) {
+  const SIZE = 25;
+  const first = await fetch(`/api/nkper?batch=0&size=${SIZE}`);
+  const d0 = await first.json().catch(() => ({}));
+  if (!first.ok || d0.error) throw new Error(d0.error || ('HTTP ' + first.status));
+  const total = d0.total || 0;
+  const nb = Math.ceil(total / SIZE);
+  const pages = [d0];
+  const rest = []; for (let b = 1; b < nb; b++) rest.push(b);
+  // 3並列で残りを取る（1回=25銘柄のYahoo取得≒5秒。直列だと45秒かかる）
+  const runners = [0, 1, 2].map(async () => {
+    while (rest.length) {
+      const b = rest.shift();
+      const res = await fetch(`/api/nkper?batch=${b}&size=${SIZE}`);
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.error) throw new Error(d.error || ('HTTP ' + res.status));
+      pages.push(d);
+    }
+  });
+  await Promise.all(runners);
+  const items = pages.flatMap(p => p.items || []);
+  let sw = 0, sy = 0, n = 0; const missing = [];
+  for (const it of items) {
+    if (typeof it.eps !== 'number' || typeof it.price !== 'number' || !(it.price > 0)) { missing.push(it.code); continue; }
+    sw += it.w; sy += it.w * it.eps / it.price; n++;
+  }
+  if (!(sw >= 0.7) || !(sy > 0)) throw new Error(`算出できる銘柄が足りません（${n}/${items.length}銘柄・ウエート${Math.round(sw * 100)}%）`);
+  const per = Math.round(sw / sy * 100) / 100;
+  macroPerMerge(id, [[todayJst(), per]], '日次');
+  store.data.macro[id].calc = { at: new Date().toISOString(), weightsDate: d0.date || '', n, total: items.length, covered: Math.round(sw * 1000) / 10, missing };
+}
+// 「PER別の株価」表（EPSからの逆算）。今の PER と株価から EPS（指数ベース）を出し、PER水準ごとの株価を並べる。
+//   列: 1年前のEPS（履歴があれば）／現在のEPS／来期EPS（成長率は入力可。既定＝1年間のEPS伸び率、無ければ+8%）
+//   行: 直近5年のPERの範囲（＋現在値）を整数刻みで。現在値と1年安値の位置に印を付ける。
+// EPSはこの表のために 株価÷PER で逆算した「指数1単位あたりの利益」。日経（予想PER）なら予想EPS、S&P500（実績PER）なら実績EPS。
+function macroPerLevelsHtml(card) {
+  const perId = (card.ids || []).find(id => (MACRO_SERIES[id] || {}).src === 'per');
+  const pxId = (card.ids || []).find(id => (MACRO_SERIES[id] || {}).src === 'idx');
+  if (!perId || !pxId) return '';
+  const perPts = macroPoints(perId), pxPts = macroPoints(pxId);
+  if (!perPts.length || !pxPts.length) return '';
+  const perLast = perPts[perPts.length - 1];
+  const pxAt = (date) => { let hit = null; for (let i = pxPts.length - 1; i >= 0; i--) { if (pxPts[i][0] <= date) { hit = pxPts[i]; break; } } return hit; };
+  const px0 = pxAt(perLast[0]) || pxPts[pxPts.length - 1];
+  const pxNow = pxPts[pxPts.length - 1];
+  if (!(perLast[1] > 0) || !(px0[1] > 0)) return '';
+  const eps0 = px0[1] / perLast[1];
+  // 1年前: PER と株価をそれぞれ約1年前の点で
+  const per1 = macroAtBefore(perPts, perLast[0], 365, 60);
+  const px1 = per1 ? pxAt(per1[0]) : null;
+  const eps1 = (per1 && px1 && per1[1] > 0) ? px1[1] / per1[1] : null;
+  const gKey = macroGroupKey() + '/' + card.key;
+  const gSaved = ((store.data.macroView || {}).perGrowth || {})[gKey];
+  const gDefault = eps1 ? Math.round((eps0 / eps1 - 1) * 1000) / 10 : 8;
+  const g = (typeof gSaved === 'number' && isFinite(gSaved)) ? gSaved : gDefault;
+  const eps2 = eps0 * (1 + g / 100);
+  // 行（PER水準）: 直近5年の範囲＋現在値を含む整数刻み。12行を超えるなら刻みを広げる
+  const recent = macroCut(perPts, '5y').map(p => p[1]).filter(v => v > 0);
+  let lo = Math.floor(Math.min(...recent, perLast[1])) - 1, hi = Math.ceil(Math.max(...recent, perLast[1])) + 1;
+  lo = Math.max(1, lo);
+  const step = (hi - lo) <= 12 ? 1 : (hi - lo) <= 24 ? 2 : 5;
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const levels = []; for (let v = hi; v >= lo; v -= step) levels.push(v);
+  // 印: 現在値（最新株価÷現在EPS）と 1年安値（直近1年の最安値÷現在EPS）に最も近い水準
+  const cutDate = new Date(Date.parse(pxNow[0]) - 365 * 86400000).toISOString().slice(0, 10);
+  const yearPts = pxPts.filter(p => p[0] >= cutDate);
+  const low = yearPts.length ? yearPts.reduce((m, p) => p[1] < m[1] ? p : m) : null;
+  const nearest = (price) => levels.reduce((b, v) => Math.abs(v - price / eps0) < Math.abs(b - price / eps0) ? v : b, levels[0]);
+  const markNow = nearest(pxNow[1]), markLow = low ? nearest(low[1]) : null;
+  const fmtPx = (v) => macroFmt(v, pxId);
+  const unit = (MACRO_SERIES[pxId] || {}).unit || '';
+  const perDef = MACRO_SERIES[perId] || {};
+  const epsKind = /実績/.test(perDef.label) ? '実績EPS' : '予想EPS';
+  const cols = [];
+  if (eps1) cols.push({ head: `1年前<br><span class="muted">${esc(per1[0])}</span><br>${epsKind} ${fmtPx(eps1)}`, eps: eps1 });
+  cols.push({ head: `現在<br><span class="muted">${esc(perLast[0])}</span><br>${epsKind} <b>${fmtPx(eps0)}</b>`, eps: eps0, cur: true });
+  cols.push({ head: `来期（成長率 <input type="number" step="1" value="${g}" style="width:52px;font-size:11px;padding:1px 3px" onchange="macroSetPerGrowth('${jsq(gKey)}', this.value)" title="来期EPSの想定成長率（%）。既定は1年間のEPS伸び率（履歴が無ければ+8%）。変更は保存されます">%）<br>${epsKind} ${fmtPx(eps2)}`, eps: eps2 });
+  const rows = levels.map(v => `<tr class="${v === markNow ? 'macro-row-new' : ''}"><th class="r" style="white-space:nowrap;padding:3px 8px">${v}倍</th>${cols.map(c => {
+    let mark = '';
+    if (c.cur && v === markNow) mark = ` <span class="pos" title="現在値 ${fmtPx(pxNow[1])}（${esc(pxNow[0])}）＝PER ${(pxNow[1] / eps0).toFixed(1)}倍">★現在 ${fmtPx(pxNow[1])}</span>`;
+    if (c.cur && low && v === markLow && v !== markNow) mark = ` <span class="neg" title="直近1年の安値 ${fmtPx(low[1])}（${esc(low[0])}）＝PER ${(low[1] / eps0).toFixed(1)}倍">☆1年安値 ${fmtPx(low[1])}</span>`;
+    return `<td class="r" style="white-space:nowrap;padding:3px 8px">${fmtPx(v * c.eps)}${mark}</td>`;
+  }).join('')}</tr>`).join('');
+  return `<div class="table-wrap macro-managed" style="flex:0 1 auto;margin:0"><table class="list" style="font-size:12px">
+    <thead><tr><th class="l" title="PER別の株価＝EPS×PER。EPSは株価÷PERで逆算した指数1単位あたりの利益">PER別株価${unit ? `<span class="muted" style="font-weight:500">（${esc(unit)}）</span>` : ''}</th>${cols.map(c => `<th class="r" style="font-weight:500;line-height:1.35">${c.head}</th>`).join('')}</tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+function macroSetPerGrowth(key, v) {
+  const m = Object.assign({}, (store.data.macroView || {}).perGrowth || {});
+  const n = parseFloat(v);
+  if (isFinite(n)) m[key] = n; else delete m[key];
+  macroSaveView({ perGrowth: m });
+  renderMacro();
 }
 // 既存の観測列に新しい観測を日付で混ぜる（同じ日付は新しい値で上書き）。戻り値＝追加・更新した点数。
 function macroPerMerge(id, obs, freq) {
@@ -8572,11 +8678,14 @@ function renderMacro() {
           ? `<b>比較中</b>: 指標は<b>左軸（実線）</b>、比較の指数は<b>右軸（破線）</b>で実際の値のまま重ねています。凡例の <b>r</b> は基準系列との相関係数。${cmp.length >= 2 ? '<span class="neg">指数を2つ以上選ぶと右軸は「起点=100」の指数表示に切り替わります（実値のままだと片方が潰れて読めないため。実値は凡例とカーソルで確認できます）。</span>' : ''}`
           : esc(card.note || '')}</div>
         ${macroPerStatusHtml(card)}
-        <div class="table-wrap macro-managed" style="margin-top:12px"><table class="list">
+        <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-top:12px">
+        ${macroPerLevelsHtml(card)}
+        <div class="table-wrap macro-managed" style="flex:1 1 420px;margin:0"><table class="list">
           <thead><tr><th class="l">指標</th><th class="c">頻度</th><th class="r">最新</th><th class="c">観測日</th>
             <th class="r">1期前</th><th class="r">2期前</th><th class="r">3期前</th><th class="r">1年前</th><th class="r">1年差</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
+        </div>
         <div class="muted" style="font-size:11px;margin-top:6px" title="変化の色は符号ではなく指標ごとの向きで付けています。例: CPI −0.2 はインフレ鈍化なので緑、失業率 −0.2 も雇用改善なので緑。逆に 非農業雇用 −87 は雇用の減速なので赤。数字の符号は増減そのものです。">
           色: <span class="pos">緑</span>＝望ましい向きに動いた／<span class="neg">赤</span>＝逆向き（<span class="macro-good">↓良</span>下がるほど追い風・<span class="macro-good">↑良</span>上がるほど追い風）。符号は増減そのもの。　${macroSrcNote(ids)}
         </div>
@@ -8597,10 +8706,13 @@ function macroPerStatusHtml(card) {
     const last = n ? rec.obs[n - 1][0] : null;
     const err = _macroPerErr[id];
     const blocked = err && /ボット認証/.test(err);
-    const paste = def.per === 'nikkei' ? `<button class="btn btn-sm" onclick="macroPerPaste('${jsq(id)}')" title="日経のページの表をコピーして貼り付けで取り込みます">貼り付けで取込</button>` : '';
+    // 貼り付け取込は自動算出・取得が失敗した時だけ出す（通常は手動なしで回る）
+    const paste = (def.per === 'nkcalc' && err) ? `<button class="btn btn-sm" onclick="macroPerPaste('${jsq(id)}')" title="日経のPERページの表をコピーして貼り付けで取り込みます（自動算出が失敗した時の予備）">貼り付けで取込</button>` : '';
+    const calc = rec && rec.calc;
+    const calcNote = (def.per === 'nkcalc' && calc) ? `<span title="日経公表の構成銘柄ウエート（基準日 ${esc(calc.weightsDate || '')}）と各銘柄のEPS（会社予想）・前日終値から算出。EPS未公表の銘柄は除外して按分: ${esc((calc.missing || []).join(' '))}">算出 ${calc.n}/${calc.total}銘柄・ウエート${calc.covered}%・${esc(mktFetchedAt(calc.at))}</span>` : '';
     return `<div class="muted" style="font-size:11px;margin:4px 2px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span>${esc(def.label)}: ${n ? `${n}点（最新 ${esc(last)}）` : 'データなし'}</span>
-      ${err ? `<span class="neg" title="${esc(err)}">自動取得に失敗${blocked ? '（取得元のボット認証にブロックされました' + (paste ? '。下の貼り付けで取り込めます' : '') + '）' : ''}</span>` : (_macroPerOk[id] ? `<span>自動取得OK</span>` : '')}
+      <span>${esc(def.label)}: ${n ? `${n}点（最新 ${esc(last)}）` : 'データなし'}</span>${calcNote}
+      ${err ? `<span class="neg" title="${esc(err)}">自動${def.per === 'nkcalc' ? '算出' : '取得'}に失敗${blocked ? '（取得元のボット認証にブロックされました）' : `（${esc(err.slice(0, 60))}）`}</span>` : (_macroPerOk[id] ? `<span>自動${def.per === 'nkcalc' ? '算出' : '取得'}OK</span>` : '')}
       ${paste}</div>`;
   }).join('');
 }
@@ -8670,16 +8782,19 @@ function renderMacroChart() {
 // カード6枚＋7行の表＋ツールバー3段（グループ/期間/重ねる）が重なる「景気・雇用」で必要になる。
 // 汎用の fitListTables は「縮めた結果160px未満になるなら何もしない」ため、ここで専用に詰める
 // （この枠は .macro-managed を付けて fitListTables の対象から外してある＝二重管理を防ぐ）。
+// ★PERグループでは「PER別株価」表が同じ段に横並びになる（.macro-managed を付けてある）。段の高さは
+//   高い方の表で決まるので、両方に同じ上限を掛ける（片方だけ詰めても段は縮まない）。
 function macroFitTable(el) {
-  const wrap = document.querySelector('#app .table-wrap.macro-managed');
-  if (!wrap) return;
-  wrap.style.maxHeight = '';
+  const wraps = [...document.querySelectorAll('#app .table-wrap.macro-managed')];
+  if (!wraps.length) return;
+  wraps.forEach(w => { w.style.maxHeight = ''; });
   const cont = el.closest('.content');
   if (!cont) return;
   const overflow = cont.scrollHeight - cont.clientHeight;
   if (overflow <= 1) return;
-  const h = wrap.getBoundingClientRect().height;
-  wrap.style.maxHeight = Math.max(88, Math.round(h - overflow)) + 'px';
+  const h = Math.max(...wraps.map(w => w.getBoundingClientRect().height));
+  const mh = Math.max(88, Math.round(h - overflow)) + 'px';
+  wraps.forEach(w => { w.style.maxHeight = mh; });
 }
 // 今のレイアウトから「グラフに使ってよい高さ」を実測で求める。
 // 収まり判定は main.content 基準（ルール6。document 基準は body:overflow:hidden で常に0になり誤判定する）。
