@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-0920';
+const APP_VERSION = 'v20261106-1005';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -1507,7 +1507,8 @@ const gsync = {
 // fetch を薄くラップして同一オリジンの該当パスにだけ Authorization を自動で足す。
 // 未ログイン時は何も足さない（サーバーが401を返し、各呼び出し元の既存のエラー処理に乗る）。
 const GUARDED_APIS = ['/api/price', '/api/news', '/api/macro', '/api/estat',
-                      '/api/translate', '/api/ai-diagnosis', '/api/youtube-summary'];
+                      '/api/translate', '/api/ai-diagnosis', '/api/youtube-summary',
+                      '/api/per', '/api/nkper'];   // 指数PER（2026-11-06。付け忘れて本番で「ログインが必要」になった）
 (() => {
   const orig = window.fetch.bind(window);
   const guardedPath = (input) => {
