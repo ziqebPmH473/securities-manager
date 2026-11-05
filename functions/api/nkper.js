@@ -1,18 +1,24 @@
 // Cloudflare Pages Function: 日経平均の「加重平均PER」をツール側で算出するための部品API
 //
 // 日経が公表している PER（indexes.nikkei.co.jp の「PER・PBR」ページ）はボット認証付きで自動取得できない。
-// そこで、同サイトが静的ファイルとして配っている **構成銘柄ウエートCSV**（認証なしで取れる）と、
-// Yahoo!ファイナンス日本版の各銘柄の EPS（会社予想）・前日終値から、日経平均と同じ定義の PER を自分で計算する。
+// そこで、同サイトが静的ファイルとして配っている **構成銘柄一覧（ウエートCSV）**（認証なしで取れる）で
+// 225銘柄を特定し、Yahoo!ファイナンス日本版の各銘柄ページから 時価総額・発行済株式数・EPS を取って、
+// 日経が公表している「加重平均」PER と同じ定義で自分で計算する。
 //
-//   日経平均 PER = Σ(株価_i × 換算係数_i) / Σ(EPS_i × 換算係数_i)
-//                = 1 / Σ( w_i × EPS_i / 株価_i )        （w_i = 構成ウエート。株価×係数の構成比なので係数は要らない）
-//   ＝ 各銘柄の益回り（EPS/株価）のウエート加重平均の逆数。日経の公表値（予想PER）と同じ「加重平均」型。
+//   加重平均 PER = Σ 時価総額_i / Σ 純利益_i      （純利益_i ≒ EPS_i × 発行済株式数_i）
+//   ※日経は「加重平均」（時価総額合計÷純利益合計）と「指数ベース」（日経平均÷指数ベースEPS）の2つを公表している。
+//     ツールで算出するのは前者。2026-11-05 実測: ツール 15.96倍 vs 日経公表 15.80倍（差1%）。
+//     指数ベースは株価換算係数の大きい銘柄（ソフトバンクG等＝会社予想なし・日経予想で補われる）に左右され、再現できなかった。
+//
+// EPS は 会社予想（参考指標の EPS）。未公表（---）の銘柄は 実績EPS ≒ ROE(実績)×BPS(実績) で代用する（epsSrc:'actual'）。
+// 2026-11-05 時点で 225銘柄中19銘柄が未公表（三菱UFJ・ソフトバンクG・キーエンス・キオクシア・中外製薬など＝時価総額の15%）。
 //
 // 225銘柄ぶんを1回の Function で取ると Cloudflare のサブリクエスト上限（無料50）を超えるため、
 // クライアントが batch 単位（既定25銘柄）で呼び、手元で合算する（/api/price の40銘柄分割と同じ考え方）。
 //
-// GET /api/nkper?op=weights            → { date, n, rows:[{code, name?, w}] }   （ウエートの一覧。確認用）
-// GET /api/nkper?batch=0&size=25       → { date, batch, size, total, items:[{code, w, eps, price, per}] }
+// GET /api/nkper?op=weights            → { date, n, rows:[{code, w}] }   （構成銘柄とウエートの一覧。確認用）
+// GET /api/nkper?batch=0&size=25       → { date, batch, size, total, items:[{code, w, eps, epsSrc, price, per, mc, sh}] }
+//     mc=時価総額（百万円）, sh=発行済株式数, w=指数ウエート（指数ベースの参考用）
 //
 // 出典: 日経平均プロフィル（日本経済新聞社）／Yahoo!ファイナンス
 import { guardApi } from '../lib/api-guard.js';
@@ -34,9 +40,9 @@ export async function onRequestGet(context) {
     const items = await Promise.all(rows.map(async (r) => {
       try {
         const q = await fetchYahooJp(r.code);
-        return { code: r.code, w: r.w, eps: q.eps, price: q.price, per: q.per };
+        return { code: r.code, w: r.w, eps: q.eps, epsSrc: q.epsSrc, price: q.price, per: q.per, mc: q.mc, sh: q.sh };
       } catch (e) {
-        return { code: r.code, w: r.w, eps: null, price: null, per: null, error: String((e && e.message) || e) };
+        return { code: r.code, w: r.w, eps: null, epsSrc: null, price: null, per: null, mc: null, sh: null, error: String((e && e.message) || e) };
       }
     }));
     return json({ date: weights.date, batch, size, total: weights.rows.length, items, at: new Date().toISOString() });
@@ -73,7 +79,8 @@ export function parseWeights(text) {
   return { date, rows };
 }
 
-// ---- Yahoo!ファイナンス日本版（1銘柄）: EPS(会社予想)・前日終値・PER(会社予想) ----
+// ---- Yahoo!ファイナンス日本版（1銘柄）: EPS(会社予想)・前日終値・PER(会社予想)・時価総額(百万円)・発行済株式数 ----
+// EPS(会社予想) が無い銘柄は 実績EPS ≒ ROE(実績)×BPS(実績)/100 で代用（epsSrc:'actual'）。両方無ければ null。
 // 「参考指標」の各項目は _DataListItem__name の直後の _StyledNumber__value（info.js の jpRefMetric と同じ規則）。
 async function fetchYahooJp(code) {
   const res = await fetchWithTimeout(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}.T`, {
@@ -82,7 +89,13 @@ async function fetchYahooJp(code) {
   });
   if (!res.ok) throw new Error(`Yahoo!JP HTTP ${res.status}`);
   const html = await res.text();
-  return { eps: jpRefMetric(html, 'EPS'), price: jpRefMetric(html, '前日終値'), per: jpRefMetric(html, 'PER') };
+  let eps = jpRefMetric(html, 'EPS'), epsSrc = eps != null ? 'forecast' : null;
+  if (eps == null) {
+    const roe = jpRefMetric(html, 'ROE'), bps = jpRefMetric(html, 'BPS');
+    if (roe != null && bps != null) { eps = Math.round(roe * bps) / 100; epsSrc = 'actual'; }
+  }
+  return { eps, epsSrc, price: jpRefMetric(html, '前日終値'), per: jpRefMetric(html, 'PER'),
+           mc: jpRefMetric(html, '時価総額'), sh: jpRefMetric(html, '発行済株式数') };
 }
 export function jpRefMetric(html, label) {
   const re = new RegExp('_DataListItem__name[^>]*>' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '<');

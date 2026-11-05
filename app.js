@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-0830';
+const APP_VERSION = 'v20261106-0920';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -8074,7 +8074,9 @@ const MACRO_SERIES = {
   // ★日経は公表ページがボット認証で取れないため、日経公表の構成銘柄ウエートCSV（静的ファイル・認証なし）×
   //   Yahoo!ファイナンス日本版の各銘柄 EPS(会社予想)・前日終値 から**同じ定義（加重平均）で算出**する（per:'nkcalc'、/api/nkper）。
   //   会社予想EPSが未公表の銘柄（約1割）は除外して按分するので、公表値とは数%ずれ得る。
-  NK_PER:  { label: '日経平均 PER(予想・算出)', tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'nkcalc', srcName: '日経平均プロフィル（構成銘柄ウエート）＋Yahoo!ファイナンス（各銘柄のEPS）' },
+  //   日経は「加重平均」（時価総額合計÷純利益合計）と「指数ベース」の2つを公表しており、ツールが出すのは**加重平均**
+  //   （2026-11-05 実測: ツール 15.96 vs 公表 15.80）。指数ベースは日経予想EPSに依存し再現できない。
+  NK_PER:  { label: '日経平均 PER(加重平均・算出)', tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'nkcalc', srcName: '日経平均プロフィル（構成銘柄）＋Yahoo!ファイナンス（各銘柄の時価総額・EPS）' },
   SPX_PER: { label: 'S&P500 PER(実績)',         tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'sp500',  srcName: 'multpl.com' },
   NDX_PER: { label: 'NASDAQ100 PER(実績・QQQ)', tf: 'raw', unit: '倍', dec: 2, src: 'per', per: 'ndx',    srcName: 'Yahoo Finance（QQQ）' },
   // 指数・為替（src:'idx'）。FREDではなく Yahoo（/api/history）から取得し store.data.macroIdx に入れる。
@@ -8133,7 +8135,7 @@ const MACRO_GROUPS = [
   // PER × 株価（左軸=PER・右軸=株価）。期間を切り替えて「株価が上がってもPERは上がっていない＝業績が伸びている」
   // 「株価が下がってPERも下がった＝割安化」などを読む。
   { key: 'per', label: 'PER', cards: [
-    { key: 'nk',  label: '日経平均 PER × 株価',  ids: ['NK_PER', '^N225'],  right: ['^N225'], note: '左軸＝日経平均の予想PER（倍）・右軸＝日経平均株価。PERは低いほど割安。PERは構成225銘柄のEPS（会社予想）をウエート加重して毎日ツールが算出（日経公表値と同じ定義。未公表銘柄は除外して按分）' },
+    { key: 'nk',  label: '日経平均 PER × 株価',  ids: ['NK_PER', '^N225'],  right: ['^N225'], note: '左軸＝日経平均の予想PER（加重平均＝構成225銘柄の時価総額合計÷純利益合計。日経公表の「加重平均」と同じ定義）・右軸＝日経平均株価。PERは低いほど割安。EPSは会社予想、未公表の銘柄は実績EPSで代用。毎日ツールが算出' },
     { key: 'spx', label: 'S&P500 PER × 株価',   ids: ['SPX_PER', '^GSPC'], right: ['^GSPC'], note: '左軸＝S&P500の実績PER（倍・月次・multpl.com）・右軸＝S&P500。日経の「予想PER」とは定義が違う（過去12か月の実績利益ベース）ので水準の直接比較はしない' },
     { key: 'ndx', label: 'NASDAQ100 PER × 株価', ids: ['NDX_PER', '^NDX'],  right: ['^NDX'],  note: '左軸＝NASDAQ100連動ETF（QQQ）の実績PER（倍）・右軸＝NASDAQ100。履歴の無料配信元が無いため、ツールが毎日1点ずつ積み上げる（取得を始めた日からの履歴になる）' },
   ] },
@@ -8307,11 +8309,13 @@ async function macroFetchPer(id) {
     delete _macroPerErr[id]; _macroPerOk[id] = true;
   } catch (e) { _macroPerErr[id] = String((e && e.message) || e); throw e; }
 }
-// 日経平均の加重平均PERを算出する。/api/nkper を 25銘柄ずつ（9回・3並列）呼び、
-//   PER = Σw_i / Σ(w_i × EPS_i / 株価_i)   （w=構成ウエート。日経公表値と同じ「株価合計÷EPS合計」型）
-// EPS(会社予想) が無い銘柄（無配当・未公表など約1割）は分子分母の両方から外す＝残りで按分。
-// 赤字（EPS<0）は益回りマイナスのまま合算する。カバー率（取れた銘柄のウエート合計）が7割未満なら失敗扱い。
-// 結果は当日1点 [[today, PER]] として追記。算出の内訳は store.data.macro[id].calc に残す（表示用）。
+// 日経平均の「加重平均PER」を算出する。/api/nkper を 25銘柄ずつ（9回・3並列）呼び、
+//   PER = Σ時価総額_i ／ Σ(EPS_i × 発行済株式数_i)    （日経公表の「加重平均」と同じ定義。時価総額・株式数・EPSはYahoo!JP）
+// EPS は会社予想。未公表（約1割・三菱UFJ/ソフトバンクG/キーエンス等）はサーバー側で 実績EPS(ROE×BPS) に代用済み（epsSrc:'actual'）。
+// 赤字（EPS<0）は純利益マイナスのまま合算。時価総額のカバー率（取れた銘柄の合計÷全銘柄の合計）が7割未満なら失敗扱い。
+// 結果は当日1点 [[today, PER]] として追記。内訳は store.data.macro[id].calc に残す（状態行の表示用）。
+// ★以前は「指数ウエート×益回り」で指数ベースPERを出していたが、会社予想の無い大型銘柄（SBG）の扱いで公表値と
+//   2〜3倍ずれたため、公表値と1%差で一致する加重平均に切り替えた（2026-11-06）。
 async function macroCalcNikkeiPer(id) {
   const SIZE = 25;
   const first = await fetch(`/api/nkper?batch=0&size=${SIZE}`);
@@ -8333,15 +8337,18 @@ async function macroCalcNikkeiPer(id) {
   });
   await Promise.all(runners);
   const items = pages.flatMap(p => p.items || []);
-  let sw = 0, sy = 0, n = 0; const missing = [];
+  let capAll = 0, cap = 0, ni = 0, n = 0; const missing = [], actual = [];
   for (const it of items) {
-    if (typeof it.eps !== 'number' || typeof it.price !== 'number' || !(it.price > 0)) { missing.push(it.code); continue; }
-    sw += it.w; sy += it.w * it.eps / it.price; n++;
+    if (it.mc > 0) capAll += it.mc * 1e6;
+    if (typeof it.eps !== 'number' || !(it.mc > 0) || !(it.sh > 0)) { missing.push(it.code); continue; }
+    cap += it.mc * 1e6; ni += it.eps * it.sh; n++;
+    if (it.epsSrc === 'actual') actual.push(it.code);
   }
-  if (!(sw >= 0.7) || !(sy > 0)) throw new Error(`算出できる銘柄が足りません（${n}/${items.length}銘柄・ウエート${Math.round(sw * 100)}%）`);
-  const per = Math.round(sw / sy * 100) / 100;
+  const covered = capAll > 0 ? cap / capAll : 0;
+  if (!(covered >= 0.7) || !(ni > 0)) throw new Error(`算出できる銘柄が足りません（${n}/${items.length}銘柄・時価総額の${Math.round(covered * 100)}%）`);
+  const per = Math.round(cap / ni * 100) / 100;
   macroPerMerge(id, [[todayJst(), per]], '日次');
-  store.data.macro[id].calc = { at: new Date().toISOString(), weightsDate: d0.date || '', n, total: items.length, covered: Math.round(sw * 1000) / 10, missing };
+  store.data.macro[id].calc = { at: new Date().toISOString(), weightsDate: d0.date || '', n, total: items.length, covered: Math.round(covered * 1000) / 10, missing, actual };
 }
 // 「PER別の株価」表（EPSからの逆算）。今の PER と株価から EPS（指数ベース）を出し、PER水準ごとの株価を並べる。
 //   列: 1年前のEPS（履歴があれば）／現在のEPS／来期EPS（成長率は入力可。既定＝1年間のEPS伸び率、無ければ+8%）
@@ -8384,7 +8391,8 @@ function macroPerLevelsHtml(card) {
   const fmtPx = (v) => macroFmt(v, pxId);
   const unit = (MACRO_SERIES[pxId] || {}).unit || '';
   const perDef = MACRO_SERIES[perId] || {};
-  const epsKind = /実績/.test(perDef.label) ? '実績EPS' : '予想EPS';
+  // 日経（加重平均PER）の EPS は「日経平均÷加重平均PER」。日経公表の「指数ベースEPS」（日経平均÷指数ベースPER）とは水準が違う点に注意
+  const epsKind = /実績/.test(perDef.label) ? '実績EPS' : (perDef.per === 'nkcalc' ? '予想EPS(加重平均ベース)' : '予想EPS');
   const cols = [];
   if (eps1) cols.push({ head: `1年前<br><span class="muted">${esc(per1[0])}</span><br>${epsKind} ${fmtPx(eps1)}`, eps: eps1 });
   cols.push({ head: `現在<br><span class="muted">${esc(perLast[0])}</span><br>${epsKind} <b>${fmtPx(eps0)}</b>`, eps: eps0, cur: true });
@@ -8709,7 +8717,7 @@ function macroPerStatusHtml(card) {
     // 貼り付け取込は自動算出・取得が失敗した時だけ出す（通常は手動なしで回る）
     const paste = (def.per === 'nkcalc' && err) ? `<button class="btn btn-sm" onclick="macroPerPaste('${jsq(id)}')" title="日経のPERページの表をコピーして貼り付けで取り込みます（自動算出が失敗した時の予備）">貼り付けで取込</button>` : '';
     const calc = rec && rec.calc;
-    const calcNote = (def.per === 'nkcalc' && calc) ? `<span title="日経公表の構成銘柄ウエート（基準日 ${esc(calc.weightsDate || '')}）と各銘柄のEPS（会社予想）・前日終値から算出。EPS未公表の銘柄は除外して按分: ${esc((calc.missing || []).join(' '))}">算出 ${calc.n}/${calc.total}銘柄・ウエート${calc.covered}%・${esc(mktFetchedAt(calc.at))}</span>` : '';
+    const calcNote = (def.per === 'nkcalc' && calc) ? `<span title="加重平均＝構成銘柄の時価総額合計÷純利益合計（純利益＝EPS×発行済株式数）。構成銘柄は日経公表（基準日 ${esc(calc.weightsDate || '')}）、数値はYahoo!ファイナンス。会社予想EPSが無く実績EPS(ROE×BPS)で代用: ${esc((calc.actual || []).join(' ') || 'なし')}／取得できず除外: ${esc((calc.missing || []).join(' ') || 'なし')}">算出 ${calc.n}/${calc.total}銘柄（実績EPS代用 ${(calc.actual || []).length}）・時価総額の${calc.covered}%・${esc(mktFetchedAt(calc.at))}</span>` : '';
     return `<div class="muted" style="font-size:11px;margin:4px 2px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <span>${esc(def.label)}: ${n ? `${n}点（最新 ${esc(last)}）` : 'データなし'}</span>${calcNote}
       ${err ? `<span class="neg" title="${esc(err)}">自動${def.per === 'nkcalc' ? '算出' : '取得'}に失敗${blocked ? '（取得元のボット認証にブロックされました）' : `（${esc(err.slice(0, 60))}）`}</span>` : (_macroPerOk[id] ? `<span>自動${def.per === 'nkcalc' ? '算出' : '取得'}OK</span>` : '')}
