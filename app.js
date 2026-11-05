@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-1005';
+const APP_VERSION = 'v20261106-1040';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -8294,6 +8294,18 @@ async function macroFetchEstat(id) {
 // 日経は公表ページに出ている期間ぶんしか返らず、NASDAQ100 は当日1点しか返らないため、積み上げないと履歴が残らない。
 // 失敗理由は _macroPerErr に残し、PERグループの画面に出す（日経はボット認証で取れないことがあり、その時は貼り付け取込へ案内）。
 const _macroPerErr = {}, _macroPerOk = {};
+// 直近に取得・算出した最新点（id→{date, v}）。保存データ（store.data.macro）から消えた時の診断・再保存用。
+// 本番（2026-11-06 スマホ）で「自動算出OK」なのに「データなし」になる事象があり、算出自体は成功している可能性が高いため、
+// メモリに残した値と保存データを突き合わせて画面に出す。
+const _macroPerLast = {};
+function macroPerRecover(id) {
+  const r = _macroPerLast[id];
+  if (!r) return;
+  macroPerMerge(id, [[r.date, r.v]], '日次');
+  store.save();
+  toast(`${(MACRO_SERIES[id] || {}).label || id}: ${r.date} ＝ ${macroFmt(r.v, id)} を再保存しました`);
+  renderMacro();
+}
 async function macroFetchPer(id) {
   const def = MACRO_SERIES[id] || {};
   if (!def.per) throw new Error('PER の取得元が未定義 (' + id + ')');
@@ -8306,6 +8318,7 @@ async function macroFetchPer(id) {
     const d = await res.json().catch(() => ({}));
     if (!res.ok || d.error) throw new Error((d.blocked ? 'ボット認証でブロック: ' : '') + (d.error || ('HTTP ' + res.status)));
     if (!Array.isArray(d.obs) || !d.obs.length) throw new Error('データなし (' + id + ')');
+    _macroPerLast[id] = { date: d.obs[d.obs.length - 1][0], v: d.obs[d.obs.length - 1][1] };
     macroPerMerge(id, d.obs, d.freq);
     delete _macroPerErr[id]; _macroPerOk[id] = true;
   } catch (e) { _macroPerErr[id] = String((e && e.message) || e); throw e; }
@@ -8348,6 +8361,7 @@ async function macroCalcNikkeiPer(id) {
   const covered = capAll > 0 ? cap / capAll : 0;
   if (!(covered >= 0.7) || !(ni > 0)) throw new Error(`算出できる銘柄が足りません（${n}/${items.length}銘柄・時価総額の${Math.round(covered * 100)}%）`);
   const per = Math.round(cap / ni * 100) / 100;
+  _macroPerLast[id] = { date: todayJst(), v: per };
   macroPerMerge(id, [[todayJst(), per]], '日次');
   store.data.macro[id].calc = { at: new Date().toISOString(), weightsDate: d0.date || '', n, total: items.length, covered: Math.round(covered * 1000) / 10, missing, actual };
 }
@@ -8719,8 +8733,12 @@ function macroPerStatusHtml(card) {
     const paste = (def.per === 'nkcalc' && err) ? `<button class="btn btn-sm" onclick="macroPerPaste('${jsq(id)}')" title="日経のPERページの表をコピーして貼り付けで取り込みます（自動算出が失敗した時の予備）">貼り付けで取込</button>` : '';
     const calc = rec && rec.calc;
     const calcNote = (def.per === 'nkcalc' && calc) ? `<span title="加重平均＝構成銘柄の時価総額合計÷純利益合計（純利益＝EPS×発行済株式数）。構成銘柄は日経公表（基準日 ${esc(calc.weightsDate || '')}）、数値はYahoo!ファイナンス。会社予想EPSが無く実績EPS(ROE×BPS)で代用: ${esc((calc.actual || []).join(' ') || 'なし')}／取得できず除外: ${esc((calc.missing || []).join(' ') || 'なし')}">算出 ${calc.n}/${calc.total}銘柄（実績EPS代用 ${(calc.actual || []).length}）・時価総額の${calc.covered}%・${esc(mktFetchedAt(calc.at))}</span>` : '';
+    // 取得・算出は成功したのに保存データに無い（容量上限でキャッシュが整理された／同期で巻き戻った 等）→ 値と再保存ボタンを出す
+    const lastMem = _macroPerLast[id];
+    const lost = lastMem && !(rec && (rec.obs || []).some(p => p[0] === lastMem.date));
+    const lostNote = lost ? `<span class="neg" title="取得・算出した値はこのとおりですが、保存データ（store.data.macro）に残っていません。ブラウザの保存容量の上限でキャッシュが整理されたか、同期で巻き戻った可能性があります">${esc(lastMem.date)} ＝ ${macroFmt(lastMem.v, id)}${esc(def.unit || '')} は算出済みですが保存データから消えています</span><button class="btn btn-sm" onclick="macroPerRecover('${jsq(id)}')">再保存</button>` : '';
     return `<div class="muted" style="font-size:11px;margin:4px 2px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span>${esc(def.label)}: ${n ? `${n}点（最新 ${esc(last)}）` : 'データなし'}</span>${calcNote}
+      <span>${esc(def.label)}: ${n ? `${n}点（最新 ${esc(last)}）` : 'データなし'}</span>${calcNote}${lostNote}
       ${err ? `<span class="neg" title="${esc(err)}">自動${def.per === 'nkcalc' ? '算出' : '取得'}に失敗${blocked ? '（取得元のボット認証にブロックされました）' : `（${esc(err.slice(0, 60))}）`}</span>` : (_macroPerOk[id] ? `<span>自動${def.per === 'nkcalc' ? '算出' : '取得'}OK</span>` : '')}
       ${paste}</div>`;
   }).join('');
