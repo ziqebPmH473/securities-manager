@@ -1467,11 +1467,22 @@ US は Nasdaq の Date Reported（earnings-surprise）が発表から**1〜2日�
 
 | 系列ID | 内容 | 取得・算出 | 頻度 | 履歴 |
 |---|---|---|---|---|
-| `NK_PER` | 日経平均 予想PER（**ツールで算出**） | `/api/nkper`（下記）。日経公表の**構成銘柄ウエートCSV**＋Yahoo!ファイナンス日本版の各銘柄 EPS(会社予想)・前日終値 | 日次（当日1点） | 算出を始めた日から毎日積み上げ |
+| `NK_PER` | 日経平均 予想PER（**加重平均・日経公表値**） | `/api/per?src=nikkei` … nikkei225jp.com の日次データ `daily2.json`（日経公表の加重平均PER=列12・指数ベース=列25 を2009年から収録。2026-11-05 の 15.80/19.07 が公表値と一致）。ダメなら日経ページ→**自前算出 `/api/nkper`**（下記）の順に落ちる | 日次 | **2009年〜**（3年分の日次を残す `thin:[920,800]`） |
+| `NK_PER_IDX` | 日経平均 予想PER（指数ベース・日経公表値） | `/api/per?src=nikkeiidx`（同じファイルの列25） | 日次 | 2009年〜 |
 | `SPX_PER` | S&P500 実績PER（時価総額加重） | `/api/per?src=sp500` … multpl.com の月次表（Shiller データ）。1970年以降に絞って間引き320点 | 月次 | 1970年〜 |
 | `NDX_PER` | NASDAQ100 実績PER | `/api/per?src=ndx` … Yahoo quoteSummary の **QQQ**（連動ETF）`trailingPE`。本番でブロックされたら finance.yahoo.com の QQQ ページ本文「PE Ratio (TTM)」を読む。当日1点 | 日次 | 取得を始めた日から毎日積み上げ |
 
-#### 日経平均 PER の算出（`functions/api/nkper.js`＋`macroCalcNikkeiPer`）
+#### 日経平均 PER の履歴（2026-11-06「過去のデータがないと比較できない」への対応）
+最初は自前算出（下記）で当日1点ずつ積み上げる設計だったが、過去3年のPERレンジが要るので **nikkei225jp.com の日次データ**を主経路にした。
+`https://nikkei225jp.com/_data/_nfsDATA/data_DAY/daily2.json` が `var DAILY = [[unixMs, 日経平均, …, 列12=加重平均PER, 列13=PBR, …, 列25=指数ベースPER, …], …];`
+（列番号は同サイトの描画JS `DAILY[i][(a==1)?12:25]` から確認）。ts は「その営業日の 0:00 JST」なので +9h して JST 暦日にする。休場日は `""`。
+約790KB・4,200行あるのでサーバーで `thin(obs, 920, 800)`（直近800営業日≒3.3年は生のまま、それ以前を120点に間引き）。
+クライアントの `macroPerMerge` も系列定義 `thin:[920,800]` で同じ上限にする（既定の320点だと3年レンジの最低・最高を取りこぼす）。
+加重平均と指数ベースの両方を同じグラフ（左軸）に重ね、右軸に株価。カードの数値と PER別株価表は加重平均（`ids[0]`）。
+
+#### 日経平均 PER の自前算出（予備。`functions/api/nkper.js`＋`macroCalcNikkeiPer`）
+公表値の取得（nikkei225jp → 日経ページ）がどちらも失敗した時だけ、`calcFallback:true` の系列でこの算出に落ちる（当日1点）。
+状態行に「自動取得に失敗（自前算出で代用中）」と出る。
 - 日経公表の PER ページ（`indexes.nikkei.co.jp/nkave/archives/data?list=per`）は **Cloudflare のボット認証（JS チャレンジ）**が掛かり、
   サーバー（curl・Workers）からは `cf-mitigated: challenge` の 403 で取れない（2026-11-06 実測。UA偽装などの回避はしない）。
   同サイトの**静的ファイル**（`/nkave/archives/file/nikkei_stock_average_weight_jp.csv`＝構成銘柄一覧とウエート、`.../historical/*.csv`）は認証なしで取れる。
@@ -1506,7 +1517,7 @@ US は Nasdaq の Date Reported（earnings-surprise）が発表から**1〜2日�
   （段の高さは高い方の表で決まるので片方だけ詰めても縮まない）。グラフ最小140pxのうえで残りを表に回し、足りない分は枠内スクロール（ルール6）。
 - 比較（`MACRO_COMPARE`）で指数を2つ以上重ねると右軸が起点=100 の指数化になるのは既存どおり。
 - グラフは **1点だけの系列も●で描く**（算出を始めた初日のPERは線にならないため。以前は2点未満を除外していて、PERカードなのに株価しか出なかった）。2点以上でも最新点に小さな●を付ける。
-- 表の枠の最小高さは 76px（`macroFitTable`。レンジ行の分で 88px だと数px はみ出す）。
+- 表の枠の最小高さは 64px（`macroFitTable`。レンジ行・PER2系列の状態行の分で 88px だと数px はみ出す）。
 - `good` は付けない（PER 低下＝割安化だが業績悪化でも下がる）。日経は**予想**PER・S&P500/QQQ は**実績**PER で定義が違うため、水準の直接比較はしない旨を note に明記。
 
 ### 22.7 指数・為替との「比較」（2026-08-13 追加・同日に方式を2回改訂）

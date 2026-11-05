@@ -39,7 +39,8 @@ export const SERIES = {
   LRHUTTTTJPM156S: { label: '日本 失業率',              tf: 'raw',  unit: '%',   dec: 1 },
   JPNRGDPEXP:      { label: '日本 実質GDP(前年比)',     tf: 'yoy',  unit: '%',   dec: 1 },
   // 指数のPER（/api/per）。日経はボット認証で取れないことがある＝取れなければ判定対象外になるだけ
-  NK_PER:          { label: '日経平均 PER(予想・算出)',  tf: 'raw',  unit: '倍',  dec: 2 },   // 算出は225銘柄の取得が要るためサーバーでは行わず、同期データ(bundle.macro)の最新値で判定
+  NK_PER:          { label: '日経平均 PER(加重平均)',    tf: 'raw',  unit: '倍',  dec: 2, per: 'nikkei' },
+  NK_PER_IDX:      { label: '日経平均 PER(指数ベース)',  tf: 'raw',  unit: '倍',  dec: 2, per: 'nikkeiidx' },
   SPX_PER:         { label: 'S&P500 PER(実績)',          tf: 'raw',  unit: '倍',  dec: 2, per: 'sp500' },
   NDX_PER:         { label: 'NASDAQ100 PER(実績・QQQ)',  tf: 'raw',  unit: '倍',  dec: 2, per: 'ndx' },
   XTEXVA01JPM667S: { label: '日本 輸出額(前年比)',      tf: 'yoy',  unit: '%',   dec: 1 },

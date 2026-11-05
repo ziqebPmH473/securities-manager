@@ -15,7 +15,11 @@ const CACHE_TTL = 3 * 3600;      // エッジキャッシュ3時間（PER の更
 const THIN_MAX = 320, THIN_RECENT = 200;   // /api/macro と同じ間引き規則（同期対象の肥大防止）
 
 const SOURCES = {
-  nikkei: { url: 'https://indexes.nikkei.co.jp/nkave/archives/data?list=per', note: '出典: 日経平均プロフィル（日本経済新聞社）', freq: '日次' },
+  // 日経平均: 日経の公表ページはボット認証で取れないため、nikkei225jp.com が配っている日次データ
+  // （日経公表の 加重平均PER / 指数ベースPER を2009年から収録。2026-11-05 の 15.80 / 19.07 が公表値と一致）を読む。
+  // ダメなら日経のページ（parsePerTable）を試す。両方ダメならクライアントが自前算出（macroCalcNikkeiPer）に落ちる。
+  nikkei:    { url: 'https://nikkei225jp.com/_data/_nfsDATA/data_DAY/daily2.json', alt: 'https://indexes.nikkei.co.jp/nkave/archives/data?list=per', note: '出典: 日経平均プロフィル（日本経済新聞社）の公表値（nikkei225jp.com 経由）', freq: '日次', col: 12, recent: 800, max: 920 },
+  nikkeiidx: { url: 'https://nikkei225jp.com/_data/_nfsDATA/data_DAY/daily2.json', note: '出典: 日経平均プロフィル（日本経済新聞社）の公表値（指数ベース・nikkei225jp.com 経由）', freq: '日次', col: 25, recent: 800, max: 920 },
   sp500:  { url: 'https://www.multpl.com/s-p-500-pe-ratio/table/by-month',     note: '出典: multpl.com（S&P500 実績PER・月次）',   freq: '月次' },
   ndx:    { url: 'https://query1.finance.yahoo.com/v10/finance/quoteSummary/QQQ?modules=summaryDetail,defaultKeyStatistics', note: '出典: Yahoo Finance（QQQ の実績PER）', freq: '日次' },   // 失敗時は finance.yahoo.com/quote/QQQ/ のページ本文へフォールバック
 };
@@ -26,11 +30,11 @@ export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   const src = (url.searchParams.get('src') || '').trim().toLowerCase();
   const def = SOURCES[src];
-  if (!def) return json({ error: 'src は nikkei / sp500 / ndx のいずれかです' }, 400);
+  if (!def) return json({ error: 'src は nikkei / nikkeiidx / sp500 / ndx のいずれかです' }, 400);
   try {
-    const obs = src === 'nikkei' ? await fetchNikkei(def) : src === 'sp500' ? await fetchMultpl(def) : await fetchYahooPe(def);
+    const obs = (src === 'nikkei' || src === 'nikkeiidx') ? await fetchNikkei(def) : src === 'sp500' ? await fetchMultpl(def) : await fetchYahooPe(def);
     if (!obs.length) throw new Error('データなし (' + src + ')');
-    return json({ id: src, obs: thin(obs), freq: def.freq, src, note: def.note, at: new Date().toISOString() });
+    return json({ id: src, obs: thin(obs, def.max, def.recent), freq: def.freq, src, note: def.note, at: new Date().toISOString() });
   } catch (e) {
     const msg = String((e && e.message) || e);
     return json({ error: msg, blocked: /ボット認証/.test(msg), src }, 502);
@@ -55,8 +59,37 @@ async function getText(u, extraHeaders) {
 // 表の列構成がページ側で変わっても拾えるように、見出しに「PER」を含む列を探し、見つからなければ
 // 「日付の後にある 3〜200 の範囲の最初の数値」を PER とみなす（株価は 1万以上・PBR は 3 未満なので混ざらない）。
 async function fetchNikkei(def) {
-  const html = await getText(def.url, { 'Accept-Language': 'ja,en;q=0.8' });
-  return parsePerTable(html);
+  let e1 = null;
+  try {
+    const text = await getText(def.url);
+    const obs = parseNikkei225jpDaily(text, def.col);
+    if (obs.length) return obs;
+    throw new Error('daily2.json に PER の列が見つかりません');
+  } catch (e) { e1 = e; }
+  if (!def.alt) throw e1;
+  try {
+    const html = await getText(def.alt, { 'Accept-Language': 'ja,en;q=0.8' });
+    const obs = parsePerTable(html);
+    if (obs.length) return obs;
+    throw new Error('ページに表が見つかりません');
+  } catch (e2) {
+    throw new Error(`nikkei225jp: ${String((e1 && e1.message) || e1)} / 日経ページ: ${String((e2 && e2.message) || e2)}`);
+  }
+}
+// nikkei225jp.com の daily2.json: `var DAILY = [[unixMs, 日経平均, ..., col12=加重平均PER, col13=PBR, ..., col25=指数ベースPER, ...], ...];`
+// 列番号は同サイトの描画JS（DAILY[i][(a==1)?12:25]）から確認（2026-11-06）。ts は「その営業日の 0:00 JST」（UTC では前日15:00）なので +9h して JST の暦日にする。
+// 休場日は値が "" なので飛ばす。
+export function parseNikkei225jpDaily(text, col) {
+  const out = [];
+  const re = /\[(\d{12,13}),([^\]]*)\]/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const cells = m[2].split(',');
+    const v = parseFloat(cells[col - 1]);   // cells は ts を除いた列なので 1 つずれる
+    if (!isFinite(v) || v <= 0) continue;
+    out.push([new Date(+m[1] + 9 * 3600 * 1000).toISOString().slice(0, 10), Math.round(v * 100) / 100]);
+  }
+  return out;
 }
 export function parsePerTable(html) {
   const out = new Map();
@@ -166,11 +199,12 @@ function num(s) {
   return isFinite(v) ? v : null;
 }
 // 直近 THIN_RECENT 点はそのまま、それ以前を等間隔に間引いて THIN_MAX 点以内にする（/api/macro と同じ）
-function thin(obs) {
-  if (obs.length <= THIN_MAX) return obs;
-  const recent = obs.slice(obs.length - THIN_RECENT);
-  const older = obs.slice(0, obs.length - THIN_RECENT);
-  const want = THIN_MAX - THIN_RECENT, step = older.length / want;
+function thin(obs, max, recentN) {
+  const MAX = max || THIN_MAX, RECENT = recentN || THIN_RECENT;
+  if (obs.length <= MAX) return obs;
+  const recent = obs.slice(obs.length - RECENT);
+  const older = obs.slice(0, obs.length - RECENT);
+  const want = MAX - RECENT, step = older.length / want;
   const out = [];
   for (let i = 0; i < want; i++) out.push(older[Math.floor(i * step)]);
   out[0] = older[0];
