@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-2345';
+const APP_VERSION = 'v20261106-2349';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -3185,6 +3185,86 @@ function touchColPrefs(market) {
   if (!colPrefs._ts || typeof colPrefs._ts !== 'object') colPrefs._ts = {};
   colPrefs._ts[market] = new Date().toISOString();
   saveColPrefs();
+  // 列パターン適用中なら、その編集をパターンにも書き戻す（市場本体と #sticky の編集だけ。疑似キー #layouts/#layoutId は除外）
+  if (!market.includes('#') || market.endsWith('#sticky')) colLayoutWriteBack(market.replace(/#sticky$/, ''));
+}
+
+// ---------- 列パターン（名前付き列レイアウト・2026-11-06 すみぽん依頼） ----------
+// 1つのスコープ(US/JP/SIGNAL/MKTRANK/ANALYSIS…)に対し、列の表示/並び/幅/列名/固定範囲の組み合わせを「パターン」として
+// 複数保存し、ツールバーのセレクトで切り替える（例: ポートフォリオ確認用／割安感チェック用）。
+// 保存先: colPrefs['<scope>#layouts'] = [{id, name, cols, sticky, updatedAt, deleted}]（_colPrefs として Google 同期。
+//   sync-merge.js の mergeColPrefs3way は '#layouts' を id 単位・updatedAt 新しい方・削除はトンボストンでマージ）
+// 適用中: colPrefs['<scope>#layoutId']（疑似キー＝市場と同様 _ts で後勝ち）。
+// 適用中のパターンがある時は、列ピッカーでの編集(touchColPrefs)がそのパターンへ自動で書き戻される（切り替えて戻しても
+// 編集が残る）。「なし」(未適用)の時は従来どおり colPrefs[scope] だけが変わる。
+function colLayouts(scope) { const a = colPrefs[scope + '#layouts']; return Array.isArray(a) ? a : []; }
+function colLayoutsLive(scope) { return colLayouts(scope).filter(l => l && !l.deleted); }
+function colActiveLayoutId(scope) { const v = colPrefs[scope + '#layoutId']; return v ? String(v) : null; }
+function colActiveLayout(scope) { const id = colActiveLayoutId(scope); return id ? colLayoutsLive(scope).find(l => String(l.id) === id) || null : null; }
+function colLayoutSnapshot(scope) {
+  reconcileColPrefs(scope);
+  return { cols: colPrefs[scope].map(c => ({ key: c.key, visible: c.visible, width: c.width, labelOverride: c.labelOverride, auto: c.auto })), sticky: colStickyCount(scope) };
+}
+// 適用中パターンへ現在の列設定を書き戻す（touchColPrefs から呼ばれる。内容が同じなら何もしない）
+function colLayoutWriteBack(scope) {
+  const l = colActiveLayout(scope); if (!l) return;
+  const snap = colLayoutSnapshot(scope);
+  if (JSON.stringify(l.cols) === JSON.stringify(snap.cols) && (l.sticky ?? null) === (snap.sticky ?? null)) return;
+  l.cols = snap.cols; l.sticky = snap.sticky; l.updatedAt = new Date().toISOString();
+  if (!colPrefs._ts || typeof colPrefs._ts !== 'object') colPrefs._ts = {};
+  colPrefs._ts[scope + '#layouts'] = l.updatedAt;
+  saveColPrefs();
+}
+// パターンを適用（id=''で「なし」＝現在の列設定はそのまま残して紐づけだけ外す）。fromPicker=列ピッカーから呼ばれた時は再表示
+function colApplyLayout(scope, id, fromPicker) {
+  if (!id) { delete colPrefs[scope + '#layoutId']; saveColPrefs(); touchColPrefs(scope + '#layoutId'); }
+  else {
+    const l = colLayoutsLive(scope).find(x => String(x.id) === String(id)); if (!l) return;
+    colPrefs[scope] = (l.cols || []).map(c => ({ ...c }));
+    if (l.sticky != null) colPrefs[scope + '#sticky'] = l.sticky; else delete colPrefs[scope + '#sticky'];
+    colPrefs[scope + '#layoutId'] = String(l.id);
+    reconcileColPrefs(scope); // 保存後に増えた新列を補完・廃止列を除去
+    saveColPrefs(); touchColPrefs(scope); touchColPrefs(scope + '#sticky'); touchColPrefs(scope + '#layoutId');
+    toast(`列パターン「${l.name}」を適用しました`, 2500);
+  }
+  render();
+  if (fromPicker) openColPicker(scope);
+}
+function colSaveLayoutAs(scope) {
+  const name = (prompt('列パターン名を入力してください（例: ポートフォリオ / 割安感）') || '').trim(); if (!name) return;
+  const arr = colLayouts(scope); const now = new Date().toISOString();
+  const snap = colLayoutSnapshot(scope);
+  let ex = arr.find(l => l && !l.deleted && l.name === name);
+  if (ex) { if (!confirm(`「${name}」は既にあります。現在の列設定で上書きしますか？`)) return; Object.assign(ex, snap, { updatedAt: now }); }
+  else { ex = { id: 'cl' + Date.now(), name, ...snap, updatedAt: now }; arr.push(ex); }
+  colPrefs[scope + '#layouts'] = arr; colPrefs[scope + '#layoutId'] = String(ex.id);
+  saveColPrefs(); touchColPrefs(scope + '#layouts'); touchColPrefs(scope + '#layoutId');
+  toast(`列パターン「${name}」を保存しました`, 2500);
+  openColPicker(scope);
+}
+function colRenameLayout(scope) {
+  const l = colActiveLayout(scope); if (!l) { toast('名前を変えるパターンを先に選んでください'); return; }
+  const name = (prompt('新しいパターン名', l.name) || '').trim(); if (!name || name === l.name) return;
+  l.name = name; l.updatedAt = new Date().toISOString();
+  saveColPrefs(); touchColPrefs(scope + '#layouts');
+  openColPicker(scope);
+}
+function colDeleteLayout(scope) {
+  const l = colActiveLayout(scope); if (!l) { toast('削除するパターンを先に選んでください'); return; }
+  if (!confirm(`列パターン「${l.name}」を削除しますか？（現在の列の表示はそのまま残ります）`)) return;
+  l.deleted = true; l.updatedAt = new Date().toISOString(); // トンボストン（同期で復活しない）
+  delete colPrefs[scope + '#layoutId'];
+  saveColPrefs(); touchColPrefs(scope + '#layouts'); touchColPrefs(scope + '#layoutId');
+  toast(`列パターン「${l.name}」を削除しました`, 2500);
+  openColPicker(scope);
+}
+// ツールバーの列パターン切替セレクト（「列」ボタンの左に置く）。保存・名前変更・削除は列ピッカー内で行う
+function colPatternSelHtml(scope, style, fromPicker) {
+  const live = colLayoutsLive(scope), act = colActiveLayoutId(scope);
+  return `<select class="flt-preset col-pattern" title="列パターン（列の表示・並び・幅・列名・固定の組み合わせ）を切り替え。保存・名前変更・削除は「列」ボタンの設定画面から" onchange="colApplyLayout('${scope}', this.value${fromPicker ? ', true' : ''})"${style ? ` style="${style}"` : ''}>`
+    + `<option value="">列パターン: なし</option>`
+    + live.map(l => `<option value="${esc(String(l.id))}" ${act === String(l.id) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')
+    + `</select>`;
 }
 // バックアップ/同期用の“全状態”バンドル。store.data に加え列設定(colPrefs)も同梱（_colPrefs）
 function dataBundle() { return Object.assign({}, store.data, store._withTombstones(), { _colPrefs: colPrefs, _filterPresets: fltPresets }); }
@@ -5052,7 +5132,7 @@ function renderMarket(market) {
         <div class="tb-spacer"></div>
         ${filterBtnHtml('holdings')}
         ${ratioToolbarHtml()}
-        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${colMkt}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
+        ${colPatternSelHtml(colMkt)}<button class="btn btn-sm col-picker-btn" onclick="openColPicker('${colMkt}')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
         <button class="btn btn-sm ${showExcluded() ? 'btn-primary' : ''}" onclick="toggleShowExcluded()" title="除外フラグの銘柄（取得・表示を止めた銘柄）も一覧に出す。保有銘柄と分析の一覧に効く">除外も表示${showExcluded() ? '：ON' : ''}</button>
         <button class="btn btn-sm ${inlineEditOn ? 'btn-primary' : ''}" onclick="toggleInlineEdit()" title="一覧上で直接編集（誤操作防止トグル）">${svgIcon('edit', '')} 編集モード${inlineEditOn ? '：ON' : ''}</button>
@@ -5390,6 +5470,14 @@ function openColPicker(market) {
         })()}
       </select>
     </div>
+    <div class="btn-row" style="align-items:center;margin:0 0 8px;flex-wrap:wrap">
+      <span class="muted" title="列の表示・並び・幅・列名・固定の組み合わせを名前を付けて複数保存し、ツールバーのセレクトで切り替えられます（例: ポートフォリオ確認用／割安感チェック用）">列パターン</span>
+      ${colPatternSelHtml(market, '', true)}
+      <button type="button" class="btn btn-sm" onclick="colSaveLayoutAs('${market}')" title="現在の列設定（表示・並び・幅・列名・固定）に名前を付けて保存">現在の列設定を保存…</button>
+      <button type="button" class="btn btn-sm" onclick="colRenameLayout('${market}')" ${colActiveLayoutId(market) ? '' : 'disabled'}>名前変更…</button>
+      <button type="button" class="btn btn-sm" onclick="colDeleteLayout('${market}')" ${colActiveLayoutId(market) ? '' : 'disabled'}>削除</button>
+      <span class="muted" style="font-size:11px;width:100%">${colActiveLayoutId(market) ? `適用中「${esc((colActiveLayout(market) || {}).name || '')}」。この画面での変更はそのパターンに自動保存されます。` : 'パターン未適用（「なし」）。保存すると現在の列設定がパターンになり、以後の変更はそのパターンに自動保存されます。'}</span>
+    </div>
     <div class="cp-wrapper">
       <div id="cp-list">${itemsHtml}</div>
     </div>
@@ -5516,7 +5604,7 @@ function renderSignals() {
         <div style="flex:1"></div>
         ${ratioToolbarHtml()}
         <button class="btn btn-sm" onclick="openAiDiag()" title="サイン・保有比率・マクロ・ニュースをAI(Gemini)に渡して、相場環境と買い候補の優先順位を診断（金額は送信しない）">🤖 AI相場診断</button>
-        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
+        ${colPatternSelHtml('SIGNAL')}<button class="btn btn-sm col-picker-btn" onclick="openColPicker('SIGNAL')" title="列の表示設定">${svgIcon('columns', '')} 列</button>
       </div>
       <div class="bulkbar" style="flex-wrap:wrap">
         <span class="muted" id="bulk-count">選択 0 件</span>
@@ -6726,7 +6814,7 @@ function renderMarketTab() {
       <div class="section-head"><h2>マーケット ランキング（上位50）</h2>
         <div style="display:flex;align-items:center;gap:10px">
           <span class="muted" style="font-size:11px">${cache && cache.at ? '取得：' + mktFetchedAt(cache.at) : ''}</span>
-          <button class="btn btn-sm col-picker-btn" onclick="openColPicker('MKTRANK')" title="列の表示・並び替え・幅の設定">${svgIcon('columns', '')} 列</button>
+          ${colPatternSelHtml('MKTRANK')}<button class="btn btn-sm col-picker-btn" onclick="openColPicker('MKTRANK')" title="列の表示・並び替え・幅の設定">${svgIcon('columns', '')} 列</button>
           <button class="btn btn-sm btn-primary" id="mkt-refresh-btn" onclick="mktRefresh()" ${mktBusy ? 'disabled' : ''} title="${market === 'US' ? '米国株' : '日本株'}の全ランキング（${market === 'US' ? '' : '全市場区分×'}売買代金・時価総額・値上がり・値下がり）を取り直します">${mktBusy ? mktBusyLabel() : '更新'}</button></div></div>
       <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${mseg}${subseg}</div>
       <div class="toolbar" style="border:none;padding:8px 16px 0;gap:8px;flex-wrap:wrap"><span class="muted">ランキング</span>${kseg}
@@ -9364,7 +9452,7 @@ function renderEcal() {
       <div class="ecal-listhead"><b id="ecal-ltitle"></b><span class="muted" id="ecal-lcount"></span><span id="ecal-alldays"></span>
         <span class="ecal-range" title="期間で絞る。カレンダーをなぞる・Shift+クリックでも選べます（←→で1日、↑↓で1週送り）">期間
           <input type="date" id="ecal-from" onchange="ecalRangeChanged()" onkeydown="ecalRangeKey(event)" onblur="ecalRangeFlush()">〜<input type="date" id="ecal-to" onchange="ecalRangeChanged()" onkeydown="ecalRangeKey(event)" onblur="ecalRangeFlush()"></span>
-        <button class="btn btn-sm col-picker-btn" style="margin-left:auto" onclick="openColPicker('${ecalScopeKey()}')" title="列の表示・並び替え・幅の設定">${svgIcon('columns', '')} 列</button></div>
+        ${colPatternSelHtml(ecalScopeKey(), 'margin-left:auto')}<button class="btn btn-sm col-picker-btn" onclick="openColPicker('${ecalScopeKey()}')" title="列の表示・並び替え・幅の設定">${svgIcon('columns', '')} 列</button></div>
       <div class="table-wrap" id="ecal-list"></div>
     </div>`;
   ecalLoadShown();
@@ -13681,7 +13769,7 @@ function renderAnalysis() {
         <div class="tb-spacer"></div>
         ${filterBtnHtml('analysis')}
         <button class="btn btn-sm" onclick="anaTogglePanel()" title="しきい値設定">しきい値 ${anaPanelOpen ? '▲' : '▼'}</button>
-        <button class="btn btn-sm col-picker-btn" onclick="openColPicker('${AKEY}')" title="列の表示設定（${anaSide === 'trend' ? '順張り' : '逆張り'}ビュー）">${svgIcon('columns', '')} 列</button>
+        ${colPatternSelHtml(AKEY)}<button class="btn btn-sm col-picker-btn" onclick="openColPicker('${AKEY}')" title="列の表示設定（${anaSide === 'trend' ? '順張り' : '逆張り'}ビュー）">${svgIcon('columns', '')} 列</button>
         <button class="btn btn-sm" onclick="copyDisplayedTable()" title="表示中の表をコピー">${svgIcon('copy', '')} 表コピー</button>
         <button class="btn btn-sm btn-primary" onclick="runAnalysis()">分析</button>
       </div>

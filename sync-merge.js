@@ -276,6 +276,9 @@
     const out = {}, outTs = {};
     const markets = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)].filter(k => k !== '_ts'));
     for (const m of markets) {
+      // 列パターン（'<scope>#layouts'）は id 単位の行マージ（updatedAt 新しい方・削除はトンボストン）。
+      // 配列まるごと後勝ちにすると、別端末で別々のパターンを保存した時に片方が消えるため（ルール7-2）。
+      if (m.endsWith('#layouts')) { out[m] = mergeRecordsTomb(local[m], remote[m], x => String(x.id)); const t = mergeMax(lts[m], rts[m]); if (t) outTs[m] = t; continue; }
       const b = base[m], l = local[m], r = remote[m];
       const lP = l !== undefined, rP = r !== undefined;
       if (lP && rP) {
