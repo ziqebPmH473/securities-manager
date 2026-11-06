@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-2349';
+const APP_VERSION = 'v20261107-0004';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -238,6 +238,10 @@ const STKM = ['US','JP','SIGNAL','ANALYSIS'];
 const MASTER_COLS = [
   { key: 'ticker',      label: 'コード',           left: true,  markets: ALLM, noSort: false, narrow: true },
   { key: 'name',        label: '銘柄名',           left: true,  markets: ALLM, noSort: false },
+  // 銘柄名セルに同居していたラベルの独立列（2026-11-07）。既定表示で銘柄名の直後に並ぶ
+  { key: 'rankBadge',   label: 'ランキング',       left: true,  markets: STKM, noSort: false, narrow: true },
+  { key: 'earnLabel',   label: '決算ラベル',       left: true,  markets: STKM, noSort: false, narrow: true },
+  { key: 'watch',       label: '留意銘柄',         left: true,  markets: STKM, noSort: false, narrow: true },
   { key: 'detailType',  label: '詳細種別',         left: true,  markets: STKM, noSort: false },
   { key: 'market',      label: '市場',             left: true,  markets: ['SIGNAL'], noSort: false },
   { key: 'broker',      label: '証券会社',         left: true,  markets: ALLM, noSort: false },
@@ -386,12 +390,12 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','ruleDrop','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
-  JP:   ['ticker','name','price','day','prevClose','dayAmt','trigger','trigBasis','ruleDrop','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  US:   ['ticker','name','rankBadge','earnLabel','watch','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','ruleDrop','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  JP:   ['ticker','name','rankBadge','earnLabel','watch','price','day','prevClose','dayAmt','trigger','trigBasis','ruleDrop','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','ruleDrop','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','capCoef','capAmount','ruleName','fixedBuyPrice','rating'],
-  ANALYSIS:   ['ticker','name','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
-  ANALYSIS_T: ['ticker','name','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
+  SIGNAL: ['ticker','name','rankBadge','earnLabel','watch','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','ruleDrop','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','capCoef','capAmount','ruleName','fixedBuyPrice','rating'],
+  ANALYSIS:   ['ticker','name','rankBadge','earnLabel','watch','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
+  ANALYSIS_T: ['ticker','name','rankBadge','earnLabel','watch','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
   // マーケットランキングタブ（既定＝現状維持）。順位/コード/名称は先頭固定列で、ここには含めない。
   MKTRANK: ['market','price','day','high5y','dropFrom5y','turnover','marketCap','capToTop'],
   // 決算カレンダーの一覧（全列を既定表示。並び・幅・表示は「列」ボタンで変更）
@@ -3599,6 +3603,9 @@ function colDefaultWidth(key) {
   if (key === 'stScenPos' || key === 'mtScenPos') return 100;   // 位置タグ（「弱気〜ベース」等）
   if (key === 'scenarioDate') return 92;
   if (key === 'labels') return 150; // 複数タグ
+  if (key === 'rankBadge') return 104; // 「時価1」「代金3」の2バッジ
+  if (key === 'earnLabel') return 92;  // 決算チップ
+  if (key === 'watch') return 72;      // 留意タグ
   if (key === 'origCost') return 96; // 金額（本来の購入額）
   if (key === 'capToTop') return 92; // 見出し「時価1位まで」＋「3.99倍」
   if (key === 'capCoef') return 76;  // 🔒＋「1.35」
@@ -4084,7 +4091,14 @@ function scenarioPosTd(s, term) {
 const COL_RENDERERS = {
   ticker:    (s,c) => `<td class="l col-code"><span class="tk ${s.market.toLowerCase()}" style="cursor:pointer" onclick="openSecurityDetail(${s.id})">${esc(s.ticker)}</span></td>`,
   // 銘柄名クリック: 分析タブ＝分析詳細／ダッシュボード＝銘柄カルテ（2026-09-18 すみぽん指示）／それ以外＝詳細ドロワー
-  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : currentView === 'dashboard' ? `karteOpenSec(${s.id})` : `openSecurityDetail(${s.id})`; return `<td class="l">${rankBadgeHtml(s)}${earnLabelHtml(s)}<strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong>${detailTypeOf(s) === 'ETF' ? ` <span class="tag detail-etf">ETF</span>` : ''}${watchTag(s, ' ')}</td>`; },
+  // 銘柄名セルは名前リンクだけにする（2026-11-07 すみぽん指示）。以前はランキングバッジ・決算チップ・ETF・留意タグを同居させていたが、
+  // セルは overflow:hidden のため、バッジが増えると名前が右に押し出されて見えず「クリックできない」状態になっていた。
+  // 各ラベルは独立した列（rankBadge / earnLabel / watch / detailType）で表示する。
+  name:      (s,c) => { const onName = cfScreen === 'analysis' ? `openAnalysisDetail('${s.market}','${esc(String(s.ticker))}')` : currentView === 'dashboard' ? `karteOpenSec(${s.id})` : `openSecurityDetail(${s.id})`; return `<td class="l"><strong class="lnk-ext nm-strong" onclick="${onName}" title="${esc(calc.displayName(s))}">${esc(displayNameAbbr(s))}</strong></td>`; },
+  // 旧・銘柄名セル同居ラベルの独立列（表示専用。フォーム・取込・一括変更は rankBadge/earnLabel は対象外。watch は既存の留意銘柄フィールドと同じキー）
+  rankBadge: (s,c) => { const h = rankBadgeHtml(s); return `<td class="l" title="市場全体の時価総額/売買代金ランキング順位（上位のみ）">${h || muted}</td>`; },
+  earnLabel: (s,c) => { const h = earnLabelHtml(s); return `<td class="l" title="決算（近い予定・直近発表のときだけ表示）">${h || muted}</td>`; },
+  watch:     (s,c) => { const h = watchTag(s); return `<td class="l" title="留意銘柄（注意/パス/再調査）">${h || muted}</td>`; },
   market:    (s,c) => `<td class="l"><span class="tag ${s.market.toLowerCase()}">${MARKET_LABEL[s.market]}</span></td>`,
   detailType: (s,c) => { const dt = detailTypeOf(s); return `<td class="l"><span class="tag detail-${dt === 'ETF' ? 'etf' : dt === '投資信託' ? 'fund' : 'stock'}">${esc(dt)}</span></td>`; },
   broker:    (s,c) => { const b = calc.lastBroker(s); return `<td class="l">${b ? esc(b) : muted}</td>`; },
@@ -4962,6 +4976,9 @@ function sortValue(sec, key) {
     case 'anaDate': { const r = techOf(sec); return r ? (r.lastAnalyzed || '') : ''; }
     case 'market': return sec.market;
     case 'detailType': return detailTypeOf(sec);
+    case 'rankBadge': { const code = String(sec.ticker || '').toUpperCase(); const rt = _rankTop || {}; const mc = (rt[sec.market + ':marketcap'] || {})[code], to = (rt[sec.market + ':turnover'] || {})[code]; const v = Math.min(mc || Infinity, to || Infinity); return v; } // 上位ほど先頭。無しは末尾
+    case 'earnLabel': { const eff = earnEffNext(sec); return eff ? eff.date : '9999-99-99'; } // 次回決算が近い順（earnNext と同じ）
+    case 'watch': { const k = watchKind(sec); const d = k && watchDef(k); return d ? (d.sortOrder ?? 0) : 10000; } // 留意区分のマスタ順、通常は末尾
     case 'createdAt': return sec.createdAt || '';
     case 'updatedAt': return sec.updatedAt || '';
     case 'broker': return (calc.lastBroker(sec) || '').toLowerCase();
