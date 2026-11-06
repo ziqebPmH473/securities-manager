@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261107-0024';
+const APP_VERSION = 'v20261107-0035';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -252,6 +252,8 @@ const MASTER_COLS = [
   { key: 'dayAmt',      label: '前日比値幅',       left: false, markets: ALLM, noSort: false },
   { key: 'extPrice',    label: '時間外',           left: false, markets: ['US', 'SIGNAL'], noSort: false },
   { key: 'trigger',     label: '次回購入',         left: false, markets: STKM, noSort: false },
+  // 買増固定値を無視し、買い増しルールだけで計算した次回購入（派生値。フォーム・取込・一括変更は対象外）
+  { key: 'ruleTrigger', label: 'ルール上の次回購入', left: false, markets: STKM, noSort: false },
   { key: 'trigBasis',   label: '適用区分',         left: true,  markets: STKM, noSort: true, narrow: true },
   // 次回購入ラインに使ったルールの下落率（ルール由来の派生値。フォーム・取込・一括変更は対象外）
   { key: 'ruleDrop',    label: 'ルール下落率',     left: false, markets: ['US', 'JP', 'SIGNAL'], noSort: false },
@@ -390,10 +392,10 @@ const MASTER_COLS = [
 ];
 // デフォルト表示列（市場ごと）。表示順は MASTER_COLS の順、ここに含まれるkeyが初期表示
 const DEFAULT_VISIBLE = {
-  US:   ['ticker','name','rankBadge','earnLabel','watch','price','day','prevClose','dayAmt','extPrice','trigger','trigBasis','ruleDrop','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
-  JP:   ['ticker','name','rankBadge','earnLabel','watch','price','day','prevClose','dayAmt','trigger','trigBasis','ruleDrop','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  US:   ['ticker','name','rankBadge','earnLabel','watch','price','day','prevClose','dayAmt','extPrice','trigger','ruleTrigger','trigBasis','ruleDrop','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
+  JP:   ['ticker','name','rankBadge','earnLabel','watch','price','day','prevClose','dayAmt','trigger','ruleTrigger','trigBasis','ruleDrop','drop','dropPrev','high5y','high52w','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','low1y','low3y','riseFrom1y','riseFrom3y','sector','industry','marketCap','capToTop','turnover','marginRatio','value','cost','origCost','ratioValue','ratioCost','pnl','avgCost','qty','buyCount','buyAmount','capCoef','capAmount','category','investCategory','labels','ruleName','fixedBuyPrice','rating','targetPerPrice','targetPbrPrice','targetYieldPrice'],
   FUND: ['ticker','name','price','value','cost','pnl','avgCost','qty','buyCount','buyAmount','category'],
-  SIGNAL: ['ticker','name','rankBadge','earnLabel','watch','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','trigBasis','ruleDrop','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','capCoef','capAmount','ruleName','fixedBuyPrice','rating'],
+  SIGNAL: ['ticker','name','rankBadge','earnLabel','watch','market','broker','sigType','price','day','prevClose','dayAmt','drop','dropPrev','reachKind','trigger','ruleTrigger','trigBasis','ruleDrop','base','prevBuyPrice','prevBuyDate','dropFromPrev','dropFrom5y','ratioValue','ratioCost','buyAmount','reco','capCoef','capAmount','ruleName','fixedBuyPrice','rating'],
   ANALYSIS:   ['ticker','name','rankBadge','earnLabel','watch','price','anaContra','anaTotal','anaWbottom','anaInvHS','anaRound','anaUndercut','anaClimax','anaRsiDiv','anaBoll','anaMaDev','anaGap','anaVolDry','anaWarnC','anaRSI','anaDev52w','ana5d','anaMACD','anaStatus','anaDate'],
   ANALYSIS_T: ['ticker','name','rankBadge','earnLabel','watch','price','anaTrend','anaTotal','anaCup','anaRange','anaAsc','anaFlag','anaBase','anaWarn','anaMa200','anaMACD','anaStatus','anaDate'],
   // マーケットランキングタブ（既定＝現状維持）。順位/コード/名称は先頭固定列で、ここには含めない。
@@ -1944,7 +1946,7 @@ async function execRestoreDriveBackup(id, label) {
 // 銘柄ごとに1回だけ計算して使い回す（同じ描画内で保有・取引履歴の走査を何度もやり直さない）。
 // 描画の外では常にその場計算（メモOFF）＝古い値が残らない。データ変更→save→render で毎回作り直す。
 let _calcMemo = null;
-function calcMemoBegin() { _calcMemo = { ev: new Map(), th: new Map(), lb: new Map() }; }
+function calcMemoBegin() { _calcMemo = { ev: new Map(), evr: new Map(), th: new Map(), lb: new Map() }; }
 function calcMemoEnd() { _calcMemo = null; }
 const calc = {
   fx() { return store.data.fx.USDJPY || null; },
@@ -2131,7 +2133,14 @@ const calc = {
     if (_calcMemo) { const m = _calcMemo.ev; if (m.has(sec.id)) return m.get(sec.id); const v = this._evaluate(sec); m.set(sec.id, v); return v; }
     return this._evaluate(sec);
   },
-  _evaluate(sec) {
+  // ルール上の次回購入（買増固定値を無視し、買い増しルールだけで計算した判定）。列「ルール上の次回購入」・詳細用。
+  // 固定値が無い銘柄では evaluate と同じ値になる。固定値がある銘柄で「固定値が無ければいくらで買うか」を並べて見るための参考値。
+  evaluateRule(sec) {
+    if (_calcMemo) { const m = _calcMemo.evr; if (m.has(sec.id)) return m.get(sec.id); const v = this._evaluate(sec, { ignoreFixed: true }); m.set(sec.id, v); return v; }
+    return this._evaluate(sec, { ignoreFixed: true });
+  },
+  ruleTrigger(sec) { const ev = this.evaluateRule(sec); return ev ? ev.trigger : null; },
+  _evaluate(sec, opts) {
     if (sec.market === 'FUND' || sec.enabled === false || sec.excluded) return null; // 除外銘柄は判定しない
     const price = this.price(sec);
     if (price == null) return null;
@@ -2139,7 +2148,7 @@ const calc = {
     const th = this.totalHolding(sec.id);
     const lb = this.lastBuyInfo(sec);
 
-    const fixed = (typeof sec.fixedBuyPrice === 'number' && sec.fixedBuyPrice > 0) ? sec.fixedBuyPrice : null;
+    const fixed = (!(opts && opts.ignoreFixed) && typeof sec.fixedBuyPrice === 'number' && sec.fixedBuyPrice > 0) ? sec.fixedBuyPrice : null; // ignoreFixed=ルール上の次回購入（固定値を無視）
     let type = (th.qty <= 0 && lb.price == null) ? 'initial' : 'addon';
     let base, trigger, baseSource;
     if (fixed != null) {
@@ -3589,6 +3598,7 @@ function colDefaultWidth(key) {
   if (key === 'market' || key === 'detailType') return 72;
   if (key === 'trigBasis') return 64; // 1文字バッジ（初/増/高/固）
   if (key === 'ruleDrop') return 76;  // 「−20%」
+  if (key === 'ruleTrigger') return 96; // 見出しが長い＋金額
   if (key === 'addonFromHigh') return 84; // 「初回基準」タグ or —
   if (key === 'extPrice') return 92;  // 時間外価格＋種別タグ
   if (key === 'prevClose') return 96; // 前日終値＋引け日(MM-DD)
@@ -3728,7 +3738,7 @@ const CF_SCREENS = [
   { id: 'analysis', label: '分析' },
 ];
 // 背景色ルールを設定できる数値列（設定UIの選択肢）。
-const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'capToTop', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'ratioValue', 'ratioCost', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'capCoef', 'capAmount', 'ruleDrop', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail', 'stScenPos', 'mtScenPos'];
+const CF_NUMERIC_KEYS = ['price', 'day', 'extPrice', 'trigger', 'ruleTrigger', 'base', 'drop', 'dropPrev', 'high5y', 'high52w', 'dropFrom5y', 'dropFrom52w', 'low1y', 'low3y', 'riseFrom1y', 'riseFrom3y', 'prevBuyPrice', 'dropFromPrev', 'marketCap', 'capToTop', 'turnover', 'value', 'cost', 'origCost', 'acqJpy', 'ratioValue', 'ratioCost', 'pnl', 'avgCost', 'qty', 'buyCount', 'buyAmount', 'reco', 'capCoef', 'capAmount', 'ruleDrop', 'fixedBuyPrice', 'per', 'pbr', 'psr', 'dividend', 'divYield', 'yieldOnCost', 'eps', 'priority', 'marginRatio', 'principalSoldAmount', 'anaTotal', 'anaCup', 'anaRange', 'anaWbottom', 'anaAsc', 'anaRound', 'anaInvHS', 'anaFlag', 'anaBase', 'anaWarn', 'anaRSI', 'anaBuy', 'anaFail', 'stScenPos', 'mtScenPos'];
 // 現在描画中の画面（背景色ルールの適用先絞り込みに使用）。render() で更新。
 let cfScreen = 'holdings';
 function cfNewId() { return 'cf_' + Math.random().toString(36).slice(2, 9); }
@@ -3939,7 +3949,7 @@ function setRatioManual() {
 }
 // 背景色判定で「US（ドル建て）→円換算」する対象の列（ネイティブ通貨の金額・株価系）。
 // %・倍率・株数・スコア・既に円建ての取得円(acqJpy)は対象外。表示は$のまま、色だけ円換算で判定する。
-const CF_MONEY_KEYS = new Set(['price', 'dayAmt', 'trigger', 'base', 'high5y', 'high52w', 'low1y', 'low3y', 'prevBuyPrice', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'avgCost', 'buyAmount', 'reco', 'capAmount', 'fixedBuyPrice', 'dividend', 'eps', 'principalSoldAmount', 'targetPerPrice', 'targetPbrPrice', 'targetYieldPrice']);
+const CF_MONEY_KEYS = new Set(['price', 'dayAmt', 'trigger', 'ruleTrigger', 'base', 'high5y', 'high52w', 'low1y', 'low3y', 'prevBuyPrice', 'marketCap', 'turnover', 'value', 'cost', 'origCost', 'avgCost', 'buyAmount', 'reco', 'capAmount', 'fixedBuyPrice', 'dividend', 'eps', 'principalSoldAmount', 'targetPerPrice', 'targetPbrPrice', 'targetYieldPrice']);
 // US の金額系の素の値を共通レートで円換算（背景色判定用）。それ以外はそのまま返す。
 function cfConvVal(key, market, v) {
   if (v == null || !isFinite(v)) return v;
@@ -3978,6 +3988,7 @@ function cfCellValue(key, sec, ctx) {
     case 'dayAmt': return ctx.dayAmt;
     case 'extPrice': { const p = store.data.prices[priceKey(sec)] || {}; if (p.extPrice == null) return null; const base = p.price != null ? p.price : p.prevClose; return (base && p.extPrice) ? (p.extPrice - base) / base * 100 : null; }
     case 'trigger': return ctx.ev ? ctx.ev.trigger : null;
+    case 'ruleTrigger': return calc.ruleTrigger(sec);
     case 'base': return ctx.ev ? ctx.ev.base : null;
     case 'drop': return ctx.ev ? ctx.ev.remainingDropPct : null;
     case 'dropPrev': return calc.remainingDropPrev(sec);
@@ -4116,6 +4127,8 @@ const COL_RENDERERS = {
   // 前日比値幅: 現在値−前日終値（原通貨）。符号つき・緑/赤。
   dayAmt:    (s,c) => { const v = c.dayAmt; return `<td class="${cls(v)}">${v != null ? (v >= 0 ? '+' : '−') + fmtAmt(Math.abs(v), c.market) : '—'}</td>`; },
   trigger:   (s,c) => `<td>${c.ev ? (c.ev.baseSource === 'みなし' ? MINASHI : c.ev.baseSource === '固定' ? FIXED_MARK : '') + c.m(c.ev.trigger) : muted}</td>`,
+  // ルール上の次回購入: 固定値を無視した判定。固定値が効いている銘柄だけ値が「次回購入」と異なる（区分マークで基準を示す）
+  ruleTrigger: (s,c) => { const ev = calc.evaluateRule(s); if (!ev) return `<td>${muted}</td>`; const diff = c.ev && c.ev.baseSource === '固定'; return `<td class="${diff ? '' : 'muted'}" title="買増固定値を無視し、買い増しルールだけで計算した次回購入（基準: ${esc(ev.baseSource)}）${diff ? '' : '＝次回購入と同じ'}">${ev.baseSource === 'みなし' ? MINASHI : ''}${c.m(ev.trigger)}</td>`; },
   // ルール下落率: 次回購入ラインの算出に使ったルールの下落率と基準（高値から／前回から）。ruleDropInfo 参照
   ruleDrop:  (s,c) => {
     const r = ruleDropInfo(s, c.ev);
@@ -5054,6 +5067,7 @@ function sortValue(sec, key) {
     case 'prevClose': { const p = store.data.prices[priceKey(sec)] || {}; return p.prevClose ?? -Infinity; }
     case 'dayAmt': { const p = store.data.prices[priceKey(sec)] || {}; return (p.price != null && p.prevClose != null) ? (p.price - p.prevClose) : -Infinity; }
     case 'trigger': { const ev = calc.evaluate(sec); return ev ? ev.trigger : -Infinity; }
+    case 'ruleTrigger': return calc.ruleTrigger(sec) ?? -Infinity;
     case 'base': { const ev = calc.evaluate(sec); return ev ? ev.base : -Infinity; }
     case 'drop': { const ev = calc.evaluate(sec); return ev ? ev.remainingDropPct : Infinity; }
     case 'dropPrev': return calc.remainingDropPrev(sec) ?? Infinity;
@@ -13492,6 +13506,7 @@ function openSecurityDetail(secId) {
     kv('種別', typeLabel),
     kv('基準値', (ev.baseSource === 'みなし' ? MINASHI : ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.base)),
     kv('次回購入(トリガー)', (ev.baseSource === '固定' ? FIXED_MARK : '') + m(ev.trigger)),
+    ...(ev.baseSource === '固定' && calc.ruleTrigger(sec) != null ? [kv('ルール上の次回購入（固定値なし）', m(calc.ruleTrigger(sec)) + ` <span class="muted">基準: ${esc((calc.evaluateRule(sec) || {}).baseSource || '')}</span>`)] : []),
     kv('現在値', m(price)),
     kv('残り下落率', ev.remainingDropPct != null ? `<span class="${ev.reached ? 'neg' : ''}">${ev.remainingDropPct.toFixed(1)}%</span>` + (ev.reached ? '（到達）' : '') : '—'),
     highResetNote,
