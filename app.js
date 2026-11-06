@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261107-0004';
+const APP_VERSION = 'v20261107-0024';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -5511,16 +5511,34 @@ function openColPicker(market) {
 // 列プロファイルの表示名（コピーボタン/トースト用）。市場のほか分析の逆張り/順張りビューも扱う。
 function colMarketLabel(m) { return ({ US: '米国株', JP: '日本株', FUND: '投信', SIGNAL: '買い増しサイン', ANALYSIS: '逆張り', ANALYSIS_T: '順張り' })[m] || MARKET_LABEL[m] || m; }
 // 列レイアウト（表示/非表示・並び順・幅・列名）を他のプロファイルへコピー。米国株↔日本株 / 逆張り↔順張り。
+// 列パターン対応（2026-11-07 すみぽん指摘）: コピー元でパターンを適用中なら、コピー先の**同名パターン**を上書き
+// （無ければ同名で新規作成）し、コピー先でもそのパターンを適用する。以前はコピー先の「なし」（自由レイアウト）や
+// 適用中の別パターンへ書き込んでいた。コピー元がパターン未適用なら、コピー先もパターンを外して自由レイアウトへ入れる
+// （適用中の別パターンへ黙って書き戻さない）。
 function copyColLayout(fromMarket, toMarket) {
   reconcileColPrefs(fromMarket);
+  const srcLayout = colActiveLayout(fromMarket);
   colPrefs[toMarket] = colPrefs[fromMarket].map(c => ({ key: c.key, visible: c.visible, width: c.width, labelOverride: c.labelOverride, auto: c.auto }));
   // 列の固定範囲も一緒にコピー（未設定なら相手側も未設定に揃える）
   if (colPrefs[fromMarket + '#sticky'] != null) colPrefs[toMarket + '#sticky'] = colPrefs[fromMarket + '#sticky'];
   else delete colPrefs[toMarket + '#sticky'];
-  touchColPrefs(toMarket + '#sticky');
   reconcileColPrefs(toMarket); // toMarket に無い列を除去・新規列を補完（同一列群なので実質そのまま）
-  saveColPrefs(); touchColPrefs(toMarket);
-  toast(`列設定を${colMarketLabel(toMarket)}ビューにコピーしました`, 4000);
+  let msg;
+  if (srcLayout) {
+    const arr = colLayouts(toMarket); const now = new Date().toISOString();
+    const snap = colLayoutSnapshot(toMarket);
+    let l = arr.find(x => x && !x.deleted && x.name === srcLayout.name);
+    if (l) { Object.assign(l, snap, { updatedAt: now }); msg = `列パターン「${srcLayout.name}」を${colMarketLabel(toMarket)}ビューの同名パターンに上書きしました`; }
+    else { l = { id: 'cl' + Date.now(), name: srcLayout.name, ...snap, updatedAt: now }; arr.push(l); msg = `列パターン「${srcLayout.name}」を${colMarketLabel(toMarket)}ビューに同名で作成しました`; }
+    colPrefs[toMarket + '#layouts'] = arr; colPrefs[toMarket + '#layoutId'] = String(l.id);
+    touchColPrefs(toMarket + '#layouts');
+  } else {
+    delete colPrefs[toMarket + '#layoutId']; // 自由レイアウトへ（適用中パターンへの書き戻しを避ける）
+    msg = `列設定を${colMarketLabel(toMarket)}ビューにコピーしました（パターンなし）`;
+  }
+  touchColPrefs(toMarket + '#layoutId'); touchColPrefs(toMarket + '#sticky');
+  saveColPrefs(); touchColPrefs(toMarket); // 適用中パターンがあれば colLayoutWriteBack で同内容を書き戻す（同内容なので無変更）
+  toast(msg, 4000);
   openColPicker(_colPickerMarket);
 }
 function cpToggle(key, checked) {
