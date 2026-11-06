@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261106-1230';
+const APP_VERSION = 'v20261106-2345';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -263,6 +263,10 @@ const MASTER_COLS = [
   { key: 'low3y',       label: '3年安値',          left: false, markets: STKM, noSort: false },
   { key: 'riseFrom1y',  label: '1年安値からの上昇率', left: false, markets: STKM, noSort: false },
   { key: 'riseFrom3y',  label: '3年安値からの上昇率', left: false, markets: STKM, noSort: false },
+  // 株価レンジ（安値〜高値＋現在値の位置バー）。自動取得の派生値のためフォーム・取込・一括変更は対象外。ソートは「レンジ内の現在位置(%)」
+  { key: 'range1y',     label: '1年レンジ',        left: true,  markets: STKM, noSort: false },
+  { key: 'range5y',     label: '5年レンジ',        left: true,  markets: STKM, noSort: false },
+  { key: 'range10y',    label: '10年レンジ',       left: true,  markets: STKM, noSort: false },
   { key: 'prevBuyPrice', label: '前回購入単価',     left: false, markets: STKM, noSort: false },
   { key: 'prevBuyDate',  label: '前回購入日',       left: true,  markets: STKM, noSort: false },
   { key: 'earnPrev',     label: '前回決算',          left: true,  markets: STKM, noSort: false },
@@ -396,9 +400,9 @@ const DEFAULT_VISIBLE = {
 };
 // マーケットランキングで列設定に出せる項目（追加取得ゼロで出せる市場データ＋登録済み銘柄のツール内情報）。
 // MASTER_COLS に実在するkeyのみ（resetColPrefs 側で実在チェックして交差を取る）。表示順もこの順。
-const MKTRANK_KEYS = ['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap','capToTop','sector','industry','category','investCategory','labels','ruleName','rating','per','pbr','dividend','divYield','buyAmount'];
+const MKTRANK_KEYS = ['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','range1y','range5y','range10y','turnover','marketCap','capToTop','sector','industry','category','investCategory','labels','ruleName','rating','per','pbr','dividend','divYield','buyAmount'];
 // このうち「市場データ列」＝ランキング取得値(it)から描画する（store.data.prices を参照しない）。残りは登録済み銘柄のみ COL_RENDERERS(sec) に委譲。
-const MKTRANK_IT_KEYS = new Set(['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','turnover','marketCap']);
+const MKTRANK_IT_KEYS = new Set(['market','price','day','prevClose','dayAmt','high5y','dropFrom5y','high52w','dropFrom52w','low1y','low3y','riseFrom1y','riseFrom3y','range1y','range5y','range10y','turnover','marketCap']);
 // 配当は米株のみランキング取得値に含まれる（USスクリーナーの同一レスポンス＝追加取得ゼロ）。
 // 日本株ランキングのHTMLには無いので、it に値が無ければ登録済み銘柄のマスタ値へフォールバックする両対応列。
 // capToTop（時価1位まで）もハイブリッド: 時価総額ランキングは it.marketCap から算出でき、
@@ -526,8 +530,10 @@ const store = {
     // 当日の補完取得（refreshAll末尾の高値欠け拾い）で正しい値を取り直させる。サーバー側にも同じフィルタ導入済み。
     for (const p of Object.values(this.data.prices)) {
       if (!p || typeof p.price !== 'number' || p.price <= 0) continue;
-      const bad = ['high5y', 'high52w', 'low1y', 'low3y'].some(k => typeof p[k] === 'number' && (p[k] > p.price * 1000 || (p[k] > 0 && p[k] < p.price / 1000)));
-      if (bad) { for (const k of ['high5y', 'high52w', 'high5yDate', 'high52wDate', 'low1y', 'low3y', 'low1yDate', 'low3yDate']) p[k] = null; p.highsAt = null; }
+      const bad = ['high5y', 'high52w', 'low1y', 'low3y', 'low5y', 'high10y', 'low10y'].some(k => typeof p[k] === 'number' && (p[k] > p.price * 1000 || (p[k] > 0 && p[k] < p.price / 1000)));
+      if (bad) { for (const k of ['high5y', 'high52w', 'high5yDate', 'high52wDate', 'low1y', 'low3y', 'low1yDate', 'low3yDate', 'low5y', 'high10y', 'low10y']) p[k] = null; p.highsAt = null; }
+      // 2026-11-06 レンジ列追加の移行: 10年レンジ未取得（旧キャッシュ）は高値取得成功日を落として当日の補完取得(refreshHighsBg)で取り直す
+      if (p.high10y == null && p.highsAt) p.highsAt = null;
     }
     this.data.fx ||= { USDJPY: null };
     this.data.meta ||= {}; // 銘柄情報マスタ（名前・セクター・ファンダ）priceKeyでキャッシュ
@@ -1960,6 +1966,15 @@ const calc = {
   // 安値（priceキャッシュ。情報表示用・判定には未使用）
   low1y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.low1y ?? null; },
   low3y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.low3y ?? null; },
+  // 株価レンジ列用（1年=1年安値〜52週高値 / 5年=5年安値〜5年高値 / 10年=10年安値〜10年高値）
+  low5y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.low5y ?? null; },
+  high10y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.high10y ?? null; },
+  low10y(sec) { const p = store.data.prices[priceKey(sec)] || {}; return p.low10y ?? null; },
+  rangeOf(sec, key) {
+    if (key === 'range1y') return { lo: this.low1y(sec), hi: this.high52w(sec) };
+    if (key === 'range5y') return { lo: this.low5y(sec), hi: this.high5y(sec) };
+    return { lo: this.low10y(sec), hi: this.high10y(sec) };
+  },
   // 各種「〜からの下落率」（現在値 vs 基準。負=基準より下）
   dropFrom(sec, base) { return pctFromBase(this.price(sec), base); },
   dropFromPrev(sec) { return this.dropFrom(sec, this.lastBuyPrice(sec)); },
@@ -2529,6 +2544,7 @@ const api = {
           low3y: q.low3y != null ? q.low3y : (prev.low3y ?? null),
           low1yDate: q.low1yDate != null ? q.low1yDate : (prev.low1yDate ?? null),
           low3yDate: q.low3yDate != null ? q.low3yDate : (prev.low3yDate ?? null),
+          low5y: q.low5y != null ? q.low5y : (prev.low5y ?? null), high10y: q.high10y != null ? q.high10y : (prev.high10y ?? null), low10y: q.low10y != null ? q.low10y : (prev.low10y ?? null), // レンジ列用
           volume: q.volume != null ? q.volume : (prev.volume ?? null), // 当日出来高（売買代金算出用・未取得時は前回値を保持）
           fetchedAt: q.fetchedAt,
         };
@@ -2820,6 +2836,7 @@ const api = {
           high5yDate: q.high5yDate ?? prev.high5yDate ?? null, high52wDate: q.high52wDate ?? prev.high52wDate ?? null, // 高値が付いた日（高値更新判定用）
           low1y: q.low1y != null ? q.low1y : (prev.low1y ?? null), low3y: q.low3y != null ? q.low3y : (prev.low3y ?? null),
           low1yDate: q.low1yDate ?? prev.low1yDate ?? null, low3yDate: q.low3yDate ?? prev.low3yDate ?? null, // 安値が付いた日（情報表示用）
+          low5y: q.low5y ?? prev.low5y ?? null, high10y: q.high10y ?? prev.high10y ?? null, low10y: q.low10y ?? prev.low10y ?? null, // 1/5/10年レンジ列用
           highsAt: q.high5y != null ? today() : (prev.highsAt ?? null), // 高値取得の成功日（銘柄単位）
           highsTriedAt: today(), // 高値取得を試みた日（この経路は常に highs=1）。成否問わず更新
           highsFail: q.high5y != null ? 0 : (prev.highsFail || 0) + 1, // 連続失敗回数（成功で0）。恒久失敗の毎回リトライ抑制に使う
@@ -3507,6 +3524,7 @@ function colDefaultWidth(key) {
   if (key === 'capCoef') return 76;  // 🔒＋「1.35」
   if (key === 'capAmount') return 92;
   if (key === 'ratioValue' || key === 'ratioCost') return 84; // 「12.34%」＋バー
+  if (key === 'range1y' || key === 'range5y' || key === 'range10y') return 150; // 「安値 – 高値」＋位置バー
   if (key === 'anaWarn' || key === 'anaWarnC') return 150; // パターン名＋スコア
   if (key === 'anaMa200') return 72;
   if (key === 'ana5d') return 58;
@@ -4042,6 +4060,9 @@ const COL_RENDERERS = {
   low3y:    (s,c) => `<td>${c.low3y != null ? fmtAmt(c.low3y, c.market) : muted}</td>`,
   riseFrom1y: (s,c) => pctTd(calc.riseFrom1y(s)),
   riseFrom3y: (s,c) => pctTd(calc.riseFrom3y(s)),
+  range1y:  (s,c) => { const r = calc.rangeOf(s, 'range1y'); return rangeTd(r.lo, r.hi, c.price, c.market); },
+  range5y:  (s,c) => { const r = calc.rangeOf(s, 'range5y'); return rangeTd(r.lo, r.hi, c.price, c.market); },
+  range10y: (s,c) => { const r = calc.rangeOf(s, 'range10y'); return rangeTd(r.lo, r.hi, c.price, c.market); },
   prevBuyPrice: (s,c) => { const lb = calc.lastBuyInfo(s); return `<td>${lb.price != null ? (lb.source === 'みなし' ? MINASHI : '') + fmtAmt(lb.price, c.market) : muted}</td>`; },
   // 前回購入日: 判定に使う実効値（取引履歴の最新買い日→無ければ手動入力の前回購入日）
   prevBuyDate: (s,c) => { const d = calc.lastBuyInfo(s).date; return `<td class="l">${d ? esc(d) : muted}</td>`; },
@@ -4927,6 +4948,7 @@ function sortValue(sec, key) {
     case 'low3y': return calc.low3y(sec) ?? -Infinity;
     case 'riseFrom1y': return calc.riseFrom1y(sec) ?? Infinity;
     case 'riseFrom3y': return calc.riseFrom3y(sec) ?? Infinity;
+    case 'range1y': case 'range5y': case 'range10y': { const r = calc.rangeOf(sec, key); return rangePos(r.lo, r.hi, calc.price(sec)) ?? Infinity; }
     case 'value': return calc.valueOrCostNative(sec) ?? -Infinity;
     case 'ratioValue': return ratioPct(sec, 'value') ?? -Infinity;
     case 'ratioCost': return ratioPct(sec, 'cost') ?? -Infinity;
@@ -6437,6 +6459,9 @@ async function fetchRankingItems({ market, sub, kind }, memo) {
       high52w: ok && q.high52w != null ? q.high52w : null,
       low1y:   ok && q.low1y   != null ? q.low1y   : null,
       low3y:   ok && q.low3y   != null ? q.low3y   : null,
+      low5y:   ok && q.low5y   != null ? q.low5y   : null,
+      high10y: ok && q.high10y != null ? q.high10y : null,
+      low10y:  ok && q.low10y  != null ? q.low10y  : null,
       volume:  ok && q.volume  != null ? q.volume  : (it.volume ?? null),
     };
     if (market === 'JP') {
@@ -6580,6 +6605,9 @@ function mktItValue(it, key, market) {
     case 'dropFrom52w': return pctFromBase(price, it.high52w);
     case 'riseFrom1y':  return pctFromBase(price, it.low1y);
     case 'riseFrom3y':  return pctFromBase(price, it.low3y);
+    case 'range1y':     return rangePos(it.low1y, it.high52w, price);
+    case 'range5y':     return rangePos(it.low5y, it.high5y, price);
+    case 'range10y':    return rangePos(it.low10y, it.high10y, price);
     case 'turnover':    return it.turnover ?? null;
     case 'marketCap':   return it.marketCap ?? null;
     case 'dividend':    return it.dividend ?? null;
@@ -6614,6 +6642,9 @@ function mktItCell(it, key, market) {
       return `<td>${v != null ? fmtAmt(v, market) : '—'}</td>`;
     case 'dropFrom5y': case 'dropFrom52w': case 'riseFrom1y': case 'riseFrom3y':
       return `<td class="${cls(v)}">${v != null ? signed(v) + '%' : '—'}</td>`;
+    case 'range1y':  return rangeTd(it.low1y, it.high52w, it.price, market);
+    case 'range5y':  return rangeTd(it.low5y, it.high5y, it.price, market);
+    case 'range10y': return rangeTd(it.low10y, it.high10y, it.price, market);
     case 'turnover':  return `<td>${mktAmt(it.turnover, market)}</td>`;
     case 'marketCap': return `<td>${mktAmt(it.marketCap, market)}</td>`;
     default: return '<td>—</td>';
@@ -13382,6 +13413,7 @@ function openSecurityDetail(secId) {
       return kv('時価総額1位まで', calc.capToTop(sec) > 1 ? `${esc(f.label)}（${f.pct}） <span class="muted">1位 ${esc(t.name || t.code)} ${fmtTurnover(t.cap, sec.market)}</span>` : '到達済み（1位）');
     })()] : []),
     kv('1年安値 / 3年安値', `${m(calc.low1y(sec))} / ${m(calc.low3y(sec))}`),
+    kv('5年安値 / 10年高値 / 10年安値', `${m(calc.low5y(sec))} / ${m(calc.high10y(sec))} / ${m(calc.low10y(sec))}`),
     kv('売買代金（現在値×当日出来高）', `${calc.turnover(sec) != null ? fmtTurnover(calc.turnover(sec), sec.market) : '—'}`),
     kv('前回決算 / 次回決算', `${esc(earnPrevText(sec))} / ${esc(earnNextText(sec))}`),
     companySummary(sec) ? kv('概要', `<span style="font-weight:400">${esc(companySummary(sec))}</span>`) : '',
@@ -14573,6 +14605,7 @@ function openPriceInput(secId) {
       high52w: p.high52w ?? null,
       low1y: p.low1y ?? null, low3y: p.low3y ?? null,
       low1yDate: p.low1yDate ?? null, low3yDate: p.low3yDate ?? null,
+      low5y: p.low5y ?? null, high10y: p.high10y ?? null, low10y: p.low10y ?? null,
       fetchedAt: new Date().toISOString(),
     };
     store.save(); closeModal(); render();
@@ -17228,6 +17261,17 @@ function fmtQty(n, market) {
 }
 // 基準値に対する変化率(%)。base割れ=負。保有銘柄の各種「〜からの下落率」と共通（calc.dropFromもこれを使用）
 function pctFromBase(price, base) { if (price == null || !base) return null; return (price - base) / base * 100; }
+// 株価レンジ内の現在値の位置(%)。0=安値・100=高値。レンジ外は0未満/100超も返す（表示側でクランプ）
+function rangePos(lo, hi, price) { if (lo == null || hi == null || price == null || !(hi > lo)) return null; return (price - lo) / (hi - lo) * 100; }
+// 株価レンジ列の <td>（「安値 – 高値」＋現在位置バー）。保有銘柄・サイン・マーケットの各表で共用
+function rangeTd(lo, hi, price, market) {
+  if (lo == null || hi == null) return '<td class="l"><span class="muted">—</span></td>';
+  const pos = rangePos(lo, hi, price);
+  const pct = pos == null ? null : Math.max(0, Math.min(100, pos));
+  const title = pos == null ? '' : ` title="レンジ内の位置 ${pos.toFixed(0)}%（0%=安値 / 100%=高値）"`;
+  const bar = pct == null ? '' : `<span class="rng-bar"><i style="left:${pct.toFixed(1)}%"></i></span>`;
+  return `<td class="l rng"${title}><span class="rng-txt">${fmtAmt(lo, market)} – ${fmtAmt(hi, market)}</span>${bar}</td>`;
+}
 function signed(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2); }
 function cls(n) { return n == null ? '' : (n > 0 ? 'pos' : (n < 0 ? 'neg' : '')); }
 // 「今日」は**日本時間の暦日**。UTC基準だと 00:00〜09:00 JST の間だけ前日を返し、

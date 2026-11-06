@@ -760,6 +760,11 @@ textarea.paste:focus { outline: none; border-color: var(--navy-3); box-shadow: 0
 /* progress bar (損益率の視覚化など) */
 .bar { height: 5px; border-radius: 3px; background: var(--panel-3); overflow: hidden; width: 64px; display: inline-block; vertical-align: middle; }
 .bar > i { display: block; height: 100%; border-radius: 3px; }
+/* 株価レンジ列: 「安値 – 高値」の下に現在値の位置を示す細いバー（縦線マーカー） */
+td.rng { white-space: nowrap; line-height: 1.15; padding-top: 3px; padding-bottom: 3px; }
+td.rng .rng-txt { font-variant-numeric: tabular-nums; font-size: 12px; }
+td.rng .rng-bar { position: relative; display: block; height: 4px; margin-top: 3px; border-radius: 2px; background: var(--panel-3); }
+td.rng .rng-bar > i { position: absolute; top: -2px; width: 2px; height: 8px; margin-left: -1px; background: var(--accent, #4c8dff); border-radius: 1px; }
 
 /* 空状態 */
 .empty { padding: 56px 20px; text-align: center; color: var(--muted); }

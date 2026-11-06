@@ -112,14 +112,15 @@ async function fetchFinnhub(symbol, token, withHighs) {
   const q = quoteRes.ok ? await quoteRes.json().catch(() => ({})) : {};
 
   let high5y = null, high52w = null, high5yDate = null, high52wDate = null, prevDayPct = null, yq = null;
-  let low1y = null, low3y = null, low1yDate = null, low3yDate = null;
+  let low1y = null, low3y = null, low1yDate = null, low3yDate = null, low5y = null, high10y = null, low10y = null;
   // 高値が必要な時のみ Yahoo を追加（高値は日中ほぼ不変なので毎回は取らない）。日足取得で5年高値＋前営業日比も得る。
   if (withHighs) {
     try {
-      yq = await fetchYahooChart(symbol, '5y', '1d');
+      yq = await fetchYahooChart(symbol, '10y', '1d');
       high5y = yq.high5y || null; high52w = yq.high52w || null;
       high5yDate = yq.high5yDate; high52wDate = yq.high52wDate; prevDayPct = yq.prevDayPct;
       low1y = yq.low1y; low3y = yq.low3y; low1yDate = yq.low1yDate; low3yDate = yq.low3yDate;
+      low5y = yq.low5y; high10y = yq.high10y; low10y = yq.low10y;
     } catch (_) { /* 失敗時は高値なし（クライアントが既存値を保持） */ }
   }
 
@@ -135,7 +136,7 @@ async function fetchFinnhub(symbol, token, withHighs) {
 
   // 出来高: Finnhub quote には無いため、高値取得で Yahoo を引いた時(withHighs)だけ得られる。
   // 通常更新では null だが、クライアント側で前回値を保持するため日次の高値更新で更新される。
-  return { price, prevClose, prevDayPct, high5y, high52w, high5yDate, high52wDate, low1y, low3y, low1yDate, low3yDate, currency: 'USD', source, volume: yq ? yq.volume : null, fetchedAt: new Date().toISOString() };
+  return { price, prevClose, prevDayPct, high5y, high52w, high5yDate, high52wDate, low1y, low3y, low1yDate, low3yDate, low5y, high10y, low10y, currency: 'USD', source, volume: yq ? yq.volume : null, fetchedAt: new Date().toISOString() };
 }
 
 // ---------- 米株 プレ/アフター（時間外）----------
@@ -177,7 +178,8 @@ async function fetchUsExtended(symbol) {
 // Finnhubキー無しの米株・日本株はこちら（1呼び出し）。withHighs=false の通常更新は短期間取得で軽く（高値はnull→クライアントが既存値保持）。
 async function fetchYahoo(symbol, type, rangeOverride, withHighs) {
   // 高値が必要な時だけ長期間(5y/1y)。通常は短期間(1mo)で価格・前日比のみ。
-  const range = rangeOverride || (type === 'fund' ? '1y' : (withHighs ? '5y' : '1mo'));
+  // highs=1 は10年日足（1/5/10年レンジ列用。5年高値・1/3年安値はその中の窓で算出）。
+  const range = rangeOverride || (type === 'fund' ? '1y' : (withHighs ? '10y' : '1mo'));
   // 日足で取得する。週足だと chartPreviousClose が「前週終値」になり前日比が壊れるため。
   // 前日終値は日足の終値配列の最後から2番目を使う（下記 fetchYahooChart）。
   const interval = '1d';
@@ -196,6 +198,9 @@ async function fetchYahoo(symbol, type, rangeOverride, withHighs) {
     low3y:    wantHighs ? q.low3y : null,    // 3年安値
     low1yDate:  wantHighs ? q.low1yDate : null,
     low3yDate:  wantHighs ? q.low3yDate : null,
+    low5y:    wantHighs ? q.low5y : null,    // 5年安値（レンジ列用）
+    high10y:  wantHighs ? q.high10y : null,  // 10年高値（レンジ列用）
+    low10y:   wantHighs ? q.low10y : null,   // 10年安値（レンジ列用）
     currency: q.currency,
     source:   'yahoo',
     volume:   q.volume,     // 当日出来高（売買代金算出用）
@@ -285,20 +290,25 @@ async function fetchYahooChart(symbol, range, interval) {
   // 52週高値（直近52週の最大値）。高値が付いた日付も記録（高値更新判定で「前回購入後に高値更新したか」を見るため）
   const now = Date.now() / 1000;
   const yr52 = 52 * 7 * 24 * 3600;
-  let high52w = 0, high5y = 0, high5yTs = null, high52wTs = null;
+  // 取得範囲は10年(range=10y)。5年高値は直近5年(=260週)の窓で算出し、10年高値は取得範囲全体の最大値。
+  const win5y = 5 * yr52;
+  let high52w = 0, high5y = 0, high10y = 0, high5yTs = null, high52wTs = null;
   highs.forEach((h, i) => {
     if (typeof h !== 'number') return;
-    if (h > high5y) { high5y = h; high5yTs = ts[i] || null; }
+    if (h > high10y) high10y = h;
+    if (ts[i] && (now - ts[i]) < win5y && h > high5y) { high5y = h; high5yTs = ts[i] || null; }
     if (ts[i] && (now - ts[i]) < yr52 && h > high52w) { high52w = h; high52wTs = ts[i]; }
   });
   // 1年安値・3年安値（直近1年/3年の最小値）。安値が付いた日付も記録（情報表示用。判定には未使用）。
   // 5y日足を走査するので 1y=直近52週・3y=直近156週の窓で最小を取る。0/負・null は除外（無効値）。
   const lows = (quotes && quotes.low) || [];
   const win3y = 3 * yr52;
-  let low1y = Infinity, low3y = Infinity, low1yTs = null, low3yTs = null;
+  let low1y = Infinity, low3y = Infinity, low5y = Infinity, low10y = Infinity, low1yTs = null, low3yTs = null;
   lows.forEach((l, i) => {
     if (typeof l !== 'number' || l <= 0 || !ts[i]) return;
     const age = now - ts[i];
+    if (l < low10y) low10y = l;
+    if (age < win5y && l < low5y) low5y = l;
     if (age < win3y && l < low3y) { low3y = l; low3yTs = ts[i]; }
     if (age < yr52 && l < low1y) { low1y = l; low1yTs = ts[i]; }
   });
@@ -325,6 +335,9 @@ async function fetchYahooChart(symbol, range, interval) {
     low3y:    low3y === Infinity ? null : low3y,   // 3年安値
     low1yDate: toDate(low1yTs),      // 1年安値が付いた日
     low3yDate: toDate(low3yTs),      // 3年安値が付いた日
+    low5y:    low5y === Infinity ? null : low5y,     // 5年安値（レンジ列用）
+    high10y:  high10y || null,                       // 10年高値（レンジ列用）
+    low10y:   low10y === Infinity ? null : low10y,   // 10年安値（レンジ列用）
     currency: meta.currency || null,
     // 当日出来高（売買代金=現在値×出来高）。meta.regularMarketVolume が無い場合は出来高配列の最後の有効値で補完
     volume: num(meta.regularMarketVolume) ?? (() => { const vs = (quotes && quotes.volume) || []; for (let i = vs.length - 1; i >= 0; i--) if (typeof vs[i] === 'number') return vs[i]; return null; })(),
