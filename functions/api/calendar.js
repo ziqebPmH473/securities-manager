@@ -112,7 +112,10 @@ async function loadJp() {
     files.push({ url, asOf });
   }
   out.sort((a, b) => a.date.localeCompare(b.date) || a.code.localeCompare(b.code));
-  return { ok: true, market: "jp", source: "JPX", files, rows: out };
+  // 同じ会社が複数の Excel に載ることがあるので、同じ日・同じコードは1行にまとめる
+  const seen = new Set();
+  const uniq = out.filter((r) => { const k = r.date + "|" + r.code; if (seen.has(k)) return false; seen.add(k); return true; });
+  return { ok: true, market: "jp", source: "JPX", files, rows: uniq };
 }
 
 // ---- 日本株：日経の決算発表スケジュール（月ごと・50件ずつのページ） ----

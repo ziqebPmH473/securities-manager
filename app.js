@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261107-0035';
+const APP_VERSION = 'v20261110-1132';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -9422,6 +9422,9 @@ function ecalRows() {
     out.push(...jr.filter(r => ms.includes(r.date.slice(0, 7))));
     for (const m of ms) if (ECAL.mon.JP[m]) out.push(...ECAL.mon.JP[m].rows.filter(r => !inJpx(r.code, r.date)));
   }
+  // 同じ日・同じ銘柄は1行にまとめる（JPX は期ごとに Excel が分かれていて、同じ会社が複数の Excel に載ることがある）
+  const seen = new Set();
+  out = out.filter(r => { const k = r.date + '|' + ecalKey(mk, r.symbol || r.code); if (seen.has(k)) return false; seen.add(k); return true; });
   out = out.map(r => Object.assign({}, r, { code: r.code || r.symbol, mine: mine.get(ecalKey(mk, r.symbol || r.code)) || null }));
   // 決算日キャッシュからおぎなう（フィードで前後20日以内に同じ銘柄があれば足さない）
   const have = new Map();
