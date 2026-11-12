@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261111-0034';
+const APP_VERSION = 'v20261112-2335';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -7998,7 +7998,9 @@ function updPush(rec) {
   if (store.data.updates.length > UPD_MAX) store.data.updates = store.data.updates.slice(0, UPD_MAX);
 }
 function updList(kind) {
-  const all = (store.data.updates || []).filter(r => r && r.key && (!kind || r.kind === kind));
+  // 既に積まれてしまったPER等の通知も表示しない（同期データに残っていても出さない）
+  const all = (store.data.updates || []).filter(r => r && r.key && (!kind || r.kind === kind)
+    && !(r.kind === 'macro' && r.seriesId && MACRO_SERIES[r.seriesId] && !updMacroNotifiable(r.seriesId)));
   return all.slice().sort(updCmp);
 }
 function updIsUnseen(r) { return !((store.data.updSeen || {})[r.key]); }
@@ -8047,9 +8049,16 @@ function macroMarkNewSeen() { updMarkSeen('macro'); renderMacro(); renderNav(); 
 // ---- 検知: 経済指標の更新 ----
 // 取得前の最終観測日と比べ、新しい観測が入った時だけ積む（同じ日のデータ再取得では積まない）。
 // 指数・為替(src:'idx')は毎日動くので対象外。「指標が更新された」だけを拾う。
+// ★指数のPER（src:'per'）も対象外（すみぽん指摘 2026-11-12「PERを毎日トップページに通知しないで」）。
+//   PERは株価に連動して毎日動く評価指標で「指標の公表」ではない。S&P500 は月次扱いだが、取得元 multpl の
+//   最新行がその日付の推定値（月の途中の行）なので、毎日「新しい観測」と判定されて毎日積まれていた。
+function updMacroNotifiable(id) {
+  const def = MACRO_SERIES[id];
+  return !!def && def.src !== 'idx' && def.src !== 'per';
+}
 function updNoteMacro(id, prevLastDate, obs, freq) {
   const def = MACRO_SERIES[id];
-  if (!def || def.src === 'idx' || !obs || !obs.length) return;
+  if (!def || !updMacroNotifiable(id) || !obs || !obs.length) return;
   // ★日次の指標（米国債利回り・FF金利・期待インフレ・VIX等）は毎営業日に値が入るので、
   //   お知らせに出すと毎日大量に流れて他の更新が埋もれる（すみぽん指摘 2026-08-14）。
   //   「指標が更新された」と言えるのは月次・四半期（と週次）なので、日次は積まない。
