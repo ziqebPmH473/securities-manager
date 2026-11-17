@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261112-2335';
+const APP_VERSION = 'v20261118-0214';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -6522,10 +6522,50 @@ function syncTopCapFromCache() {
   }
   return changed;
 }
-function setMktMarket(m) { mktState.market = m; if (m === 'US') mktState.sub = 'all'; renderMarketTab(); }
+function setMktMarket(m) { mktState.market = m; if (m === 'US') { mktState.sub = 'all'; if (mktState.kind === 'opening') mktState.kind = 'gainers'; } renderMarketTab(); }
 function setMktSub(s) { mktState.sub = s; renderMarketTab(); }
 function setMktKind(k) { mktState.kind = k; renderMarketTab(); }
-function mktRefresh() { loadRanking(true); }
+function mktRefresh() { if (mktState.market === 'JP' && mktState.kind === 'opening') loadOpenRank(true); else loadRanking(true); }
+
+// ---------- 寄り付きランキング（日本株・市場区分別 値上がり率/値下がり率 上位10、100円未満除外） ----------
+// /api/open-ranking（Yahoo!ファイナンス日本版＝東証リアルタイム）。同じ内容を平日9:10にメールでも送る（worker cron）。
+// 表示用の一時データなのでメモリのみ（設定ではないため store.data に保存しない）。
+let _openRank = null;   // { data, at }
+let _openRankBusy = false;
+async function loadOpenRank(force) {
+  if (_openRankBusy) return;
+  if (!force && _openRank && Date.now() - _openRank.at < 60 * 1000) return;
+  _openRankBusy = true; renderMarketTab();
+  try {
+    const r = await fetch('/api/open-ranking').then(x => x.ok ? x.json() : null).catch(() => null);
+    _openRank = { data: r && r.ok ? r : { error: (r && r.error) || '取得できませんでした' }, at: Date.now() };
+  } finally { _openRankBusy = false; renderMarketTab(); }
+}
+function openRankListHtml(items, title, cls) {
+  const mark = code => { const s = mktFindSec(code, 'JP'); if (!s) return ''; const held = store.data.holdings.some(h => h.securityId === s.id && (h.quantity || 0) > 0); return `<span class="or-mark" title="${held ? '保有中' : '登録銘柄'}">${held ? '★' : '☆'}</span>`; };
+  const rows = (items || []).map((it, i) => `<li><span class="or-rank">${i + 1}</span><a href="#" class="or-name" onclick="mktClickName('${esc(it.code)}','JP');return false">${mark(it.code)}<span class="or-code">${esc(it.code)}</span>${esc(it.name || '')}</a><span class="or-pct ${cls}">${it.changePct > 0 ? '+' : ''}${it.changePct.toFixed(2)}%</span><span class="or-price">${Number(it.price).toLocaleString('ja-JP', { maximumFractionDigits: 1 })}</span></li>`).join('');
+  return `<div class="or-list"><div class="or-title ${cls}">${title}</div>${rows ? `<ol>${rows}</ol>` : '<div class="muted" style="padding:6px 0">該当なし</div>'}</div>`;
+}
+function renderOpeningTab(mseg, kseg) {
+  const d = _openRank && _openRank.data;
+  let body;
+  if (!d) body = '<div class="empty">読み込み中…</div>';
+  else if (d.error) body = `<div class="empty">取得できませんでした（${esc(d.error)}）。「更新」で再取得できます。</div>`;
+  else body = `<div class="or-grid">${d.segments.map(s => `<div class="or-card"><div class="or-seg">${esc(s.label)}${s.error ? ` <span class="muted" style="font-size:11px">※${esc(s.error)}</span>` : ''}</div><div class="or-pair">${openRankListHtml(s.gainers, '値上がり率', 'up')}${openRankListHtml(s.losers, '値下がり率', 'or-down')}</div></div>`).join('')}</div>`;
+  const note = d && !d.error ? `ランキング更新 ${esc(d.updatedAt || '不明')}${d.tradingDay ? '' : '（本日分はまだ・休場日の可能性）'}・${d.min}円未満は除外・★保有 ☆登録` : '';
+  app.innerHTML = `
+    <div class="section">
+      <div class="section-head"><h2>寄り付きランキング（東証・市場区分別 上位10）</h2>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="muted" style="font-size:11px">${_openRank ? '取得：' + mktFetchedAt(_openRank.at) : ''}</span>
+          <button class="btn btn-sm btn-primary" onclick="mktRefresh()" ${_openRankBusy ? 'disabled' : ''}>${_openRankBusy ? '取得中…' : '更新'}</button></div></div>
+      <div class="toolbar" style="border:none;padding:10px 16px 0;gap:8px;flex-wrap:wrap">${mseg}</div>
+      <div class="toolbar" style="border:none;padding:8px 16px 0;gap:8px;flex-wrap:wrap"><span class="muted">ランキング</span>${kseg}</div>
+      <div class="muted" style="font-size:11px;padding:8px 16px 0">${note}　※前日終値比（東証リアルタイム）。平日9:10に同じ内容をメールでも送信</div>
+      <div class="section-body" style="padding:12px 16px 16px">${body}</div>
+    </div>`;
+  if (!_openRank && !_openRankBusy) loadOpenRank(false);
+}
 function mktAbbr(n) { if (n == null) return '—'; const a = Math.abs(n); if (a >= 1e12) return (n / 1e12).toFixed(2) + '兆'; if (a >= 1e8) return (n / 1e8).toFixed(1) + '億'; if (a >= 1e6) return (n / 1e6).toFixed(0) + 'M'; return Number(n).toLocaleString('ja-JP'); }
 function mktFetchedAt(ts) { try { return new Date(ts).toLocaleString('ja-JP', { timeZone: JST_TZ, hourCycle: 'h23', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } }
 function mktKabutan(code, market) { return market === 'US' ? `https://us.kabutan.jp/stocks/${encodeURIComponent(code)}/chart` : `https://kabutan.jp/stock/chart?code=${encodeURIComponent(code)}`; }
@@ -6882,7 +6922,8 @@ function renderMarketTab() {
   const { market, sub, kind } = mktState;
   const mseg = `<div class="seg"><button class="${market === 'US' ? 'active' : ''}" onclick="setMktMarket('US')">米国株</button><button class="${market === 'JP' ? 'active' : ''}" onclick="setMktMarket('JP')">日本株</button></div>`;
   const subseg = market === 'JP' ? `<div class="seg" style="margin-left:6px;flex-wrap:wrap">${MKT_JP_SUBS.map(([v, l]) => `<button class="${sub === v ? 'active' : ''}" onclick="setMktSub('${v}')">${l}</button>`).join('')}</div>` : '';
-  const kseg = `<div class="seg">${MKT_KINDS.map(([v, l]) => `<button class="${kind === v ? 'active' : ''}" onclick="setMktKind('${v}')">${l}</button>`).join('')}</div>`;
+  const kseg = `<div class="seg mkt-kseg">${(market === 'JP' ? [...MKT_KINDS, ['opening', '寄り付き']] : MKT_KINDS).map(([v, l]) => `<button class="${kind === v ? 'active' : ''}" onclick="setMktKind('${v}')">${l}</button>`).join('')}</div>`;
+  if (market === 'JP' && kind === 'opening') { renderOpeningTab(mseg, kseg); return; }
   // 列設定（保有銘柄と同じ getColOrder/colHeadHtml/colTag/openColPicker を MKTRANK スコープで再利用）
   const st = listState.MKTRANK;
   const ccy = MARKET_CCY[market];
@@ -11983,6 +12024,7 @@ function renderImport() {
         <div class="btn-row">
           <button class="btn btn-primary" onclick="openGenericImport()">汎用取込（列を選んで取込）</button>
           <button class="btn" onclick="openGenericExport()">汎用出力（CSV）</button>
+          <button class="btn" onclick="openTradingViewExport()">TradingView用リスト出力</button>
         </div>
         <p class="muted grp-note">CSV/Excelを貼り付け→列ごとに取込先を選んで上書き（コード・市場は必須）。分析・詳細種別・取得円・保有・メモ・売却前購入額まで自由に取込でき、フォーマット保存も可能。汎用出力した内容はそのまま汎用取込で戻せます（管理項目をすべて往復）。</p>
       </div>
@@ -16175,6 +16217,71 @@ function genericFieldValue(key, s, h) {
     default: return ''; // 分析結果・未対応フィールドは空欄
   }
 }
+// ---------- TradingView 用ウォッチリスト出力 ----------
+// TradingView の「ウォッチリストをインポート」で読める .txt（カンマ区切り。"###名前" はセクション見出し）。
+// 日本株は "TSE:7203"、米国株は取引所が分からないためティッカーのみ（TradingView 側が主要上場先に解決する）。
+// 出力対象・区分けの選択は毎回選ぶ一時的な操作なので保存しない。
+function tvExportSymbols(scope, markets) {
+  const held = new Set(store.data.holdings.filter(h => (h.quantity || 0) > 0).map(h => h.securityId));
+  const groups = [];
+  for (const mk of ['JP', 'US']) {
+    if (!markets.includes(mk)) continue;
+    const secs = store.data.securities.filter(s => s && !s.deleted && s.market === mk && s.ticker)
+      .sort((a, b) => String(a.ticker).localeCompare(String(b.ticker)));
+    const sym = s => mk === 'JP' ? 'TSE:' + String(s.ticker).replace(/\.T$/i, '').toUpperCase() : String(s.ticker).toUpperCase(); // BRK.B 等も TradingView はドット表記
+    const label = mk === 'JP' ? '日本株' : '米国株';
+    const h = secs.filter(s => held.has(s.id)).map(sym);
+    const w = secs.filter(s => !held.has(s.id)).map(sym);
+    if (h.length) groups.push({ name: `${label}（保有）`, syms: h });
+    if (scope === 'all' && w.length) groups.push({ name: `${label}（登録）`, syms: w });
+  }
+  return groups;
+}
+function tvExportText() {
+  const scope = (document.querySelector('input[name="tv-scope"]:checked') || {}).value || 'held';
+  const markets = [...document.querySelectorAll('input[name="tv-mk"]:checked')].map(x => x.value);
+  const groups = tvExportSymbols(scope, markets);
+  return { text: groups.map(g => [`###${g.name}`, ...g.syms].join(',')).join(','), count: groups.reduce((a, g) => a + g.syms.length, 0) };
+}
+function tvExportPreview() {
+  const { text, count } = tvExportText();
+  const ta = document.getElementById('tv-out'); if (ta) ta.value = text;
+  const c = document.getElementById('tv-count'); if (c) c.textContent = `${count}銘柄`;
+}
+function openTradingViewExport() {
+  showModal('TradingView用リスト出力', `
+    <p class="muted" style="margin:0 0 8px">TradingView のウォッチリストに読み込める形式で出力します。読み込むとそのウォッチリストで<strong>リアルタイムの株価・騰落率</strong>を一覧で見られます。</p>
+    <div class="field"><label style="font-size:11px">対象</label>
+      <label style="margin-right:12px"><input type="radio" name="tv-scope" value="held" checked onchange="tvExportPreview()"> 保有中のみ</label>
+      <label><input type="radio" name="tv-scope" value="all" onchange="tvExportPreview()"> 登録銘柄すべて</label></div>
+    <div class="field"><label style="font-size:11px">市場</label>
+      <label style="margin-right:12px"><input type="checkbox" name="tv-mk" value="JP" checked onchange="tvExportPreview()"> 日本株</label>
+      <label><input type="checkbox" name="tv-mk" value="US" checked onchange="tvExportPreview()"> 米国株</label></div>
+    <div class="field"><label style="font-size:11px">出力内容（<span id="tv-count"></span>・市場×保有/登録で見出し分け）</label>
+      <textarea id="tv-out" readonly rows="4" style="width:100%;font:12px ui-monospace,monospace"></textarea></div>
+    <div class="muted" style="font-size:11.5px;line-height:1.6">読み込み方（PCのブラウザ版 TradingView）：ウォッチリスト右上の名前 → 「リストをインポート」→ ダウンロードした .txt を選ぶ。<br>※TradingView のスマホアプリにはインポート機能がありません。PCで1回読み込めば、スマホアプリにも同じウォッチリストが出ます。</div>
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+      <button type="button" class="btn" onclick="tvExportCopy()">コピー</button>
+      <button type="button" class="btn btn-primary" onclick="tvExportDownload()">ダウンロード（.txt）</button>
+    </div>`);
+  tvExportPreview();
+}
+function tvExportDownload() {
+  const { text, count } = tvExportText();
+  if (!count) { toast('対象の銘柄がありません'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  a.download = `tradingview-watchlist-${today()}.txt`;
+  a.click();
+  toast(`TradingView用リストをダウンロードしました（${count}銘柄）`);
+}
+function tvExportCopy() {
+  const { text, count } = tvExportText();
+  if (!count) { toast('対象の銘柄がありません'); return; }
+  navigator.clipboard.writeText(text).then(() => toast(`コピーしました（${count}銘柄）`), () => toast('コピーできませんでした'));
+}
+
 // 出力レイアウト選択（標準 or 汎用取込で保存したフォーマット）
 function openGenericExport() {
   const fmts = store.data.importFormats || [];

@@ -17,6 +17,17 @@ export default {
   // 米国株の式だけ hour が "15,22"（"0 15,22 * * MON-FRI"）。日本株2式は "2,8"/"22"。
   // 曜日表記(MON-FRI等)の正規化差に左右されないよう、先頭の分・時部分で判定する。
   async scheduled(event, env, ctx) {
+    // 寄り付きランキング（JST月〜金 9:10 = "10 0 * * MON-FRI"）は別エンドポイント
+    if (event.cron.startsWith('10 0')) {
+      ctx.waitUntil((async () => {
+        try {
+          const token = env.NOTIFY_TRIGGER_TOKEN || '';
+          const res = await fetch(`${env.NOTIFY_BASE_URL}/api/open-ranking?send=1${token ? '&token=' + encodeURIComponent(token) : ''}`);
+          console.log(`[open-ranking] cron=${event.cron} status=${res.status} ${(await res.text()).slice(0, 300)}`);
+        } catch (e) { console.log(`[open-ranking] error: ${e && e.message}`); }
+      })());
+      return;
+    }
     const market = event.cron.startsWith('0 15,22') ? 'US' : 'JP';
     ctx.waitUntil((async () => {
       try {

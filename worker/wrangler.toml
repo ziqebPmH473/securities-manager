@@ -14,9 +14,10 @@ workers_dev = false
 #  - "0 2,8 * * MON-FRI"   → UTC月〜金 02:00/08:00 = JST月〜金 11:00/17:00 → 日本株
 #  - "0 22 * * SUN-THU"    → UTC日〜木 22:00       = JST月〜金 07:00       → 日本株
 #  - "0 15,22 * * MON-FRI" → UTC月〜金 15:00/22:00 = JST火〜土 00:00/07:00 → 米国株
+#  - "10 0 * * MON-FRI"   → UTC月〜金 00:10       = JST月〜金 09:10       → 寄り付きランキング（/api/open-ranking）
 #  UTC22:00(=JST翌7:00)は UTC日〜木 に日本株、UTC月〜金 に米国株が発火。JST日曜はどれも発火しない。
 [triggers]
-crons = ["0 2,8 * * MON-FRI", "0 22 * * SUN-THU", "0 15,22 * * MON-FRI"]
+crons = ["0 2,8 * * MON-FRI", "0 22 * * SUN-THU", "0 15,22 * * MON-FRI", "10 0 * * MON-FRI"]
 
 [vars]
 NOTIFY_BASE_URL = "https://securities-manager-9fno6acdqirgdgb76qks.pages.dev"
