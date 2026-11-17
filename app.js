@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261118-0214';
+const APP_VERSION = 'v20261118-0220';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -6543,7 +6543,7 @@ async function loadOpenRank(force) {
 }
 function openRankListHtml(items, title, cls) {
   const mark = code => { const s = mktFindSec(code, 'JP'); if (!s) return ''; const held = store.data.holdings.some(h => h.securityId === s.id && (h.quantity || 0) > 0); return `<span class="or-mark" title="${held ? '保有中' : '登録銘柄'}">${held ? '★' : '☆'}</span>`; };
-  const rows = (items || []).map((it, i) => `<li><span class="or-rank">${i + 1}</span><a href="#" class="or-name" onclick="mktClickName('${esc(it.code)}','JP');return false">${mark(it.code)}<span class="or-code">${esc(it.code)}</span>${esc(it.name || '')}</a><span class="or-pct ${cls}">${it.changePct > 0 ? '+' : ''}${it.changePct.toFixed(2)}%</span><span class="or-price">${Number(it.price).toLocaleString('ja-JP', { maximumFractionDigits: 1 })}</span></li>`).join('');
+  const rows = (items || []).map((it, i) => `<li><span class="or-rank">${i + 1}</span><a href="#" class="or-name" onclick="mktClickName('${esc(it.code)}','JP');return false">${mark(it.code)}<span class="or-code">${esc(it.code)}</span>${esc(it.name || '')}</a><span class="or-price">${Number(it.price).toLocaleString('ja-JP', { maximumFractionDigits: 1 })}円</span><span class="or-pct ${cls}">${it.changePct > 0 ? '+' : ''}${it.changePct.toFixed(2)}%</span></li>`).join('');
   return `<div class="or-list"><div class="or-title ${cls}">${title}</div>${rows ? `<ol>${rows}</ol>` : '<div class="muted" style="padding:6px 0">該当なし</div>'}</div>`;
 }
 function renderOpeningTab(mseg, kseg) {

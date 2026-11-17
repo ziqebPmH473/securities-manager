@@ -97,7 +97,7 @@ function buildEmail(data, mine, min) {
   const mark = c => { const v = mine && mine.get(c); return v === '保有' ? '★' : v === '登録' ? '☆' : '　'; };
   const pct = v => (v > 0 ? '+' : '') + v.toFixed(2) + '%';
   const yen = v => v == null ? '—' : v.toLocaleString('ja-JP', { maximumFractionDigits: 1 });
-  const line = (it, i) => `${String(i + 1).padStart(2, ' ')}. ${mark(it.code)}${it.code} ${it.name}  ${pct(it.changePct)}  ${yen(it.price)}円（前日 ${yen(it.prevClose)}）`;
+  const line = (it, i) => `${String(i + 1).padStart(2, ' ')}. ${mark(it.code)}${it.code} ${it.name}  ${yen(it.price)}円  ${pct(it.changePct)}（前日 ${yen(it.prevClose)}）`;
   const L = [];
   L.push(`東証 市場区分別の値上がり率・値下がり率 上位${data.count}（${min}円未満は除外）`);
   L.push(`ランキング更新: ${data.updatedAt || '不明'}　★=保有中 ☆=登録銘柄`);
