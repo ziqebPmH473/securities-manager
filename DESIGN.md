@@ -1889,5 +1889,6 @@ S&P500・NASDAQ100・日経平均・TOPIX(1306.T)・ドル円を、いまのグ�
   - 保有：購入額＝列「購入額（本来）」（`calc.originalCostNative`＝取得単価×数量、売却前購入額があればそれ。原通貨）の小さい順。※当初「買い増し予定額」(`calc.buyAmount`)を使い誤っていた（2026-11-18 すみぽん指摘）。区切り（既定 `100,250,400,500,600,800,1000`。カンマ区切りで変更可）ごとに見出し。区切り値ちょうどは上の段（「$1000以上」「$250〜$400未満」）。区切りは米株=ドル、日本株=×100円。取得単価未入力で0の銘柄だけ「取得単価未入力」として最後。
   - 未保有：銘柄格付（`rating`、無ければ `overallGrade`）S→D→未設定で見出し、中はコード/ティッカー昇順。
   - 銘柄格付の範囲（S〜D から選択＋未設定を含めるか）で保有・未保有とも絞り込み。
+  - ETF（詳細種別 `detailTypeOf(s)==='ETF'`）は既定で除外（`excludeEtf`。チェックで含められる）。
   - 見出し名にカンマを入れない（ファイルがカンマ区切りのため）。日本株は「2.5万円」、米株は「$1000」表記。
-- 選択内容は `store.data.settings.tvExport`（bounds/scope/markets/ratingMin/ratingMax/noRating）に保存（ルール7。settings は keyedTs なので SCHEMA 追加不要）。
+- 選択内容は `store.data.settings.tvExport`（bounds/scope/markets/ratingMin/ratingMax/noRating/excludeEtf）に保存（ルール7。settings は keyedTs なので SCHEMA 追加不要）。

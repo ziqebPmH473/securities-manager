@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261118-1555';
+const APP_VERSION = 'v20261118-1559';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -16228,7 +16228,7 @@ function genericFieldValue(key, s, h) {
 //   未保有 … 銘柄格付（rating、無ければ総合評価 overallGrade）S→D→未設定で見出し分け、中はコード/ティッカー昇順。
 //   格付の範囲（例 S〜B）で全体を絞れる。
 // 選択内容は store.data.settings.tvExport に保存（ルール7。settings は keyedTs なので SCHEMA 追加不要）。
-const TV_DEFAULT = { bounds: '100,250,400,500,600,800,1000', scope: 'all', markets: ['US', 'JP'], ratingMin: 'S', ratingMax: 'D', noRating: true };
+const TV_DEFAULT = { bounds: '100,250,400,500,600,800,1000', scope: 'all', markets: ['US', 'JP'], ratingMin: 'S', ratingMax: 'D', noRating: true, excludeEtf: true }; // ETFは既定で出力しない（2026-11-18 すみぽん指示。判定は詳細種別 detailTypeOf）
 const TV_GRADES = ['S', 'A', 'B', 'C', 'D'];
 function tvPrefs() { return { ...TV_DEFAULT, ...(store.data.settings.tvExport || {}) }; }
 function tvParseBounds(str) { return [...new Set(String(str || '').split(/[,，、\s]+/).map(x => parseFloat(x)).filter(x => isFinite(x) && x > 0))].sort((a, b) => a - b); }
@@ -16239,7 +16239,7 @@ function tvAmountLabel(v, mk) { return mk === 'JP' ? `${+(v / 100).toFixed(4)}�
 function tvExportSymbols(p) {
   const bounds = tvParseBounds(p.bounds);
   const lo = TV_GRADES.indexOf(p.ratingMin), hi = TV_GRADES.indexOf(p.ratingMax);
-  const gOk = s => { const g = tvGrade(s); if (!g) return !!p.noRating; const i = TV_GRADES.indexOf(g); return i >= Math.min(lo, hi) && i <= Math.max(lo, hi); };
+  const gOk = s => { if (p.excludeEtf && detailTypeOf(s) === 'ETF') return false; const g = tvGrade(s); if (!g) return !!p.noRating; const i = TV_GRADES.indexOf(g); return i >= Math.min(lo, hi) && i <= Math.max(lo, hi); };
   const held = new Set(store.data.holdings.filter(h => (h.quantity || 0) > 0).map(h => h.securityId));
   const byCode = (a, b) => String(a.ticker).localeCompare(String(b.ticker), 'en', { numeric: true });
   const groups = [];
@@ -16281,7 +16281,7 @@ function tvReadForm() {
   return { ...p,
     scope: (document.querySelector('input[name="tv-scope"]:checked') || {}).value || 'all',
     markets: [...document.querySelectorAll('input[name="tv-mk"]:checked')].map(x => x.value),
-    bounds: v('tv-bounds').value, ratingMin: v('tv-rmin').value, ratingMax: v('tv-rmax').value, noRating: v('tv-norating').checked };
+    bounds: v('tv-bounds').value, ratingMin: v('tv-rmin').value, ratingMax: v('tv-rmax').value, noRating: v('tv-norating').checked, excludeEtf: v('tv-noetf').checked };
 }
 function tvExportText(p = tvReadForm()) {
   const groups = tvExportSymbols(p);
@@ -16290,8 +16290,8 @@ function tvExportText(p = tvReadForm()) {
 function tvExportPreview(save) {
   const p = tvReadForm();
   if (save) {
-    const { bounds, scope, markets, ratingMin, ratingMax, noRating } = p;
-    store.data.settings.tvExport = { bounds, scope, markets, ratingMin, ratingMax, noRating };
+    const { bounds, scope, markets, ratingMin, ratingMax, noRating, excludeEtf } = p;
+    store.data.settings.tvExport = { bounds, scope, markets, ratingMin, ratingMax, noRating, excludeEtf };
     store.data.settings._updatedAt = store._now(); store.save();
   }
   const { text, count, groups } = tvExportText(p);
@@ -16315,6 +16315,8 @@ function openTradingViewExport() {
     <div class="field"><label style="font-size:11px">銘柄格付の範囲（保有・未保有とも）</label><div class="tv-opts">
       ${gsel('tv-rmin', p.ratingMin)}<span>〜</span>${gsel('tv-rmax', p.ratingMax)}
       <label><input type="checkbox" id="tv-norating" ${p.noRating ? 'checked' : ''} onchange="tvExportPreview(true)"> 格付未設定も含める</label></div></div>
+    <div class="field"><label style="font-size:11px">種別</label><div class="tv-opts">
+      <label><input type="checkbox" id="tv-noetf" ${p.excludeEtf ? 'checked' : ''} onchange="tvExportPreview(true)"> ETFを除外する</label></div></div>
     <div class="field"><label style="font-size:11px">出力内容（<span id="tv-count"></span>）</label>
       <div id="tv-summary" class="muted" style="font-size:11.5px;line-height:1.5;max-height:120px;overflow:auto;margin-bottom:4px"></div>
       <textarea id="tv-out" readonly rows="3" style="width:100%;font:12px ui-monospace,monospace"></textarea></div>
