@@ -1427,3 +1427,8 @@ body.drawer-modeless .drawer { pointer-events: auto; box-shadow: -6px 0 24px rgb
 .mkt-kseg { flex-wrap: wrap; }
 .mkt-kseg button { white-space: nowrap; }
 .or-down { color: var(--down-ink); }
+/* TradingView用リスト出力モーダル：ラジオ・チェック・格付セレクトを横並び（.field の既定 block/100%幅を打ち消す） */
+.field .tv-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.field .tv-opts label { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-size: 13px; font-weight: 400; color: var(--text); cursor: pointer; }
+.field .tv-opts input[type="radio"], .field .tv-opts input[type="checkbox"] { width: auto; padding: 0; margin: 0; }
+.field .tv-opts select { width: auto; min-width: 64px; height: 34px; padding: 4px 8px; }

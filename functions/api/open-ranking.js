@@ -24,13 +24,28 @@ export async function onRequestGet(context) {
       const auth = checkToken(context);
       if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
     }
-    const data = await buildOpenRanking(min, count);
+    let data = await buildOpenRanking(min, count);
+    // 送信時: 取得エラー or 当日分でない場合は最大3回まで60秒おきに取り直す（Yahoo の一時的な拒否・更新遅れ対策）。
+    // 2026-11-18 初回の9:10送信が届かず原因ログを取れなかったため、黙って止めない作りにした。
+    for (let i = 0; doSend && i < 3 && (hasError(data) || !data.tradingDay); i++) {
+      await new Promise(r => setTimeout(r, 60 * 1000));
+      data = await buildOpenRanking(min, count);
+    }
 
     // preview=1: メール本文の確認用（登録銘柄の印なし・送信しない）
     if (!doSend && url.searchParams.get('preview') === '1') { const e = buildEmail(data, null, min); return json({ ok: true, subject: e.subject, preview: e.text }); }
     if (!doSend) return json({ ok: true, ...data });
 
-    // 休場日（土日祝・年末年始）はランキングが前営業日のまま → 送らない
+    // 取り直しても取得エラーが残る → 失敗したことをメールで知らせる（黙って送らないと原因が分からないため）
+    if (hasError(data) && !data.tradingDay) {
+      const errs = data.segments.filter(s => s.error).map(s => `${s.label}: ${s.error}`).join('\n');
+      const t = jstNow();
+      const fail = { subject: `寄り付きランキング ${t.getUTCMonth() + 1}/${t.getUTCDate()}（取得失敗）`, text: `寄り付きランキングを取得できませんでした（3回取り直し済み）。\nアプリの マーケット＞日本株＞寄り付き で再取得できます。\n\n${errs}\nランキング更新日時: ${data.updatedAt || '不明'}` };
+      fail.html = `<pre style="font:13px/1.7 ui-monospace,monospace;white-space:pre-wrap">${escapeHtml(fail.text)}</pre>`;
+      const sent = await sendResend(context.env, fail);
+      return json({ ok: false, sent, error: 'ランキング取得失敗', detail: errs });
+    }
+    // 休場日（土日祝・年末年始）はランキングが前営業日のまま（エラーなし） → 送らない
     if (!data.tradingDay) return json({ ok: true, skipped: `本日の更新がないため送信スキップ（休場日の可能性。ランキング更新日時: ${data.updatedAt || '不明'}）`, updatedAt: data.updatedAt });
 
     // 登録銘柄・保有銘柄に印を付ける（best-effort。読めなくても送る）
@@ -63,7 +78,9 @@ async function topFiltered(kind, sub, min, count) {
   const out = []; let updatedAt = null; let error = null;
   for (let page = 1; page <= 2 && out.length < count; page++) {
     try {
-      const r = await rankJpPage(kind, sub, page, { cacheTtl: 30 });
+      // 1回失敗したら2秒置いて1回だけ取り直す
+      const r = await rankJpPage(kind, sub, page, { cacheTtl: 30 })
+        .catch(() => new Promise(res => setTimeout(res, 2000)).then(() => rankJpPage(kind, sub, page, { cacheTtl: 0 })));
       if (!updatedAt) updatedAt = r.updatedAt;
       for (const it of r.items) {
         if (out.length >= count) break;
@@ -115,6 +132,7 @@ function buildEmail(data, mine, min) {
   return { subject, text, html };
 }
 
+function hasError(data) { return data.segments.some(s => s.error || (!s.gainers.length && !s.losers.length)); }
 function jstNow() { return new Date(Date.now() + 9 * 3600 * 1000); }
 function num(v, d) { const n = parseFloat(v); return isFinite(n) ? n : d; }
 function escapeHtml(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }

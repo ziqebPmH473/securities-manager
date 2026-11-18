@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261118-0220';
+const APP_VERSION = 'v20261118-1545';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -16218,54 +16218,109 @@ function genericFieldValue(key, s, h) {
   }
 }
 // ---------- TradingView 用ウォッチリスト出力 ----------
-// TradingView の「ウォッチリストをインポート」で読める .txt（カンマ区切り。"###名前" はセクション見出し）。
+// TradingView の「リストをインポート」で読める .txt（カンマ区切り。"###名前" はセクション見出し）。
 // 日本株は "TSE:7203"、米国株は取引所が分からないためティッカーのみ（TradingView 側が主要上場先に解決する）。
-// 出力対象・区分けの選択は毎回選ぶ一時的な操作なので保存しない。
-function tvExportSymbols(scope, markets) {
+// 並び（2026-11-18 すみぽん指定）: 保有の米 → 保有の日 → 未保有の米 → 未保有の日。
+//   保有 … 1回の購入額（calc.buyAmount。原通貨）の小さい順。区切り（既定 100,250,400,500,600,800,1000）で見出し分け。
+//          区切りは米株=ドル、日本株=×100円（100 → 1万円）。購入額が無い銘柄は「購入額未設定」として最後。
+//   未保有 … 銘柄格付（rating、無ければ総合評価 overallGrade）S→D→未設定で見出し分け、中はコード/ティッカー昇順。
+//   格付の範囲（例 S〜B）で全体を絞れる。
+// 選択内容は store.data.settings.tvExport に保存（ルール7。settings は keyedTs なので SCHEMA 追加不要）。
+const TV_DEFAULT = { bounds: '100,250,400,500,600,800,1000', scope: 'all', markets: ['US', 'JP'], ratingMin: 'S', ratingMax: 'D', noRating: true };
+const TV_GRADES = ['S', 'A', 'B', 'C', 'D'];
+function tvPrefs() { return { ...TV_DEFAULT, ...(store.data.settings.tvExport || {}) }; }
+function tvParseBounds(str) { return [...new Set(String(str || '').split(/[,，、\s]+/).map(x => parseFloat(x)).filter(x => isFinite(x) && x > 0))].sort((a, b) => a - b); }
+function tvGrade(s) { const g = s.rating || s.overallGrade; return TV_GRADES.includes(g) ? g : null; }
+function tvSym(s) { return s.market === 'JP' ? 'TSE:' + String(s.ticker).replace(/\.T$/i, '').toUpperCase() : String(s.ticker).toUpperCase(); } // BRK.B 等も TradingView はドット表記
+// 見出しにカンマを入れない（ファイル自体がカンマ区切りのため）。日本株は ×100円を「万円」表記（100 → 1万円、250 → 2.5万円）
+function tvAmountLabel(v, mk) { return mk === 'JP' ? `${+(v / 100).toFixed(4)}万円` : `$${v}`; }
+function tvExportSymbols(p) {
+  const bounds = tvParseBounds(p.bounds);
+  const lo = TV_GRADES.indexOf(p.ratingMin), hi = TV_GRADES.indexOf(p.ratingMax);
+  const gOk = s => { const g = tvGrade(s); if (!g) return !!p.noRating; const i = TV_GRADES.indexOf(g); return i >= Math.min(lo, hi) && i <= Math.max(lo, hi); };
   const held = new Set(store.data.holdings.filter(h => (h.quantity || 0) > 0).map(h => h.securityId));
+  const byCode = (a, b) => String(a.ticker).localeCompare(String(b.ticker), 'en', { numeric: true });
   const groups = [];
-  for (const mk of ['JP', 'US']) {
-    if (!markets.includes(mk)) continue;
-    const secs = store.data.securities.filter(s => s && !s.deleted && s.market === mk && s.ticker)
-      .sort((a, b) => String(a.ticker).localeCompare(String(b.ticker)));
-    const sym = s => mk === 'JP' ? 'TSE:' + String(s.ticker).replace(/\.T$/i, '').toUpperCase() : String(s.ticker).toUpperCase(); // BRK.B 等も TradingView はドット表記
-    const label = mk === 'JP' ? '日本株' : '米国株';
-    const h = secs.filter(s => held.has(s.id)).map(sym);
-    const w = secs.filter(s => !held.has(s.id)).map(sym);
-    if (h.length) groups.push({ name: `${label}（保有）`, syms: h });
-    if (scope === 'all' && w.length) groups.push({ name: `${label}（登録）`, syms: w });
+  const MK = { US: '米', JP: '日' };
+  for (const mk of ['US', 'JP']) {
+    if (!p.markets.includes(mk)) continue;
+    const secs = store.data.securities.filter(s => s && !s.deleted && s.market === mk && s.ticker && held.has(s.id) && gOk(s))
+      .map(s => { const a = calc.buyAmount(s); return { s, amt: a > 0 ? a : null }; });
+    const scale = mk === 'JP' ? 100 : 1;
+    // バケット番号: 0..n-1 = 区切り以下、n = 最大区切り超、n+1 = 購入額未設定
+    const bucketOf = amt => { if (amt == null) return bounds.length + 1; const i = bounds.findIndex(b => amt <= b * scale); return i < 0 ? bounds.length : i; };
+    const buckets = new Map();
+    for (const x of secs) { const k = bucketOf(x.amt); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(x); }
+    for (const k of [...buckets.keys()].sort((a, b) => a - b)) {
+      const list = buckets.get(k).sort((a, b) => (a.amt ?? Infinity) - (b.amt ?? Infinity) || byCode(a.s, b.s));
+      const name = k === bounds.length + 1 ? '購入額未設定'
+        : k === bounds.length ? `${tvAmountLabel(bounds[bounds.length - 1], mk)}超`
+        : k === 0 ? `${tvAmountLabel(bounds[0], mk)}以下`
+        : `${tvAmountLabel(bounds[k - 1], mk)}超〜${tvAmountLabel(bounds[k], mk)}`;
+      groups.push({ name: `保有${MK[mk]} ${name}`, syms: list.map(x => tvSym(x.s)) });
+    }
+  }
+  if (p.scope === 'all') for (const mk of ['US', 'JP']) {
+    if (!p.markets.includes(mk)) continue;
+    const secs = store.data.securities.filter(s => s && !s.deleted && s.market === mk && s.ticker && !held.has(s.id) && gOk(s));
+    for (const g of [...TV_GRADES, null]) {
+      const list = secs.filter(s => tvGrade(s) === g).sort(byCode);
+      if (list.length) groups.push({ name: `未保有${MK[mk]} 格付${g || '未設定'}`, syms: list.map(tvSym) });
+    }
   }
   return groups;
 }
-function tvExportText() {
-  const scope = (document.querySelector('input[name="tv-scope"]:checked') || {}).value || 'held';
-  const markets = [...document.querySelectorAll('input[name="tv-mk"]:checked')].map(x => x.value);
-  const groups = tvExportSymbols(scope, markets);
-  return { text: groups.map(g => [`###${g.name}`, ...g.syms].join(',')).join(','), count: groups.reduce((a, g) => a + g.syms.length, 0) };
+function tvReadForm() {
+  const p = tvPrefs();
+  const v = id => document.getElementById(id);
+  if (!v('tv-bounds')) return p;
+  return { ...p,
+    scope: (document.querySelector('input[name="tv-scope"]:checked') || {}).value || 'all',
+    markets: [...document.querySelectorAll('input[name="tv-mk"]:checked')].map(x => x.value),
+    bounds: v('tv-bounds').value, ratingMin: v('tv-rmin').value, ratingMax: v('tv-rmax').value, noRating: v('tv-norating').checked };
 }
-function tvExportPreview() {
-  const { text, count } = tvExportText();
+function tvExportText(p = tvReadForm()) {
+  const groups = tvExportSymbols(p);
+  return { text: groups.map(g => [`###${g.name}`, ...g.syms].join(',')).join(','), count: groups.reduce((a, g) => a + g.syms.length, 0), groups };
+}
+function tvExportPreview(save) {
+  const p = tvReadForm();
+  if (save) {
+    const { bounds, scope, markets, ratingMin, ratingMax, noRating } = p;
+    store.data.settings.tvExport = { bounds, scope, markets, ratingMin, ratingMax, noRating };
+    store.data.settings._updatedAt = store._now(); store.save();
+  }
+  const { text, count, groups } = tvExportText(p);
   const ta = document.getElementById('tv-out'); if (ta) ta.value = text;
-  const c = document.getElementById('tv-count'); if (c) c.textContent = `${count}銘柄`;
+  const c = document.getElementById('tv-count'); if (c) c.textContent = `${count}銘柄・見出し${groups.length}`;
+  const sm = document.getElementById('tv-summary'); if (sm) sm.innerHTML = groups.map(g => `<div>${esc(g.name)}：${g.syms.length}</div>`).join('') || '<div>対象なし</div>';
 }
 function openTradingViewExport() {
+  const p = tvPrefs();
+  const gsel = (id, val) => `<select id="${id}" onchange="tvExportPreview(true)">${TV_GRADES.map(g => `<option value="${g}" ${g === val ? 'selected' : ''}>${g}</option>`).join('')}</select>`;
   showModal('TradingView用リスト出力', `
-    <p class="muted" style="margin:0 0 8px">TradingView のウォッチリストに読み込める形式で出力します。読み込むとそのウォッチリストで<strong>リアルタイムの株価・騰落率</strong>を一覧で見られます。</p>
-    <div class="field"><label style="font-size:11px">対象</label>
-      <label style="margin-right:12px"><input type="radio" name="tv-scope" value="held" checked onchange="tvExportPreview()"> 保有中のみ</label>
-      <label><input type="radio" name="tv-scope" value="all" onchange="tvExportPreview()"> 登録銘柄すべて</label></div>
-    <div class="field"><label style="font-size:11px">市場</label>
-      <label style="margin-right:12px"><input type="checkbox" name="tv-mk" value="JP" checked onchange="tvExportPreview()"> 日本株</label>
-      <label><input type="checkbox" name="tv-mk" value="US" checked onchange="tvExportPreview()"> 米国株</label></div>
-    <div class="field"><label style="font-size:11px">出力内容（<span id="tv-count"></span>・市場×保有/登録で見出し分け）</label>
-      <textarea id="tv-out" readonly rows="4" style="width:100%;font:12px ui-monospace,monospace"></textarea></div>
+    <p class="muted" style="margin:0 0 8px">TradingView のウォッチリストに読み込める形式で出力します。並びは <strong>保有の米 → 保有の日 → 未保有の米 → 未保有の日</strong>。保有は1回の購入額の小さい順（区切りごとに見出し）、未保有は銘柄格付ごと（中はコード順）です。</p>
+    <div class="field"><label style="font-size:11px">対象</label><div class="tv-opts">
+      <label><input type="radio" name="tv-scope" value="held" ${p.scope === 'held' ? 'checked' : ''} onchange="tvExportPreview(true)"> 保有中のみ</label>
+      <label><input type="radio" name="tv-scope" value="all" ${p.scope !== 'held' ? 'checked' : ''} onchange="tvExportPreview(true)"> 未保有の登録銘柄も</label></div></div>
+    <div class="field"><label style="font-size:11px">市場</label><div class="tv-opts">
+      <label><input type="checkbox" name="tv-mk" value="US" ${p.markets.includes('US') ? 'checked' : ''} onchange="tvExportPreview(true)"> 米国株</label>
+      <label><input type="checkbox" name="tv-mk" value="JP" ${p.markets.includes('JP') ? 'checked' : ''} onchange="tvExportPreview(true)"> 日本株</label></div></div>
+    <div class="field"><label style="font-size:11px">保有の購入額の区切り（カンマ区切り。米株=ドル、日本株=×100円）</label>
+      <input id="tv-bounds" value="${esc(p.bounds)}" onchange="tvExportPreview(true)" oninput="tvExportPreview(false)" style="width:100%" placeholder="${TV_DEFAULT.bounds}"></div>
+    <div class="field"><label style="font-size:11px">銘柄格付の範囲（保有・未保有とも）</label><div class="tv-opts">
+      ${gsel('tv-rmin', p.ratingMin)}<span>〜</span>${gsel('tv-rmax', p.ratingMax)}
+      <label><input type="checkbox" id="tv-norating" ${p.noRating ? 'checked' : ''} onchange="tvExportPreview(true)"> 格付未設定も含める</label></div></div>
+    <div class="field"><label style="font-size:11px">出力内容（<span id="tv-count"></span>）</label>
+      <div id="tv-summary" class="muted" style="font-size:11.5px;line-height:1.5;max-height:120px;overflow:auto;margin-bottom:4px"></div>
+      <textarea id="tv-out" readonly rows="3" style="width:100%;font:12px ui-monospace,monospace"></textarea></div>
     <div class="muted" style="font-size:11.5px;line-height:1.6">読み込み方（PCのブラウザ版 TradingView）：ウォッチリスト右上の名前 → 「リストをインポート」→ ダウンロードした .txt を選ぶ。<br>※TradingView のスマホアプリにはインポート機能がありません。PCで1回読み込めば、スマホアプリにも同じウォッチリストが出ます。</div>
     <div class="form-actions">
       <button type="button" class="btn" onclick="closeModal()">閉じる</button>
       <button type="button" class="btn" onclick="tvExportCopy()">コピー</button>
       <button type="button" class="btn btn-primary" onclick="tvExportDownload()">ダウンロード（.txt）</button>
     </div>`);
-  tvExportPreview();
+  tvExportPreview(false);
 }
 function tvExportDownload() {
   const { text, count } = tvExportText();
