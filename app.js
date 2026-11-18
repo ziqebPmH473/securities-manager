@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261118-1552';
+const APP_VERSION = 'v20261118-1555';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -16221,8 +16221,10 @@ function genericFieldValue(key, s, h) {
 // TradingView の「リストをインポート」で読める .txt（カンマ区切り。"###名前" はセクション見出し）。
 // 日本株は "TSE:7203"、米国株は取引所が分からないためティッカーのみ（TradingView 側が主要上場先に解決する）。
 // 並び（2026-11-18 すみぽん指定）: 保有の米 → 保有の日 → 未保有の米 → 未保有の日。
-//   保有 … 1回の購入額（calc.buyAmount。原通貨）の小さい順。区切り（既定 100,250,400,500,600,800,1000）で見出し分け。
-//          区切りは米株=ドル、日本株=×100円（100 → 1万円）。購入額が無い銘柄は「購入額未設定」として最後。
+//   保有 … 購入額＝列「購入額（本来）」（calc.originalCostNative＝取得単価×数量、売却前購入額があればそれ。原通貨）の小さい順。
+//          区切り（既定 100,250,400,500,600,800,1000）で見出し分け。区切りは米株=ドル、日本株=×100円（100 → 1万円）。
+//          取得単価が未入力で0になる銘柄だけ「取得単価未入力」として最後。
+//          ※当初「買い増し予定額」（calc.buyAmount＝次回1回分の予定額）を使い誤っていた（2026-11-18 すみぽん指摘）。
 //   未保有 … 銘柄格付（rating、無ければ総合評価 overallGrade）S→D→未設定で見出し分け、中はコード/ティッカー昇順。
 //   格付の範囲（例 S〜B）で全体を絞れる。
 // 選択内容は store.data.settings.tvExport に保存（ルール7。settings は keyedTs なので SCHEMA 追加不要）。
@@ -16245,7 +16247,7 @@ function tvExportSymbols(p) {
   for (const mk of ['US', 'JP']) {
     if (!p.markets.includes(mk)) continue;
     const secs = store.data.securities.filter(s => s && !s.deleted && s.market === mk && s.ticker && held.has(s.id) && gOk(s))
-      .map(s => { const a = calc.buyAmount(s); return { s, amt: a > 0 ? a : null }; });
+      .map(s => { const a = calc.originalCostNative(s); return { s, amt: a > 0 ? a : null }; });
     const scale = mk === 'JP' ? 100 : 1;
     // バケット番号 = 購入額「以上」になっている区切りの数（区切り値ちょうどは上の段に入る。例 $1000 → 「$1000以上」）。
     //   0 = 最小区切り未満、1..n-1 = [前の区切り, 次の区切り)、n = 最大区切り以上、n+1 = 購入額未設定
@@ -16255,7 +16257,7 @@ function tvExportSymbols(p) {
     for (const x of secs) { const k = bucketOf(x.amt); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(x); }
     for (const k of [...buckets.keys()].sort((a, b) => a - b)) {
       const list = buckets.get(k).sort((a, b) => (a.amt ?? Infinity) - (b.amt ?? Infinity) || byCode(a.s, b.s));
-      const name = k === bounds.length + 1 ? '購入額未設定'
+      const name = k === bounds.length + 1 ? '取得単価未入力'
         : k === bounds.length ? `${tvAmountLabel(bounds[bounds.length - 1], mk)}以上`
         : k === 0 ? `${tvAmountLabel(bounds[0], mk)}未満`
         : `${tvAmountLabel(bounds[k - 1], mk)}〜${tvAmountLabel(bounds[k], mk)}未満`;
@@ -16301,7 +16303,7 @@ function openTradingViewExport() {
   const p = tvPrefs();
   const gsel = (id, val) => `<select id="${id}" onchange="tvExportPreview(true)">${TV_GRADES.map(g => `<option value="${g}" ${g === val ? 'selected' : ''}>${g}</option>`).join('')}</select>`;
   showModal('TradingView用リスト出力', `
-    <p class="muted" style="margin:0 0 8px">TradingView のウォッチリストに読み込める形式で出力します。並びは <strong>保有の米 → 保有の日 → 未保有の米 → 未保有の日</strong>。保有は1回の購入額の小さい順（区切りごとに見出し）、未保有は銘柄格付ごと（中はコード順）です。</p>
+    <p class="muted" style="margin:0 0 8px">TradingView のウォッチリストに読み込める形式で出力します。並びは <strong>保有の米 → 保有の日 → 未保有の米 → 未保有の日</strong>。保有は購入額（列「購入額（本来）」＝取得単価×数量）の小さい順（区切りごとに見出し）、未保有は銘柄格付ごと（中はコード順）です。</p>
     <div class="field"><label style="font-size:11px">対象</label><div class="tv-opts">
       <label><input type="radio" name="tv-scope" value="held" ${p.scope === 'held' ? 'checked' : ''} onchange="tvExportPreview(true)"> 保有中のみ</label>
       <label><input type="radio" name="tv-scope" value="all" ${p.scope !== 'held' ? 'checked' : ''} onchange="tvExportPreview(true)"> 未保有の登録銘柄も</label></div></div>
