@@ -1890,5 +1890,6 @@ S&P500・NASDAQ100・日経平均・TOPIX(1306.T)・ドル円を、いまのグ�
   - 未保有：銘柄格付（`rating`、無ければ `overallGrade`）S→D→未設定で見出し、中はコード/ティッカー昇順。
   - 銘柄格付の範囲（S〜D から選択＋未設定を含めるか）で保有・未保有とも絞り込み。
   - ETF（詳細種別 `detailTypeOf(s)==='ETF'`）は既定で除外（`excludeEtf`。チェックで含められる）。
+- 「銘柄だけコピー」：見出し(###)なしの銘柄だけをカンマ区切りでコピー。リストに付けたアラートを残すため、既存リストの「シンボルを追加」に貼り付けて足す用（インポートは毎回新しいリストになるため）。
   - 見出し名にカンマを入れない（ファイルがカンマ区切りのため）。日本株は「2.5万円」、米株は「$1000」表記。
 - 選択内容は `store.data.settings.tvExport`（bounds/scope/markets/ratingMin/ratingMax/noRating/excludeEtf）に保存（ルール7。settings は keyedTs なので SCHEMA 追加不要）。

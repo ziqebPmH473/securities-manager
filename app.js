@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261118-1559';
+const APP_VERSION = 'v20261118-1606';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -16320,9 +16320,10 @@ function openTradingViewExport() {
     <div class="field"><label style="font-size:11px">出力内容（<span id="tv-count"></span>）</label>
       <div id="tv-summary" class="muted" style="font-size:11.5px;line-height:1.5;max-height:120px;overflow:auto;margin-bottom:4px"></div>
       <textarea id="tv-out" readonly rows="3" style="width:100%;font:12px ui-monospace,monospace"></textarea></div>
-    <div class="muted" style="font-size:11.5px;line-height:1.6">読み込み方（PCのブラウザ版 TradingView）：ウォッチリスト右上の名前 → 「リストをインポート」→ ダウンロードした .txt を選ぶ。<br>※TradingView のスマホアプリにはインポート機能がありません。PCで1回読み込めば、スマホアプリにも同じウォッチリストが出ます。</div>
+    <div class="muted" style="font-size:11.5px;line-height:1.6"><strong>今のリストに足す</strong>（リストに付けたアラートを残したい時）：「銘柄だけコピー」→ TradingView で今のリストを開き「＋（シンボルを追加）」の検索欄に貼り付けて Enter。見出しは付かず、すでにある銘柄は重複しない。<br><strong>新しいリストにする</strong>：ウォッチリスト右上の名前 →「リストをインポート」→ ダウンロードした .txt を選ぶ（PCのブラウザ版のみ。毎回新しいリストができる）。</div>
     <div class="form-actions">
       <button type="button" class="btn" onclick="closeModal()">閉じる</button>
+      <button type="button" class="btn" onclick="tvExportCopy(true)" title="見出し(###)を除き、銘柄だけをカンマ区切りでコピー。既存リストの「シンボルを追加」に貼り付ける用">銘柄だけコピー</button>
       <button type="button" class="btn" onclick="tvExportCopy()">コピー</button>
       <button type="button" class="btn btn-primary" onclick="tvExportDownload()">ダウンロード（.txt）</button>
     </div>`);
@@ -16337,10 +16338,12 @@ function tvExportDownload() {
   a.click();
   toast(`TradingView用リストをダウンロードしました（${count}銘柄）`);
 }
-function tvExportCopy() {
-  const { text, count } = tvExportText();
+// symbolsOnly: 見出し(###)なしの銘柄だけ。アラート付きの既存ウォッチリストを作り直さず「シンボルを追加」に貼って足す用（2026-11-18）
+function tvExportCopy(symbolsOnly) {
+  const { text, count, groups } = tvExportText();
   if (!count) { toast('対象の銘柄がありません'); return; }
-  navigator.clipboard.writeText(text).then(() => toast(`コピーしました（${count}銘柄）`), () => toast('コピーできませんでした'));
+  const out = symbolsOnly ? groups.flatMap(g => g.syms).join(',') : text;
+  navigator.clipboard.writeText(out).then(() => toast(`${symbolsOnly ? '銘柄だけ' : ''}コピーしました（${count}銘柄）`), () => toast('コピーできませんでした'));
 }
 
 // 出力レイアウト選択（標準 or 汎用取込で保存したフォーマット）
