@@ -23,3 +23,8 @@ crons = ["0 2,8 * * MON-FRI", "0 22 * * SUN-THU", "0 15,22 * * MON-FRI", "10 0 *
 NOTIFY_BASE_URL = "https://securities-manager-9fno6acdqirgdgb76qks.pages.dev"
 # NOTIFY_TRIGGER_TOKEN（任意・送信保護用）は秘密なので vars には書かず、
 # `npx wrangler secret put NOTIFY_TRIGGER_TOKEN` か ダッシュボードで設定する。
+
+# 実行ログを Cloudflare に保存（ダッシュボードの Worker →「ログ」で過去の cron 実行結果を見られる）。
+# 2026-11-18 寄り付きメールが届かなかった時に原因ログが残っておらず調べられなかったため有効化。無料枠内。
+[observability]
+enabled = true
