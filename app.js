@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261118-1545';
+const APP_VERSION = 'v20261118-1552';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -16247,16 +16247,18 @@ function tvExportSymbols(p) {
     const secs = store.data.securities.filter(s => s && !s.deleted && s.market === mk && s.ticker && held.has(s.id) && gOk(s))
       .map(s => { const a = calc.buyAmount(s); return { s, amt: a > 0 ? a : null }; });
     const scale = mk === 'JP' ? 100 : 1;
-    // バケット番号: 0..n-1 = 区切り以下、n = 最大区切り超、n+1 = 購入額未設定
-    const bucketOf = amt => { if (amt == null) return bounds.length + 1; const i = bounds.findIndex(b => amt <= b * scale); return i < 0 ? bounds.length : i; };
+    // バケット番号 = 購入額「以上」になっている区切りの数（区切り値ちょうどは上の段に入る。例 $1000 → 「$1000以上」）。
+    //   0 = 最小区切り未満、1..n-1 = [前の区切り, 次の区切り)、n = 最大区切り以上、n+1 = 購入額未設定
+    //   2026-11-18: 当初「以下」区切りで $1000 ちょうどが「$800超〜$1000」に入り、すみぽんが「1000ドル以上が載っていない」と指摘
+    const bucketOf = amt => amt == null ? bounds.length + 1 : bounds.filter(b => amt >= b * scale).length;
     const buckets = new Map();
     for (const x of secs) { const k = bucketOf(x.amt); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(x); }
     for (const k of [...buckets.keys()].sort((a, b) => a - b)) {
       const list = buckets.get(k).sort((a, b) => (a.amt ?? Infinity) - (b.amt ?? Infinity) || byCode(a.s, b.s));
       const name = k === bounds.length + 1 ? '購入額未設定'
-        : k === bounds.length ? `${tvAmountLabel(bounds[bounds.length - 1], mk)}超`
-        : k === 0 ? `${tvAmountLabel(bounds[0], mk)}以下`
-        : `${tvAmountLabel(bounds[k - 1], mk)}超〜${tvAmountLabel(bounds[k], mk)}`;
+        : k === bounds.length ? `${tvAmountLabel(bounds[bounds.length - 1], mk)}以上`
+        : k === 0 ? `${tvAmountLabel(bounds[0], mk)}未満`
+        : `${tvAmountLabel(bounds[k - 1], mk)}〜${tvAmountLabel(bounds[k], mk)}未満`;
       groups.push({ name: `保有${MK[mk]} ${name}`, syms: list.map(x => tvSym(x.s)) });
     }
   }
