@@ -11,7 +11,7 @@
  */
 // アプリのバージョン（v{YYYYMMDD}-{HHMM} JST）。コミットのたびに必ず更新し、すみぽんへ報告する（CLAUDE.md ルール8）。
 // 左上のロゴ「証券管理」の下（#app-version）に表示（2026-09-30 マスタ画面から移動）。index.html の ?v= キャッシュバスターも同じ日時に揃える。
-const APP_VERSION = 'v20261118-1609';
+const APP_VERSION = 'v20261124-1022';
 // 留意銘柄（旧称: 注意銘柄）の区分（2026-09-30 導入、2026-10-15 マスタ化）。
 // 保存値 securities[].watch: 通常=false（未設定）/ 注意=true（従来互換）/ それ以外＝留意銘柄マスタ(store.data.watchDefs)の key 文字列
 // （既定: 'pass'=パス・'recheck'=再調査。ユーザーがマスタで追加した区分は自動採番の key）。
@@ -4492,7 +4492,11 @@ function applyStickyCols(table, scope) {
   // 拾うとコード/銘柄名の列検出が壊れ、銘柄名が固定されない不具合になるため除外する。
   const bodyRow = [...table.tBodies[0].rows].find(r => r.cells.length === (headRow ? headRow.cells.length : 0));
   if (!headRow || !bodyRow) return;
-  [...table.rows].forEach(r => [...r.cells].forEach(c => { if (c.colSpan > 1) return; c.classList.remove('stick', 'stick-edge'); c.style.left = ''; }));
+  [...table.rows].forEach(r => [...r.cells].forEach(c => {
+    if (c.colSpan > 1) return;
+    c.classList.remove('stick', 'stick-edge'); c.style.left = '';
+    if (c.dataset.stickBg != null) { c.style.background = c.dataset.stickBg; delete c.dataset.stickBg; } // 固定解除時は元の背景色へ戻す
+  }));
   const fixedN = scope != null ? colStickyCount(scope) : null;
   const contiguous = [];
   if (fixedN != null) {
@@ -4518,6 +4522,10 @@ function applyStickyCols(table, scope) {
       const c = r.cells[ci]; if (!c || c.colSpan > 1) return; // 横結合(グループ見出し)セルは触らない＝inlineのleft:0固定を保つ
       c.classList.add('stick'); if (n === contiguous.length - 1) c.classList.add('stick-edge');
       c.style.left = left + 'px';
+      // 背景色ルール(cfInject)の色は半透明rgbaで、インライン指定が .stick の不透明背景を上書きするため
+      // 横スクロール時に下の列が透けて見える。固定セルだけ「色を不透明なパネル色の上に重ねる」形に置き換える。
+      const cbg = c.style.backgroundColor;
+      if (cbg && c.dataset.stickBg == null) { c.dataset.stickBg = c.style.background; c.style.background = `linear-gradient(${cbg}, ${cbg}), var(--panel)`; }
     });
     left += w;
   });
